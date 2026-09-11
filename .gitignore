@@ -1,0 +1,16 @@
+# Rust
+/target
+
+# Nix / direnv
+/.direnv
+/.envrc.local
+
+# Local environment and secrets
+.env
+.envrc.local
+
+# Local PostgreSQL data directory
+/.pgdata
+
+# Logs
+*.log
