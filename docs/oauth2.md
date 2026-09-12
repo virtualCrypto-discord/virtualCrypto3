@@ -442,3 +442,35 @@ application to verify with.
 And the whole of it — the application, its owner, its scopes — is one transaction,
 so a registration that fails half way leaves nothing.
 
+### The last details of registration, including one that is probably a bug
+
+The order the fields are validated in is fixed and observable, because the first
+failure is the one reported: `response_types`, `grant_types`, `application_type`,
+`client_name`, `client_uri`, `logo_uri`, `webhook_url`,
+`discord_support_server_invite_slug`, then that `redirect_uris` is an **array**
+(`redirect_uris_must_be_array`), then that each of them has an http or https
+scheme, then the client id and the keypair, and only then the webhook handshake.
+
+**The handshake only happens when a webhook URL was given.** `if webhook_url do
+… else :ok end` — so an application that registers none is registered without one,
+which is the same `:nop` its deliveries take later.
+
+**`response_types` is validated and then thrown away.** The row is built with
+`response_types: []` — a literal — so whatever the request asked for and passed
+`validate_response_types/1` is not what is stored. The answer to
+`GET /oauth2/clients/@me` therefore always shows `"response_types": []`, whatever
+was asked for. `grant_types` is taken from the validated value, so the two list
+fields are treated differently and this is the one that is treated wrongly.
+
+That is recorded rather than fixed, and rather than copied: it is a bug in the
+sense that the value validated is not the value used, but nothing downstream reads
+`response_types` — `preauthorize` checks the redirect URI and the grant types and
+the scopes and never this — so whether the port stores the request or the literal
+is a decision with no behaviour behind it. The literal is what the Elixir stores,
+and the field is answered as an empty array today.
+
+**And the two generated values.** The client id is `Ecto.UUID.generate/0`, so a
+UUID. The client secret is `:crypto.strong_rand_bytes(32)` base64-url encoded
+without padding — thirty-two bytes, the same entropy as the authorization code,
+spelled differently.
+
