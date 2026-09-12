@@ -275,3 +275,47 @@ that posts through the worker, the worker's URL, and **the client certificate an
 key it will demand**. And something that re-verifies applications periodically —
 there is no scheduler in this service at all.
 
+### What a delivery is, and what the handshake checks
+
+Read out of `CloudflareWorkers`. The proxy is generic: **the target is in the
+request**, and the proxy answers with what the target said.
+
+A delivery is a `POST` to the configured proxy whose body is the event's JSON and
+whose headers are:
+
+| Header | |
+| --- | --- |
+| `X-Signature-Ed25519` | ed25519 over `timestamp <> body`, **hex and lowercase** |
+| `X-Signature-Timestamp` | the time in whole seconds |
+| `X-Forward` | **the application's `webhook_url`** — where the proxy should send it |
+
+and the signature is made with the **application's** `private_key`, not with
+anything of this service's. The response carries `X-Status`, the status the
+target answered with, plus the target's body — so the caller learns what the
+application said without the proxy having to paraphrase it.
+
+The handshake is **two requests, not one**, and that is the part worth not
+simplifying:
+
+1. a PING — `{"type": 1}` — signed with the application's real key must come back
+   `200` and a body of `{"type": 1}`, which says the application answers webhooks
+   at all;
+2. a PING signed with a **keypair generated for the occasion** must come back
+   `401`, which says the application actually verifies what it is sent.
+
+An application that cannot tell a real signature from rubbish fails the second and
+is refused. Two results must both be `:ok`; a wrong answer is
+`verification_failed`, a proxy that could not be reached is
+`internal_server_error`. The two requests are **shuffled** so that the order is not
+something to guess at.
+
+The handshake is also rate-limited **per requester** — one per three seconds,
+twenty per hour, fifty per day — answering `retry_after_3_seconds`,
+`retry_after_1_hour` or `retry_after_1_day`. Nothing here has a rate limiter for
+that; the per-user one on the interaction endpoint is a different thing.
+
+The client certificate lives in this module's own configuration under `:ssl`,
+which is the mTLS the worker demands. And a notification is **fire-and-forget**:
+`Task.start`, so a slow application does not slow the claim that caused it, with
+an account that has no application being a silent `:nop`.
+
