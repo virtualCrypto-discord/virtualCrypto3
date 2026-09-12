@@ -7,10 +7,10 @@ with the reason.
 | Area | cases | ported | status |
 | --- | ---: | ---: | --- |
 | v2 REST API | 103 | 103 | complete |
-| Discord interactions | 141 | 92 | in progress |
+| Discord interactions | 141 | 93 | in progress |
 | Notifications | 11 | 11 | complete |
 | v1 REST API | 77 | 0 | dropped by decision |
-| **total** | **332** | **206** | |
+| **total** | **332** | **207** | |
 
 A row is only `ported` when all of its cases exist and pass, and extra Rust cases
 are listed separately so the Elixir coverage can still be read off at a glance.
@@ -60,7 +60,7 @@ checked against the locked balances before anything is written.
 | `claim/list/claim_list_deny_test.exs` | 13 | | pending |
 | `claim/list/claim_list_cancel_test.exs` | 13 | | pending |
 | `claim/list/claim_list_select_test.exs` | 3 | | pending |
-| `claim/list/claim_list_options_test.exs` | 1 | | pending |
+| `claim/list/claim_list_options_test.exs` | 1 | `src/claim_list.rs` unit tests | ported |
 | `claim/list/claim_list_received_test.exs` | 0 | | empty in Elixir too |
 | `claim/list/claim_list_claimed_test.exs` | 0 | | empty in Elixir too |
 
