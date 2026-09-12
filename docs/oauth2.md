@@ -500,3 +500,27 @@ What registration adds after it is its own: the profile the token fetches answer
 with `bot`, and a bot account may not register — `user_verification_failed`. The
 same profile's `id` is the `owner_discord_id` the application row is written with.
 
+### The handler's last obstacle: the handshake needs the proxy, and the state has only the notifier
+
+Registration's fifth step is the webhook handshake. `verify` and `Proxy` are
+written and tested, and `fresh_keypair` with them — but a handler cannot reach
+them. `AppState` carries a `Notifier`, which holds a `Proxy` privately, and a
+trait object is not a proxy: `Notifier::notify_claim_update` takes a claimant and
+events and answers nothing.
+
+So the state wants the proxy itself — `Option<Arc<Proxy>>`, the same one
+`main.rs` builds for the notifier, shared rather than built twice. Then a handler
+can call the handshake, and the notifier can be built from the same value.
+
+**And a registration without a webhook must not need one.** The Elixir's
+`if webhook_url do … else :ok end` means an application that registers none is
+registered without a handshake — so "no proxy configured" is only a problem for a
+registration that asked for a webhook.
+
+When it is a problem, which refusal it is matters, and the distinction is the one
+`Handshake` already draws: a handshake that ran and came back wrong is
+`verification_failed`, and the application is at fault. A handshake that could not
+be attempted, because this service has no proxy, is **the service's fault** and
+belongs in the five-hundreds — malformed client metadata is not what happened, and
+saying so would send a user to look at their own request.
+
