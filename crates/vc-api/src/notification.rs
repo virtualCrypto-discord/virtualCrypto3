@@ -111,6 +111,99 @@ impl Proxy {
     }
 }
 
+/// The event body for a claim update: type 2, with the events as its data.
+///
+/// Type 1 is the PING the handshake sends, and an application must ignore types
+/// it does not know — which is what its documentation says, and what makes adding
+/// a third type safe later.
+pub fn claim_update_body(events: &[Value]) -> Value {
+    serde_json::json!({ "type": 2, "data": events })
+}
+
+/// The type of the handshake's event.
+pub const PING: i64 = 1;
+
+/// The delivery, wired up: an application's events, sent the way its own
+/// documentation says they will be.
+#[derive(Clone)]
+pub struct WebhookNotifier {
+    pool: sqlx::PgPool,
+    proxy: std::sync::Arc<Proxy>,
+}
+
+impl WebhookNotifier {
+    pub fn new(pool: sqlx::PgPool, proxy: Proxy) -> Self {
+        Self {
+            pool,
+            proxy: std::sync::Arc::new(proxy),
+        }
+    }
+}
+
+impl vc_core::notification::Notifier for WebhookNotifier {
+    /// Fire and forget, as `Task.start/1` does: an application that is slow to
+    /// answer must not slow the claim that caused the event, and an application
+    /// that never answers must not stop it.
+    fn notify_claim_update(&self, claimant_id: i32, events: &[Value]) {
+        let pool = self.pool.clone();
+        let proxy = std::sync::Arc::clone(&self.proxy);
+        let events = events.to_vec();
+
+        tokio::spawn(async move {
+            send_claim_update(&pool, &proxy, claimant_id, &events).await;
+        });
+    }
+}
+
+/// One delivery, if there is anywhere to deliver it.
+async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32, events: &[Value]) {
+    // The application the claimant acts for, if it acts for one. An account that
+    // is nobody's application has nowhere to be told, which is the Elixir's
+    // `:nop` rather than a failure.
+    let Some(application_id) = vc_core::user::application_id(pool, claimant_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+
+    let Some(webhook) = vc_core::application::webhook_data(pool, application_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+
+    let Some(url) = webhook.webhook_url.as_deref() else {
+        return;
+    };
+
+    // A key that is not thirty-two bytes is not an ed25519 seed, and signing with
+    // a guess would produce something the application refuses.
+    let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
+        tracing::warn!(
+            application_id,
+            "the application's private key is not 32 bytes"
+        );
+
+        return;
+    };
+
+    let body = claim_update_body(events);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or_default();
+
+    let delivery = delivery(&body, &private_key, url, now);
+
+    if let Err(error) = proxy.send(&delivery).await {
+        tracing::warn!(application_id, %error, "could not reach the webhook proxy");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +307,14 @@ mod tests {
             built.is_err(),
             "a certificate that does not parse was accepted"
         );
+    }
+
+    #[test]
+    fn a_claim_update_says_it_is_one() {
+        let body = claim_update_body(&[json!({ "id": 1, "status": "approved" })]);
+
+        assert_eq!(body["type"], 2);
+        assert_eq!(body["data"][0]["status"], "approved");
+        assert_ne!(body["type"], PING, "which is the handshake's");
     }
 }

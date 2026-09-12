@@ -213,3 +213,21 @@ pub async fn application_user_id(
 
     Ok(found)
 }
+
+/// The application an account acts for, if it acts for one.
+///
+/// `users.application_id` is the link from an account to the application it
+/// belongs to. A user without one has nowhere to be notified, which is the
+/// notification path's `:nop` rather than an error.
+pub async fn application_id(
+    pool: &PgPool,
+    user_id: i32,
+) -> std::result::Result<Option<i64>, sqlx::Error> {
+    let found = sqlx::query_scalar!("SELECT application_id FROM users WHERE id = $1", user_id)
+        .fetch_optional(pool)
+        .await?;
+
+    // The column is nullable, so this is an `Option` of an `Option`: no such
+    // user, or a user that is not anybody's application.
+    Ok(found.flatten())
+}
