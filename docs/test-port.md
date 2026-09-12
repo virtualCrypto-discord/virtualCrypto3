@@ -8,9 +8,9 @@ coverage can still be read off at a glance.
 | Elixir test file | cases | Rust test file | status |
 | --- | ---: | --- | --- |
 | `v2/currencies_controller_test.exs` | 15 | `tests/v2_currencies.rs` | ported (15 + 3 extra: path id, path+query, currency without assets) |
-| `v2/claim/claim_controller_test.exs` | 46 | `tests/v2_claims.rs` (get by id), `tests/v2_claims_list.rs` (list), `tests/v2_claims_patch.rs` (status transitions), `tests/v2_claims_create.rs` (create) | **partial** — 4 get-by-id and 14 list cases done; status transitions and create pending |
+| `v2/claim/claim_controller_test.exs` | 46 | `tests/v2_claims.rs` (get by id), `tests/v2_claims_list.rs` (list), `tests/v2_claims_patch.rs` (status transitions and metadata patches), `tests/v2_claims_create.rs` (create) | **partial** — 4 get-by-id, 14 list and 19 transition/metadata cases done; create pending |
 | `v2/claim/metadata/get_test.exs` | 2 | `tests/v2_claims_metadata.rs` | pending |
-| `v2/claim/metadata/update_test.exs` | 15 | `tests/v2_claims_metadata.rs` | pending |
+| `v2/claim/metadata/update_test.exs` | 15 | `tests/v2_claims_metadata.rs` | pending — the metadata-only update cases already exist in `v2_claims_patch.rs`; the creation, size-limit and count-limit cases are still to port |
 | `v2/user_transactions/pay/single/single_user_transaction_controller_test.exs` | 7 | `tests/v2_transactions.rs` | pending |
 | `v2/user_transactions/pay/single/single_user_transaction_controller_idempotency_test.exs` | 5 | `tests/v2_transactions_idempotency.rs` | pending |
 | `v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` | 12 | `tests/v2_transactions.rs` | pending |
