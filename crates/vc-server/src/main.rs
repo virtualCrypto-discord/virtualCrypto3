@@ -51,6 +51,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secure_cookies = optional_env("SECURE_COOKIES", "true") != "false";
 
     let pool = vc_core::db::connect(&database_url, 10).await?;
+
+    // The webhook transport, when there is a proxy to send through. With none —
+    // in development, or before the certificates exist — nothing is delivered and
+    // claims still complete, which is what the no-op is for.
+    let notifier: Arc<dyn vc_core::notification::Notifier> = match webhook_proxy() {
+        Some(proxy) => Arc::new(vc_api::notification::WebhookNotifier::new(
+            pool.clone(),
+            proxy,
+        )),
+        None => Arc::new(vc_core::notification::NoopNotifier),
+    };
+
     let state = AppState::new(
         pool,
         vc_api::state::Signing::new(jwt_secret, session_secret, secure_cookies),
@@ -67,8 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::var("DISCORD_OAUTH2_REDIRECT_URI")
                 .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
-        // The webhook transport is not implemented; see docs/known-gaps.md.
-        Arc::new(vc_core::notification::NoopNotifier),
+        notifier.clone(),
         // A loose per-user allowance; `RATE_LIMIT_PER_MINUTE=0` turns it off.
         Arc::new(vc_api::rate_limit::RateLimiter::new(
             std::env::var("RATE_LIMIT_PER_MINUTE")
@@ -95,4 +106,29 @@ fn require_env(key: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 fn optional_env(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// The proxy to deliver webhooks through, if one is configured.
+///
+/// The certificate and its key arrive with `#` standing in for a newline, which
+/// is how they are set: a PEM in an environment variable is otherwise a single
+/// line of nothing. That trick is the Elixir's, and the deployment sets them the
+/// same way.
+///
+/// No proxy at all is development, and is answered with `None`. A proxy whose
+/// certificate will not parse is a configuration mistake and panics, because a
+/// server that boots without ever delivering is worse than one that says so.
+fn webhook_proxy() -> Option<vc_api::notification::Proxy> {
+    let url = std::env::var("WEBHOOK_PROXY_URL").ok()?;
+    let certificate = std::env::var("VCRYPTO_WEBHOOK_PROXY_CERT")
+        .ok()?
+        .replace('#', "\n");
+    let key = std::env::var("VCRYPTO_WEBHOOK_PROXY_KEY")
+        .ok()?
+        .replace('#', "\n");
+
+    Some(
+        vc_api::notification::Proxy::new(url, certificate.as_bytes(), key.as_bytes())
+            .expect("the webhook proxy certificate could not be used"),
+    )
 }
