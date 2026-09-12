@@ -42,3 +42,73 @@ pub async fn create_access_token(
 
     Ok(token_id.to_string())
 }
+
+/// `Grant.get_or_create_grant_if_not_reused/3`: the grant a code belongs to.
+///
+/// A code that a grant still remembers has already been redeemed, and that is
+/// what the delete in front is for: it is not cleaning up, it is the check. Two
+/// codes for the same application and guild are the same grant, so the insert
+/// conflicts on that pair and keeps the newer code.
+///
+/// `None` is that reuse, and the caller answers it as `used_code`.
+pub async fn grant_for_code(
+    pool: &PgPool,
+    application_id: i64,
+    guild_id: i64,
+    latest_code: &str,
+    now: OffsetDateTime,
+) -> Result<Option<i64>> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let remembered = sqlx::query!("DELETE FROM grants WHERE latest_code = $1", latest_code)
+        .execute(pool)
+        .await?;
+
+    if remembered.rows_affected() > 0 {
+        return Ok(None);
+    }
+
+    let id = sqlx::query_scalar!(
+        "INSERT INTO grants (application_id, guild_id, latest_code, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $4)
+         ON CONFLICT (application_id, guild_id) DO UPDATE SET latest_code = $3
+        RETURNING id",
+        application_id,
+        guild_id,
+        latest_code,
+        at
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(Some(id))
+}
+
+/// `Grant.create_grant_scopes/2`: what a grant carries.
+///
+/// One statement for however many scopes, as `insert_all/3` is, rather than one
+/// per scope — the same care `UserResolver.resolve_ids/1` takes and for the same
+/// reason. Conflicting rows are left alone, which is what makes redeeming a
+/// second code of the same pair harmless.
+pub async fn create_grant_scopes(
+    pool: &PgPool,
+    grant_id: i64,
+    scopes: &[String],
+    now: OffsetDateTime,
+) -> Result<()> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    sqlx::query!(
+        "INSERT INTO grant_scopes (grant_id, scope, inserted_at, updated_at)
+         SELECT $1, t.scope::text::virtual_crypto_scope_type, $3, $3
+           FROM UNNEST($2::text[]) AS t(scope)
+         ON CONFLICT DO NOTHING",
+        grant_id,
+        scopes,
+        at
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

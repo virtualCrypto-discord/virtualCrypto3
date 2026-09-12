@@ -6,11 +6,10 @@
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
-use vc_core::grant::create_access_token;
+use vc_core::grant::{create_access_token, create_grant_scopes, grant_for_code};
 
-/// An application, and a grant of it in a guild.
-async fn grant(pool: &PgPool) -> i64 {
-    let application_id = sqlx::query_scalar!(
+async fn application(pool: &PgPool) -> i64 {
+    sqlx::query_scalar!(
         r#"INSERT INTO applications
              (status, client_id, client_secret, grant_types, client_name,
               public_key, private_key, inserted_at, updated_at)
@@ -23,7 +22,12 @@ async fn grant(pool: &PgPool) -> i64 {
     )
     .fetch_one(pool)
     .await
-    .expect("insert the application");
+    .expect("insert the application")
+}
+
+/// An application, and a grant of it in a guild.
+async fn grant(pool: &PgPool) -> i64 {
+    let application_id = application(pool).await;
 
     sqlx::query_scalar!(
         "INSERT INTO grants (application_id, guild_id, inserted_at, updated_at)
@@ -74,4 +78,99 @@ async fn two_tokens_are_not_the_same_token(pool: PgPool) {
         .expect("another token");
 
     assert_ne!(one, two);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_code_makes_a_grant_that_remembers_it(pool: PgPool) {
+    let application_id = application(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let grant_id = grant_for_code(&pool, application_id, 42, "a-code", now)
+        .await
+        .expect("a grant")
+        .expect("a new one");
+
+    let stored = sqlx::query!(
+        "SELECT application_id, guild_id, latest_code FROM grants WHERE id = $1",
+        grant_id
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the row");
+
+    assert_eq!(stored.application_id, Some(application_id));
+    assert_eq!(stored.guild_id, Some(42));
+    assert_eq!(stored.latest_code.as_deref(), Some("a-code"));
+}
+
+/// The delete in front of the insert is the check, not housekeeping: a grant
+/// that still remembers this code has already been redeemed with it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_code_a_grant_remembers_is_a_reuse(pool: PgPool) {
+    let application_id = application(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    grant_for_code(&pool, application_id, 42, "a-code", now)
+        .await
+        .expect("a grant");
+
+    let again = grant_for_code(&pool, application_id, 42, "a-code", now)
+        .await
+        .expect("an answer");
+
+    assert_eq!(again, None);
+
+    let stored = sqlx::query!("SELECT COUNT(*) AS count FROM grants")
+        .fetch_one(&pool)
+        .await
+        .expect("count the grants");
+
+    assert_eq!(stored.count, Some(0), "and the grant it found was deleted");
+}
+
+/// Two codes for the same application and guild are one grant, not two.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_second_code_keeps_the_same_grant(pool: PgPool) {
+    let application_id = application(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let first = grant_for_code(&pool, application_id, 42, "one", now)
+        .await
+        .expect("a grant")
+        .expect("a new one");
+    let second = grant_for_code(&pool, application_id, 42, "two", now)
+        .await
+        .expect("a grant")
+        .expect("the same one");
+
+    assert_eq!(first, second);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn scopes_are_recorded_once_however_often_they_are_given(pool: PgPool) {
+    let application_id = application(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let grant_id = grant_for_code(&pool, application_id, 42, "a-code", now)
+        .await
+        .expect("a grant")
+        .expect("a new one");
+
+    create_grant_scopes(&pool, grant_id, &["openid".to_string()], now)
+        .await
+        .expect("the scopes");
+    create_grant_scopes(&pool, grant_id, &["openid".to_string()], now)
+        .await
+        .expect("the same scopes again");
+
+    let stored = sqlx::query!(
+        r#"SELECT scope::text AS "scope!" FROM grant_scopes WHERE grant_id = $1"#,
+        grant_id
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("the rows");
+
+    assert_eq!(stored.len(), 1, "given twice, recorded once");
+    assert_eq!(stored[0].scope, "openid");
 }
