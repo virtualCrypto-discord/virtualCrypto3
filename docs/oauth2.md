@@ -474,3 +474,29 @@ UUID. The client secret is `:crypto.strong_rand_bytes(32)` base64-url encoded
 without padding — thirty-two bytes, the same entropy as the authorization code,
 spelled differently.
 
+### Two of registration's steps already exist, in another endpoint
+
+Registration's second and third steps — refresh the owner's Discord authorization
+when it is near expiry, then ask Discord who they are — are the same thing
+`GET /api/v2/users/@me` needed, and they are written there as `resolve_token` in
+`routes/v2/users.rs`:
+
+```rust
+async fn resolve_token(state: &AppState, discord_id: i64, authorization: &DiscordAuth)
+    -> Result<String, ApiError>
+```
+
+It refreshes inside the last fifteen minutes of the seven-day lifetime, stores the
+new authorization, and answers with the token to use.
+
+**It is private to that file, and registration should not copy it.** The behaviour
+is two constants and a comparison — the fifteen minutes and the seven days — and a
+second copy is a second place for both to be got wrong, in a flow where getting
+them wrong means asking Discord with a token that has expired. It wants to be
+shared: the natural move is to lift it out of `v2/users.rs` into a module of its
+own, and have both callers use it.
+
+What registration adds after it is its own: the profile the token fetches answers
+with `bot`, and a bot account may not register — `user_verification_failed`. The
+same profile's `id` is the `owner_discord_id` the application row is written with.
+
