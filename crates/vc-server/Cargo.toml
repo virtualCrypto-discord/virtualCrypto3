@@ -1,0 +1,21 @@
+[package]
+name = "vc-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "vc-server"
+path = "src/main.rs"
+
+[dependencies]
+vc-core.workspace = true
+vc-auth.workspace = true
+vc-api.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

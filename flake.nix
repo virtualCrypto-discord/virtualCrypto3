@@ -33,6 +33,7 @@
           cargo-watch
           cargo-nextest
           cargo-deny
+          cargo-insta
           sqlx-cli
         ];
 
@@ -44,7 +45,7 @@
 
         deps = with pkgs; [
           openssl
-          postgresql_16
+          postgresql_17
           pkg-config
         ];
       in
@@ -56,14 +57,11 @@
 
           env = {
             DATABASE_URL = "postgres://postgres:postgres@localhost:5432/virtualcrypto_dev";
-            PGDATA = ".pgdata";
-            PGHOST = "localhost";
-            PGPORT = "5432";
           };
 
           shellHook = ''
             echo "virtualCrypto dev shell — $(rustc --version)"
-            echo "postgres: $(postgres --version) (PGDATA=$PGDATA)"
+            echo "postgres: $(postgres --version)"
           '';
         };
       }
