@@ -6,6 +6,7 @@
 //! directly; the renderers stay separate functions so they still line up with
 //! `InteractionsJSON`.
 
+pub mod autocomplete;
 pub mod bal;
 pub mod claim;
 pub mod create;
@@ -24,6 +25,7 @@ pub const PONG: i64 = 1;
 pub const CHANNEL_MESSAGE_WITH_SOURCE: i64 = 4;
 pub const UPDATE_MESSAGE: i64 = 7;
 pub const MODAL: i64 = 9;
+pub const AUTOCOMPLETE_RESULT: i64 = 8;
 pub const EPHEMERAL: i64 = 64;
 pub const COLOR_OK: i64 = 0x38EA42;
 pub const COLOR_ERROR: i64 = 0xEA3875;

@@ -46,13 +46,60 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
         Some(2) => command(&state, &payload).await,
         Some(3) => component(&state, &payload).await,
-        Some(4) => text(
-            StatusCode::NOT_IMPLEMENTED,
-            "interaction type 4 is not implemented yet",
-        ),
+        Some(4) => autocomplete(&state, &payload).await,
         Some(5) => modal(&state, &payload).await,
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }
+}
+
+/// `verified/2` for `type` 4: the option being typed, and the path that says
+/// which suggestions it wants.
+async fn autocomplete(state: &AppState, payload: &Value) -> Response {
+    let data = payload.get("data");
+
+    let Some(name) = data
+        .and_then(|data| data.get("name"))
+        .and_then(Value::as_str)
+    else {
+        return text(StatusCode::BAD_REQUEST, "Type Not Found");
+    };
+
+    let options = data
+        .and_then(|data| data.get("options"))
+        .and_then(Value::as_array);
+
+    // A subcommand's options sit one level down, and the focused one is the
+    // option Discord says the user is typing in.
+    let (path, focused) = match options.and_then(|options| options.first()) {
+        Some(option) if option.get("type").and_then(Value::as_i64) == Some(1) => {
+            let subcommand = option
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+
+            (
+                vec![name, subcommand],
+                focused_option(option.get("options").and_then(Value::as_array)),
+            )
+        }
+        _ => (vec![name], focused_option(options)),
+    };
+
+    let Some(focused) = focused else {
+        return text(StatusCode::BAD_REQUEST, "Type Not Found");
+    };
+
+    match crate::command::autocomplete::handle(state, &path, focused, payload).await {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+        Err(CommandError::Internal(error)) => error.into_response(),
+    }
+}
+
+fn focused_option(options: Option<&Vec<Value>>) -> Option<&Value> {
+    options?
+        .iter()
+        .find(|option| option.get("focused").and_then(Value::as_bool) == Some(true))
 }
 
 /// `verified/2` for `type` 5: a modal submission, whose `custom_id` says which

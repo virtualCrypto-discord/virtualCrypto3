@@ -1207,3 +1207,67 @@ async fn update_statuses(
 
     Ok(())
 }
+
+/// `Query.Claim.list_candidates/6`: the claims whose id starts with `query`,
+/// the ones in the caller's own guild first and the newest first after that.
+///
+/// `filter` is which side of the claim the caller has to be, so the same `id`
+/// option offers what the caller could act on from where they are standing.
+pub async fn search_candidates(
+    pool: &PgPool,
+    operator_discord_id: i64,
+    query: &str,
+    filter: SrFilter,
+    statuses: &[String],
+    guild_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<ClaimView>> {
+    let mut prefix = String::with_capacity(query.len() + 1);
+    for character in query.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            prefix.push('\\');
+        }
+        prefix.push(character);
+    }
+    prefix.push('%');
+
+    let rows = sqlx::query_as!(
+        Row,
+        "SELECT c.id AS \"claim_id!\",
+                c.amount AS claim_amount,
+                c.status::text AS claim_status,
+                c.inserted_at AS \"claim_inserted_at!\",
+                c.updated_at AS \"claim_updated_at!\",
+                cur.name AS currency_name,
+                cur.unit AS currency_unit,
+                cur.guild_id AS currency_guild_id,
+                cur.pool_amount AS currency_pool_amount,
+                cl.id AS \"claimant_id!\",
+                cl.discord_id AS claimant_discord_id,
+                py.id AS \"payer_id!\",
+                py.discord_id AS payer_discord_id,
+                '{}'::jsonb AS \"metadata!\"
+           FROM claims c
+           JOIN currencies cur ON c.currency_id = cur.id
+           JOIN users cl ON c.claimant_user_id = cl.id
+           JOIN users py ON c.payer_user_id = py.id
+          WHERE c.status::text = ANY($1)
+            AND ($2 = 'all'
+                 AND (cl.discord_id = $3 OR py.discord_id = $3)
+              OR $2 = 'received' AND py.discord_id = $3
+              OR $2 = 'claimed' AND cl.discord_id = $3)
+            AND c.id::text LIKE $4
+          ORDER BY (cur.guild_id = $5) DESC NULLS LAST, c.id DESC
+          LIMIT $6",
+        statuses,
+        filter.as_str(),
+        operator_discord_id,
+        prefix,
+        guild_id,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Row::into_view).collect())
+}

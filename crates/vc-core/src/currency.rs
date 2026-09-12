@@ -294,3 +294,126 @@ pub async fn deletable(
         Ok(DeleteCheck::OutOfTerm)
     }
 }
+
+/// One option candidate: a currency, and what the caller holds of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrencyCandidate {
+    pub amount: i64,
+    pub name: Option<String>,
+    pub unit: Option<String>,
+}
+
+/// `escape_like_query/1`: a prefix match, with the wildcards in the user's own
+/// text escaped so a `%` they typed does not match everything.
+fn like_prefix(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 1);
+
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+
+    escaped.push('%');
+
+    escaped
+}
+
+/// `Money.search_currencies_with_asset_by_unit/3`: the units starting with
+/// `unit`, the caller's own guild first and their holdings next — the order the
+/// command's suggestions appear in.
+pub async fn search_by_unit(
+    pool: &PgPool,
+    unit: &str,
+    guild_id: Option<i64>,
+    operator_id: i32,
+    limit: i64,
+) -> Result<Vec<CurrencyCandidate>> {
+    let candidates = sqlx::query_as!(
+        CurrencyCandidate,
+        "SELECT COALESCE(assets.amount, 0) AS \"amount!\",
+                currencies.name, currencies.unit
+           FROM currencies
+           LEFT JOIN assets
+                  ON assets.currency_id = currencies.id AND assets.user_id = $1
+          WHERE currencies.unit ILIKE $2
+          ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,
+                   (COALESCE(assets.amount, 0) != 0) DESC,
+                   char_length(currencies.unit) ASC,
+                   assets.updated_at DESC NULLS LAST
+          LIMIT $4",
+        i64::from(operator_id),
+        like_prefix(unit),
+        guild_id,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(candidates)
+}
+
+/// `Money.search_currencies_with_asset_by_name/3`, which orders by the name's
+/// length and then by the currency's id rather than by anything stored on the
+/// asset.
+pub async fn search_by_name(
+    pool: &PgPool,
+    name: &str,
+    guild_id: Option<i64>,
+    operator_id: i32,
+    limit: i64,
+) -> Result<Vec<CurrencyCandidate>> {
+    let candidates = sqlx::query_as!(
+        CurrencyCandidate,
+        "SELECT COALESCE(assets.amount, 0) AS \"amount!\",
+                currencies.name, currencies.unit
+           FROM currencies
+           LEFT JOIN assets
+                  ON assets.currency_id = currencies.id AND assets.user_id = $1
+          WHERE currencies.name ILIKE $2
+          ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,
+                   (COALESCE(assets.amount, 0) != 0) DESC,
+                   char_length(currencies.name) ASC,
+                   currencies.id ASC
+          LIMIT $4",
+        i64::from(operator_id),
+        like_prefix(name),
+        guild_id,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(candidates)
+}
+
+/// `Money.search_currencies_with_asset_by_guild_and_user/2`, which is what an
+/// empty query offers: the caller's own currencies and their guild's.
+pub async fn search_by_guild_and_user(
+    pool: &PgPool,
+    guild_id: Option<i64>,
+    operator_id: i32,
+    limit: i64,
+) -> Result<Vec<CurrencyCandidate>> {
+    let candidates = sqlx::query_as!(
+        CurrencyCandidate,
+        "SELECT COALESCE(assets.amount, 0) AS \"amount!\",
+                currencies.name, currencies.unit
+           FROM currencies
+           LEFT JOIN assets
+                  ON assets.currency_id = currencies.id AND assets.user_id = $1
+          WHERE assets.user_id = $1 OR currencies.guild_id = $2
+          ORDER BY (currencies.guild_id = $2) DESC NULLS LAST,
+                   (COALESCE(assets.amount, 0) != 0) DESC,
+                   currencies.id ASC
+          LIMIT $3",
+        i64::from(operator_id),
+        guild_id,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(candidates)
+}

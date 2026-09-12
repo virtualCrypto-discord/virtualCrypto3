@@ -159,22 +159,15 @@ stale.
 `timestamp <> body` and answers PING (type 1) with a PONG. Types 2 (application
 commands), 3 (message components) and 5 (modals) are dispatched by name or by
 `component_type`, with the state each one acts on packed into its `custom_id`.
-Type 4 (autocomplete) answers 501, so the currency and claim suggestions the
-commands describe do not appear while an option is being typed. **The Elixir
-suite has no test for it**, so the ported cases say nothing about it and the
-endpoint is not whole even though every interaction test is ported. Read from
-`Interaction.AutoComplete`, it needs:
+Type 4 (autocomplete) is dispatched on the focused option's name and, for a
+claim id, the command path — the same `id` offers received-and-pending under
+`approve` and `deny`, claimed-and-pending under `cancel`, and every status under
+`show`. Elixir has no test for any of it, so `tests/interactions_autocomplete.rs`
+holds additions rather than ports.
 
-- three searches that do not exist in vc-core yet:
-  `Money.search_currencies_with_asset_by_unit/3`, `_by_name/3` and
-  `_by_guild_and_user/2`, each an `ILIKE` prefix match with the
-  discord-guild-first, non-zero-balance-first ordering the options rely on, and
-  `Money.search_claims/6`;
-- a dispatch on the focused option's name *and* the command path — the same `id`
-  option means "received and pending" under `approve`/`deny`, "claimed and
-  pending" under `cancel` and every status under `show`;
-- and, for a claim whose party is an application rather than a discord user, that
-  application's `client_name`, which needs the OAuth2/application side.
+One thing it cannot name yet: a claim whose party is an application rather than a
+discord user reads as `deleted`, where Elixir shows that application's client
+name. That needs the OAuth2/application side.
 
 One deviation: a command name that no `Command.handle/4` clause matches answers
 400 `Type Not Found`, where Elixir has no clause either and so raises, producing
