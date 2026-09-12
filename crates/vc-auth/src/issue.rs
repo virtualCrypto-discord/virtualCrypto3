@@ -28,14 +28,46 @@ pub async fn user_token(
     scopes: &[&str],
     now: OffsetDateTime,
 ) -> Result<String, AuthError> {
+    issue(pool, secret, user_id, "user", scopes, now).await
+}
+
+/// `Guardian.issue_token_for_app/2`: a token that says what an application may
+/// do, rather than one that says who a user is.
+///
+/// The `kind` claim is the whole of the difference, and it is not a small one:
+/// the API dispatches on it, and one endpoint answers a user and an application
+/// differently for the same path.
+pub async fn app_token(
+    pool: &PgPool,
+    secret: &[u8],
+    application_user_id: i64,
+    scopes: &[&str],
+    now: OffsetDateTime,
+) -> Result<String, AuthError> {
+    issue(pool, secret, application_user_id, "app", scopes, now).await
+}
+
+/// The issuance both kinds share.
+///
+/// Guardian's `after_encode_and_sign/4` writes a `user_access_tokens` row for
+/// `kind in ["user", "app"]` — the same table for both — so an application's
+/// token is revoked the same way a user's is, by deleting a row.
+async fn issue(
+    pool: &PgPool,
+    secret: &[u8],
+    subject: i64,
+    kind: &str,
+    scopes: &[&str],
+    now: OffsetDateTime,
+) -> Result<String, AuthError> {
     let jti = Uuid::new_v4();
-    let at = PrimitiveDateTime::new(now.date(), now.time());
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
     let issued = now.unix_timestamp();
 
     sqlx::query!(
         "INSERT INTO user_access_tokens (user_id, token_id, expires, inserted_at, updated_at)
          VALUES ($1, $2, $3, $4, $4)",
-        user_id,
+        subject,
         jti,
         at + TTL,
         at
@@ -44,17 +76,56 @@ pub async fn user_token(
     .await?;
 
     let claims = Claims {
-        sub: user_id.to_string(),
+        sub: subject.to_string(),
         exp: issued + TTL.whole_seconds(),
         iat: Some(issued),
         nbf: Some(issued),
         iss: ISSUER.to_string(),
         aud: Some(AUDIENCE.to_string()),
         jti: jti.to_string(),
-        kind: "user".to_string(),
+        kind: kind.to_string(),
         scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
         typ: Some("access".to_string()),
     };
 
     jwt::sign(&claims, secret)
+}
+
+/// The scopes a `client_credentials` token may carry, which are **not** the
+/// browser flow's: that one allows `openid` and nothing else, and neither check
+/// can be reused for the other.
+pub const APP_SCOPES: &[&str] = &["vc.pay", "vc.claim", "oauth2.register"];
+
+/// Whether a `client_credentials` request's scopes are acceptable: no repeats,
+/// and nothing outside [`APP_SCOPES`].
+pub fn app_scopes_are_valid(scopes: &[&str]) -> bool {
+    let unique: std::collections::HashSet<&str> = scopes.iter().copied().collect();
+
+    unique.len() == scopes.len() && scopes.iter().all(|scope| APP_SCOPES.contains(scope))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_app_scopes_are_the_ones_the_credentials_grant_checks() {
+        assert!(app_scopes_are_valid(&["vc.pay"]));
+        assert!(app_scopes_are_valid(&["vc.pay", "vc.claim"]));
+        assert!(app_scopes_are_valid(&[]));
+    }
+
+    /// A repeat is refused, as `MapSet.size/1` against the list's length is.
+    #[test]
+    fn a_repeated_app_scope_is_refused() {
+        assert!(!app_scopes_are_valid(&["vc.pay", "vc.pay"]));
+    }
+
+    /// And `openid` is not one of them, which is the reason the two checks are
+    /// two: the browser flow's set and this one do not overlap.
+    #[test]
+    fn an_app_scope_that_is_not_one_is_refused() {
+        assert!(!app_scopes_are_valid(&["openid"]));
+        assert!(!app_scopes_are_valid(&["vc.pay", "root"]));
+    }
 }
