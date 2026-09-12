@@ -153,6 +153,18 @@ which is the same four gates a laptop runs. The database is what the `sqlx`
 macros compile against, so no `.sqlx` offline cache is committed and none can go
 stale.
 
+## OAuth2 and applications
+
+Not built at all: no `/oauth2/*` route exists, so no third-party application can
+register or obtain a token. This is the largest remaining milestone, and unlike
+everything else in this migration Elixir has **no tests for it**, so there is no
+ported spec — `docs/oauth2.md` records the contract read out of the controllers,
+which is where a port would have to start.
+
+It is also what the claim notifications are waiting on: the webhook handshake
+that registering an application performs is the same mutual-TLS path the
+notifications are sent over, so the transport arrives with this.
+
 ## Discord interactions
 
 `POST /api/integrations/discord/interactions` verifies the Ed25519 signature over
