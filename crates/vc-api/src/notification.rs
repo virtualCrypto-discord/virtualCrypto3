@@ -92,7 +92,7 @@ impl Proxy {
     /// `None` is a proxy that did not say: the status travels in `X-Status`
     /// because the proxy's own answer is a `200` whatever the destination did,
     /// and a caller that cannot tell those apart cannot act on either.
-    pub async fn send(&self, delivery: &Delivery) -> Result<Option<u16>, reqwest::Error> {
+    pub async fn send(&self, delivery: &Delivery) -> Result<Option<(u16, Value)>, reqwest::Error> {
         let response = self
             .http
             .post(&self.url)
@@ -103,11 +103,19 @@ impl Proxy {
             .send()
             .await?;
 
-        Ok(response
+        // The status first, because the body consumes the response and the
+        // handshake needs both.
+        let status = response
             .headers()
             .get(STATUS)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse().ok()))
+            .and_then(|value| value.parse().ok());
+
+        let body = response.json::<Value>().await.ok();
+
+        // A proxy that answered without saying what the application said is a
+        // proxy that did not answer.
+        Ok(status.zip(body))
     }
 }
 
@@ -246,6 +254,38 @@ pub fn fresh_keypair() -> [u8; 32] {
     getrandom::fill(&mut seed).expect("the operating system's randomness");
 
     seed
+}
+
+/// The handshake an application must pass before it is registered, and
+/// periodically afterwards.
+///
+/// Two requests, as the Elixir sends them. The second is signed with a keypair
+/// generated here and used for nothing else, because its whole purpose is to be a
+/// signature the application should refuse.
+pub async fn verify(proxy: &Proxy, url: &str, private_key: &[u8; 32], at: i64) -> Handshake {
+    let real = send_ping(proxy, url, private_key, at).await;
+    let wrong = send_ping(proxy, url, &fresh_keypair(), at).await;
+
+    handshake(
+        real.as_ref().map(|(status, body)| (*status, body)),
+        wrong.as_ref().map(|(status, body)| (*status, body)),
+    )
+}
+
+/// One PING, and what the application answered through the proxy.
+async fn send_ping(
+    proxy: &Proxy,
+    url: &str,
+    private_key: &[u8; 32],
+    at: i64,
+) -> Option<(u16, Value)> {
+    let ping = serde_json::json!({ "type": PING });
+
+    proxy
+        .send(&delivery(&ping, private_key, url, at))
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
