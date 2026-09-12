@@ -1,5 +1,5 @@
 //! Claim-update notifications, ported from
-//! `test/virtualCrypto/notification/single_test.exs`.
+//! `test/virtualCrypto/notification/single_test.exs` and `bulk_test.exs`.
 //!
 //! The Elixir tests use `VirtualCryptoTest.Notification.Sink`, a `Notification`
 //! implementation that sends what it receives to the test process; this records
@@ -12,12 +12,14 @@ use std::sync::Mutex;
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{Money, insert_claim, insert_claim_metadata, setup_money};
-use vc_core::claim::Transition;
+use support::{Money, insert_claim, insert_claim_metadata, insert_user, setup_money};
+use vc_core::claim::{PartialClaim, Transition};
 use vc_core::notification::Notifier;
 
-const CLAIM_ID: i64 = 1;
-const AMOUNT: i64 = 100;
+const CURRENCY: i64 = 1;
+/// user1 is account 1 and user2 is account 2; 123 is an account the tests make.
+const THIRD_ACCOUNT: i32 = 3;
+const THIRD_DISCORD_ID: i64 = 123;
 
 /// `VirtualCryptoTest.Notification.Sink`.
 #[derive(Default)]
@@ -41,25 +43,30 @@ impl Notifier for Sink {
     }
 }
 
-/// A pending claim of 100 from user2 to user1, with the claimant's metadata when
-/// one is given.
-async fn fixture(pool: &PgPool, metadata: Option<Value>) -> Money {
-    let money = setup_money(pool).await;
-    insert_claim(pool, CLAIM_ID, AMOUNT, "pending", 1, 2, money.currency).await;
+/// `VirtualCryptoTest.Notification.Setup.setup_claim/1`: a pending claim, with
+/// the claimant's metadata when one is given.
+async fn pending_claim(
+    pool: &PgPool,
+    id: i64,
+    amount: i64,
+    claimant: i32,
+    payer: i32,
+    metadata: Option<Value>,
+) {
+    insert_claim(pool, id, amount, "pending", claimant, payer, CURRENCY).await;
 
     if let Some(metadata) = metadata {
-        insert_claim_metadata(pool, CLAIM_ID, 1, 2, 1, metadata).await;
+        insert_claim_metadata(pool, id, claimant, payer, claimant, metadata).await;
     }
-
-    money
 }
 
-/// `format_claim_for_notification/1`, with the claimant's metadata.
-fn event(money: &Money, status: &str, metadata: Value) -> Value {
+/// `format_claim_for_notification/1`, with the claimant's metadata. The payer is
+/// user2 in every one of these tests.
+fn expected(money: &Money, id: i64, status: &str, amount: i64, metadata: Value) -> Value {
     json!({
-        "id": CLAIM_ID,
+        "id": id,
         "status": status,
-        "amount": AMOUNT.to_string(),
+        "amount": amount.to_string(),
         "updated_at": Value::Null,
         "metadata": metadata,
         "payer": {
@@ -90,34 +97,46 @@ fn assert_timestamp(value: &Value) {
     assert!(
         digits
             .iter()
-            .all(|field| field.chars().all(|c| c.is_ascii_digit())),
+            .all(|field| field.chars().all(|character| character.is_ascii_digit())),
         "numeric fields: {text}"
     );
 }
 
-/// Compares the delivered event, ignoring `updated_at`, which is checked
-/// separately because it is the transition's own timestamp.
-fn assert_event(actual: &Value, expected: &Value) {
-    assert_timestamp(&actual["updated_at"]);
+/// The events as comparable strings, with `updated_at` checked separately
+/// because it is the transition's own timestamp. The Elixir tests compare sets,
+/// since the order the events arrive in is the database's.
+fn canonical(events: &[Value]) -> Vec<String> {
+    let mut rendered: Vec<String> = events
+        .iter()
+        .map(|event| {
+            // A delivered event carries the timestamp, which has to be the form
+            // the Elixir tests assert; an expected one carries null.
+            if !event["updated_at"].is_null() {
+                assert_timestamp(&event["updated_at"]);
+            }
 
-    let mut actual = actual.clone();
-    let mut expected = expected.clone();
-    actual["updated_at"] = Value::Null;
-    expected["updated_at"] = Value::Null;
+            let mut event = event.clone();
+            event["updated_at"] = Value::Null;
 
-    assert_eq!(actual, expected);
+            event.to_string()
+        })
+        .collect();
+    rendered.sort();
+
+    rendered
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn approving_a_claim_notifies_the_claimant(pool: PgPool) {
-    let money = fixture(&pool, None).await;
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, None).await;
     let sink = Sink::default();
 
     vc_core::claim::transition(
         &pool,
         &sink,
         2,
-        CLAIM_ID,
+        1,
         Transition::Approved,
         Some(json!({ "a": "b" })),
     )
@@ -137,19 +156,23 @@ async fn approving_a_claim_notifies_the_claimant(pool: PgPool) {
     assert_eq!(user.discord_id, Some(support::MONEY_USER1));
 
     assert_eq!(events.len(), 1);
-    assert_event(&events[0], &event(&money, "approved", json!({})));
+    assert_eq!(
+        canonical(events),
+        canonical(&[expected(&money, 1, "approved", 100, json!({}))])
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn denying_a_claim_notifies_the_claimant(pool: PgPool) {
-    let money = fixture(&pool, None).await;
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, None).await;
     let sink = Sink::default();
 
     vc_core::claim::transition(
         &pool,
         &sink,
         2,
-        CLAIM_ID,
+        1,
         Transition::Denied,
         Some(json!({ "a": "b" })),
     )
@@ -158,24 +181,25 @@ async fn denying_a_claim_notifies_the_claimant(pool: PgPool) {
 
     let deliveries = sink.take();
     assert_eq!(deliveries.len(), 1);
-
-    let (claimant_id, events) = &deliveries[0];
-    assert_eq!(*claimant_id, 1);
-    assert_eq!(events.len(), 1);
-    assert_event(&events[0], &event(&money, "denied", json!({})));
+    assert_eq!(deliveries[0].0, 1);
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[expected(&money, 1, "denied", 100, json!({}))])
+    );
 }
 
 /// The metadata in the event is the claimant's own row, not the operator's.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn approving_a_claim_carries_the_claimants_metadata(pool: PgPool) {
-    let money = fixture(&pool, Some(json!({ "x": "y" }))).await;
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
     let sink = Sink::default();
 
     vc_core::claim::transition(
         &pool,
         &sink,
         2,
-        CLAIM_ID,
+        1,
         Transition::Approved,
         Some(json!({ "a": "b" })),
     )
@@ -184,22 +208,23 @@ async fn approving_a_claim_carries_the_claimants_metadata(pool: PgPool) {
 
     let deliveries = sink.take();
     assert_eq!(deliveries.len(), 1);
-    assert_event(
-        &deliveries[0].1[0],
-        &event(&money, "approved", json!({ "x": "y" })),
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[expected(&money, 1, "approved", 100, json!({ "x": "y" }))])
     );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn denying_a_claim_carries_the_claimants_metadata(pool: PgPool) {
-    let money = fixture(&pool, Some(json!({ "x": "y" }))).await;
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
     let sink = Sink::default();
 
     vc_core::claim::transition(
         &pool,
         &sink,
         2,
-        CLAIM_ID,
+        1,
         Transition::Denied,
         Some(json!({ "a": "b" })),
     )
@@ -208,20 +233,274 @@ async fn denying_a_claim_carries_the_claimants_metadata(pool: PgPool) {
 
     let deliveries = sink.take();
     assert_eq!(deliveries.len(), 1);
-    assert_event(
-        &deliveries[0].1[0],
-        &event(&money, "denied", json!({ "x": "y" })),
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[expected(&money, 1, "denied", 100, json!({ "x": "y" }))])
     );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn cancelling_a_claim_notifies_nobody(pool: PgPool) {
-    fixture(&pool, Some(json!({ "x": "y" }))).await;
+    setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
     let sink = Sink::default();
 
-    vc_core::claim::transition(&pool, &sink, 1, CLAIM_ID, Transition::Canceled, None)
+    vc_core::claim::transition(&pool, &sink, 1, 1, Transition::Canceled, None)
         .await
         .expect("the transition succeeds");
 
     assert!(sink.take().is_empty(), "nothing is delivered");
+}
+
+/// Approving several of one claimant's claims delivers once, carrying both.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approving_several_claims_notifies_the_claimant_once(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
+    pending_claim(&pool, 2, 200, 1, 2, None).await;
+
+    let sink = Sink::default();
+    vc_core::claim::update_claims(
+        &pool,
+        &sink,
+        2,
+        &[
+            PartialClaim {
+                id: 1,
+                status: Some("approved".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 2,
+                status: Some("approved".to_string()),
+                metadata: None,
+            },
+        ],
+    )
+    .await
+    .expect("the update succeeds");
+
+    let deliveries = sink.take();
+    assert_eq!(deliveries.len(), 1, "one delivery for the one claimant");
+    assert_eq!(deliveries[0].0, 1);
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[
+            expected(&money, 1, "approved", 100, json!({ "x": "y" })),
+            expected(&money, 2, "approved", 200, json!({})),
+        ])
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn denying_several_claims_notifies_the_claimant_once(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
+    pending_claim(&pool, 2, 200, 1, 2, None).await;
+
+    let sink = Sink::default();
+    vc_core::claim::update_claims(
+        &pool,
+        &sink,
+        2,
+        &[
+            PartialClaim {
+                id: 1,
+                status: Some("denied".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 2,
+                status: Some("denied".to_string()),
+                metadata: None,
+            },
+        ],
+    )
+    .await
+    .expect("the update succeeds");
+
+    let deliveries = sink.take();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[
+            expected(&money, 1, "denied", 100, json!({ "x": "y" })),
+            expected(&money, 2, "denied", 200, json!({})),
+        ])
+    );
+}
+
+/// One claimant can be told about an approval and a denial in the same batch.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approving_and_denying_together_notifies_the_claimant_once(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
+    pending_claim(&pool, 2, 200, 1, 2, None).await;
+
+    let sink = Sink::default();
+    vc_core::claim::update_claims(
+        &pool,
+        &sink,
+        2,
+        &[
+            PartialClaim {
+                id: 1,
+                status: Some("approved".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 2,
+                status: Some("denied".to_string()),
+                metadata: None,
+            },
+        ],
+    )
+    .await
+    .expect("the update succeeds");
+
+    let deliveries = sink.take();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[
+            expected(&money, 1, "approved", 100, json!({ "x": "y" })),
+            expected(&money, 2, "denied", 200, json!({})),
+        ])
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approving_claims_of_different_claimants_notifies_each(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    insert_user(&pool, THIRD_ACCOUNT, THIRD_DISCORD_ID).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
+    pending_claim(&pool, 2, 200, THIRD_ACCOUNT, 2, None).await;
+
+    let sink = Sink::default();
+    vc_core::claim::update_claims(
+        &pool,
+        &sink,
+        2,
+        &[
+            PartialClaim {
+                id: 1,
+                status: Some("approved".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 2,
+                status: Some("approved".to_string()),
+                metadata: None,
+            },
+        ],
+    )
+    .await
+    .expect("the update succeeds");
+
+    let mut deliveries = sink.take();
+    deliveries.sort_by_key(|(claimant_id, _)| *claimant_id);
+    assert_eq!(deliveries.len(), 2, "one delivery per claimant");
+    assert_eq!(deliveries[0].0, 1);
+    assert_eq!(deliveries[1].0, THIRD_ACCOUNT);
+
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[expected(&money, 1, "approved", 100, json!({ "x": "y" }))])
+    );
+    assert_eq!(
+        canonical(&deliveries[1].1),
+        canonical(&[expected(&money, 2, "approved", 200, json!({}))])
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn denying_claims_of_different_claimants_notifies_each(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    insert_user(&pool, THIRD_ACCOUNT, THIRD_DISCORD_ID).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
+    pending_claim(&pool, 2, 200, THIRD_ACCOUNT, 2, None).await;
+
+    let sink = Sink::default();
+    vc_core::claim::update_claims(
+        &pool,
+        &sink,
+        2,
+        &[
+            PartialClaim {
+                id: 1,
+                status: Some("denied".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 2,
+                status: Some("denied".to_string()),
+                metadata: None,
+            },
+        ],
+    )
+    .await
+    .expect("the update succeeds");
+
+    let mut deliveries = sink.take();
+    deliveries.sort_by_key(|(claimant_id, _)| *claimant_id);
+    assert_eq!(deliveries.len(), 2);
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[expected(&money, 1, "denied", 100, json!({ "x": "y" }))])
+    );
+    assert_eq!(
+        canonical(&deliveries[1].1),
+        canonical(&[expected(&money, 2, "denied", 200, json!({}))])
+    );
+}
+
+/// Approving, denying and cancelling in one batch: a cancellation tells nobody,
+/// so the third claim is absent from the deliveries.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_mixed_batch_notifies_only_the_changed_hands(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    insert_user(&pool, THIRD_ACCOUNT, THIRD_DISCORD_ID).await;
+    pending_claim(&pool, 1, 100, 1, 2, Some(json!({ "x": "y" }))).await;
+    pending_claim(&pool, 2, 200, THIRD_ACCOUNT, 2, None).await;
+    // The operator is this claim's claimant, which is what a cancellation
+    // requires.
+    pending_claim(&pool, 3, 100, 2, 1, None).await;
+
+    let sink = Sink::default();
+    vc_core::claim::update_claims(
+        &pool,
+        &sink,
+        2,
+        &[
+            PartialClaim {
+                id: 1,
+                status: Some("approved".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 2,
+                status: Some("denied".to_string()),
+                metadata: None,
+            },
+            PartialClaim {
+                id: 3,
+                status: Some("canceled".to_string()),
+                metadata: None,
+            },
+        ],
+    )
+    .await
+    .expect("the update succeeds");
+
+    let mut deliveries = sink.take();
+    deliveries.sort_by_key(|(claimant_id, _)| *claimant_id);
+    assert_eq!(deliveries.len(), 2, "the cancellation tells nobody");
+    assert_eq!(
+        canonical(&deliveries[0].1),
+        canonical(&[expected(&money, 1, "approved", 100, json!({ "x": "y" }))])
+    );
+    assert_eq!(
+        canonical(&deliveries[1].1),
+        canonical(&[expected(&money, 2, "denied", 200, json!({}))])
+    );
 }

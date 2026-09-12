@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 use sqlx::types::Json;
 use sqlx::{PgConnection, PgPool};
@@ -718,6 +720,322 @@ pub async fn set_metadata(
     }
 
     tx.commit().await.map_err(TransitionError::Database)?;
+
+    Ok(())
+}
+
+/// One entry of a bulk status change: which claim, the status it should move to
+/// (`None` changes nothing), and the operator's metadata when it should change.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartialClaim {
+    pub id: i64,
+    pub status: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug)]
+pub enum UpdateClaimsError {
+    /// The same claim id appears twice.
+    DuplicatedClaims,
+    /// A status outside `approved`, `denied`, `canceled` or `None`.
+    InvalidStatus,
+    InvalidMetadata(Vec<String>),
+    NotFound,
+    InvalidOperator,
+    /// The operator is not the payer of every claim being approved or denied, or
+    /// not the claimant of every claim being cancelled.
+    PermissionDenied,
+    /// One of the claims is no longer pending.
+    InvalidCurrentStatus,
+    NotFoundCurrency,
+    NotFoundSenderAsset,
+    NotEnoughAmount,
+    InvalidAmount,
+    Database(sqlx::Error),
+}
+
+impl From<TransferError> for UpdateClaimsError {
+    fn from(error: TransferError) -> Self {
+        match error {
+            TransferError::InvalidAmount => UpdateClaimsError::InvalidAmount,
+            TransferError::NotFoundCurrency => UpdateClaimsError::NotFoundCurrency,
+            TransferError::NotFoundSenderAsset => UpdateClaimsError::NotFoundSenderAsset,
+            TransferError::NotEnoughAmount => UpdateClaimsError::NotEnoughAmount,
+            TransferError::Database(error) => UpdateClaimsError::Database(error),
+        }
+    }
+}
+
+impl From<TransitionError> for UpdateClaimsError {
+    fn from(error: TransitionError) -> Self {
+        match error {
+            TransitionError::Database(error) => UpdateClaimsError::Database(error),
+            // The `metadata_limitation` trigger rejecting the write, which the
+            // controller reports as too many entries.
+            TransitionError::MetadataLimit => UpdateClaimsError::InvalidMetadata(vec![
+                "too many entries in metadata(max: 50)".to_string(),
+            ]),
+            other => UpdateClaimsError::Database(sqlx::Error::Protocol(format!(
+                "unexpected error from the metadata write: {other:?}"
+            ))),
+        }
+    }
+}
+
+/// What a bulk status change needs to know about each claim.
+#[derive(Debug, Clone)]
+struct BulkClaim {
+    id: i64,
+    status: Option<String>,
+    amount: Option<i64>,
+    currency_unit: Option<String>,
+    claimant_id: i64,
+    payer_id: i64,
+}
+
+/// `Money.update_claims/2`: apply several status changes at once, which is what
+/// the claim-list buttons do.
+///
+/// The validations run in the order the Elixir `with` runs them — duplicate ids,
+/// the statuses themselves, the metadata, that every claim exists, and that the
+/// operator is a party to all of them — before anything is written. Approvals
+/// then move every claim's money in one batch through
+/// [`crate::transfer::transfer_bulk`], and one notification is dispatched per
+/// claimant once the transaction has committed.
+pub async fn update_claims(
+    pool: &PgPool,
+    notifier: &dyn Notifier,
+    operator_id: i32,
+    partial_claims: &[PartialClaim],
+) -> std::result::Result<(), UpdateClaimsError> {
+    let mut seen = std::collections::HashSet::new();
+    for partial in partial_claims {
+        if !seen.insert(partial.id) {
+            return Err(UpdateClaimsError::DuplicatedClaims);
+        }
+    }
+
+    for partial in partial_claims {
+        match partial.status.as_deref() {
+            None | Some("approved") | Some("denied") | Some("canceled") => {}
+            Some(_) => return Err(UpdateClaimsError::InvalidStatus),
+        }
+    }
+
+    let mut details = Vec::new();
+    for (index, partial) in partial_claims.iter().enumerate() {
+        if let Some(metadata) = &partial.metadata {
+            details.extend(
+                crate::metadata::validate(metadata)
+                    .into_iter()
+                    .map(|detail| format!("[{index}] {detail}")),
+            );
+        }
+    }
+    if !details.is_empty() {
+        return Err(UpdateClaimsError::InvalidMetadata(details));
+    }
+
+    let time = utc_now();
+    let mut tx = pool.begin().await.map_err(UpdateClaimsError::Database)?;
+
+    let ids: Vec<i64> = partial_claims.iter().map(|partial| partial.id).collect();
+    let rows = sqlx::query!(
+        "SELECT c.id, c.status::text AS status, c.amount, cur.unit AS currency_unit,
+                c.claimant_user_id AS \"claimant_id!\", c.payer_user_id AS \"payer_id!\"
+           FROM claims c
+           JOIN currencies cur ON c.currency_id = cur.id
+          WHERE c.id = ANY($1)
+            FOR UPDATE OF c",
+        &ids
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(UpdateClaimsError::Database)?;
+
+    if rows.len() != ids.len() {
+        return Err(UpdateClaimsError::NotFound);
+    }
+
+    let claims: HashMap<i64, BulkClaim> = rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.id,
+                BulkClaim {
+                    id: row.id,
+                    status: row.status,
+                    amount: row.amount,
+                    currency_unit: row.currency_unit,
+                    claimant_id: row.claimant_id,
+                    payer_id: row.payer_id,
+                },
+            )
+        })
+        .collect();
+
+    let operator = i64::from(operator_id);
+    if !claims
+        .values()
+        .all(|claim| claim.claimant_id == operator || claim.payer_id == operator)
+    {
+        return Err(UpdateClaimsError::InvalidOperator);
+    }
+
+    let group = |status: &str| -> Vec<&PartialClaim> {
+        partial_claims
+            .iter()
+            .filter(|partial| partial.status.as_deref() == Some(status))
+            .collect()
+    };
+
+    let mut notified: Vec<i64> = Vec::new();
+
+    let approving = group("approved");
+    if !approving.is_empty() {
+        let approving: Vec<&BulkClaim> = approving.iter().map(|p| &claims[&p.id]).collect();
+
+        if !approving.iter().all(|claim| claim.payer_id == operator) {
+            return Err(UpdateClaimsError::PermissionDenied);
+        }
+        if !approving
+            .iter()
+            .all(|claim| claim.status.as_deref() == Some("pending"))
+        {
+            return Err(UpdateClaimsError::InvalidCurrentStatus);
+        }
+
+        // `approve_claims/3` sends from the first claim's payer, which every
+        // entry has just been checked against.
+        let sender_id = i32::try_from(approving[0].payer_id).map_err(|_| {
+            UpdateClaimsError::Database(sqlx::Error::Protocol("payer id out of range".into()))
+        })?;
+
+        let entries: Vec<crate::transfer::BulkEntry> = approving
+            .iter()
+            .map(|claim| {
+                Ok((
+                    claim.currency_unit.clone().unwrap_or_default(),
+                    i32::try_from(claim.claimant_id).map_err(|_| {
+                        UpdateClaimsError::Database(sqlx::Error::Protocol(
+                            "claimant id out of range".into(),
+                        ))
+                    })?,
+                    claim.amount.unwrap_or_default(),
+                ))
+            })
+            .collect::<std::result::Result<Vec<_>, UpdateClaimsError>>()?;
+
+        crate::transfer::transfer_bulk(&mut tx, sender_id, &entries)
+            .await
+            .map_err(UpdateClaimsError::from)?;
+
+        let approving_ids: Vec<i64> = approving.iter().map(|claim| claim.id).collect();
+        update_statuses(&mut tx, &approving_ids, "approved", time).await?;
+        notified.extend(approving_ids);
+    }
+
+    let denying = group("denied");
+    if !denying.is_empty() {
+        let denying: Vec<&BulkClaim> = denying.iter().map(|p| &claims[&p.id]).collect();
+
+        if !denying.iter().all(|claim| claim.payer_id == operator) {
+            return Err(UpdateClaimsError::PermissionDenied);
+        }
+        if !denying
+            .iter()
+            .all(|claim| claim.status.as_deref() == Some("pending"))
+        {
+            return Err(UpdateClaimsError::InvalidCurrentStatus);
+        }
+
+        let denying_ids: Vec<i64> = denying.iter().map(|claim| claim.id).collect();
+        update_statuses(&mut tx, &denying_ids, "denied", time).await?;
+        notified.extend(denying_ids);
+    }
+
+    let canceling = group("canceled");
+    if !canceling.is_empty() {
+        let canceling: Vec<&BulkClaim> = canceling.iter().map(|p| &claims[&p.id]).collect();
+
+        if !canceling.iter().all(|claim| claim.claimant_id == operator) {
+            return Err(UpdateClaimsError::PermissionDenied);
+        }
+        if !canceling
+            .iter()
+            .all(|claim| claim.status.as_deref() == Some("pending"))
+        {
+            return Err(UpdateClaimsError::InvalidCurrentStatus);
+        }
+
+        let canceling_ids: Vec<i64> = canceling.iter().map(|claim| claim.id).collect();
+        update_statuses(&mut tx, &canceling_ids, "canceled", time).await?;
+    }
+
+    // The operator's own metadata, for the claims that asked it to change.
+    for partial in partial_claims
+        .iter()
+        .filter(|partial| partial.metadata.is_some())
+    {
+        let claim = &claims[&partial.id];
+
+        upsert_metadata(
+            &mut tx,
+            claim.id,
+            claim.claimant_id,
+            claim.payer_id,
+            operator,
+            partial.metadata.clone().unwrap_or_default(),
+        )
+        .await
+        .map_err(UpdateClaimsError::from)?;
+    }
+
+    tx.commit().await.map_err(UpdateClaimsError::Database)?;
+
+    // One notification per claimant, carrying every event for that claimant.
+    let mut grouped: Vec<(i32, Vec<Value>)> = Vec::new();
+    for id in notified {
+        let claim = &claims[&id];
+
+        let Some((claimant_id, event)) = claim_notification(pool, id, claim.claimant_id)
+            .await
+            .map_err(UpdateClaimsError::Database)?
+        else {
+            continue;
+        };
+
+        match grouped.iter_mut().find(|(group, _)| *group == claimant_id) {
+            Some((_, events)) => events.push(event),
+            None => grouped.push((claimant_id, vec![event])),
+        }
+    }
+
+    for (claimant_id, events) in grouped {
+        notifier.notify_claim_update(claimant_id, &events);
+    }
+
+    Ok(())
+}
+
+/// `Query.Claim.update_claims_status/3`: one statement for the whole group.
+async fn update_statuses(
+    conn: &mut PgConnection,
+    ids: &[i64],
+    status: &str,
+    time: PrimitiveDateTime,
+) -> std::result::Result<(), UpdateClaimsError> {
+    sqlx::query!(
+        "UPDATE claims
+            SET status = $2::text::virtual_crypto_claim_status, updated_at = $3
+          WHERE id = ANY($1)",
+        ids,
+        status,
+        time
+    )
+    .execute(&mut *conn)
+    .await
+    .map_err(UpdateClaimsError::Database)?;
 
     Ok(())
 }

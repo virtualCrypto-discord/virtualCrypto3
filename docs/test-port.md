@@ -8,9 +8,9 @@ with the reason.
 | --- | ---: | ---: | --- |
 | v2 REST API | 103 | 103 | complete |
 | Discord interactions | 141 | 44 | in progress |
-| Notifications | 11 | 5 | in progress |
+| Notifications | 11 | 11 | complete |
 | v1 REST API | 77 | 0 | dropped by decision |
-| **total** | **332** | **152** | |
+| **total** | **332** | **158** | |
 
 A row is only `ported` when all of its cases exist and pass, and extra Rust cases
 are listed separately so the Elixir coverage can still be read off at a glance.
@@ -88,7 +88,12 @@ application side of the domain, which is not built yet — see
 | Elixir test file | cases | Rust file | status |
 | --- | ---: | --- | --- |
 | `notification/single_test.exs` | 5 | `tests/notification.rs` | ported |
-| `notification/bulk_test.exs` | 6 | | pending — needs `update_claims/2` |
+| `notification/bulk_test.exs` | 6 | `tests/notification.rs` | ported — with `vc_core::claim::update_claims/2` |
+
+The bulk cases needed `update_claims/2`, which groups the requests by the status
+they move to, checks the operator against every claim, moves an approval batch in
+one transfer, and dispatches one notification per claimant. That is the same call
+the claim-list buttons make, so it is not work spent only on these tests.
 
 ## v1 REST API: dropped
 
