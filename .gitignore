@@ -5,6 +5,9 @@
 /.direnv
 /.envrc.local
 
+# CommandCode local agent state (permissions, taste)
+/.commandcode/
+
 # Local environment and secrets
 .env
 .envrc.local
