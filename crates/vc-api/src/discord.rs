@@ -69,6 +69,12 @@ pub trait DiscordApi: Send + Sync {
     /// what a member's own permissions are ORed together from.
     async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError>;
 
+    /// The bot's own user id, which for a Discord application is the same number
+    /// as its client id. The consent screen asks whether the bot is in a guild
+    /// before it asks a person anything: a grant belongs to a guild, and one the
+    /// bot cannot see is not a guild it can grant anything in.
+    fn bot_user_id(&self) -> i64;
+
     /// `post_webhook_message/3`: the follow-up a component answers with, which
     /// is where a button's result is shown. The Elixir tests swap the service
     /// for one that records the body instead of sending it.
@@ -255,6 +261,10 @@ impl DiscordApi for CachedDiscord {
         self.inner.get_roles(guild_id).await
     }
 
+    fn bot_user_id(&self) -> i64 {
+        self.inner.bot_user_id()
+    }
+
     async fn post_webhook_message(
         &self,
         application_id: &str,
@@ -395,6 +405,15 @@ impl DiscordApi for HttpDiscordApi {
             Value::Object(member) => Ok(Some(member)),
             _ => Err(DiscordError::Request("member is not an object".into())),
         }
+    }
+
+    /// The client id, parsed. A client id that is not a number is a configuration
+    /// mistake, and every request that needs this would be wrong, so it fails
+    /// here and loudly rather than being smuggled onward as zero.
+    fn bot_user_id(&self) -> i64 {
+        self.client_id
+            .parse()
+            .expect("the Discord client id is a snowflake")
     }
 
     async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {

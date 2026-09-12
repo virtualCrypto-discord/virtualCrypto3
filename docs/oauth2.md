@@ -117,9 +117,10 @@ of the above plus a CSRF token. There is no deny button and no `deny` action.
 errors do *not* redirect, unlike `GET`'s, which redirects with `error`,
 `error_description` and `state` for everything except the two that cannot.
 
-### Two things that cannot have worked
+### Two things that cannot have worked, and what was decided
 
-Both are worth deciding on rather than porting:
+**Both are repaired, not ported.** Both are recorded in `docs/known-gaps.md` as
+deliberate differences, and `/login` existing is what made the second answerable.
 
 - **`validate_executor` looks the logged-in user up in Discord by the wrong id.**
   It passes the session's `user.id` to `get_guild_member_with_status_code/2` as
@@ -131,5 +132,14 @@ Both are worth deciding on rather than porting:
   database and asking Discord with that.
 - **A missing session raises.** With no session the `with` falls through to
   `raise "session validation error!"`, which is a 500 rather than a trip to the
-  login page. Now that the session and `/login` exist, the sensible answer is to
-  send the browser to log in and come back to the consent screen.
+  login page. The answer is to send the browser to
+  `/login?continue=<the consent url>` and let it come back, which is the same
+  `continue` the login page already honours.
+
+### CSRF, which the old form had and this one gets from the cookie
+
+The Elixir's consent form carries a hidden `_csrf_token`, minted and checked by
+Phoenix. The SPA's consent POST does not need one, because the session cookie is
+`SameSite=Lax`: a cross-site POST does not carry it, so a forged consent cannot
+be submitted with somebody's session attached. That is the whole of the
+protection, and it is worth knowing that it rests on that attribute.

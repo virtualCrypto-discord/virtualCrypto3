@@ -215,3 +215,14 @@ makes it a bug rather than a branch, and one that a retry would not fix.
 The Rust side skips the id, so the same race costs a permission check that may be
 a moment stale instead of the request.
 
+### The consent screen's two repairs
+
+`validate_executor` asked Discord about the session's user id, which is a
+VirtualCrypto id and not a Discord one, so the lookup could not succeed and the
+Approve button was unreachable. It now reads the account's `discord_id` and asks
+with that.
+
+A missing session raised, which is a 500 where the answer is a trip to
+`/login?continue=…`. That repair needed the login page to exist, which is why it
+waited until it did.
+

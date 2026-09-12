@@ -20,6 +20,8 @@ use vc_api::state::Links;
 use vc_core::claim::Transition;
 use vc_core::notification::{NoopNotifier, Notifier};
 
+/// The id the fake answers `bot_user_id` with.
+pub const BOT_USER_ID: i64 = 100_000_000_000_000_000;
 pub const JWT_SECRET: &str = "test-secret";
 /// The session cookie's own secret, which a test needs to read one back.
 pub const SESSION_SECRET: &str = "test-session-secret";
@@ -140,6 +142,12 @@ impl DiscordApi for FakeDiscord {
 
     async fn get_roles(&self, _guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {
         Ok(self.roles.clone())
+    }
+
+    /// The fake's own id, which the consent screen's tests use as the bot whose
+    /// membership is being asked about.
+    fn bot_user_id(&self) -> i64 {
+        BOT_USER_ID
     }
 
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
