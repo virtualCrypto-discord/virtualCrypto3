@@ -1,5 +1,6 @@
 //! axum routers implementing the virtualCrypto HTTP API.
 
+pub mod custom_id;
 pub mod discord;
 pub mod error;
 pub mod routes;

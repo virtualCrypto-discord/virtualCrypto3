@@ -25,6 +25,38 @@ and the history insert are one statement each. A batch therefore costs a fixed
 number of round trips instead of one per entry, and the per-currency totals are
 checked against the locked balances before anything is written.
 
+## Discord interaction tests
+
+`test/.../controllers/api/interactions/` holds 22 files and 141 cases. They are
+the checklist for the interaction types that still answer 501.
+
+| Elixir test file | cases | Rust file | status |
+| --- | ---: | --- | --- |
+| `common_test.exs` | 6 | `tests/interactions_common.rs` | ported (+3 extra: a forged signature, the signature covering exact bytes, a duplicated header) |
+| `custom_id_test.exs` | 1 | `src/custom_id.rs` unit tests | ported (+4 extra: discriminator, unknown id, round trip) |
+| `help_test.exs` | 1 | | pending |
+| `invite_test.exs` | 1 | | pending |
+| `pay_test.exs` | 8 | | pending |
+| `bal_test.exs` | 3 | | pending |
+| `info_test.exs` | 13 | | pending |
+| `create_test.exs` | 9 | | pending |
+| `delete_test.exs` | 3 | | pending |
+| `claim/claim_make_test.exs` | 3 | | pending |
+| `claim/claim_approve_test.exs` | 16 | | pending |
+| `claim/claim_deny_test.exs` | 13 | | pending |
+| `claim/claim_cancel_test.exs` | 13 | | pending |
+| `claim/claim_show_test.exs` | 3 | | pending |
+| `claim/list/claim_list_all_test.exs` | 2 | | pending |
+| `claim/list/claim_list_approve_test.exs` | 16 | | pending |
+| `claim/list/claim_list_deny_test.exs` | 13 | | pending |
+| `claim/list/claim_list_cancel_test.exs` | 13 | | pending |
+| `claim/list/claim_list_select_test.exs` | 3 | | pending |
+| `claim/list/claim_list_options_test.exs` | 1 | | pending |
+| `claim/list/claim_list_received_test.exs` | 0 | | empty in Elixir too |
+| `claim/list/claim_list_claimed_test.exs` | 0 | | empty in Elixir too |
+
+Total: 141 cases, 7 ported.
+
 ## Endpoints with no Elixir test
 
 These have no test in the Elixir suite, so their contract comes from captured
