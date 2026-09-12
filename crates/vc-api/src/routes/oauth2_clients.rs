@@ -14,13 +14,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use vc_auth::AuthUser;
 
+use vc_core::application::check_application_type as check_application_type_again;
 use vc_core::application::{
-    MetadataError, NewApplication, check_application_type, check_grant_types, check_logo_uri,
-    check_response_types, check_slug, check_url,
+    Changes, MetadataError, NewApplication, check_application_type, check_grant_types,
+    check_logo_uri, check_response_types, check_slug, check_url,
 };
 
 use crate::discord_auth::resolve_token;
@@ -556,6 +557,101 @@ fn internal(why: &str) -> Response {
         Json(json!({ "error": "server_error" })),
     )
         .into_response()
+}
+
+/// What a `PATCH` asks to change, with each field's presence intact.
+///
+/// A `serde` option cannot tell "absent" from "null" — both arrive as `None` — and
+/// in this endpoint they are different operations: sending `logo_uri: null` clears
+/// it, and not mentioning it leaves it alone. So the body is read as a map and each
+/// field is asked for rather than deserialised.
+pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Response>> {
+    /// `None` when the field is not in the request, `Some(None)` when it is null,
+    /// and `Some(Some(..))` when it has a value.
+    fn text(body: &Map<String, Value>, field: &str) -> Option<Option<String>> {
+        match body.get(field)? {
+            Value::Null => Some(None),
+            // A number or a boolean is answered as its JSON text, which is what a
+            // database column would have been given; refusing it here would be a
+            // difference nobody asked for.
+            other => Some(Some(
+                other
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| other.to_string()),
+            )),
+        }
+    }
+
+    fn list(body: &Map<String, Value>, field: &str) -> Option<Vec<String>> {
+        body.get(field)?.as_array().map(|values| {
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .collect()
+        })
+    }
+
+    let changes = Changes {
+        client_name: text(body, "client_name"),
+        client_uri: text(body, "client_uri"),
+        logo_uri: text(body, "logo_uri"),
+        webhook_url: text(body, "webhook_url"),
+        discord_support_server_invite_slug: text(body, "discord_support_server_invite_slug"),
+        application_type: text(body, "application_type").flatten(),
+        grant_types: list(body, "grant_types"),
+        response_types: list(body, "response_types"),
+        redirect_uris: list(body, "redirect_uris"),
+    };
+
+    // The same rules registration applies, to the fields that are here: an edit is
+    // a registration of the parts it names.
+    if let Some(kind) = changes.application_type.as_deref() {
+        check_application_type_again(kind).map_err(metadata)?;
+    }
+
+    if let Some(Some(client_uri)) = changes.client_uri.as_ref() {
+        check_url(client_uri, MetadataError::ClientUri).map_err(metadata)?;
+    }
+
+    if let Some(Some(logo_uri)) = changes.logo_uri.as_ref() {
+        check_logo_uri(logo_uri).map_err(metadata)?;
+    }
+
+    if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
+        check_url(webhook_url, MetadataError::WebhookUrl).map_err(metadata)?;
+    }
+
+    if let Some(Some(slug)) = changes.discord_support_server_invite_slug.as_ref() {
+        check_slug(slug).map_err(metadata)?;
+    }
+
+    if let Some(types) = changes.grant_types.as_deref() {
+        check_grant_types(types).map_err(metadata)?;
+    }
+
+    if let Some(types) = changes.response_types.as_deref() {
+        check_response_types(types).map_err(metadata)?;
+    }
+
+    if let Some(uris) = changes.redirect_uris.as_deref() {
+        for redirect_uri in uris {
+            if check_url(redirect_uri, MetadataError::ClientUri).is_err() {
+                return Err(Box::new(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_redirect_uri",
+                    "redirect_uri_scheme_must_be_http_or_https",
+                )));
+            }
+        }
+    }
+
+    Ok(changes)
 }
 
 #[cfg(test)]
