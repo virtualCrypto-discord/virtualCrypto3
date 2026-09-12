@@ -241,15 +241,7 @@ mod cookie_tests {
         };
 
         let carried = set_cookie(&session, SECRET, false).expect("a cookie");
-        let headers = headers_with_cookie(
-            &carried
-                .to_str()
-                .unwrap()
-                .split(';')
-                .next()
-                .unwrap()
-                .to_owned(),
-        );
+        let headers = headers_with_cookie(carried.to_str().unwrap().split(';').next().unwrap());
 
         assert_eq!(from_headers(&headers, SECRET), Some(session));
     }
