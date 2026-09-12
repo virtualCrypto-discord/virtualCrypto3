@@ -7,10 +7,11 @@ mod support;
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{ClaimSet, execute_from_guild, fake, interaction, setup_claim, state};
+use support::{ClaimSet, execute_from_guild, fake, get_amount, interaction, setup_claim, state};
 
 const COLOR_ERROR: i64 = 0x00EA_3875;
 const COLOR_BRAND: i64 = 6_431_213;
+const COLOR_OK: i64 = 0x0038_EA42;
 
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
@@ -274,4 +275,244 @@ async fn show_renders_a_pending_claim_with_its_actions(pool: PgPool) {
     let response = interaction(router(pool), show_from_guild(money.user1, claim_id)).await;
 
     assert_shown(&response, claim_id, &claims, inserted_at);
+}
+
+/// `InteractionsControllerTest.Claim.Helper.patch_from_guild/3`: a `claim
+/// <action> id:<id>` command sent by `user`.
+fn patch_from_guild(action: &str, id: i64, user: i64) -> Value {
+    execute_from_guild(
+        json!({
+            "name": "claim",
+            "options": [{
+                "name": action,
+                "options": [{ "name": "id", "value": id.to_string() }],
+            }],
+        }),
+        user,
+    )
+}
+
+async fn patch(pool: PgPool, action: &str, id: i64, user: i64) -> support::Response {
+    interaction(router(pool), patch_from_guild(action, id, user)).await
+}
+
+/// `Helper.assert_discord_message/2`: the claim command's error embed, which
+/// carries no `allowed_mentions`.
+fn assert_message(response: &support::Response, message: &str) {
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        json!({
+            "type": 4,
+            "data": {
+                "flags": 64,
+                "embeds": [{
+                    "title": "エラー",
+                    "color": COLOR_ERROR,
+                    "description": message,
+                }],
+            },
+        })
+    );
+}
+
+/// `Interactions.Claim.render/1` for a transition the caller was allowed to make.
+fn assert_action_result(response: &support::Response, claim_id: i64, result: &str) {
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        json!({
+            "type": 4,
+            "data": {
+                "flags": 64,
+                "embeds": [{
+                    "description": format!("id: {claim_id}の請求を{result}"),
+                    "color": COLOR_OK,
+                }],
+            },
+        })
+    );
+}
+
+const INVALID_OPERATOR: &str = "この請求に対してこの操作を行う権限がありません。";
+const INVALID_STATUS: &str = "この請求に対してこの操作を行うことは出来ません。";
+const NOT_FOUND: &str = "そのidの請求は見つかりませんでした。";
+const NOT_ENOUGH: &str = "お金が足りません。";
+
+/// c1 is pending, so the payer can approve it and the money moves.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_pays_the_claimant(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+    let claim_id = claims.id(0);
+
+    let claimant_before = get_amount(&pool, money.user1, money.currency).await;
+    let payer_before = get_amount(&pool, money.user2, money.currency).await;
+
+    let response = patch(pool.clone(), "approve", claim_id, money.user2).await;
+
+    assert_action_result(&response, claim_id, "承諾し、支払いました。");
+
+    let claim = vc_core::claim::view(&pool, 1, claim_id)
+        .await
+        .expect("a lookup")
+        .expect("the claim exists");
+    assert_eq!(claim.status.as_deref(), Some("approved"));
+
+    assert_eq!(
+        get_amount(&pool, money.user1, money.currency).await,
+        claimant_before + 500
+    );
+    // The payer is left with nothing, and the assets trigger drops the row.
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        payer_before - 500
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_the_claimant(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(0), money.user1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_an_unrelated_user(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    let response = patch(pool, "approve", claims.id(0), -1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+/// c2 asks for far more than its payer holds, and the payer's own approval is
+/// what uncovers it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_reports_a_payer_who_cannot_cover_the_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(1), money.user1).await;
+
+    assert_message(&response, NOT_ENOUGH);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_the_claimant_of_an_unaffordable_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(1), money.user2).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_an_unrelated_user_of_an_unaffordable_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    let response = patch(pool, "approve", claims.id(1), -1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_reports_an_already_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(2), money.user2).await;
+
+    assert_message(&response, INVALID_STATUS);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_the_claimant_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(2), money.user1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_an_unrelated_user_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    let response = patch(pool, "approve", claims.id(2), -1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_reports_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(3), money.user2).await;
+
+    assert_message(&response, INVALID_STATUS);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_the_claimant_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(3), money.user1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_an_unrelated_user_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    let response = patch(pool, "approve", claims.id(3), -1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_reports_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(4), money.user2).await;
+
+    assert_message(&response, INVALID_STATUS);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_the_claimant_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", claims.id(4), money.user1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_rejects_an_unrelated_user_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    let response = patch(pool, "approve", claims.id(4), -1).await;
+
+    assert_message(&response, INVALID_OPERATOR);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approve_reports_an_unknown_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = patch(pool, "approve", -1, money.user1).await;
+
+    assert_message(&response, NOT_FOUND);
 }

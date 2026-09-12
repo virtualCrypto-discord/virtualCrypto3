@@ -1,8 +1,10 @@
+pub mod action;
 pub mod make;
 pub mod show;
 
 use serde_json::{Map, Value, json};
 use time::PrimitiveDateTime;
+use vc_core::claim::Transition;
 
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError, EPHEMERAL};
 use crate::state::AppState;
@@ -21,6 +23,9 @@ pub async fn handle(
     let sub_options = options.get("sub_options");
 
     match subcommand {
+        "approve" => action::handle(state, sub_options, payload, Transition::Approved).await,
+        "cancel" => action::handle(state, sub_options, payload, Transition::Canceled).await,
+        "deny" => action::handle(state, sub_options, payload, Transition::Denied).await,
         "make" => make::handle(state, sub_options, payload).await,
         "show" => show::handle(state, sub_options, payload).await,
         _ => Err(CommandError::Unknown),

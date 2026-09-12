@@ -7,10 +7,10 @@ with the reason.
 | Area | cases | ported | status |
 | --- | ---: | ---: | --- |
 | v2 REST API | 103 | 103 | complete |
-| Discord interactions | 141 | 50 | in progress |
+| Discord interactions | 141 | 66 | in progress |
 | Notifications | 11 | 11 | complete |
 | v1 REST API | 77 | 0 | dropped by decision |
-| **total** | **332** | **164** | |
+| **total** | **332** | **180** | |
 
 A row is only `ported` when all of its cases exist and pass, and extra Rust cases
 are listed separately so the Elixir coverage can still be read off at a glance.
@@ -51,7 +51,7 @@ checked against the locked balances before anything is written.
 | `create_test.exs` | 9 | `tests/interactions_create.rs` | ported |
 | `delete_test.exs` | 3 | `tests/interactions_delete.rs` | 2 of 3 — the modal submission needs the type 5 handler |
 | `claim/claim_make_test.exs` | 3 | `tests/interactions_claim.rs` | ported |
-| `claim/claim_approve_test.exs` | 16 | | pending |
+| `claim/claim_approve_test.exs` | 16 | `tests/interactions_claim.rs` | ported |
 | `claim/claim_deny_test.exs` | 13 | | pending |
 | `claim/claim_cancel_test.exs` | 13 | | pending |
 | `claim/claim_show_test.exs` | 3 | `tests/interactions_claim.rs` | ported |
