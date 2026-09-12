@@ -69,10 +69,17 @@ for fifteen minutes, a 404 included — the same shape as the Elixir `Cachex`
 tables, and what keeps a page of claims from asking about the same missing user
 once per row.
 
-Two differences from Elixir's, both deliberate: the table is bounded (ten
-thousand entries, expired ones swept first) so a long-lived server cannot grow
-without limit, and it lives in this process, so every Fly machine keeps its own.
-Neither changes what a caller sees.
+Like Elixir's, a miss is fetched once: callers that want the same id while it is
+being looked up wait on that id's lock and then read what the first one stored,
+rather than each making their own call.
+
+Two differences from Elixir's, both about the bound rather than the behaviour:
+
+- The table is bounded (ten thousand entries) and gives up its oldest tenth
+  rather than clearing, so a long-lived server cannot grow without limit and a
+  full table does not send every caller back to Discord at once.
+- It lives in this process, so every Fly machine keeps its own. That changes
+  nothing a caller can see.
 
 ## Rate limiting is loose, and only on the interactions endpoint
 

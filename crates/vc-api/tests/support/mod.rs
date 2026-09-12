@@ -39,6 +39,7 @@ pub struct FakeDiscord {
     payload: Map<String, Value>,
     guild: Map<String, Value>,
     refresh_calls: AtomicUsize,
+    user_calls: AtomicUsize,
     webhooks: Mutex<Vec<Value>>,
 }
 
@@ -58,12 +59,19 @@ impl FakeDiscord {
             payload: golden_discord_payload(),
             guild,
             refresh_calls: AtomicUsize::new(0),
+            user_calls: AtomicUsize::new(0),
             webhooks: Mutex::new(Vec::new()),
         }
     }
 
     pub fn refresh_calls(&self) -> usize {
         self.refresh_calls.load(Ordering::SeqCst)
+    }
+
+    /// How many times `get_user` reached this stand-in, which is how a cache is
+    /// shown to have answered instead.
+    pub fn user_calls(&self) -> usize {
+        self.user_calls.load(Ordering::SeqCst)
     }
 
     /// The bodies `post_webhook_message` has been handed, in order — what the
@@ -125,6 +133,12 @@ impl DiscordApi for FakeDiscord {
         &self,
         discord_user_id: i64,
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        self.user_calls.fetch_add(1, Ordering::SeqCst);
+
+        // Give a second caller the chance to reach the cache while this one is
+        // still out, so a lookup that is not coalesced has somewhere to show it.
+        tokio::task::yield_now().await;
+
         let mut user = Map::new();
         user.insert("id".to_string(), Value::String(discord_user_id.to_string()));
 

@@ -78,13 +78,61 @@ pub const CACHE_LIMIT: usize = 10_000;
 /// "not found", which `Cachex` stores as `:not_found` and answers from.
 struct Entries<T> {
     entries: std::sync::Mutex<std::collections::HashMap<i64, (std::time::Instant, Option<T>)>>,
+    /// One lock per id currently being fetched. Two callers who miss the same id
+    /// therefore make one call between them, which is what the Elixir cache's
+    /// per-key `Cachex.transaction!` does.
+    flights:
+        std::sync::Mutex<std::collections::HashMap<i64, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl<T: Clone> Entries<T> {
     fn new() -> Self {
         Self {
             entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+            flights: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// The call for `key`, made once even when several callers want it at once.
+    async fn fetch<F, Fut, E>(&self, key: i64, fetch: F) -> Result<Option<T>, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Option<T>, E>>,
+    {
+        if let Some(cached) = self.get(key) {
+            return Ok(cached);
+        }
+
+        let flight = {
+            let mut flights = self.flights.lock().expect("the cache is not poisoned");
+            std::sync::Arc::clone(flights.entry(key).or_default())
+        };
+
+        // Held for the whole call, so a second caller waits here and then finds
+        // what the first one stored.
+        let held = flight.lock().await;
+
+        if let Some(cached) = self.get(key) {
+            return Ok(cached);
+        }
+
+        let value = fetch().await?;
+        self.put(key, value.clone());
+
+        drop(held);
+
+        // Forget the lock once nobody is waiting on it, so the table is only as
+        // large as the calls in flight.
+        let mut flights = self.flights.lock().expect("the cache is not poisoned");
+        let finished = flights
+            .get(&key)
+            .is_some_and(|flight| std::sync::Arc::strong_count(flight) == 2);
+
+        if finished {
+            flights.remove(&key);
+        }
+
+        Ok(value)
     }
 
     /// `Some(value)` is a hit, including a remembered miss; `None` means the
@@ -101,11 +149,23 @@ impl<T: Clone> Entries<T> {
     fn put(&self, key: i64, value: Option<T>) {
         let mut entries = self.entries.lock().expect("the cache is not poisoned");
 
-        if entries.len() >= CACHE_LIMIT {
-            // Drop what has expired first, and only then make room.
+        if entries.len() >= CACHE_LIMIT && !entries.contains_key(&key) {
+            // Drop what has expired first: on a cache that has been running a
+            // while that is most of it, and it costs one pass.
             entries.retain(|_, (at, _)| at.elapsed() < CACHE_TTL);
-            if entries.len() >= CACHE_LIMIT && !entries.contains_key(&key) {
-                entries.clear();
+
+            if entries.len() >= CACHE_LIMIT {
+                // Still full, so give up the oldest tenth in one go. Evicting a
+                // single entry would make every insert scan, and clearing the
+                // table outright would send every caller back to Discord at
+                // once.
+                let mut stored: Vec<(std::time::Instant, i64)> =
+                    entries.iter().map(|(key, (at, _))| (*at, *key)).collect();
+                stored.sort_unstable();
+
+                for (_, key) in stored.into_iter().take(CACHE_LIMIT / 10) {
+                    entries.remove(&key);
+                }
             }
         }
 
@@ -145,25 +205,15 @@ impl DiscordApi for CachedDiscord {
         &self,
         discord_user_id: i64,
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
-        if let Some(cached) = self.users.get(discord_user_id) {
-            return Ok(cached);
-        }
-
-        let user = self.inner.get_user(discord_user_id).await?;
-        self.users.put(discord_user_id, user.clone());
-
-        Ok(user)
+        self.users
+            .fetch(discord_user_id, || self.inner.get_user(discord_user_id))
+            .await
     }
 
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
-        if let Some(cached) = self.guilds.get(guild_id) {
-            return Ok(cached);
-        }
-
-        let guild = self.inner.get_guild(guild_id).await?;
-        self.guilds.put(guild_id, guild.clone());
-
-        Ok(guild)
+        self.guilds
+            .fetch(guild_id, || self.inner.get_guild(guild_id))
+            .await
     }
 
     async fn post_webhook_message(
