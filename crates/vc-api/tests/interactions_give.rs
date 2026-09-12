@@ -10,22 +10,14 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    DEFAULT_PERMISSIONS, Response, currency_by_unit, fake_with_guild, get_amount, interaction,
-    setup_money, state,
+    DEFAULT_PERMISSIONS, Response, currency_by_unit, fake, get_amount, interaction, setup_money,
+    state,
 };
 
 const COLOR_OK: i64 = 0x0038_EA42;
-const GUILD_PERMISSIONS_V2: &str = "APPLICATION_COMMAND_PERMISSIONS_V2";
 
-fn router(pool: PgPool, features: Value) -> Router {
-    vc_api::router(state(
-        pool,
-        fake_with_guild(json!({ "name": "TestGuild", "features": features })),
-    ))
-}
-
-fn plain_router(pool: PgPool) -> Router {
-    router(pool, json!([]))
+fn router(pool: PgPool) -> Router {
+    vc_api::router(state(pool, fake()))
 }
 
 fn give_data(receiver: i64, amount: Option<Value>) -> Value {
@@ -37,13 +29,14 @@ fn give_data(receiver: i64, amount: Option<Value>) -> Value {
     json!({ "name": "give", "options": options })
 }
 
-fn from_guild(receiver: i64, amount: Option<Value>, sender: i64, guild_id: i64) -> Value {
-    support::from_guild(
-        give_data(receiver, amount),
-        sender,
-        guild_id,
-        DEFAULT_PERMISSIONS,
-    )
+fn from_guild(
+    receiver: i64,
+    amount: Option<Value>,
+    sender: i64,
+    guild_id: i64,
+    permissions: &str,
+) -> Value {
+    support::from_guild(give_data(receiver, amount), sender, guild_id, permissions)
 }
 
 fn assert_error(response: &Response, content: &str) {
@@ -68,8 +61,14 @@ async fn give_issues_from_the_pool(pool: PgPool) {
     let receiver_before = get_amount(&pool, money.user2, money.currency).await;
 
     let response = interaction(
-        plain_router(pool.clone()),
-        from_guild(money.user2, Some(json!(100)), money.user1, money.guild),
+        router(pool.clone()),
+        from_guild(
+            money.user2,
+            Some(json!(100)),
+            money.user1,
+            money.guild,
+            DEFAULT_PERMISSIONS,
+        ),
     )
     .await;
 
@@ -112,8 +111,14 @@ async fn give_without_an_amount_issues_the_whole_pool(pool: PgPool) {
     let receiver_before = get_amount(&pool, money.user2, money.currency).await;
 
     let response = interaction(
-        plain_router(pool.clone()),
-        from_guild(money.user2, None, money.user1, money.guild),
+        router(pool.clone()),
+        from_guild(
+            money.user2,
+            None,
+            money.user1,
+            money.guild,
+            DEFAULT_PERMISSIONS,
+        ),
     )
     .await;
 
@@ -137,8 +142,14 @@ async fn give_more_than_the_pool_is_refused(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
-        from_guild(money.user2, Some(json!(501)), money.user1, money.guild),
+        router(pool),
+        from_guild(
+            money.user2,
+            Some(json!(501)),
+            money.user1,
+            money.guild,
+            DEFAULT_PERMISSIONS,
+        ),
     )
     .await;
 
@@ -146,17 +157,12 @@ async fn give_more_than_the_pool_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn give_needs_the_administrator_bit_under_v2_permissions(pool: PgPool) {
+async fn give_needs_the_administrator_bit(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        router(pool, json!([GUILD_PERMISSIONS_V2])),
-        support::from_guild(
-            give_data(money.user2, Some(json!(100))),
-            money.user1,
-            money.guild,
-            "0",
-        ),
+        router(pool),
+        from_guild(money.user2, Some(json!(100)), money.user1, money.guild, "0"),
     )
     .await;
 
@@ -168,7 +174,7 @@ async fn give_in_a_direct_message_is_refused(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         support::execute_from_dm(give_data(money.user2, Some(json!(100))), money.user1),
     )
     .await;

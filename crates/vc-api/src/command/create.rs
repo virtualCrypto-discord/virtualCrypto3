@@ -3,7 +3,7 @@ use vc_core::currency::{self, CreateError};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, EPHEMERAL, as_int,
-    as_permissions, may_manage, option_text, value_text,
+    as_permissions, is_administrator, option_text, value_text,
 };
 use crate::state::AppState;
 
@@ -75,8 +75,7 @@ pub async fn handle(
         .and_then(as_int)
         .ok_or_else(|| CommandError::missing("create has no amount"))?;
 
-    let guild = state.discord().get_guild(guild_id).await?;
-    if !may_manage(guild.as_ref(), permissions) {
+    if !is_administrator(permissions) {
         return Ok(render_error(Reason::Permission, options));
     }
 

@@ -7,28 +7,18 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    DEFAULT_PERMISSIONS, Response, currency_by_unit, execute_from_guild, fake_with_guild,
-    get_amount, interaction, setup_money, state,
+    DEFAULT_PERMISSIONS, Response, currency_by_unit, execute_from_guild, fake, get_amount,
+    interaction, setup_money, state,
 };
 
 const COLOR_OK: i64 = 0x0038_EA42;
 const COLOR_ERROR: i64 = 0x00EA_3875;
-/// The guild the create tests use when they need one with no currency, which is
-/// neither the interaction default nor either `setup_money` guild.
+/// A guild with no currency, which is neither the interaction default nor either
+/// `setup_money` guild.
 const FREE_GUILD: i64 = 494_780_225_280_802_818;
-const GUILD_PERMISSIONS_V2: &str = "APPLICATION_COMMAND_PERMISSIONS_V2";
 
-/// The Elixir tests inject a Discord service whose guild reports `features`;
-/// `create` only reads them for the permission check.
-fn router(pool: PgPool, features: Value) -> Router {
-    vc_api::router(state(
-        pool,
-        fake_with_guild(json!({ "name": "TestGuild", "features": features })),
-    ))
-}
-
-fn plain_router(pool: PgPool) -> Router {
-    router(pool, json!([]))
+fn router(pool: PgPool) -> Router {
+    vc_api::router(state(pool, fake()))
 }
 
 /// `InteractionsControllerTest.Create.Helper.create_data/1`.
@@ -110,7 +100,7 @@ async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
     let sender = 100_000_000_000_000_101;
 
     let response = interaction(
-        plain_router(pool.clone()),
+        router(pool.clone()),
         from_guild(json!(10000), "u1", "funyu1", sender),
     )
     .await;
@@ -124,16 +114,25 @@ async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
     assert_eq!(get_amount(&pool, sender, currency.id).await, 10000);
 }
 
-/// A guild that has not moved to application-command permissions lets any
-/// member create a currency, even without the administrator bit.
+/// Elixir calls this case "not admin without v2 flag" and passes the default
+/// permissions, which are every bit set — so what it actually pins is that a
+/// guild other than the seeded ones works. The flag it was named for is the
+/// branch this port dropped, because every guild carries it now.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn create_is_allowed_without_the_administrator_bit(pool: PgPool) {
+async fn create_succeeds_in_another_guild(pool: PgPool) {
     setup_money(&pool).await;
     let sender = 100_000_000_000_000_102;
 
     let response = interaction(
-        plain_router(pool.clone()),
-        from_guild_in(json!(10000), "u2", "funyu2", sender, FREE_GUILD, "0"),
+        router(pool.clone()),
+        from_guild_in(
+            json!(10000),
+            "u2",
+            "funyu2",
+            sender,
+            FREE_GUILD,
+            DEFAULT_PERMISSIONS,
+        ),
     )
     .await;
 
@@ -151,7 +150,7 @@ async fn create_rejects_a_currency_name_that_is_taken(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         from_guild_in(
             json!(10000),
             "u3",
@@ -177,7 +176,7 @@ async fn create_rejects_a_currency_unit_that_is_taken(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         from_guild_in(
             json!(10000),
             &money.unit,
@@ -203,7 +202,7 @@ async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
     setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         from_guild_in(
             json!("9007199254740992"),
             "u5",
@@ -221,14 +220,12 @@ async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
     );
 }
 
-/// Once a guild reports `APPLICATION_COMMAND_PERMISSIONS_V2`, the caller needs
-/// the administrator bit.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn create_needs_the_administrator_bit_under_v2_permissions(pool: PgPool) {
+async fn create_needs_the_administrator_bit(pool: PgPool) {
     setup_money(&pool).await;
 
     let response = interaction(
-        router(pool, json!([GUILD_PERMISSIONS_V2])),
+        router(pool),
         from_guild_in(
             json!(10000),
             "u6",
@@ -248,7 +245,7 @@ async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         from_guild_in(
             json!(10000),
             "u7",
@@ -268,7 +265,7 @@ async fn create_rejects_a_unit_that_is_not_lowercase(pool: PgPool) {
     setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         from_guild(json!(10000), "AA", "funyu8", 100_000_000_000_000_108),
     )
     .await;
@@ -284,7 +281,7 @@ async fn create_rejects_a_name_without_enough_alphanumerics(pool: PgPool) {
     setup_money(&pool).await;
 
     let response = interaction(
-        plain_router(pool),
+        router(pool),
         from_guild(json!(10000), "a", " ", 100_000_000_000_000_109),
     )
     .await;

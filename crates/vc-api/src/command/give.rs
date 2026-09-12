@@ -3,7 +3,7 @@ use vc_core::issue::{GiveError, Issued};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, EPHEMERAL, as_int, as_permissions,
-    may_manage, mention, value_text,
+    is_administrator, mention, value_text,
 };
 use crate::state::AppState;
 
@@ -33,8 +33,7 @@ pub async fn handle(
         .and_then(as_permissions)
         .ok_or_else(|| CommandError::missing("give has no permissions"))?;
 
-    let guild = state.discord().get_guild(guild_id).await?;
-    if !may_manage(guild.as_ref(), permissions) {
+    if !is_administrator(permissions) {
         return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
     }
 

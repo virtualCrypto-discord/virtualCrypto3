@@ -82,27 +82,18 @@ pub fn mention(id: impl std::fmt::Display) -> String {
     format!("<@{id}>")
 }
 
-/// `Command.continue_management_command?/2`: a guild that has moved to
-/// application-command permissions wants the administrator bit, and every other
-/// guild is allowed through. `create` and `give` both gate on this.
+/// `Command.continue_management_command?/2`, with the branch it used to take
+/// removed.
 ///
-/// Discord has finished migrating guilds to the new permission system, so in
-/// practice every guild carries the feature and the administrator bit is always
-/// required. The branch is kept because that is what Elixir does and what the
-/// ported tests pin. A payload with no readable feature list fails closed — one
-/// that grants a privilege is worse than one that asks for it — where Elixir
-/// raises on the same input.
-pub fn may_manage(guild: Option<&Map<String, Value>>, permissions: u64) -> bool {
+/// Elixir only demanded the administrator bit from guilds carrying
+/// `APPLICATION_COMMAND_PERMISSIONS_V2`, and let every other guild through.
+/// Discord finished that migration, so every guild carries it and the branch
+/// can no longer be false — it is gone, and with it the guild lookup both
+/// callers used to make just to read the feature list.
+pub fn is_administrator(permissions: u64) -> bool {
     const ADMINISTRATOR: u64 = 0x8;
 
-    let requires_v2 = match guild.and_then(|guild| guild.get("features")) {
-        Some(Value::Array(features)) => features
-            .iter()
-            .any(|feature| feature == "APPLICATION_COMMAND_PERMISSIONS_V2"),
-        _ => true,
-    };
-
-    !requires_v2 || permissions & ADMINISTRATOR == ADMINISTRATOR
+    permissions & ADMINISTRATOR == ADMINISTRATOR
 }
 
 /// `Command.cast_int/1`, and what `String.to_integer/1` does to an option.

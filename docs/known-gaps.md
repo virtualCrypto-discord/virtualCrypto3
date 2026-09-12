@@ -102,6 +102,14 @@ relevant test.
 - `GET /api/v2/users/@me/claims/:id` answers `404` for a non-numeric id, where
   Ecto's `bigint` cast would raise a 500. `PATCH` already answers an unparsable
   id with 404, so the two endpoints stay consistent.
+- The `APPLICATION_COMMAND_PERMISSIONS_V2` branch is gone. Elixir required the
+  administrator bit only from guilds carrying that feature, and let every other
+  guild run `create` and `give`; Discord finished that migration, so no such
+  guild is left and the branch could no longer be false. Removing it also
+  removes the guild lookup those two commands made solely to read the feature
+  list. `create_test.exs`'s "not admin without v2 flag" case passes the default
+  permissions — every bit set — so it still passes; its name is the only thing
+  that referred to the flag.
 
 ## Deliberately out of scope
 
