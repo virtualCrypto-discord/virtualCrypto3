@@ -55,6 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             discord_client_id,
             discord_client_secret,
             discord_bot_token,
+            // Where Discord sends the browser back to. It has to match the URL
+            // the login redirect used, so a deployment sets its own origin.
+            std::env::var("DISCORD_OAUTH2_REDIRECT_URI")
+                .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
         // The webhook transport is not implemented; see docs/known-gaps.md.
         Arc::new(vc_core::notification::NoopNotifier),

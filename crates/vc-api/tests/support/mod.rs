@@ -24,6 +24,9 @@ use vc_core::notification::{NoopNotifier, Notifier};
 pub const JWT_SECRET: &str = "test-secret";
 pub const REFRESHED_TOKEN: &str = "refreshed-token";
 pub const REFRESHED_REFRESH_TOKEN: &str = "refreshed-refresh-token";
+/// Distinct from the refresh pair so a test can tell which path ran.
+pub const EXCHANGED_TOKEN: &str = "exchanged-token";
+pub const EXCHANGED_REFRESH_TOKEN: &str = "exchanged-refresh-token";
 
 pub fn utc_now() -> PrimitiveDateTime {
     let now = OffsetDateTime::now_utc()
@@ -124,6 +127,14 @@ impl DiscordApi for FakeDiscord {
             token: REFRESHED_TOKEN.to_string(),
             expires_in: 3600,
             refresh_token: Some(REFRESHED_REFRESH_TOKEN.to_string()),
+        })
+    }
+
+    async fn exchange_code(&self, _code: &str) -> Result<RefreshedToken, DiscordError> {
+        Ok(RefreshedToken {
+            token: EXCHANGED_TOKEN.to_string(),
+            expires_in: 3600,
+            refresh_token: Some(EXCHANGED_REFRESH_TOKEN.to_string()),
         })
     }
 

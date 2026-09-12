@@ -64,6 +64,11 @@ pub trait DiscordApi: Send + Sync {
     ) -> Result<(), DiscordError>;
 
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError>;
+
+    /// Redeeming an authorization code, the other half of the flow the web UI
+    /// drives. Discord answers both grants with the same document, which is why
+    /// this returns what a refresh does.
+    async fn exchange_code(&self, code: &str) -> Result<RefreshedToken, DiscordError>;
 }
 
 /// How long a Discord lookup is remembered, matching the Elixir cache's TTL.
@@ -230,6 +235,10 @@ impl DiscordApi for CachedDiscord {
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError> {
         self.inner.refresh_token(refresh_token).await
     }
+
+    async fn exchange_code(&self, code: &str) -> Result<RefreshedToken, DiscordError> {
+        self.inner.exchange_code(code).await
+    }
 }
 
 pub struct HttpDiscordApi {
@@ -237,6 +246,9 @@ pub struct HttpDiscordApi {
     client_id: String,
     client_secret: String,
     bot_token: String,
+    /// Discord requires this to match the URL it redirected the browser to, so
+    /// it is configuration rather than something the exchange can infer.
+    redirect_uri: String,
 }
 
 impl HttpDiscordApi {
@@ -244,12 +256,14 @@ impl HttpDiscordApi {
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
         bot_token: impl Into<String>,
+        redirect_uri: impl Into<String>,
     ) -> Self {
         Self {
             http: reqwest::Client::new(),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             bot_token: bot_token.into(),
+            redirect_uri: redirect_uri.into(),
         }
     }
 }
@@ -398,6 +412,38 @@ impl DiscordApi for HttpDiscordApi {
 
         serde_json::from_str(access_token)
             .map_err(|error| DiscordError::Request(format!("access_token is not JSON: {error}")))
+    }
+
+    async fn exchange_code(&self, code: &str) -> Result<RefreshedToken, DiscordError> {
+        let response = self
+            .http
+            .post("https://discord.com/api/oauth2/token")
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("redirect_uri", &self.redirect_uri),
+                ("client_id", &self.client_id),
+                ("client_secret", &self.client_secret),
+            ])
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        // Unlike a refresh, whose access_token arrives as a document the Elixir
+        // code then decodes, this one is an opaque token and is read directly.
+        Ok(RefreshedToken {
+            token: body["access_token"]
+                .as_str()
+                .ok_or_else(|| DiscordError::Request("response has no access_token".into()))?
+                .to_owned(),
+            expires_in: body["expires_in"].as_i64().unwrap_or_default(),
+            refresh_token: body["refresh_token"].as_str().map(str::to_owned),
+        })
     }
 }
 
