@@ -169,6 +169,103 @@ pub async fn index(
     Ok(response)
 }
 
+/// `PATCH /api/v2/users/@me/claims/:id`
+///
+/// Mirrors `ClaimController.patch/2`. The clause order matters:
+///
+/// 1. a recognised `status` performs that transition;
+/// 2. otherwise a `metadata` field performs a metadata-only update, even when
+///    `status` was present but unrecognised;
+/// 3. otherwise the request is rejected as `must_supply_valid_status`.
+///
+/// For a transition, `Map.get(d, "metadata", %{})` means an absent field becomes
+/// `{}` (merge, preserving existing metadata) while an explicit `null` deletes —
+/// and transitions do not run the application-side metadata validator, so only
+/// the database trigger can reject their metadata.
+pub async fn patch(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    if !user.scopes.vc_claim {
+        return Err(ApiError::PermissionDenied);
+    }
+
+    let operator_id = i32::try_from(user.subject)
+        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+
+    // `Integer.parse(id)` with a clean tail; anything else is not found.
+    let claim_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
+
+    let object = body.as_object();
+    let status = object
+        .and_then(|object| object.get("status"))
+        .and_then(Value::as_str);
+    let has_metadata = object.is_some_and(|object| object.contains_key("metadata"));
+    // JSON null is Elixir's `nil`: it means "delete the metadata", not "store null".
+    let metadata = object
+        .and_then(|object| object.get("metadata"))
+        .filter(|value| !value.is_null())
+        .cloned();
+
+    let transition = match status {
+        Some("approved") => Some(vc_core::claim::Transition::Approved),
+        Some("denied") => Some(vc_core::claim::Transition::Denied),
+        Some("canceled") => Some(vc_core::claim::Transition::Canceled),
+        _ => None,
+    };
+
+    if let Some(transition) = transition {
+        let metadata = if has_metadata {
+            metadata
+        } else {
+            Some(json!({}))
+        };
+
+        vc_core::claim::transition(state.pool(), operator_id, claim_id, transition, metadata)
+            .await
+            .map_err(transition_error)?;
+    } else if has_metadata {
+        let details = metadata
+            .as_ref()
+            .map(vc_core::metadata::validate)
+            .unwrap_or_default();
+
+        if !details.is_empty() {
+            return Err(ApiError::InvalidMetadata(details));
+        }
+
+        vc_core::claim::set_metadata(state.pool(), operator_id, claim_id, metadata)
+            .await
+            .map_err(transition_error)?;
+    } else {
+        return Err(ApiError::InvalidRequest("must_supply_valid_status"));
+    }
+
+    let view = vc_core::claim::view(state.pool(), operator_id, claim_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(serialize_claim(&state, view).await?))
+}
+
+fn transition_error(error: vc_core::claim::TransitionError) -> ApiError {
+    use vc_core::claim::TransitionError;
+
+    match error {
+        TransitionError::NotFound => ApiError::NotFound,
+        TransitionError::InvalidStatus => ApiError::Conflict("invalid_status"),
+        TransitionError::InvalidOperator => ApiError::Forbidden("invalid_operator"),
+        TransitionError::NotEnoughAmount | TransitionError::NotFoundSenderAsset => {
+            ApiError::Conflict("not_enough_amount")
+        }
+        TransitionError::NotFoundCurrency => ApiError::InvalidRequest("not_found_currency"),
+        TransitionError::MetadataLimit => ApiError::MetadataLimit,
+        TransitionError::Database(error) => ApiError::Core(vc_core::Error::Database(error)),
+    }
+}
+
 /// `format_claim/2`: amounts and ids as strings, timestamps as UTC with a `Z`,
 /// and the claimant/payer decorated with their filtered Discord profile.
 pub async fn serialize_claim(state: &AppState, view: ClaimView) -> Result<Value, ApiError> {

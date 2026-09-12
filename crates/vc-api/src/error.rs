@@ -37,7 +37,24 @@ pub enum ApiError {
     /// 400 `invalid_request` with one of the controller's error codes.
     #[error("invalid request: {0}")]
     InvalidRequest(&'static str),
+
+    /// 409 `conflict` with an `error_info` such as `invalid_status`.
+    #[error("conflict: {0}")]
+    Conflict(&'static str),
+
+    /// 400 `invalid_request` / `invalid_metadata` carrying the validation details.
+    #[error("invalid metadata")]
+    InvalidMetadata(Vec<String>),
+
+    /// 400 `invalid_request` with the metadata-limit message the controller uses.
+    #[error("metadata limit reached")]
+    MetadataLimit,
 }
+
+/// The controller's message for [`ApiError::MetadataLimit`]. `error_description`
+/// is outside the specification, so this is reproduced for fidelity, not because
+/// a client may rely on the wording.
+const METADATA_LIMIT_MESSAGE: &str = "The upper limit of the number of metadata is 50, and it is highly possible that this has been reached. (Maybe for other reasons)";
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -60,6 +77,28 @@ impl IntoResponse for ApiError {
             ApiError::InvalidRequest(description) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "invalid_request", "error_description": description })),
+            )
+                .into_response(),
+            ApiError::Conflict(info) => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "conflict", "error_info": info })),
+            )
+                .into_response(),
+            ApiError::InvalidMetadata(details) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_request",
+                    "error_description": "invalid_metadata",
+                    "error_description_details": details,
+                })),
+            )
+                .into_response(),
+            ApiError::MetadataLimit => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_request",
+                    "error_description": METADATA_LIMIT_MESSAGE,
+                })),
             )
                 .into_response(),
             ApiError::Core(vc_core::Error::UserNotFound(_))

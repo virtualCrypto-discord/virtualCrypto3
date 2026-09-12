@@ -6,6 +6,7 @@ pub mod db;
 pub mod error;
 pub mod metadata;
 pub mod model;
+pub mod transfer;
 pub mod user;
 
 pub use error::{Error, Result};
