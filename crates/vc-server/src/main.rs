@@ -55,7 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The webhook transport, when there is a proxy to send through. With none —
     // in development, or before the certificates exist — nothing is delivered and
     // claims still complete, which is what the no-op is for.
-    let notifier: Arc<dyn vc_core::notification::Notifier> = match webhook_proxy() {
+    let proxy = webhook_proxy().map(Arc::new);
+
+    let notifier: Arc<dyn vc_core::notification::Notifier> = match proxy.clone() {
         Some(proxy) => Arc::new(vc_api::notification::WebhookNotifier::new(
             pool.clone(),
             proxy,
@@ -79,7 +81,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::var("DISCORD_OAUTH2_REDIRECT_URI")
                 .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
-        notifier.clone(),
+        vc_api::state::Outbound {
+            proxy: proxy.clone(),
+            notifier: notifier.clone(),
+        },
         // A loose per-user allowance; `RATE_LIMIT_PER_MINUTE=0` turns it off.
         Arc::new(vc_api::rate_limit::RateLimiter::new(
             std::env::var("RATE_LIMIT_PER_MINUTE")

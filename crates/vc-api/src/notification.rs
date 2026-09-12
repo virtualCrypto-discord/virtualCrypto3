@@ -140,11 +140,12 @@ pub struct WebhookNotifier {
 }
 
 impl WebhookNotifier {
-    pub fn new(pool: sqlx::PgPool, proxy: Proxy) -> Self {
-        Self {
-            pool,
-            proxy: std::sync::Arc::new(proxy),
-        }
+    /// The proxy is taken as an `Arc` rather than built into one, because the
+    /// state holds the same one: the handshake a registration performs and the
+    /// deliveries an application receives go through one proxy, and there is no
+    /// reason for two.
+    pub fn new(pool: sqlx::PgPool, proxy: std::sync::Arc<Proxy>) -> Self {
+        Self { pool, proxy }
     }
 }
 

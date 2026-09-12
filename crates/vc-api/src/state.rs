@@ -5,6 +5,7 @@ use vc_auth::AuthState;
 use vc_core::notification::Notifier;
 
 use crate::discord::DiscordApi;
+use crate::notification::Proxy;
 use crate::rate_limit::RateLimiter;
 
 /// The public URLs the command responses link to, plus the logo their embeds show.
@@ -43,6 +44,19 @@ impl Signing {
     }
 }
 
+/// What this service sends with: the proxy that reaches applications, and the
+/// notifier built on it.
+///
+/// The two travel together because one is how the other works. `proxy` is `None`
+/// when none is configured, which is development and any deployment that has not
+/// been given the certificate — and the webhook handshake a registration performs
+/// is the one thing that needs it rather than the notifier the deliveries use.
+#[derive(Clone)]
+pub struct Outbound {
+    pub proxy: Option<Arc<Proxy>>,
+    pub notifier: Arc<dyn Notifier>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pool: PgPool,
@@ -50,7 +64,7 @@ pub struct AppState {
     discord_public_key: Arc<[u8; 32]>,
     links: Arc<Links>,
     discord: Arc<dyn DiscordApi>,
-    notifier: Arc<dyn Notifier>,
+    outbound: Outbound,
     limiter: Arc<RateLimiter>,
 }
 
@@ -61,7 +75,7 @@ impl AppState {
         discord_public_key: [u8; 32],
         links: Links,
         discord: Arc<dyn DiscordApi>,
-        notifier: Arc<dyn Notifier>,
+        outbound: Outbound,
         limiter: Arc<RateLimiter>,
     ) -> Self {
         Self {
@@ -70,7 +84,7 @@ impl AppState {
             discord_public_key: Arc::new(discord_public_key),
             links: Arc::new(links),
             discord,
-            notifier,
+            outbound,
             limiter,
         }
     }
@@ -109,7 +123,16 @@ impl AppState {
 
     /// The claim-update dispatcher, which a test replaces with its own sink.
     pub fn notifier(&self) -> &dyn Notifier {
-        self.notifier.as_ref()
+        self.outbound.notifier.as_ref()
+    }
+
+    /// The proxy that reaches applications, when one is configured.
+    ///
+    /// `None` is a service that delivers nothing and verifies nothing: the claim
+    /// paths still complete, and a registration that asks for a webhook has
+    /// something this service cannot do.
+    pub fn webhook_proxy(&self) -> Option<&Arc<Proxy>> {
+        self.outbound.proxy.as_ref()
     }
 
     pub fn links(&self) -> &Links {

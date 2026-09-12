@@ -260,7 +260,10 @@ pub fn state_with_limiter(
         discord_public_key(),
         links(),
         discord,
-        Arc::new(NoopNotifier),
+        vc_api::state::Outbound {
+            proxy: None,
+            notifier: Arc::new(NoopNotifier),
+        },
         limiter,
     )
 }
@@ -278,7 +281,10 @@ pub fn state_with_notifier(
         discord_public_key(),
         links(),
         discord,
-        notifier,
+        vc_api::state::Outbound {
+            proxy: None,
+            notifier,
+        },
         // Unlimited by default, so the other tests are not held to it.
         Arc::new(RateLimiter::new(0, vc_api::rate_limit::DEFAULT_WINDOW)),
     )
