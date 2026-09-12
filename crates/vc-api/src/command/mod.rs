@@ -7,6 +7,7 @@
 //! `InteractionsJSON`.
 
 pub mod bal;
+pub mod info;
 pub mod pay;
 
 use serde_json::{Map, Value, json};
@@ -63,6 +64,12 @@ impl From<vc_core::Error> for CommandError {
 impl From<sqlx::Error> for CommandError {
     fn from(error: sqlx::Error) -> Self {
         CommandError::Internal(ApiError::from(vc_core::Error::Database(error)))
+    }
+}
+
+impl From<crate::discord::DiscordError> for CommandError {
+    fn from(error: crate::discord::DiscordError) -> Self {
+        CommandError::Internal(ApiError::from(error))
     }
 }
 
@@ -156,6 +163,7 @@ pub async fn handle(
         "help" => Ok(help(state)),
         "invite" => Ok(invite(state)),
         "bal" => bal::handle(state, payload).await,
+        "info" => info::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),
     }

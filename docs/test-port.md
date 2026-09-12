@@ -38,7 +38,7 @@ the checklist for the interaction types that still answer 501.
 | `invite_test.exs` | 1 | `tests/interactions_commands.rs` | ported |
 | `pay_test.exs` | 8 | `tests/interactions_pay.rs` | ported (+1 extra: paying a receiver with no account) |
 | `bal_test.exs` | 3 | `tests/interactions_bal.rs` | ported |
-| `info_test.exs` | 13 | | pending |
+| `info_test.exs` | 13 | `tests/interactions_info.rs` | ported |
 | `create_test.exs` | 9 | | pending |
 | `delete_test.exs` | 3 | | pending |
 | `claim/claim_make_test.exs` | 3 | | pending |
@@ -55,7 +55,7 @@ the checklist for the interaction types that still answer 501.
 | `claim/list/claim_list_received_test.exs` | 0 | | empty in Elixir too |
 | `claim/list/claim_list_claimed_test.exs` | 0 | | empty in Elixir too |
 
-Total: 141 cases, 20 ported.
+Total: 141 cases, 33 ported.
 
 The builders the interaction tests share — `execute_from_guild/2` and its
 component, select, button and modal siblings, plus `setup_money/1` and

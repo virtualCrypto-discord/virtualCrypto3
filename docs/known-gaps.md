@@ -65,8 +65,9 @@ there rather than in the claim endpoints.
 
 Elixir wraps `Discord.Api.Raw` in `Discord.Api.Cached`, backed by `Cachex` with a
 15 minute TTL, so repeated claim serialization does not re-query Discord. The
-Rust `DiscordApi` calls Discord on every lookup. Responses are identical; only
-Discord API traffic and latency differ.
+Rust `DiscordApi` calls Discord on every lookup — both `get_user`, which decorates
+claims, and `get_guild`, which decorates the `info` embed. Responses are
+identical; only Discord API traffic and latency differ.
 
 ## No rate limiting
 

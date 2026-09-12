@@ -33,13 +33,25 @@ pub fn utc_now() -> PrimitiveDateTime {
 /// tests can prove when the refresh branch is (not) taken.
 pub struct FakeDiscord {
     payload: Map<String, Value>,
+    guild: Map<String, Value>,
     refresh_calls: AtomicUsize,
 }
 
 impl FakeDiscord {
     pub fn new() -> Self {
+        Self::with_guild(json!({ "name": "TestGuild" }))
+    }
+
+    /// The guild `get_guild` reports. The interaction tests vary it to cover the
+    /// icon branches; the id always echoes the request, like the Elixir fakes.
+    pub fn with_guild(guild: Value) -> Self {
+        let Value::Object(guild) = guild else {
+            panic!("the fake guild must be an object");
+        };
+
         Self {
             payload: golden_discord_payload(),
+            guild,
             refresh_calls: AtomicUsize::new(0),
         }
     }
@@ -59,6 +71,13 @@ impl Default for FakeDiscord {
 impl DiscordApi for FakeDiscord {
     async fn get_user_info(&self, _token: &str) -> Result<Map<String, Value>, DiscordError> {
         Ok(self.payload.clone())
+    }
+
+    async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
+        let mut guild = self.guild.clone();
+        guild.insert("id".to_string(), Value::String(guild_id.to_string()));
+
+        Ok(Some(guild))
     }
 
     async fn refresh_token(&self, _refresh_token: &str) -> Result<RefreshedToken, DiscordError> {
@@ -106,6 +125,11 @@ fn golden_discord_payload() -> Map<String, Value> {
 
 pub fn fake() -> Arc<FakeDiscord> {
     Arc::new(FakeDiscord::new())
+}
+
+/// A fake Discord whose `get_guild` reports `guild`.
+pub fn fake_with_guild(guild: Value) -> Arc<FakeDiscord> {
+    Arc::new(FakeDiscord::with_guild(guild))
 }
 
 pub fn state(pool: PgPool, discord: Arc<FakeDiscord>) -> AppState {

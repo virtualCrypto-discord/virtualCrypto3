@@ -47,6 +47,11 @@ pub trait DiscordApi: Send + Sync {
         discord_user_id: i64,
     ) -> Result<Option<Map<String, Value>>, DiscordError>;
 
+    /// `Discord.Api.Cached.get_guild/2`, which decorates the `info` embed with
+    /// the currency's guild. `None` stands for the `:not_found` the Elixir cache
+    /// stores after a 404.
+    async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError>;
+
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError>;
 }
 
@@ -113,6 +118,38 @@ impl DiscordApi for HttpDiscordApi {
 
         // `Discord.Api.Raw` reports 404s as `:not_found`, which the user cache
         // stores and the claim serializer then fails on.
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        match body {
+            Value::Object(map) => Ok(Some(map)),
+            other => Err(DiscordError::Request(format!(
+                "expected a JSON object, got {other}"
+            ))),
+        }
+    }
+
+    async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
+        let response = self
+            .http
+            .get(format!(
+                "https://discord.com/api/guilds/{guild_id}?with_counts=false"
+            ))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        // `Discord.Api.GuildCache` records a 404 as `:not_found`.
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
