@@ -3,7 +3,7 @@ use vc_core::claim::{PartialClaim, UpdateClaimsError};
 
 use super::list;
 use crate::claim_list::ListOptions;
-use crate::command::{CommandError, EPHEMERAL, get_user};
+use crate::command::{CommandError, EPHEMERAL, as_int, get_user};
 use crate::custom_id::ui::button::{Action, Path, parse};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -138,4 +138,59 @@ fn result_text(action: Action) -> &'static str {
         Action::Cancel => "キャンセルしました。",
         Action::Back => "",
     }
+}
+
+/// `Interaction.SelectMenu.handle/5` for `[:claim, :select]`: the claims the menu
+/// offered, with the caller's selection marked and what it would spend.
+pub async fn select(
+    state: &AppState,
+    custom_id: &str,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+
+    let (_, data) =
+        crate::custom_id::ui::select_menu::parse(&crate::custom_id::parse(custom_id))
+            .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
+
+    let (options, rest) = ListOptions::parse(&data).ok_or_else(|| {
+        CommandError::Internal(ApiError::Internal("the select payload is malformed".into()))
+    })?;
+
+    let values: Vec<i64> = payload
+        .get("data")
+        .and_then(|data| data.get("values"))
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(as_int).collect())
+        .unwrap_or_default();
+
+    // An empty selection is what clearing the menu sends; it only redraws.
+    if values.is_empty() {
+        return list::page(state, me, options).await;
+    }
+
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+    let claims = vc_core::claim::views_by_ids(state.pool(), account, &claim_ids(rest)).await?;
+
+    // `SelectMenu.handle_/3` raises here: a menu only ever lists claims its
+    // reader is party to, so a selection outside that is not theirs to make.
+    if !claims
+        .iter()
+        .all(|claim| claim.payer.discord_id == Some(me) || claim.claimant.discord_id == Some(me))
+    {
+        return Err(CommandError::Internal(ApiError::Internal(
+            "Illegal request".to_string(),
+        )));
+    }
+
+    let balances = vc_core::balance::for_discord_user(state.pool(), me).await?;
+
+    Ok(list::selection(
+        options.position,
+        &claims,
+        me,
+        &options,
+        &values,
+        &balances,
+    ))
 }

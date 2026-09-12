@@ -1640,3 +1640,155 @@ async fn button_cancel_reports_an_unknown_claim(pool: PgPool) {
 
     assert_action_error(pool, Action::Cancel, 0, money.user1, BUTTON_NOT_FOUND).await;
 }
+
+/// The menu's own payload, which the `:select` render numbers from zero.
+fn select_menu_custom_id(k: u8, ids: &[i64]) -> String {
+    let mut payload = claim_select().to_vec();
+    payload.extend_from_slice(&list_options(Position::All).encode());
+    payload.extend_from_slice(&vc_api::claim_list::encode_claim_ids(ids));
+
+    vc_api::custom_id::encode(k, &payload)
+}
+
+fn selection_values(ids: &[i64]) -> Value {
+    json!(ids.iter().map(|id| id.to_string()).collect::<Vec<_>>())
+}
+
+fn ticked(response: &support::Response) -> Vec<bool> {
+    response.body["data"]["embeds"][0]["fields"]
+        .as_array()
+        .expect("the fields")
+        .iter()
+        .map(|field| {
+            field["name"]
+                .as_str()
+                .expect("a field name")
+                .starts_with('☑')
+        })
+        .collect()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn selecting_everything_marks_it_and_warns(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let page = first_page(&pool, 1).await;
+    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
+    assert_eq!(ids.len(), 3);
+
+    let response = interaction(
+        router(pool),
+        support::select_from_guild(
+            json!({
+                "custom_id": select_menu_custom_id(0, &ids),
+                "values": selection_values(&ids),
+            }),
+            money.user1,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    // The selection answers by replacing the message the menu was on.
+    assert_eq!(response.body["type"], json!(7));
+    assert_eq!(response.body["data"]["flags"], json!(64));
+
+    assert_eq!(ticked(&response), vec![true, true, true]);
+
+    // user1 holds 200000 and is being asked for 10000099, so the quotation warns.
+    assert_eq!(
+        response.body["data"]["embeds"][1]["description"],
+        json!(format!(
+            "**{}**: `200000{}` - `10000099{}` => `-9800099{}`⚠",
+            money.name, money.unit, money.unit, money.unit
+        ))
+    );
+
+    let menu = &response.body["data"]["components"][0]["components"][0];
+    assert_eq!(menu["type"], json!(3));
+    assert_eq!(menu["max_values"], json!(3));
+    assert_eq!(menu["custom_id"], json!(select_menu_custom_id(0, &ids)));
+
+    // user1 is not the payer of all three, so nothing can be acted on.
+    let buttons = response.body["data"]["components"][1]["components"]
+        .as_array()
+        .expect("the buttons");
+    assert_eq!(buttons.len(), 4);
+    assert!(
+        buttons[0]["disabled"].is_null(),
+        "going back is always possible"
+    );
+    for button in &buttons[1..] {
+        assert_eq!(button["disabled"], json!(true));
+    }
+}
+
+/// c6 is user1's claim on themselves for 100, which they can afford and are both
+/// sides of, so every action is offered.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn selecting_one_affordable_claim_enables_the_actions(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+    let selected = claims.id(5);
+
+    let page = first_page(&pool, 1).await;
+    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
+
+    let response = interaction(
+        router(pool),
+        support::select_from_guild(
+            json!({
+                "custom_id": select_menu_custom_id(0, &ids),
+                "values": selection_values(&[selected]),
+            }),
+            money.user1,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body["data"]["embeds"][1]["description"],
+        json!(format!(
+            "**{}**: `200000{}` - `100{}` => `199900{}`",
+            money.name, money.unit, money.unit, money.unit
+        ))
+    );
+
+    // The page is newest first, and c6 is the newest of the three.
+    assert_eq!(ticked(&response), vec![true, false, false]);
+
+    let buttons = response.body["data"]["components"][1]["components"]
+        .as_array()
+        .expect("the buttons");
+    for button in &buttons[1..] {
+        assert_eq!(button["disabled"], json!(false));
+    }
+}
+
+/// user2 is a party to two of the three, but not all three, and the menu only
+/// ever offered their own.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn selecting_someone_elses_claims_is_refused(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let page = first_page(&pool, 1).await;
+    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
+
+    let response = interaction(
+        router(pool),
+        support::select_from_guild(
+            json!({
+                "custom_id": select_menu_custom_id(0, &ids),
+                "values": selection_values(&ids),
+            }),
+            money.user2,
+        ),
+    )
+    .await;
+
+    // Elixir raises `ArgumentError, "Illegal request"`, which is a 500.
+    assert_eq!(response.status, 500, "body: {}", response.body);
+}

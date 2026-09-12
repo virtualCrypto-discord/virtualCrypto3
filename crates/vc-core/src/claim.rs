@@ -122,6 +122,49 @@ pub async fn view(pool: &PgPool, operator_id: i32, claim_id: i64) -> Result<Opti
     Ok(row.map(Row::into_view))
 }
 
+/// `Query.Claim.get_claim_by_ids/2`: the same view as [`view`] for several ids,
+/// returned in the order they were asked for, which is the order the caller
+/// packed them in.
+pub async fn views_by_ids(pool: &PgPool, operator_id: i32, ids: &[i64]) -> Result<Vec<ClaimView>> {
+    let rows = sqlx::query_as!(
+        Row,
+        "SELECT c.id AS \"claim_id!\",
+                c.amount AS claim_amount,
+                c.status::text AS claim_status,
+                c.inserted_at AS \"claim_inserted_at!\",
+                c.updated_at AS \"claim_updated_at!\",
+                cur.name AS currency_name,
+                cur.unit AS currency_unit,
+                cur.guild_id AS currency_guild_id,
+                cur.pool_amount AS currency_pool_amount,
+                cl.id AS \"claimant_id!\",
+                cl.discord_id AS claimant_discord_id,
+                py.id AS \"payer_id!\",
+                py.discord_id AS payer_discord_id,
+                COALESCE(m.metadata, '{}'::jsonb) AS \"metadata!\"
+           FROM claims c
+           JOIN currencies cur ON c.currency_id = cur.id
+           JOIN users cl ON c.claimant_user_id = cl.id
+           JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN claim_metadata m
+                  ON c.id = m.claim_id AND m.owner_user_id = $1
+          WHERE c.id = ANY($2)",
+        i64::from(operator_id),
+        ids
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut views: Vec<ClaimView> = rows.into_iter().map(Row::into_view).collect();
+    views.sort_by_key(|view| {
+        ids.iter()
+            .position(|id| *id == view.id)
+            .unwrap_or(usize::MAX)
+    });
+
+    Ok(views)
+}
+
 /// Which side of a claim the operating user must be on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SrFilter {

@@ -1,13 +1,15 @@
 use serde_json::{Value, json};
+use vc_core::balance::Balance;
 use vc_core::claim::{ClaimPage, ClaimView, PageTarget, SrFilter};
 
 use super::format_date_time;
 use crate::claim_list::{ListOptions, Page, Position, encode_claim_ids};
 use crate::command::{
-    ACTION_ROW, BUTTON, BUTTON_STYLE_SECONDARY, CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND,
-    CommandError, EPHEMERAL, SELECT_MENU, UPDATE_MESSAGE, as_int, get_user, mention,
+    ACTION_ROW, BUTTON, BUTTON_STYLE_DANGER, BUTTON_STYLE_PRIMARY, BUTTON_STYLE_SECONDARY,
+    BUTTON_STYLE_SUCCESS, CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, EPHEMERAL,
+    SELECT_MENU, UPDATE_MESSAGE, as_int, get_user, mention,
 };
-use crate::custom_id::ui::button::{ListScope, claim_list};
+use crate::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
 use crate::custom_id::ui::select_menu::claim_select;
 use crate::state::AppState;
 
@@ -179,7 +181,7 @@ fn render(
     let embed = json!({
         "title": title(position),
         "color": COLOR_BRAND,
-        "fields": fields(position, &page.claims, me),
+        "fields": fields(position, &page.claims, me, &[]),
         "description": if page.claims.is_empty() {
             json!("表示する内容がありません。")
         } else {
@@ -192,7 +194,7 @@ fn render(
     // The select menu lists what can still be acted on, so it is absent from an
     // empty page.
     if !pending.is_empty() {
-        components.push(select_row(&pending, me, options));
+        components.push(select_row(MAX_COLUMN_COUNT, &pending, me, options, &[]));
     }
 
     // The action row only appears once something has been selected, which a
@@ -218,7 +220,7 @@ fn title(position: Position) -> &'static str {
 }
 
 /// `Listing.render_claim/3`.
-fn fields(position: Position, claims: &[ClaimView], me: i64) -> Vec<Value> {
+fn fields(position: Position, claims: &[ClaimView], me: i64, selected: &[i64]) -> Vec<Value> {
     claims
         .iter()
         .map(|claim| {
@@ -233,7 +235,7 @@ fn fields(position: Position, claims: &[ClaimView], me: i64) -> Vec<Value> {
             json!({
                 "name": format!(
                     "{}{}{}",
-                    render_selection(claim.status.as_deref(), false),
+                    render_selection(claim.status.as_deref(), selected.contains(&claim.id)),
                     render_rs_icon(me, claim.claimant.discord_id, claim.payer.discord_id),
                     claim.id
                 ),
@@ -341,7 +343,13 @@ fn page_custom_id(k: u8, position: Position, target: PageTarget, options: &ListO
 
 /// `Listing.selection_select_row/5`: the claims that can still be acted on, with
 /// the options and the ids they are, so the selection comes back with them.
-fn select_row(pending: &[&ClaimView], me: i64, options: &ListOptions) -> Value {
+fn select_row(
+    k: u8,
+    pending: &[&ClaimView],
+    me: i64,
+    options: &ListOptions,
+    selected: &[i64],
+) -> Value {
     let ids: Vec<i64> = pending.iter().map(|claim| claim.id).collect();
 
     let mut payload = claim_select().to_vec();
@@ -363,7 +371,7 @@ fn select_row(pending: &[&ClaimView], me: i64, options: &ListOptions) -> Value {
                     claim.amount.unwrap_or_default(),
                     claim.currency.unit.clone().unwrap_or_default()
                 ),
-                "default": false,
+                "default": selected.contains(&claim.id),
             })
         })
         .collect();
@@ -372,10 +380,201 @@ fn select_row(pending: &[&ClaimView], me: i64, options: &ListOptions) -> Value {
         "type": ACTION_ROW,
         "components": [{
             "type": SELECT_MENU,
-            "custom_id": crate::custom_id::encode(MAX_COLUMN_COUNT, &payload),
+            "custom_id": crate::custom_id::encode(k, &payload),
             "max_values": pending.len(),
             "min_values": 0,
             "options": choices,
         }],
     })
+}
+
+/// One currency's share of a selection: what the operator holds, against what is
+/// being asked of them.
+struct Quotation {
+    name: String,
+    unit: String,
+    current: i64,
+    quoted: i64,
+}
+
+fn quotations(selected: &[&ClaimView], me: i64, balances: &[Balance]) -> Vec<Quotation> {
+    let mut quotations: Vec<Quotation> = Vec::new();
+
+    for claim in selected {
+        let unit = claim.currency.unit.clone().unwrap_or_default();
+
+        let index = match quotations
+            .iter()
+            .position(|quotation| quotation.unit == unit)
+        {
+            Some(index) => index,
+            None => {
+                let current = balances
+                    .iter()
+                    .find(|balance| balance.unit == unit)
+                    .map(|balance| balance.amount)
+                    .unwrap_or(0);
+
+                quotations.push(Quotation {
+                    name: claim.currency.name.clone().unwrap_or_default(),
+                    unit,
+                    current,
+                    quoted: 0,
+                });
+
+                quotations.len() - 1
+            }
+        };
+
+        // Only what this operator would pay counts against them.
+        if claim.payer.discord_id == Some(me) {
+            quotations[index].quoted += claim.amount.unwrap_or_default();
+        }
+    }
+
+    quotations
+}
+
+/// `Listing.render_quotation/1`: a lone balance when nothing is asked of them,
+/// and the arithmetic with a warning when more is asked than they hold.
+fn quotation_text(quotation: &Quotation) -> String {
+    let Quotation {
+        name,
+        unit,
+        current,
+        quoted,
+    } = quotation;
+
+    if *quoted == 0 {
+        return format!("**{name}**: `{current}{unit}`");
+    }
+
+    let warning = if current < quoted { "⚠" } else { "" };
+
+    format!(
+        "**{name}**: `{current}{unit}` - `{quoted}{unit}` => `{}{unit}`{warning}",
+        current - quoted
+    )
+}
+
+/// `Listing.render/2` for `:select`: the page with the selection marked, what
+/// the selection would spend, and the buttons that act on it.
+pub fn selection(
+    position: Position,
+    claims: &[ClaimView],
+    me: i64,
+    options: &ListOptions,
+    selected: &[i64],
+    balances: &[Balance],
+) -> Value {
+    let pending: Vec<&ClaimView> = claims
+        .iter()
+        .filter(|claim| claim.status.as_deref() == Some("pending"))
+        .collect();
+    let selected_claims: Vec<&ClaimView> = pending
+        .iter()
+        .copied()
+        .filter(|claim| selected.contains(&claim.id))
+        .collect();
+
+    let quotations = quotations(&selected_claims, me, balances);
+
+    let mut embeds = vec![json!({
+        "title": title(position),
+        "color": COLOR_BRAND,
+        "fields": fields(position, claims, me, selected),
+        "description": if claims.is_empty() {
+            json!("表示する内容がありません。")
+        } else {
+            Value::Null
+        },
+    })];
+
+    if !quotations.is_empty() {
+        embeds.push(json!({
+            "title": "残高",
+            "color": COLOR_BRAND,
+            "description": quotations
+                .iter()
+                .map(quotation_text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }));
+    }
+
+    let mut components = Vec::new();
+
+    if !pending.is_empty() {
+        components.push(select_row(0, &pending, me, options, selected));
+    }
+
+    if let Some(row) = action_row(&selected_claims, &quotations, me, options) {
+        components.push(row);
+    }
+
+    json!({
+        "type": UPDATE_MESSAGE,
+        "data": {
+            "flags": EPHEMERAL,
+            "embeds": embeds,
+            "components": components,
+        },
+    })
+}
+
+/// `Listing.selection_execute_row/5`: what the selection allows, which is
+/// nothing to act on until something is selected.
+fn action_row(
+    selected: &[&ClaimView],
+    quotations: &[Quotation],
+    me: i64,
+    options: &ListOptions,
+) -> Option<Value> {
+    if selected.is_empty() {
+        return None;
+    }
+
+    let cancelable = selected
+        .iter()
+        .all(|claim| claim.claimant.discord_id == Some(me));
+    let deniable = selected
+        .iter()
+        .all(|claim| claim.payer.discord_id == Some(me));
+    let approvable = deniable
+        && quotations
+            .iter()
+            .all(|quotation| quotation.current >= quotation.quoted);
+
+    let ids: Vec<i64> = selected.iter().map(|claim| claim.id).collect();
+
+    let button = |k: u8, emoji: &str, style: i64, action: Action, disabled: Option<bool>| {
+        let mut payload = claim_action(action).to_vec();
+        payload.extend_from_slice(&options.encode());
+        payload.extend_from_slice(&encode_claim_ids(&ids));
+
+        let mut button = json!({
+            "type": BUTTON,
+            "style": style,
+            "emoji": { "name": emoji },
+            "custom_id": crate::custom_id::encode(k, &payload),
+        });
+
+        // Only the actions that can be refused carry the flag; going back is
+        // always possible.
+        if let Some(disabled) = disabled {
+            button["disabled"] = json!(disabled);
+        }
+
+        button
+    };
+
+    Some(json!({
+        "type": ACTION_ROW,
+        "components": [
+            button(5, "⬅️", BUTTON_STYLE_SECONDARY, Action::Back, None),
+            button(6, "✅", BUTTON_STYLE_SUCCESS, Action::Approve, Some(!approvable)),
+            button(7, "❌", BUTTON_STYLE_DANGER, Action::Deny, Some(!deniable)),
+            button(8, "🗑️", BUTTON_STYLE_PRIMARY, Action::Cancel, Some(!cancelable)),
+        ],
+    }))
 }
