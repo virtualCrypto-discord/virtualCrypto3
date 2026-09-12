@@ -153,6 +153,10 @@ pub async fn details(
 /// Both find it the same way, so the difference is the shape of the answer rather
 /// than the question.
 pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+    if !user.scopes.oauth2_register {
+        return Err(ApiError::PermissionDenied);
+    }
+
     let subject = i32::try_from(user.subject)
         .map_err(|_| ApiError::Internal("subject out of range".into()))?;
 
