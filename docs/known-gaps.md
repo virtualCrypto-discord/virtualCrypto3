@@ -235,3 +235,35 @@ body — which is most of them, and which is what this endpoint exists for — r
 the Elixir's answer as a success. The refresh and `client_credentials` paths in
 the same controller do set `400`, so the code exchange was the odd one out.
 
+## The notification transport, as far as it is specified
+
+`docs/api/Webhook.md` and `notification/webhook/cloudflare-workers.ex` together
+say what the delivery is, and it is smaller than the earlier note in this file
+assumed.
+
+**The protocol** is Discord's, deliberately. Events are a claim being approved or
+denied; a body is `{ "type": 1 | 2, "data": ... }` with 1 as PING and 2 as a
+claim update, and **unknown types must be ignored**. The signature is ed25519 over
+the timestamp and the body concatenated as bytes, in `X-Signature-Ed25519` as hex
+and `X-Signature-Timestamp` as digits — the same thing this service already
+verifies on its own interaction endpoint, which is why `ed25519_dalek` is already
+in the tree. An application that cannot verify must answer `401`, and
+**VirtualCrypto checks that it can at registration and periodically afterwards**.
+
+**The delivery goes through a Cloudflare Worker**, so no mTLS belongs on this
+side. The Elixir reads a `webhook_proxy` from configuration and posts there; the
+worker holds the certificates. The earlier note in this file said the proxy's
+certificate and an HTTP client were needed here, which is wrong — what is needed
+is a client for that worker's own request shape, which is the next thing to read
+(its source is `webhook-emitter-cf-workers` in the same organisation).
+
+**The keys are per application**, and are the reason `applications` has both
+`public_key` and `private_key` as `NOT NULL`: the service signs what it sends with
+the private half and the application verifies with the public one. That is also
+why the fixture in `tests/oauth2_preauthorize.rs` has to write both, which the
+runtime taught us rather than the schema.
+
+What is missing here is an implementation of `Notifier` that posts through the
+worker, the configuration for the worker's URL, and something that re-verifies
+applications periodically — there is no scheduler in this service at all.
+
