@@ -4,6 +4,7 @@ pub mod claim_list;
 pub mod command;
 pub mod custom_id;
 pub mod discord;
+pub mod discord_auth;
 pub mod error;
 pub mod notification;
 pub mod permissions;
