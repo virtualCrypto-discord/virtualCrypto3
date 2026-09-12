@@ -250,12 +250,19 @@ verifies on its own interaction endpoint, which is why `ed25519_dalek` is alread
 in the tree. An application that cannot verify must answer `401`, and
 **VirtualCrypto checks that it can at registration and periodically afterwards**.
 
-**The delivery goes through a Cloudflare Worker**, so no mTLS belongs on this
-side. The Elixir reads a `webhook_proxy` from configuration and posts there; the
-worker holds the certificates. The earlier note in this file said the proxy's
-certificate and an HTTP client were needed here, which is wrong — what is needed
-is a client for that worker's own request shape, which is the next thing to read
-(its source is `webhook-emitter-cf-workers` in the same organisation).
+**The delivery goes through a Cloudflare Worker, and that worker is protected by
+mTLS** — so a client certificate belongs on this side, and an earlier version of
+this paragraph was wrong to say otherwise. The Elixir reads a `webhook_proxy` from
+configuration and posts there; the worker presents a certificate of its own and
+requires one from this side. That is the whole of the protection, so a client
+without the certificate is not a client the worker will talk to.
+
+`reqwest` takes one as an identity — `Identity::from_pem` over the certificate and
+its key together — and that needs the TLS feature to be chosen deliberately rather
+than left at the default.
+
+The next thing to read is that worker's own request shape; its source is
+`webhook-emitter-cf-workers` in the same organisation.
 
 **The keys are per application**, and are the reason `applications` has both
 `public_key` and `private_key` as `NOT NULL`: the service signs what it sends with
@@ -263,7 +270,8 @@ the private half and the application verifies with the public one. That is also
 why the fixture in `tests/oauth2_preauthorize.rs` has to write both, which the
 runtime taught us rather than the schema.
 
-What is missing here is an implementation of `Notifier` that posts through the
-worker, the configuration for the worker's URL, and something that re-verifies
-applications periodically — there is no scheduler in this service at all.
+What is missing here is three things and not two: an implementation of `Notifier`
+that posts through the worker, the worker's URL, and **the client certificate and
+key it will demand**. And something that re-verifies applications periodically —
+there is no scheduler in this service at all.
 
