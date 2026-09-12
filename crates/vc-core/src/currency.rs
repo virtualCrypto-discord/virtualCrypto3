@@ -207,6 +207,57 @@ pub async fn create(
     Ok(())
 }
 
+/// The guild's currency unit, for the confirmation the delete modal asks for.
+pub async fn unit_for_guild(
+    pool: &PgPool,
+    guild_id: i64,
+) -> std::result::Result<Option<String>, sqlx::Error> {
+    let unit = sqlx::query_scalar!("SELECT unit FROM currencies WHERE guild_id = $1", guild_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(unit.flatten())
+}
+
+/// `Query.Currency.delete/1`: the currency and everything that hangs off it.
+///
+/// `claim_metadata` is not named because its foreign key to `claims` cascades,
+/// which is also why Elixir can leave it out.
+pub async fn delete(pool: &PgPool, guild_id: i64) -> std::result::Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let currency_id = sqlx::query_scalar!(
+        "SELECT id FROM currencies WHERE guild_id = $1 FOR UPDATE",
+        guild_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(currency_id) = currency_id else {
+        return Ok(());
+    };
+
+    for statement in [
+        "DELETE FROM assets WHERE currency_id = $1",
+        "DELETE FROM currency_given_histories WHERE currency_id = $1",
+        "DELETE FROM currency_payment_histories WHERE currency_id = $1",
+        "DELETE FROM claims WHERE currency_id = $1",
+    ] {
+        sqlx::query(statement)
+            .bind(currency_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    sqlx::query!("DELETE FROM currencies WHERE id = $1", currency_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeleteCheck {
     /// The currency is inside its deletion window.

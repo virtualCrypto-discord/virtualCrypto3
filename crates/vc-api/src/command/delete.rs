@@ -63,6 +63,48 @@ fn render_confirm(unit: &str) -> Value {
     })
 }
 
+/// `Interaction.Modal.handle/4` for `[:delete, :confirm]`: the typed unit is the
+/// confirmation, and the currency goes once it matches.
+pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, CommandError> {
+    let guild_id = payload
+        .get("guild_id")
+        .and_then(as_int)
+        .ok_or_else(|| CommandError::missing("delete requires a guild"))?;
+
+    let value = payload
+        .get("data")
+        .and_then(|data| data.get("components"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("components"))
+        .and_then(Value::as_array)
+        .and_then(|inputs| inputs.first())
+        .and_then(|input| input.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| CommandError::missing("the delete modal has no value"))?;
+
+    let Some(unit) = vc_core::currency::unit_for_guild(state.pool(), guild_id).await? else {
+        return Ok(render_error("エラー: このサーバーに通貨が存在しません。"));
+    };
+
+    if value != format!("delete {unit}") {
+        return Ok(render_error(
+            "エラー: 確認に失敗しました。再度`/delete`コマンドを実行してください。",
+        ));
+    }
+
+    vc_core::currency::delete(state.pool(), guild_id).await?;
+
+    Ok(json!({
+        "type": CHANNEL_MESSAGE_WITH_SOURCE,
+        "data": {
+            "flags": EPHEMERAL,
+            "content": "通貨を削除しました。",
+            "allowed_mentions": { "parse": [] },
+        },
+    }))
+}
+
 /// `Interactions.Delete.render/3` for `{:error, reason, _}`.
 fn render_error(content: &str) -> Value {
     json!({

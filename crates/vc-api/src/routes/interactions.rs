@@ -37,12 +37,36 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
         Some(2) => command(&state, &payload).await,
         Some(3) => component(&state, &payload).await,
-        // 4 autocomplete and 5 modals are the remaining work; see
-        // docs/known-gaps.md.
-        Some(kind @ 4..=5) => text(
+        Some(4) => text(
             StatusCode::NOT_IMPLEMENTED,
-            &format!("interaction type {kind} is not implemented yet"),
+            "interaction type 4 is not implemented yet",
         ),
+        Some(5) => modal(&state, &payload).await,
+        _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+    }
+}
+
+/// `verified/2` for `type` 5: a modal submission, whose `custom_id` says which
+/// one was filled in.
+async fn modal(state: &AppState, payload: &Value) -> Response {
+    let Some(custom_id) = payload
+        .get("data")
+        .and_then(|data| data.get("custom_id"))
+        .and_then(Value::as_str)
+    else {
+        return text(StatusCode::BAD_REQUEST, "Type Not Found");
+    };
+
+    let path = crate::custom_id::ui::modal::parse(&crate::custom_id::parse(custom_id));
+
+    match path {
+        Ok((["delete", "confirm"], _)) => {
+            match crate::command::delete::confirm(state, payload).await {
+                Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+                Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+                Err(CommandError::Internal(error)) => error.into_response(),
+            }
+        }
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }
 }

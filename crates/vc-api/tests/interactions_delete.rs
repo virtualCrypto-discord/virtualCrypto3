@@ -77,3 +77,50 @@ async fn delete_outside_the_window_is_refused(pool: PgPool) {
         })
     );
 }
+
+/// `delete_test.exs`'s "confirm delete": the typed unit is the confirmation, and
+/// the currency and everything hanging off it go.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    let payload = json!({
+        "type": 5,
+        "data": {
+            "custom_id": vc_api::custom_id::encode(
+                0,
+                &vc_api::custom_id::ui::modal::confirm_currency_delete(),
+            ),
+            "components": [{
+                "components": [{ "value": format!("delete {}", money.unit) }],
+            }],
+        },
+        "member": {
+            "user": { "id": money.user1.to_string() },
+            "permissions": "18446744073709551615",
+        },
+        "guild_id": money.guild.to_string(),
+    });
+
+    let response = interaction(router(pool.clone()), payload).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        json!({
+            "type": 4,
+            "data": {
+                "flags": 64,
+                "content": "通貨を削除しました。",
+                "allowed_mentions": { "parse": [] },
+            },
+        })
+    );
+
+    assert!(
+        support::currency_by_unit(&pool, &money.unit)
+            .await
+            .is_none(),
+        "the currency is gone"
+    );
+}
