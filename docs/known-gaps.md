@@ -100,3 +100,24 @@ relevant test.
 - `GET /api/v2/users/@me/claims/:id` answers `404` for a non-numeric id, where
   Ecto's `bigint` cast would raise a 500. `PATCH` already answers an unparsable
   id with 404, so the two endpoints stay consistent.
+
+## Deliberately out of scope
+
+Two items in the original plan were dropped by decision, not forgotten:
+
+- `GET /api/v2/users/@me/balances` is not implemented. It and `/users/@me` are
+  consumed only by the web frontend, which is being rebuilt separately, so the
+  endpoint waits for that. (`/users/@me` is implemented because it already
+  existed.)
+- The differential harness — replaying a recorded request corpus against both the
+  Elixir and the Rust service — is not built. The ported contract tests and the
+  captured goldens are the evidence of compatibility instead.
+
+## Discord interactions
+
+`POST /api/integrations/discord/interactions` verifies the Ed25519 signature over
+`timestamp <> body` and answers PING (type 1) with a PONG. Types 2 (application
+commands), 3 (message components), 4 (autocomplete) and 5 (modals) are recognised
+but answer 501, so the bot does not respond to commands yet. The 22 interaction
+test files under `test/.../controllers/api/interactions/` are the checklist for
+closing that, starting with the `custom_id` codec the component paths need.
