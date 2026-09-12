@@ -57,6 +57,55 @@ pub async fn pay(
     Ok(())
 }
 
+/// `Money.pay/1` when both sides come from Discord, which is the `pay` slash
+/// command: `Query.Asset.Transfer.transfer/4` resolves its arguments with
+/// `UserResolver.resolve_ids/1`, so a discord id that has no account gets one.
+///
+/// The currency is checked before the accounts are resolved, keeping the order
+/// [`pay`] uses, so an unknown unit is reported without creating anyone.
+pub async fn pay_from_discord(
+    pool: &PgPool,
+    sender_discord_id: i64,
+    receiver_discord_id: i64,
+    unit: &str,
+    amount: i64,
+) -> Result<(), PayError> {
+    let mut tx = pool.begin().await.map_err(PayError::Database)?;
+
+    let known = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(PayError::Database)?;
+
+    if known.is_none() {
+        return Err(PayError::NotFoundCurrency);
+    }
+
+    let ids = crate::user::resolve_ids(&mut tx, &[sender_discord_id, receiver_discord_id])
+        .await
+        .map_err(PayError::Database)?;
+
+    crate::transfer::transfer(
+        &mut tx,
+        ids[&sender_discord_id],
+        ids[&receiver_discord_id],
+        amount,
+        unit,
+    )
+    .await
+    .map_err(|error| match error {
+        TransferError::InvalidAmount => PayError::InvalidAmount,
+        TransferError::NotFoundCurrency => PayError::NotFoundCurrency,
+        TransferError::NotFoundSenderAsset => PayError::NotFoundSenderAsset,
+        TransferError::NotEnoughAmount => PayError::NotEnoughAmount,
+        TransferError::Database(error) => PayError::Database(error),
+    })?;
+
+    tx.commit().await.map_err(PayError::Database)?;
+
+    Ok(())
+}
+
 /// One entry of a bulk payment.
 #[derive(Debug, Clone)]
 pub struct BulkPayment {

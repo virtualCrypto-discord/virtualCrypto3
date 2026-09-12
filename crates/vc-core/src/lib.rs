@@ -1,5 +1,6 @@
 //! Domain model and PostgreSQL access for virtualCrypto.
 
+pub mod balance;
 pub mod claim;
 pub mod currency;
 pub mod db;

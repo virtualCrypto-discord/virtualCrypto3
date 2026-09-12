@@ -5,66 +5,13 @@
 mod support;
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::Request;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{Response, fake, sign_interaction, state};
-use tower::ServiceExt;
+use support::{execute_from_guild, fake, interaction, state};
 
-const URI: &str = "/api/integrations/discord/interactions";
 const SITE_URL: &str = "https://vcrypto.sumidora.com";
 const BOT_INVITE_URL: &str = "https://discord.com/api/oauth2/authorize?client_id=791984306632654869&permissions=0&scope=applications.commands%20bot";
 const SUPPORT_GUILD_INVITE_URL: &str = "https://discord.com/invite/Hgp5DpG";
-
-/// `InteractionsControllerTest.Helper.Common.execute_from_guild/2` with its
-/// default guild and permissions.
-fn execute_from_guild(data: Value, user: i64) -> Value {
-    json!({
-        "type": 2,
-        "data": data,
-        "member": {
-            "user": { "id": user.to_string() },
-            "permissions": "18446744073709551615",
-        },
-        "guild_id": "494780225280802817",
-    })
-}
-
-async fn interaction(app: Router, payload: Value) -> Response {
-    let body = serde_json::to_vec(&payload).expect("encode body");
-    let (timestamp, signature) = sign_interaction(&body);
-
-    let request = Request::builder()
-        .method("POST")
-        .uri(URI)
-        .header("content-type", "application/json")
-        .header("accept", "application/json")
-        .header("x-signature-timestamp", timestamp)
-        .header("x-signature-ed25519", signature)
-        .body(Body::from(body))
-        .expect("request");
-
-    let response = app.oneshot(request).await.expect("router response");
-
-    let status = response.status().as_u16();
-    let headers = response.headers().clone();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let body = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
-    };
-
-    Response {
-        status,
-        headers,
-        body,
-    }
-}
 
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
@@ -146,15 +93,17 @@ async fn a_command_without_a_name_is_400(pool: PgPool) {
     assert_eq!(response.body, Value::String("Type Not Found".into()));
 }
 
-/// The commands that are still to come answer 501 until they land; see
-/// docs/test-port.md for the list.
+/// A name no `Command.handle/4` clause matches. Elixir has no clause either, so
+/// it raises and answers 500; this keeps the shape of the response a client can
+/// act on, which is the same `Type Not Found` a missing name gets.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_unimplemented_command_is_501(pool: PgPool) {
+async fn an_unknown_command_is_400(pool: PgPool) {
     let response = interaction(
         router(pool),
-        execute_from_guild(json!({ "name": "bal" }), 12),
+        execute_from_guild(json!({ "name": "nonexistent" }), 12),
     )
     .await;
 
-    assert_eq!(response.status, 501);
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body, Value::String("Type Not Found".into()));
 }

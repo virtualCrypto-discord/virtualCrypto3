@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use tower::ServiceExt;
@@ -463,4 +463,183 @@ pub async fn insert_claim_metadata(
     .execute(pool)
     .await
     .expect("insert claim metadata");
+}
+
+/// The guild and permissions `InteractionsControllerTest.Helper.Common` uses
+/// when a test does not pass its own.
+pub const DEFAULT_GUILD: i64 = 494_780_225_280_802_817;
+pub const DEFAULT_PERMISSIONS: &str = "18446744073709551615";
+
+/// `Helper.Common.execute_from_guild/2`.
+pub fn execute_from_guild(data: Value, user: i64) -> Value {
+    from_guild(data, user, DEFAULT_GUILD, DEFAULT_PERMISSIONS)
+}
+
+/// `Helper.Common.execute_from_guild/4`, with the guild and permissions given.
+pub fn from_guild(data: Value, user: i64, guild_id: i64, permissions: &str) -> Value {
+    json!({
+        "type": 2,
+        "data": data,
+        "member": {
+            "user": { "id": user.to_string() },
+            "permissions": permissions,
+        },
+        "guild_id": guild_id.to_string(),
+    })
+}
+
+/// `Helper.Common.execute_from_dm/2`.
+pub fn execute_from_dm(data: Value, user: i64) -> Value {
+    json!({
+        "type": 2,
+        "data": data,
+        "user": { "id": user.to_string() },
+    })
+}
+
+/// `Helper.Common.button_from_guild/2`.
+pub fn button_from_guild(data: Value, user: i64) -> Value {
+    component_from_guild(data, user, 2)
+}
+
+/// `Helper.Common.select_from_guild/2`.
+pub fn select_from_guild(data: Value, user: i64) -> Value {
+    component_from_guild(data, user, 3)
+}
+
+fn component_from_guild(data: Value, user: i64, component_type: i64) -> Value {
+    let Value::Object(mut data) = data else {
+        panic!("component data must be an object");
+    };
+    data.insert("component_type".to_string(), json!(component_type));
+
+    json!({
+        "type": 3,
+        "data": Value::Object(data),
+        "member": {
+            "user": { "id": user.to_string() },
+            "permissions": DEFAULT_PERMISSIONS,
+        },
+        "guild_id": DEFAULT_GUILD.to_string(),
+    })
+}
+
+/// `Helper.Common.modal_submit_from_guild/2`.
+pub fn modal_submit_from_guild(data: Value, user: i64) -> Value {
+    json!({
+        "type": 5,
+        "data": data,
+        "member": {
+            "user": { "id": user.to_string() },
+            "permissions": DEFAULT_PERMISSIONS,
+        },
+        "guild_id": DEFAULT_GUILD.to_string(),
+    })
+}
+
+/// `InteractionsCase.execute_interaction/2`: sign the body and POST it.
+pub async fn interaction(app: Router, payload: Value) -> Response {
+    let body = serde_json::to_vec(&payload).expect("encode body");
+    let (timestamp, signature) = sign_interaction(&body);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/integrations/discord/interactions")
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .header("x-signature-timestamp", timestamp)
+        .header("x-signature-ed25519", signature)
+        .body(Body::from(body))
+        .expect("request");
+
+    let response = app.oneshot(request).await.expect("router response");
+
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+
+    Response {
+        status,
+        headers,
+        body,
+    }
+}
+
+/// The accounts and balances `EnvironmentBootstrapper.setup_money/1` leaves
+/// behind.
+///
+/// Elixir derives its guilds, users and units from `System.unique_integer/1`;
+/// the tests only ever read them back out of the context, so fixed values keep a
+/// failure readable.
+pub struct Money {
+    pub user1: i64,
+    pub user2: i64,
+    pub guild: i64,
+    pub guild2: i64,
+    pub name: String,
+    pub name2: String,
+    pub unit: String,
+    pub unit2: String,
+    pub currency: i64,
+    pub currency2: i64,
+}
+
+pub const MONEY_USER1: i64 = 100_000_000_000_000_001;
+pub const MONEY_USER2: i64 = 100_000_000_000_000_002;
+pub const MONEY_GUILD2: i64 = 494_780_225_280_802_818;
+
+/// `setup_money/1`, as the rows it ends up with: each user created a currency
+/// worth 200000 in their own guild, the first user paid the second 500, and the
+/// first guild's pool gave the second user 500 more.
+pub async fn setup_money(pool: &PgPool) -> Money {
+    let name = "nyan".to_string();
+    let name2 = "wan".to_string();
+    let unit = "n".to_string();
+    let unit2 = "w".to_string();
+
+    insert_user(pool, 1, MONEY_USER1).await;
+    insert_user(pool, 2, MONEY_USER2).await;
+    insert_currency(pool, 1, &name, &unit, DEFAULT_GUILD, 500).await;
+    insert_currency(pool, 2, &name2, &unit2, MONEY_GUILD2, 1000).await;
+    insert_asset(pool, 1, 1, 199_500).await;
+    insert_asset(pool, 2, 1, 1_000).await;
+    insert_asset(pool, 2, 2, 200_000).await;
+
+    Money {
+        user1: MONEY_USER1,
+        user2: MONEY_USER2,
+        guild: DEFAULT_GUILD,
+        guild2: MONEY_GUILD2,
+        name,
+        name2,
+        unit,
+        unit2,
+        currency: 1,
+        currency2: 2,
+    }
+}
+
+/// `ConditionChecker.get_amount/2`: the balance, or zero when there is no row.
+pub async fn get_amount(pool: &PgPool, discord_user_id: i64, currency_id: i64) -> i64 {
+    let amount = sqlx::query_scalar!(
+        "SELECT assets.amount
+           FROM assets
+           JOIN users ON users.id = assets.user_id
+          WHERE users.discord_id = $1 AND assets.currency_id = $2",
+        discord_user_id,
+        currency_id
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("read balance");
+
+    amount.flatten().unwrap_or(0)
 }

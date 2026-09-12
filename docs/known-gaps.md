@@ -116,8 +116,13 @@ Two items in the original plan were dropped by decision, not forgotten:
 ## Discord interactions
 
 `POST /api/integrations/discord/interactions` verifies the Ed25519 signature over
-`timestamp <> body` and answers PING (type 1) with a PONG. Types 2 (application
-commands), 3 (message components), 4 (autocomplete) and 5 (modals) are recognised
-but answer 501, so the bot does not respond to commands yet. The 22 interaction
-test files under `test/.../controllers/api/interactions/` are the checklist for
-closing that, starting with the `custom_id` codec the component paths need.
+`timestamp <> body` and answers PING (type 1) with a PONG. Type 2 (application
+commands) is dispatched to a handler per command name, and the commands that are
+still missing are listed in `docs/test-port.md`. Types 3 (message components), 4
+(autocomplete) and 5 (modals) answer 501 until the button, select menu and modal
+paths land, so the components a reply draws are inert.
+
+One deviation: a command name that no `Command.handle/4` clause matches answers
+400 `Type Not Found`, where Elixir has no clause either and so raises, producing
+a 500. Discord only sends registered command names, so this is unreachable in
+practice; it is recorded because it is not a faithful reproduction.

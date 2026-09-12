@@ -6,6 +6,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
+use crate::command::CommandError;
 use crate::state::AppState;
 
 /// `POST /api/integrations/discord/interactions`
@@ -34,7 +35,7 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
     match payload.get("type").and_then(Value::as_i64) {
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
-        Some(2) => command(&state, &payload),
+        Some(2) => command(&state, &payload).await,
         // 3 message components, 4 autocomplete and 5 modals are the remaining
         // work; see docs/known-gaps.md.
         Some(kind @ 3..=5) => text(
@@ -47,20 +48,26 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
 
 /// `verified/2` for `type` 2: the command name picks a handler, and a payload
 /// without one falls through to `Type Not Found`.
-fn command(state: &AppState, payload: &Value) -> Response {
-    let name = payload
-        .get("data")
-        .and_then(|data| data.get("name"))
-        .and_then(Value::as_str);
+async fn command(state: &AppState, payload: &Value) -> Response {
+    let data = payload.get("data");
 
-    match name {
-        Some("help") => (StatusCode::OK, Json(crate::command::help(state))).into_response(),
-        Some("invite") => (StatusCode::OK, Json(crate::command::invite(state))).into_response(),
-        Some(name) => text(
-            StatusCode::NOT_IMPLEMENTED,
-            &format!("command {name} is not implemented yet"),
-        ),
-        None => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+    let Some(name) = data
+        .and_then(|data| data.get("name"))
+        .and_then(Value::as_str)
+    else {
+        return text(StatusCode::BAD_REQUEST, "Type Not Found");
+    };
+
+    let options = data
+        .and_then(|data| data.get("options"))
+        .and_then(Value::as_array)
+        .map(|options| crate::command::parse_options(options))
+        .unwrap_or_default();
+
+    match crate::command::handle(state, name, &options, payload).await {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+        Err(CommandError::Internal(error)) => error.into_response(),
     }
 }
 
