@@ -14,6 +14,33 @@ pub enum RedirectUriError {
     Scheme,
 }
 
+/// The one scope the service has ever accepted.
+pub const OPENID: &str = "openid";
+
+/// Why a list of scopes was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeError {
+    /// `invalid_scope`. The Elixir answers the same way for a repeat and for an
+    /// unknown name, so there is one reason here as well.
+    Invalid,
+}
+
+/// `is_valid_scopes?/1`: no repeats, and nothing but `openid`.
+///
+/// Which leaves exactly two acceptable answers, `[]` and `["openid"]` — so the
+/// consent screen's `scope` is usually nothing at all. Written as the two rules
+/// the Elixir states rather than as `len() <= 1`, because "no repeats" is the
+/// half a caller would not think to check.
+pub fn check_scopes(scopes: &[String]) -> Result<(), ScopeError> {
+    let unique: std::collections::HashSet<&String> = scopes.iter().collect();
+
+    if unique.len() != scopes.len() || scopes.iter().any(|scope| scope != OPENID) {
+        Err(ScopeError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
 /// Every registered redirect URI must carry an `http` or `https` scheme.
 ///
 /// An empty list passes, as `Enum.all?/2` on an empty list does; whether an
@@ -135,5 +162,34 @@ mod tests {
     #[test]
     fn the_rest_of_the_uri_is_not_inspected() {
         assert_eq!(check(&["http:example"]), Ok(()));
+    }
+
+    fn scopes(scopes: &[&str]) -> Result<(), ScopeError> {
+        check_scopes(
+            &scopes
+                .iter()
+                .map(|scope| (*scope).to_string())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn the_only_acceptable_scopes_are_none_and_openid() {
+        assert_eq!(scopes(&[]), Ok(()));
+        assert_eq!(scopes(&["openid"]), Ok(()));
+    }
+
+    #[test]
+    fn an_unknown_scope_is_refused() {
+        assert_eq!(scopes(&["profile"]), Err(ScopeError::Invalid));
+        assert_eq!(scopes(&["openid", "profile"]), Err(ScopeError::Invalid));
+        assert_eq!(scopes(&[""]), Err(ScopeError::Invalid));
+    }
+
+    /// The half a caller would not think to check, and the reason the rule is
+    /// two rules rather than a length.
+    #[test]
+    fn a_repeated_scope_is_refused() {
+        assert_eq!(scopes(&["openid", "openid"]), Err(ScopeError::Invalid));
     }
 }
