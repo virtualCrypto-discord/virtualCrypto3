@@ -4,7 +4,12 @@
 //! how a refusal is answered. The rest of the screen is a validation chain, and
 //! each link of it lands on one of these.
 
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Redirect, Response};
+use reqwest::Url;
 use serde::Deserialize;
+use serde_json::json;
 
 use vc_core::application::PreauthorizeError;
 
@@ -33,6 +38,41 @@ impl Refusal {
     pub fn redirect(error: &'static str, description: &'static str) -> Self {
         Refusal::Redirect { error, description }
     }
+}
+
+/// What a refusal becomes: the page, or a trip back to the client carrying the
+/// error and the state it sent.
+///
+/// The query is built with `Url` rather than with `format!` because the values
+/// are the client's own — a `state` containing `&` or `=` would otherwise end the
+/// parameter it is in, and the client would read someone else's query. The Elixir
+/// does the same thing with `URI.encode_query/1`.
+///
+/// A `redirect_uri` that will not parse is answered with the page. That should
+/// not happen, since `preauthorize` has already matched it against the
+/// application's own registrations, but "should not happen" is not a reason to
+/// send a browser somewhere unparsed.
+pub fn answer(refusal: Refusal, redirect_uri: &str, state: Option<&str>) -> Response {
+    let (Refusal::Redirect { error, description }, Ok(mut url)) =
+        (refusal, Url::parse(redirect_uri))
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_request" })),
+        )
+            .into_response();
+    };
+
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("error", error);
+        query.append_pair("error_description", description);
+        if let Some(state) = state {
+            query.append_pair("state", state);
+        }
+    }
+
+    Redirect::to(url.as_str()).into_response()
 }
 
 /// How `preauthorize`'s four answers are answered.
@@ -303,5 +343,80 @@ mod tests {
         let parsed = Request::parse(query(&pairs)).expect("a request");
 
         assert_eq!(parsed.scopes, ["openid", "profile"]);
+    }
+
+    fn location(response: &Response) -> String {
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .expect("a location")
+            .to_str()
+            .expect("a header")
+            .to_owned()
+    }
+
+    fn redirecting() -> Refusal {
+        Refusal::redirect("invalid_request", "invalid_guild_id")
+    }
+
+    #[test]
+    fn a_redirecting_refusal_carries_the_error_and_the_state() {
+        let response = answer(redirecting(), "https://app.example/callback", Some("abc"));
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            location(&response),
+            "https://app.example/callback?error=invalid_request&error_description=invalid_guild_id&state=abc"
+        );
+    }
+
+    /// The reason for `Url` rather than `format!`: the client's own values must
+    /// not be able to end the parameter they are in.
+    #[test]
+    fn a_state_that_looks_like_a_query_is_escaped() {
+        let response = answer(redirecting(), "https://app.example/callback", Some("a&b=c"));
+
+        assert_eq!(
+            location(&response),
+            "https://app.example/callback?error=invalid_request&error_description=invalid_guild_id&state=a%26b%3Dc"
+        );
+    }
+
+    #[test]
+    fn a_redirect_uri_that_already_has_a_query_is_added_to() {
+        let response = answer(redirecting(), "https://app.example/callback?x=1", None);
+
+        assert_eq!(
+            location(&response),
+            "https://app.example/callback?x=1&error=invalid_request&error_description=invalid_guild_id"
+        );
+    }
+
+    #[test]
+    fn a_page_refusal_goes_nowhere() {
+        let response = answer(Refusal::Page, "https://app.example/callback", Some("abc"));
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            response
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .is_none()
+        );
+    }
+
+    /// Belt and braces: the URI has already been checked, and it is still not
+    /// worth sending a browser to something that will not parse.
+    #[test]
+    fn an_unparseable_redirect_uri_is_answered_here_instead() {
+        let response = answer(redirecting(), "not a url", None);
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            response
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .is_none()
+        );
     }
 }
