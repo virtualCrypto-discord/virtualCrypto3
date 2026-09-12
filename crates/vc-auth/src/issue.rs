@@ -56,5 +56,5 @@ pub async fn user_token(
         typ: Some("access".to_string()),
     };
 
-    Ok(jwt::sign(&claims, secret)?)
+    jwt::sign(&claims, secret)
 }
