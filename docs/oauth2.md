@@ -180,11 +180,54 @@ correcting, since a client that sees it can act on it.
 Errors are `400` with `{ "error", "error_description" }`, except on the
 credentials path, which answers `{ "error" }` alone.
 
-## Still to read for the token endpoint
+## What the exchanges do, read out of `InternalAction`
 
-`Auth.exchange_token_by_authorization_code/1`, `exchange_token_by_refresh_token/1`
-and `exchange_token_by_client_credentials/1`, all in
-`lib/virtualCrypto/auth/internal/service.ex`. They are what actually redeems a
-code, rotates a refresh token and binds a token to a guild, and each has its own
-refusals.
+### `token_authorization_code/4`
+
+It **deletes the code as it reads it**, so a code is good exactly once, and the
+refusals distinguish why:
+
+| | |
+| --- | --- |
+| the code was never issued, and no grant remembers it either | `invalid_grant`, `invalid_code` |
+| the code was issued and already redeemed | `invalid_grant`, `used_code` |
+| it has expired | `invalid_grant`, `invalid_code` |
+| no application has that `client_id` | `invalid_request`, `not_found_client` |
+| the code belongs to a different application | `invalid_grant`, `issued_to_other_client` |
+| the redirect URI is not one of the application's | `invalid_grant`, `redirect_uri_mismatch` |
+| the application may not take an authorization code | `invalid_grant_type` |
+
+Then a grant is found or created for (application, guild), its scopes are
+recorded, an access token is made, and — **only if the application lists
+`refresh_token` among its grant types** — so is a refresh token. The answer is
+`access_token`, `token_type` of `Bearer`, `expires_in` of 3600, `scopes`, and
+`refresh_token` when there is one.
+
+Note `expires_in` is the literal `3600` rather than a difference of clocks, and
+that a *used* code is distinguished from an *unknown* one: a client can tell
+"somebody already spent this" from "I made this up", and only the first is worth
+retrying with a fresh authorization.
+
+### `token_refresh_token/1`
+
+Replaces the refresh token and issues a new access token. The answer carries no
+`scopes`, unlike the code exchange's — the grant already knows them. A token that
+is not one answers `invalid_grant`, `invalid_refresh_token`, and there is a
+`retry_limit` error which comes from the refresh token's own machinery.
+
+### `token_client_credentials/3`
+
+Verifies the secret, finds the grant for (application, guild), and issues an
+access token — plus a refresh token if the application lists that grant type.
+**Not read past that point**: the tail of the function is where the guild-scoped
+answer's own fields are decided, and it is the next thing to look at.
+
+## What implementing the token endpoint needs
+
+The `grants`, `grant_scopes`, `access_tokens` and `refresh_tokens` tables, and
+the three pieces of machinery that write to them: creating a grant for an
+(application, guild) pair, recording its scopes, and issuing and replacing
+tokens. None of that exists here yet, and none of it is in `vc_core` either —
+the browser flow's `/token` issues a *user* access token, which is a different
+table and a different question.
 
