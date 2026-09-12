@@ -379,3 +379,34 @@ rather than quietly tightened, since a client's slug is stored as it was sent.
 "not given" cannot be said of it. The column has a default of `web`, so it is
 never absent in practice.
 
+## What an application looks like when it is answered
+
+`Clients.render_application/1`, which the single read, the list and the client
+registration all go through — so an error here is an error in three endpoints at
+once. Sixteen fields, and the encodings are the part that is easy to get wrong:
+
+| Field | |
+| --- | --- |
+| `client_id`, `client_secret` | as stored |
+| `client_secret_expires_at` | the literal `0`, the dynamic-registration convention for "never" |
+| `redirect_uris` | the registered rows, each one's `redirect_uri` |
+| `user_id` | the owning user's id, **as a string** |
+| `discord_user_id` | **as a string**, and `null` when the account has none |
+| `owner_discord_id` | **as a string** |
+| `public_key` | the key as **lowercase hex** |
+| `application_type`, `client_name`, `client_uri`, `logo_uri`, `webhook_url`, `grant_types`, `response_types`, `discord_support_server_invite_slug` | as stored |
+
+Three numbers travel as strings and one travels as hex, which is why this is
+written down rather than inferred from the columns.
+
+**The list groups by application.** Its query returns a tuple per redirect URI —
+`{application, user, redirect_uri}` — and `ClientsJSON` groups those by the
+application's id and maps the group, so an application with three redirect URIs is
+one entry with three, not three entries. Redirect URIs that are `nil` are filtered
+out of the group, which is how an application with none registered answers with an
+empty list rather than a list containing a null.
+
+**Implementing it needs a fuller `Application` than exists here.** What is in
+`vc_core` carries an id, a client name and the grant types — the three fields
+`preauthorize` asks about — and this answer shows fourteen more.
+
