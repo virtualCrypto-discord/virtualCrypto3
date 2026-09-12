@@ -62,6 +62,19 @@ pub async fn insert_if_not_exists(
     }
 }
 
+/// `UserResolver.resolve_id/1` for a discord id: the account's id, creating the
+/// account when it is missing.
+pub async fn resolve_discord_id(
+    pool: &PgPool,
+    discord_id: i64,
+) -> std::result::Result<i32, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let user = insert_if_not_exists(&mut tx, discord_id).await?;
+    tx.commit().await?;
+
+    Ok(user.id)
+}
+
 /// Resolve several discord ids at once, creating the accounts that are missing.
 ///
 /// `UserResolver.resolve_ids/1` does the same: a fixed number of statements

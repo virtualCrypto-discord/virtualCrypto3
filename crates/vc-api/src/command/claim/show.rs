@@ -1,0 +1,194 @@
+use serde_json::{Value, json};
+use vc_core::balance::Balance;
+use vc_core::claim::{ClaimCurrency, ClaimView};
+
+use super::{format_date_time, render_error, sub_option};
+use crate::command::{
+    ACTION_ROW, BUTTON, BUTTON_STYLE_DANGER, BUTTON_STYLE_PRIMARY, BUTTON_STYLE_SUCCESS,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, EPHEMERAL, as_int, get_user, mention,
+};
+use crate::state::AppState;
+
+/// `Command.handle/4` for `claim show`: one claim, with the buttons its two
+/// parties can press.
+pub async fn handle(
+    state: &AppState,
+    sub_options: Option<&Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+
+    let id = as_int(sub_option(sub_options, "id")?)
+        .ok_or_else(|| CommandError::missing("claim id is not a number"))?;
+
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+
+    let Some(claim) = vc_core::claim::view(state.pool(), account, id).await? else {
+        return Ok(render_error("そのidの請求は見つかりませんでした。"));
+    };
+
+    // `Money.get_claim_by_id/2` answers whoever asks; the handler is what
+    // requires the caller to be one of the claim's two parties.
+    if claim.claimant.discord_id != Some(me) && claim.payer.discord_id != Some(me) {
+        return Ok(render_error("そのidの請求は見つかりませんでした。"));
+    }
+
+    // Only a pending claim's payer is shown their balance: the quotation is what
+    // tells them whether they can cover it.
+    let assets = if claim.status.as_deref() == Some("pending") && claim.payer.discord_id == Some(me)
+    {
+        Some(vc_core::balance::for_discord_user(state.pool(), me).await?)
+    } else {
+        None
+    };
+
+    Ok(render(&claim, me, assets.as_deref()))
+}
+
+/// `Interactions.Claim.Show.render/1`.
+fn render(claim: &ClaimView, me: i64, assets: Option<&[Balance]>) -> Value {
+    let unit = claim.currency.unit.clone().unwrap_or_default();
+    let amount = claim.amount.unwrap_or_default();
+    let claimant = claim.claimant.discord_id;
+    let payer = claim.payer.discord_id;
+
+    let field = json!({
+        "name": format!("{}{}", render_rs_icon(me, claimant, payer), claim.id),
+        "value": format!(
+            "状態　: {}\n請求額: **{amount}** `{unit}`\n請求元: {}\n請求先: {}\n請求日: {}",
+            render_status(claim.status.as_deref()),
+            mention(claimant.unwrap_or_default()),
+            mention(payer.unwrap_or_default()),
+            format_date_time(claim.inserted_at),
+        ),
+    });
+
+    // `currencies.unit` is unique, so finding the balance by the claim's unit is
+    // the same as `depends_assets/1` finding it by currency id.
+    let current = assets.map(|assets| {
+        assets
+            .iter()
+            .find(|balance| balance.unit == unit)
+            .map(|balance| balance.amount)
+            .unwrap_or(0)
+    });
+
+    let mut embeds = vec![json!({
+        "title": "請求",
+        "fields": [field],
+        "color": COLOR_BRAND,
+    })];
+
+    let mut components = Vec::new();
+
+    if let Some(current) = current {
+        embeds.push(json!({
+            "title": "残高",
+            "color": COLOR_BRAND,
+            "description": render_quotation(&claim.currency, current, amount),
+        }));
+        components.push(action_row(claim, me, Some(current)));
+    } else if claim.status.as_deref() == Some("pending") {
+        components.push(action_row(claim, me, None));
+    }
+
+    json!({
+        "type": CHANNEL_MESSAGE_WITH_SOURCE,
+        "data": {
+            "flags": EPHEMERAL,
+            // A `:command` action renders an empty content; a button press puts
+            // the result of the action here instead.
+            "content": "",
+            "embeds": embeds,
+            "components": components,
+        },
+    })
+}
+
+/// `Show.selection_execute_row/2`: the three buttons, disabled when the caller
+/// could not press them. Without a known balance the approval stays disabled,
+/// which is what comparing an amount against `nil` does in Elixir.
+fn action_row(claim: &ClaimView, me: i64, current: Option<i64>) -> Value {
+    let amount = claim.amount.unwrap_or_default();
+
+    let approve =
+        claim.payer.discord_id != Some(me) || current.is_none_or(|current| amount > current);
+    let deny = claim.payer.discord_id != Some(me);
+    let cancel = claim.claimant.discord_id != Some(me);
+
+    json!({
+        "type": ACTION_ROW,
+        "components": [
+            {
+                "type": BUTTON,
+                "style": BUTTON_STYLE_SUCCESS,
+                "emoji": { "name": "✅" },
+                "custom_id": action_custom_id(1, ButtonAction::Approve, claim.id),
+                "disabled": approve,
+            },
+            {
+                "type": BUTTON,
+                "style": BUTTON_STYLE_DANGER,
+                "emoji": { "name": "❌" },
+                "custom_id": action_custom_id(2, ButtonAction::Deny, claim.id),
+                "disabled": deny,
+            },
+            {
+                "type": BUTTON,
+                "style": BUTTON_STYLE_PRIMARY,
+                "emoji": { "name": "🗑️" },
+                "custom_id": action_custom_id(3, ButtonAction::Cancel, claim.id),
+                "disabled": cancel,
+            },
+        ],
+    })
+}
+
+use crate::custom_id::ui::button::Action as ButtonAction;
+
+/// `Show.action_custom_id/3`: the button's action id followed by the claim's id
+/// as eight big-endian bytes.
+fn action_custom_id(k: u8, action: ButtonAction, claim_id: i64) -> String {
+    let mut payload = crate::custom_id::ui::button::claim_action_single(action).to_vec();
+    payload.extend_from_slice(&claim_id.to_be_bytes());
+
+    crate::custom_id::encode(k, &payload)
+}
+
+/// `Show.render_rs_icon/3`: which side of the claim the caller is on.
+fn render_rs_icon(me: i64, claimant: Option<i64>, payer: Option<i64>) -> &'static str {
+    if claimant == Some(me) && payer == Some(me) {
+        "📤📥"
+    } else if claimant == Some(me) {
+        "📤"
+    } else if payer == Some(me) {
+        "📥"
+    } else {
+        // Unreachable: the caller is a party, or the claim was not shown.
+        ""
+    }
+}
+
+/// `Show.render_status/1`.
+fn render_status(status: Option<&str>) -> &'static str {
+    match status {
+        Some("approved") => "✅支払い済み",
+        Some("denied") => "❌拒否",
+        Some("canceled") => "🗑️キャンセル",
+        Some("pending") => "⌛未決定",
+        _ => "",
+    }
+}
+
+/// `Show.render_quotation/1`: what the payer holds, against what is asked, with
+/// a warning when it does not cover it.
+fn render_quotation(currency: &ClaimCurrency, current: i64, quoted: i64) -> String {
+    let unit = currency.unit.clone().unwrap_or_default();
+    let name = currency.name.clone().unwrap_or_default();
+    let warning = if current < quoted { "⚠" } else { "" };
+
+    format!(
+        "**{name}**: `{current}{unit}` - `{quoted}{unit}` => `{}{unit}`{warning}",
+        current - quoted
+    )
+}

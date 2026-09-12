@@ -7,6 +7,7 @@
 //! `InteractionsJSON`.
 
 pub mod bal;
+pub mod claim;
 pub mod create;
 pub mod delete;
 pub mod give;
@@ -191,6 +192,7 @@ pub async fn handle(
         "help" => Ok(help(state)),
         "invite" => Ok(invite(state)),
         "bal" => bal::handle(state, payload).await,
+        "claim" => claim::handle(state, options, payload).await,
         "create" => create::handle(state, options, payload).await,
         "delete" => delete::handle(state, options, payload).await,
         "give" => give::handle(state, options, payload).await,

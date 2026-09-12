@@ -16,6 +16,7 @@ use vc_api::AppState;
 use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
 use vc_api::state::Links;
 use vc_auth::claims::{AUDIENCE, Claims, ISSUER};
+use vc_core::claim::Transition;
 use vc_core::notification::{NoopNotifier, Notifier};
 
 pub const JWT_SECRET: &str = "test-secret";
@@ -671,6 +672,72 @@ pub async fn setup_money(pool: &PgPool) -> Money {
         currency: 1,
         currency2: 2,
     }
+}
+
+/// The claims `EnvironmentBootstrapper.setup_claim/1` leaves behind.
+pub struct ClaimSet {
+    pub money: Money,
+    /// c1 to c6, in the order the Elixir helper creates them.
+    pub ids: Vec<i64>,
+}
+
+impl ClaimSet {
+    pub fn id(&self, index: usize) -> i64 {
+        self.ids[index]
+    }
+}
+
+/// `setup_claim/1`, built through the real claim paths so the balances reflect
+/// the transitions it performs: c3 is approved and moves 500 from user2 to user1,
+/// c4 is denied, c5 is cancelled, and c6 is a claim on the claimant themselves.
+pub async fn setup_claim(pool: &PgPool) -> ClaimSet {
+    let money = setup_money(pool).await;
+    let unit = money.unit.clone();
+    let mut ids = Vec::new();
+
+    ids.push(create_claim(pool, 1, MONEY_USER2, &unit, 500).await);
+    ids.push(create_claim(pool, 2, MONEY_USER1, &unit, 9_999_999).await);
+
+    let approved = create_claim(pool, 1, MONEY_USER2, &unit, 500).await;
+    transition_claim(pool, 2, approved, Transition::Approved).await;
+    ids.push(approved);
+
+    let denied = create_claim(pool, 1, MONEY_USER2, &unit, 500).await;
+    transition_claim(pool, 2, denied, Transition::Denied).await;
+    ids.push(denied);
+
+    let canceled = create_claim(pool, 1, MONEY_USER2, &unit, 500).await;
+    transition_claim(pool, 1, canceled, Transition::Canceled).await;
+    ids.push(canceled);
+
+    ids.push(create_claim(pool, 1, MONEY_USER1, &unit, 100).await);
+
+    ClaimSet { money, ids }
+}
+
+async fn create_claim(
+    pool: &PgPool,
+    claimant_id: i32,
+    payer_discord_id: i64,
+    unit: &str,
+    amount: i64,
+) -> i64 {
+    vc_core::claim::create(pool, claimant_id, payer_discord_id, unit, amount, None)
+        .await
+        .expect("create claim")
+}
+
+async fn transition_claim(pool: &PgPool, operator_id: i32, claim_id: i64, transition: Transition) {
+    vc_core::claim::transition(
+        pool,
+        &NoopNotifier,
+        operator_id,
+        claim_id,
+        transition,
+        Some(Value::Object(Map::new())),
+    )
+    .await
+    .expect("transition the claim");
 }
 
 /// `ConditionChecker.get_amount/2`: the balance, or zero when there is no row.
