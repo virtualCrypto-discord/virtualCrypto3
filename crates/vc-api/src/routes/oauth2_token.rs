@@ -7,7 +7,8 @@
 
 use axum::Json;
 use axum::extract::{Form, State};
-use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
@@ -32,13 +33,39 @@ pub struct TokenForm {
 }
 
 /// `POST /oauth2/token`.
-pub async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Response {
+pub async fn token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<TokenForm>,
+) -> Response {
     match form.grant_type.as_deref() {
         None => error("invalid_request", "grant_type_parameter_missing"),
         Some("authorization_code") => exchange(&state, form).await,
         Some("refresh_token") => refresh(&state, form).await,
+        Some("client_credentials") => credentials(&headers),
         Some(_) => unsupported(),
     }
+}
+
+/// `grant_type=client_credentials`, which is two shapes rather than one: with a
+/// `guild_id` it answers with a row in `access_tokens`, and with a `scope` it
+/// answers with a signed JWT. Neither is written yet — see docs/oauth2.md for
+/// what each needs.
+///
+/// The credentials are read first because both shapes refuse a client that
+/// presents none the same way, and that much is worth answering correctly now:
+/// `invalid_client`, which is what the Elixir answers for a header it cannot
+/// parse.
+fn credentials(headers: &HeaderMap) -> Response {
+    if basic_auth(headers).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_client" })),
+        )
+            .into_response();
+    }
+
+    unsupported()
 }
 
 /// `grant_type=authorization_code`.
@@ -142,4 +169,74 @@ fn refused(error: ExchangeError) -> Response {
         })),
     )
         .into_response()
+}
+
+/// `Plug.BasicAuth.parse_basic_auth/1`: the client id and secret a client
+/// presents.
+///
+/// The scheme is matched case-insensitively because RFC 7235 says it is, and a
+/// client that writes `basic` is a client that is right. The split is on the
+/// *first* colon: a client id cannot contain one, and a secret can.
+fn basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+
+    let (scheme, encoded) = header.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())?;
+
+    let (client_id, client_secret) = decoded.split_once(':')?;
+
+    Some((client_id.to_owned(), client_secret.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            axum::http::header::HeaderValue::from_str(value).expect("a header"),
+        );
+        headers
+    }
+
+    #[test]
+    fn an_id_and_a_secret_are_read_out() {
+        // "client:secret"
+        let parsed = basic_auth(&headers("Basic Y2xpZW50OnNlY3JldA=="));
+
+        assert_eq!(parsed, Some(("client".to_owned(), "secret".to_owned())));
+    }
+
+    /// A secret may contain a colon and the id may not, which is why the split
+    /// is on the first one.
+    #[test]
+    fn a_secret_may_contain_a_colon() {
+        // "client:sec:ret"
+        let parsed = basic_auth(&headers("Basic Y2xpZW50OnNlYzpyZXQ="));
+
+        assert_eq!(parsed, Some(("client".to_owned(), "sec:ret".to_owned())));
+    }
+
+    /// RFC 7235 makes the scheme case-insensitive.
+    #[test]
+    fn the_scheme_is_matched_case_insensitively() {
+        assert!(basic_auth(&headers("basic Y2xpZW50OnNlY3JldA==")).is_some());
+        assert!(basic_auth(&headers("BASIC Y2xpZW50OnNlY3JldA==")).is_some());
+    }
+
+    #[test]
+    fn anything_else_is_not_credentials() {
+        assert_eq!(basic_auth(&HeaderMap::new()), None);
+        assert_eq!(basic_auth(&headers("Bearer a-token")), None);
+        assert_eq!(basic_auth(&headers("Basic not-base64!!")), None);
+        assert_eq!(basic_auth(&headers("Basic Y2xpZW50")), None, "no colon");
+    }
 }
