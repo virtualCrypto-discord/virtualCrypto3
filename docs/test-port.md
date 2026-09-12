@@ -7,7 +7,7 @@ with the reason.
 | Area | cases | ported | status |
 | --- | ---: | ---: | --- |
 | v2 REST API | 103 | 103 | complete |
-| Discord interactions | 141 | 141 | complete |
+| Discord interactions | 141 | 141 | tests complete — the endpoint is not, see below |
 | Notifications | 11 | 11 | complete |
 | v1 REST API | 77 | 0 | dropped by decision |
 | **total** | **332** | **255** | |
@@ -75,6 +75,11 @@ The `give` command has **no Elixir test at all**; it is exercised only through
 `setup_money/1` calling `Money.give/1`. `tests/interactions_give.rs` therefore
 holds additions rather than ports: they follow `Command.handle/4` and
 `Query.Issue.issue/3` directly.
+
+**Every Elixir interaction case is ported, and the endpoint is still not whole.**
+Type 4 (autocomplete) answers 501, and the Elixir suite has no test for it, so
+this table cannot show it: a count of ported cases says nothing about the parts
+Elixir never tested. `docs/known-gaps.md` lists what it needs.
 
 ## Notifications
 
