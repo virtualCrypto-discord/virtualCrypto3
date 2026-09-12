@@ -44,6 +44,22 @@ pub async fn preauthorize(
     redirect_uri: &str,
     client_id: &str,
 ) -> Result<Preauthorized, PreauthorizeError> {
+    let application = check(pool, scopes, redirect_uri, client_id).await?;
+
+    Ok(Preauthorized {
+        client_name: application.client_name,
+    })
+}
+
+/// The four questions, which `preauthorize` and `authorize` both ask in this
+/// order. Answering with the application is what lets one of them show a name
+/// and the other write a row.
+async fn check(
+    pool: &sqlx::PgPool,
+    scopes: &[String],
+    redirect_uri: &str,
+    client_id: &str,
+) -> Result<Application, PreauthorizeError> {
     let application = find_by_client_id(pool, client_id)
         .await
         .map_err(|_| PreauthorizeError::InvalidClientId)?
@@ -68,9 +84,62 @@ pub async fn preauthorize(
         return Err(PreauthorizeError::InvalidScope);
     }
 
-    Ok(Preauthorized {
-        client_name: application.client_name,
-    })
+    Ok(application)
+}
+
+/// How long an authorization code is good for: the Elixir's `15 * 60` seconds.
+pub const CODE_TTL: time::Duration = time::Duration::minutes(15);
+
+/// `make_code/4`: the same questions again, and then a code to hand to the
+/// browser.
+pub async fn authorize(
+    pool: &sqlx::PgPool,
+    guild_id: i64,
+    scopes: &[String],
+    redirect_uri: &str,
+    client_id: &str,
+    now: time::OffsetDateTime,
+) -> Result<String, PreauthorizeError> {
+    let application = check(pool, scopes, redirect_uri, client_id).await?;
+
+    let code = new_code();
+    // Truncated to seconds, as `NaiveDateTime.truncate(:second)` does: the column
+    // is second-precision, and a code whose stored expiry differed from the one
+    // the caller was told would be a bug waiting to happen.
+    let at = time::PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    sqlx::query!(
+        "INSERT INTO authorization_codes
+             (code, redirect_uri, application_id, guild_id, scopes, expires,
+              inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5::text[]::virtual_crypto_scope_type[], $6, $7, $7)",
+        code,
+        redirect_uri,
+        application.id,
+        guild_id,
+        scopes,
+        at + CODE_TTL,
+        at
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| PreauthorizeError::InvalidClientId)?;
+
+    Ok(code)
+}
+
+/// The code a client later exchanges for a token.
+///
+/// Thirty-two bytes of randomness, as `make_secure_random_code/0` is, taken from
+/// two UUIDs rather than from a base64 encoder: one call site does not earn a
+/// dependency, and the code is opaque to everyone but this service. The cost is
+/// its shape — 64 hex characters where the Elixir produced 43 base64-url ones.
+fn new_code() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// What an application is, as far as this check needs to know.
