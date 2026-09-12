@@ -1288,3 +1288,355 @@ async fn button_approve_reports_an_unknown_claim(pool: PgPool) {
 
     assert_action_error(pool, Action::Approve, 0, money.user1, BUTTON_NOT_FOUND).await;
 }
+
+/// Denying is the payer's move and leaves the money alone.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_deny_leaves_the_money_where_it_is(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+    let claim_id = claims.id(0);
+
+    let claimant_before = get_amount(&pool, money.user1, money.currency).await;
+    let payer_before = get_amount(&pool, money.user2, money.currency).await;
+
+    let api = fake();
+    let (response, body) = press(&api, pool.clone(), Action::Deny, &[claim_id], money.user2).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        body,
+        json!({
+            "content": format!("id: `{claim_id}` の請求を拒否しました。"),
+            "flags": 64,
+        })
+    );
+
+    let claim = vc_core::claim::view(&pool, 1, claim_id)
+        .await
+        .expect("a lookup")
+        .expect("the claim exists");
+    assert_eq!(claim.status.as_deref(), Some("denied"));
+
+    assert_eq!(
+        get_amount(&pool, money.user1, money.currency).await,
+        claimant_before
+    );
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        payer_before
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_the_claimant(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(0),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_an_unrelated_user(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Deny, claims.id(0), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_reports_an_already_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(2),
+        money.user2,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_the_claimant_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(2),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_an_unrelated_user_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Deny, claims.id(2), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_reports_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(3),
+        money.user2,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_the_claimant_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(3),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_an_unrelated_user_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Deny, claims.id(3), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_reports_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(4),
+        money.user2,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_the_claimant_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Deny,
+        claims.id(4),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_rejects_an_unrelated_user_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Deny, claims.id(4), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_deny_reports_an_unknown_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(pool, Action::Deny, 0, money.user1, BUTTON_NOT_FOUND).await;
+}
+
+/// Cancelling is the claimant's move, the mirror of denying.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_cancel_is_the_claimants_move(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let claim_id = claims.id(0);
+
+    let api = fake();
+    let (response, body) = press(
+        &api,
+        pool.clone(),
+        Action::Cancel,
+        &[claim_id],
+        claims.money.user1,
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        body,
+        json!({
+            "content": format!("id: `{claim_id}` の請求をキャンセルしました。"),
+            "flags": 64,
+        })
+    );
+
+    let claim = vc_core::claim::view(&pool, 1, claim_id)
+        .await
+        .expect("a lookup")
+        .expect("the claim exists");
+    assert_eq!(claim.status.as_deref(), Some("canceled"));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_the_payer(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(0),
+        money.user2,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_an_unrelated_user(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Cancel, claims.id(0), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_reports_an_already_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(2),
+        money.user1,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_the_payer_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(2),
+        money.user2,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_an_unrelated_user_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Cancel, claims.id(2), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_reports_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(3),
+        money.user1,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_the_payer_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(3),
+        money.user2,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_an_unrelated_user_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Cancel, claims.id(3), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_reports_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(4),
+        money.user1,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_the_payer_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Cancel,
+        claims.id(4),
+        money.user2,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_rejects_an_unrelated_user_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Cancel, claims.id(4), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_cancel_reports_an_unknown_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(pool, Action::Cancel, 0, money.user1, BUTTON_NOT_FOUND).await;
+}
