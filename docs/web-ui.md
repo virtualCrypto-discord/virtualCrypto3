@@ -122,3 +122,22 @@ deployment unpacks them somewhere else. Two things follow: **the frontend has to
 be built before the server is started**, and nothing yet gives the hashed assets
 the immutable caching they are built for — they are served without a
 `Cache-Control`, which is correct but wasteful.
+
+## What the callback needs that is not there, verified
+
+Two gaps, both found by looking rather than assuming:
+
+- **`DiscordAuth.insert_user` does not exist here.** `vc-core` has the
+  `DiscordAuth` model, `find_discord_auth/2` and the model's `refresh_user/1`,
+  but nothing that performs the login's write — store the Discord authorization
+  (token, expiry, refresh token) and give the user back. It is new code, and
+  `VirtualCrypto.DiscordAuth.insert_user/4` is its specification.
+- **Token issuance exists only in the test support.** `vc_auth::jwt::sign` over
+  a `Claims` of `sub`, `exp`, `iss`, `aud`, `jti`, `kind`, `scopes` and `typ` is
+  how the tests mint tokens, and that builder lives in `tests/support/mod.rs`.
+  Production has no equivalent, so the callback and `POST /token` have nothing to
+  call — and when one exists, the test helper should call it rather than own it.
+
+The scopes a browser login is issued are the old app's three:
+`oauth2.register`, `vc.pay` and `vc.claim`, with `kind` of `user`. `Kind::App`
+already exists for the client-credentials tokens the OAuth2 provider will need.
