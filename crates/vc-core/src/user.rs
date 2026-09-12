@@ -1,3 +1,4 @@
+use sqlx::PgConnection;
 use sqlx::PgPool;
 use time::PrimitiveDateTime;
 
@@ -26,6 +27,39 @@ pub async fn find_by_discord_id(pool: &PgPool, discord_id: i64) -> Result<Option
     .await?;
 
     Ok(user)
+}
+
+/// `VirtualCrypto.User.insert_user_if_not_exists/1`: create the account for a
+/// discord id when it is missing. Claim creation resolves its payer this way, so
+/// creating a claim can add a user row.
+pub async fn insert_if_not_exists(
+    conn: &mut PgConnection,
+    discord_id: i64,
+) -> std::result::Result<User, sqlx::Error> {
+    let inserted = sqlx::query_as!(
+        User,
+        "INSERT INTO users (discord_id, status, inserted_at, updated_at)
+         VALUES ($1, 0, $2, $2)
+         ON CONFLICT (discord_id) DO NOTHING
+         RETURNING id, discord_id, status",
+        discord_id,
+        crate::model::utc_now()
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    match inserted {
+        Some(user) => Ok(user),
+        None => {
+            sqlx::query_as!(
+                User,
+                "SELECT id, discord_id, status FROM users WHERE discord_id = $1",
+                discord_id
+            )
+            .fetch_one(&mut *conn)
+            .await
+        }
+    }
 }
 
 pub async fn find_discord_auth(pool: &PgPool, discord_user_id: i64) -> Result<Option<DiscordAuth>> {

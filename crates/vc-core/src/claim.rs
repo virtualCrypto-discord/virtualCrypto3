@@ -246,6 +246,81 @@ pub async fn list(pool: &PgPool, filter: ClaimFilter<'_>) -> Result<Vec<ClaimVie
     Ok(rows.into_iter().map(Row::into_view).collect())
 }
 
+/// `Query.Claim.create_claim/5` failures.
+#[derive(Debug)]
+pub enum CreateError {
+    InvalidAmount,
+    NotFoundCurrency,
+    Database(sqlx::Error),
+}
+
+/// `Query.Claim.create_claim/5`: resolve (or create) the payer, insert a pending
+/// claim, and attach the claimant's metadata when one was supplied.
+///
+/// The claimant's metadata row is owned by the claimant, which is what makes the
+/// metadata private to each side. A failed amount guard is reported before any
+/// validation happens, matching the Elixir function's guard.
+pub async fn create(
+    pool: &PgPool,
+    claimant_id: i32,
+    payer_discord_id: i64,
+    unit: &str,
+    amount: i64,
+    metadata: Option<Value>,
+) -> std::result::Result<i64, CreateError> {
+    if amount <= 0 {
+        return Err(CreateError::InvalidAmount);
+    }
+
+    let mut tx = pool.begin().await.map_err(CreateError::Database)?;
+
+    let currency_id = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(CreateError::Database)?
+        .ok_or(CreateError::NotFoundCurrency)?;
+
+    let payer = crate::user::insert_if_not_exists(&mut tx, payer_discord_id)
+        .await
+        .map_err(CreateError::Database)?;
+
+    let now = utc_now();
+    let claim_id = sqlx::query_scalar!(
+        "INSERT INTO claims
+             (amount, status, claimant_user_id, payer_user_id, currency_id, inserted_at, updated_at)
+         VALUES ($1, 'pending'::text::virtual_crypto_claim_status, $2, $3, $4, $5, $5)
+         RETURNING id",
+        amount,
+        i64::from(claimant_id),
+        i64::from(payer.id),
+        currency_id,
+        now
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(CreateError::Database)?;
+
+    if let Some(metadata) = metadata {
+        sqlx::query!(
+            "INSERT INTO claim_metadata
+                 (claim_id, claimant_user_id, payer_user_id, owner_user_id, metadata)
+             VALUES ($1, $2, $3, $4, $5)",
+            claim_id,
+            i64::from(claimant_id),
+            i64::from(payer.id),
+            i64::from(claimant_id),
+            metadata
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(CreateError::Database)?;
+    }
+
+    tx.commit().await.map_err(CreateError::Database)?;
+
+    Ok(claim_id)
+}
+
 /// The status transition a `PATCH` performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transition {

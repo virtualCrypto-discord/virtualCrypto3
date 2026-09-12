@@ -20,7 +20,9 @@ const DISCORD1: i64 = 100_000_000_000_000_001;
 const DISCORD2: i64 = 100_000_000_000_000_002;
 const DISCORD3: i64 = 100_000_000_000_000_003;
 
+#[allow(clippy::too_many_arguments)]
 fn claim_json(
+    id: i64,
     amount: &str,
     claimant: i32,
     claimant_discord: i64,
@@ -30,7 +32,7 @@ fn claim_json(
     metadata: Value,
 ) -> Value {
     json!({
-        "id": CLAIM_ID.to_string(),
+        "id": id.to_string(),
         "currency": {
             "name": "nyan",
             "unit": "nyan",
@@ -54,7 +56,9 @@ fn claim_json(
 }
 
 fn pending_claim(metadata: Value) -> Value {
-    claim_json("500", USER1, DISCORD1, USER2, DISCORD2, "pending", metadata)
+    claim_json(
+        CLAIM_ID, "500", USER1, DISCORD1, USER2, DISCORD2, "pending", metadata,
+    )
 }
 
 async fn fixture(pool: &PgPool) {
@@ -178,4 +182,42 @@ async fn metadata_is_scoped_to_the_requesting_user(pool: PgPool) {
         200,
         pending_claim(json!({ "note": "from the payer" })),
     );
+}
+
+/// The Elixir suite reads a claim in every status as both the claimant and the
+/// payer. Nothing differs but the status, so the matrix is one loop here.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn every_status_is_readable_by_both_parties(pool: PgPool) {
+    fixture(&pool).await;
+
+    for (id, status) in [(2_i64, "approved"), (3, "denied"), (4, "canceled")] {
+        insert_claim(&pool, id, 500, status, USER1, USER2, CURRENCY_ID).await;
+    }
+
+    let claimant_token = mint(&pool, USER1, &["vc.claim"]).await;
+    let payer_token = mint(&pool, USER2, &["vc.claim"]).await;
+
+    for (id, status) in [
+        (CLAIM_ID, "pending"),
+        (2, "approved"),
+        (3, "denied"),
+        (4, "canceled"),
+    ] {
+        let expected = claim_json(
+            id,
+            "500",
+            USER1,
+            DISCORD1,
+            USER2,
+            DISCORD2,
+            status,
+            json!({}),
+        );
+
+        let response = request(pool.clone(), &id.to_string(), Some(&claimant_token)).await;
+        assert_json(&response, 200, expected.clone());
+
+        let response = request(pool.clone(), &id.to_string(), Some(&payer_token)).await;
+        assert_json(&response, 200, expected);
+    }
 }

@@ -123,6 +123,13 @@ pub async fn insert_user(pool: &PgPool, id: i32, discord_id: i64) {
     .execute(pool)
     .await
     .expect("insert user");
+
+    // The row was inserted with an explicit id, so move the sequence past it:
+    // production code creates users without an id and would otherwise collide.
+    sqlx::query("SELECT setval('users_id_seq', (SELECT MAX(id) FROM users))")
+        .execute(pool)
+        .await
+        .expect("advance users sequence");
 }
 
 pub async fn insert_discord_auth(pool: &PgPool, discord_user_id: i64, token: &str) {
@@ -332,6 +339,11 @@ pub async fn insert_currency(
     .execute(pool)
     .await
     .expect("insert currency");
+
+    sqlx::query("SELECT setval('info_id_seq', (SELECT MAX(id) FROM currencies))")
+        .execute(pool)
+        .await
+        .expect("advance currencies sequence");
 }
 
 pub async fn insert_asset(pool: &PgPool, user_id: i32, currency_id: i64, amount: i64) {
@@ -362,7 +374,7 @@ pub async fn insert_claim(
     payer_user_id: i32,
     currency_id: i64,
 ) -> i64 {
-    sqlx::query_scalar!(
+    let claim_id = sqlx::query_scalar!(
         "INSERT INTO claims (id, amount, status, claimant_user_id, payer_user_id, currency_id,
                              inserted_at, updated_at)
          VALUES ($1, $2, $3::text::virtual_crypto_claim_status, $4, $5, $6, $7, $7)
@@ -377,7 +389,16 @@ pub async fn insert_claim(
     )
     .fetch_one(pool)
     .await
-    .expect("insert claim")
+    .expect("insert claim");
+
+    // The row was inserted with an explicit id, so move the sequence past it:
+    // production code creates claims without an id and would otherwise collide.
+    sqlx::query("SELECT setval('claims_id_seq', (SELECT MAX(id) FROM claims))")
+        .execute(pool)
+        .await
+        .expect("advance claims sequence");
+
+    claim_id
 }
 
 pub async fn insert_claim_metadata(

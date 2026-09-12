@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{OriginalUri, Path, RawQuery, State};
-use axum::http::HeaderMap;
 use axum::http::header::HOST;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::PrimitiveDateTime;
@@ -167,6 +167,133 @@ pub async fn index(
     }
 
     Ok(response)
+}
+
+/// `POST /api/v2/users/@me/claims`
+///
+/// Mirrors `ClaimController.post/2`, whose clause order decides both which
+/// `invalid_request` code a malformed body gets and which problem wins when
+/// several apply:
+///
+/// 1. `payer_discord_id` and `amount` are strings → parse and create;
+/// 2. payer present but not a string → `invalid_payer_discord_id_type`;
+/// 3. amount present but not a string → `invalid_amount_type`;
+/// 4. payer and unit present → `amount_field_is_required`;
+/// 5. payer present → `unit_field_is_required`;
+/// 6. otherwise → `payer_discord_id_field_is_required`.
+///
+/// Within clause 1 an unparseable payer is reported before an unparseable amount,
+/// and a non-positive amount before any metadata validation.
+pub async fn create(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let object = body.as_object();
+    let payer = object.and_then(|object| object.get("payer_discord_id"));
+    let unit = object.and_then(|object| object.get("unit"));
+    let amount = object.and_then(|object| object.get("amount"));
+
+    // Clause 1. The guard only checks the payer and the amount, so a non-string
+    // `unit` still reaches the currency lookup and simply fails to match.
+    if let (Some(payer), Some(amount)) = (payer, amount)
+        && payer.is_string()
+        && amount.is_string()
+    {
+        if !user.scopes.vc_claim {
+            return Err(ApiError::PermissionDenied);
+        }
+
+        let operator_id = i32::try_from(user.subject)
+            .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+
+        let payer_discord_id = parse_number(payer.as_str().unwrap_or_default())
+            .ok_or(ApiError::InvalidRequest("invalid_payer_discord_id_value"))?;
+        let amount_value = parse_number(amount.as_str().unwrap_or_default())
+            .ok_or(ApiError::InvalidRequest("invalid_amount_value"))?;
+
+        // `create_claim/5`'s guard runs before any metadata validation.
+        if amount_value <= 0 {
+            return Err(ApiError::InvalidRequest("invalid_amount"));
+        }
+
+        let metadata = object
+            .and_then(|object| object.get("metadata"))
+            .filter(|value| !value.is_null())
+            .cloned();
+
+        let details = metadata
+            .as_ref()
+            .map(vc_core::metadata::validate)
+            .unwrap_or_default();
+        if !details.is_empty() {
+            return Err(ApiError::InvalidMetadata(details));
+        }
+
+        let unit = unit
+            .and_then(Value::as_str)
+            .ok_or(ApiError::InvalidRequest("not_found_currency"))?;
+
+        let claim_id = vc_core::claim::create(
+            state.pool(),
+            operator_id,
+            payer_discord_id,
+            unit,
+            amount_value,
+            metadata,
+        )
+        .await
+        .map_err(create_error)?;
+
+        let view = vc_core::claim::view(state.pool(), operator_id, claim_id)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+
+        return Ok((
+            StatusCode::CREATED,
+            Json(serialize_claim(&state, view).await?),
+        )
+            .into_response());
+    }
+
+    // Clause 2.
+    if let Some(payer) = payer
+        && !payer.is_string()
+    {
+        return Err(ApiError::InvalidRequest("invalid_payer_discord_id_type"));
+    }
+
+    // Clause 3.
+    if let Some(amount) = amount
+        && !amount.is_string()
+    {
+        return Err(ApiError::InvalidRequest("invalid_amount_type"));
+    }
+
+    // Clause 4.
+    if payer.is_some() && unit.is_some() {
+        return Err(ApiError::InvalidRequest("amount_field_is_required"));
+    }
+
+    // Clause 5.
+    if payer.is_some() {
+        return Err(ApiError::InvalidRequest("unit_field_is_required"));
+    }
+
+    // Clause 6.
+    Err(ApiError::InvalidRequest(
+        "payer_discord_id_field_is_required",
+    ))
+}
+
+fn create_error(error: vc_core::claim::CreateError) -> ApiError {
+    use vc_core::claim::CreateError;
+
+    match error {
+        CreateError::InvalidAmount => ApiError::InvalidRequest("invalid_amount"),
+        CreateError::NotFoundCurrency => ApiError::InvalidRequest("not_found_currency"),
+        CreateError::Database(error) => ApiError::Core(vc_core::Error::Database(error)),
+    }
 }
 
 /// `PATCH /api/v2/users/@me/claims/:id`
