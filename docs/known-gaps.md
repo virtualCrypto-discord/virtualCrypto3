@@ -110,6 +110,13 @@ relevant test.
   list. `create_test.exs`'s "not admin without v2 flag" case passes the default
   permissions — every bit set — so it still passes; its name is the only thing
   that referred to the flag.
+- The claim list's `:last` page is resolved by counting the matching claims, so
+  it really is the last page. Elixir's `Raw.Get` clause for `%{page: :last}`
+  fetches one page's worth of rows in ascending order and reverses them, which
+  only lands on the last page when there is a single one — with more, it
+  re-renders the first. No Elixir test covers it, and the button that asks for
+  it is disabled while there is one page, so this diverges from a path the suite
+  does not pin.
 
 ## Deliberately out of scope
 
