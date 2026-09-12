@@ -48,6 +48,7 @@ hex = "0.4"
 # Time / ids
 time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+getrandom = "0.4"
 
 # Errors / observability
 thiserror = "2"

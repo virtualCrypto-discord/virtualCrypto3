@@ -130,16 +130,20 @@ pub async fn authorize(
 
 /// The code a client later exchanges for a token.
 ///
-/// Thirty-two bytes of randomness, as `make_secure_random_code/0` is, taken from
-/// two UUIDs rather than from a base64 encoder: one call site does not earn a
-/// dependency, and the code is opaque to everyone but this service. The cost is
-/// its shape — 64 hex characters where the Elixir produced 43 base64-url ones.
+/// Thirty-two bytes from the operating system, hex-encoded. The bytes are the
+/// same ones `:crypto.strong_rand_bytes/1` gives the Elixir; only the spelling
+/// differs, because hex needs no encoder and a code is opaque to everyone but
+/// this service.
+///
+/// This first read `Uuid::new_v4()` twice, to avoid that encoder. Wrong twice
+/// over: a UUID generator is not a random-byte generator, and the version and
+/// variant bits it fixes would have shown through as a pattern in a value whose
+/// only job is to be unguessable.
 fn new_code() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("the operating system's randomness");
+
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// What an application is, as far as this check needs to know.
