@@ -226,3 +226,12 @@ A missing session raised, which is a 500 where the answer is a trip to
 `/login?continue=…`. That repair needed the login page to exist, which is why it
 waited until it did.
 
+### `POST /oauth2/token` answers 400 where the Elixir answered 200
+
+`TokenController` renders the code exchange's error bodies without setting a
+status, so they arrive as `200` with an error in the body. RFC 6749 has
+`invalid_grant` at `400`, and a client library that checks the status before the
+body — which is most of them, and which is what this endpoint exists for — reads
+the Elixir's answer as a success. The refresh and `client_credentials` paths in
+the same controller do set `400`, so the code exchange was the odd one out.
+
