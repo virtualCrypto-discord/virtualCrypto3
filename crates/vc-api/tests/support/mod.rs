@@ -14,6 +14,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use vc_api::AppState;
 use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
+use vc_api::state::Links;
 use vc_auth::claims::{AUDIENCE, Claims, ISSUER};
 
 pub const JWT_SECRET: &str = "test-secret";
@@ -108,7 +109,19 @@ pub fn fake() -> Arc<FakeDiscord> {
 }
 
 pub fn state(pool: PgPool, discord: Arc<FakeDiscord>) -> AppState {
-    AppState::new(pool, JWT_SECRET, discord_public_key(), discord)
+    AppState::new(pool, JWT_SECRET, discord_public_key(), links(), discord)
+}
+
+/// The URLs from `config/test.exs`, which the help and invite responses embed
+/// verbatim.
+pub fn links() -> Links {
+    Links {
+        site_url: "https://vcrypto.sumidora.com".to_string(),
+        invite_url: "https://discord.com/api/oauth2/authorize?client_id=791984306632654869\
+                     &permissions=0&scope=applications.commands%20bot"
+            .to_string(),
+        support_guild_invite_url: "https://discord.com/invite/Hgp5DpG".to_string(),
+    }
 }
 
 /// The Ed25519 seed the Elixir test config uses for the Discord interaction

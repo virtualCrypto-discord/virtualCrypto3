@@ -5,6 +5,7 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 use vc_api::AppState;
 use vc_api::discord::HttpDiscordApi;
+use vc_api::state::Links;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,11 +27,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(8080);
 
+    // Elixir keeps these in `config/*.exs`; they are not secrets, so the defaults
+    // match the ones the checked-in examples use.
+    let links = Links {
+        site_url: optional_env("SITE_URL", "https://vcrypto.sumidora.com"),
+        invite_url: std::env::var("INVITE_URL").unwrap_or_else(|_| {
+            format!(
+                "https://discord.com/api/oauth2/authorize?client_id={discord_client_id}\
+                 &permissions=0&scope=applications.commands%20bot"
+            )
+        }),
+        support_guild_invite_url: optional_env(
+            "SUPPORT_GUILD_INVITE_URL",
+            "https://discord.com/invite/Hgp5DpG",
+        ),
+    };
+
     let pool = vc_core::db::connect(&database_url, 10).await?;
     let state = AppState::new(
         pool,
         jwt_secret,
         discord_public_key,
+        links,
         Arc::new(HttpDiscordApi::new(
             discord_client_id,
             discord_client_secret,
@@ -50,4 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn require_env(key: &str) -> Result<String, Box<dyn std::error::Error>> {
     std::env::var(key).map_err(|_| format!("environment variable {key} is required").into())
+}
+
+fn optional_env(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
 }

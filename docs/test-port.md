@@ -34,8 +34,8 @@ the checklist for the interaction types that still answer 501.
 | --- | ---: | --- | --- |
 | `common_test.exs` | 6 | `tests/interactions_common.rs` | ported (+3 extra: a forged signature, the signature covering exact bytes, a duplicated header) |
 | `custom_id_test.exs` | 1 | `src/custom_id.rs` unit tests | ported (+4 extra: discriminator, unknown id, round trip) |
-| `help_test.exs` | 1 | | pending |
-| `invite_test.exs` | 1 | | pending |
+| `help_test.exs` | 1 | `tests/interactions_commands.rs` | ported |
+| `invite_test.exs` | 1 | `tests/interactions_commands.rs` | ported |
 | `pay_test.exs` | 8 | | pending |
 | `bal_test.exs` | 3 | | pending |
 | `info_test.exs` | 13 | | pending |
@@ -55,7 +55,7 @@ the checklist for the interaction types that still answer 501.
 | `claim/list/claim_list_received_test.exs` | 0 | | empty in Elixir too |
 | `claim/list/claim_list_claimed_test.exs` | 0 | | empty in Elixir too |
 
-Total: 141 cases, 7 ported.
+Total: 141 cases, 9 ported.
 
 ## Endpoints with no Elixir test
 

@@ -34,13 +34,33 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
     match payload.get("type").and_then(Value::as_i64) {
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
-        // 2 application commands, 3 message components, 4 autocomplete and
-        // 5 modals are the remaining work; see docs/known-gaps.md.
-        Some(kind @ 2..=5) => text(
+        Some(2) => command(&state, &payload),
+        // 3 message components, 4 autocomplete and 5 modals are the remaining
+        // work; see docs/known-gaps.md.
+        Some(kind @ 3..=5) => text(
             StatusCode::NOT_IMPLEMENTED,
             &format!("interaction type {kind} is not implemented yet"),
         ),
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+    }
+}
+
+/// `verified/2` for `type` 2: the command name picks a handler, and a payload
+/// without one falls through to `Type Not Found`.
+fn command(state: &AppState, payload: &Value) -> Response {
+    let name = payload
+        .get("data")
+        .and_then(|data| data.get("name"))
+        .and_then(Value::as_str);
+
+    match name {
+        Some("help") => (StatusCode::OK, Json(crate::command::help(state))).into_response(),
+        Some("invite") => (StatusCode::OK, Json(crate::command::invite(state))).into_response(),
+        Some(name) => text(
+            StatusCode::NOT_IMPLEMENTED,
+            &format!("command {name} is not implemented yet"),
+        ),
+        None => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }
 }
 
