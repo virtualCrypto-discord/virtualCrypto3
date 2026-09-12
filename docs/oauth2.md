@@ -261,3 +261,40 @@ table and a different question.
 
 The first piece is `create_access_token`, which is one insert.
 
+## The two `client_credentials` shapes are two mechanisms
+
+They share a name and a grant type, and that is all. The Elixir answers them with
+different code, different tokens and different ways of computing the same field.
+
+**With `guild_id`** it verifies the secret, finds the grant for (application,
+guild), and issues a row in `access_tokens` — the opaque, revocable token the
+code exchange also issues. A refresh token comes with it if the application takes
+them, created if the grant has none and **replaced** if it has one. `expires_in`
+is computed from the clock.
+
+**With `scope`** it verifies the secret, resolves the *application's user id*, and
+calls `Guardian.issue_token_for_app/2` — so this one is a **signed JWT**, with
+`kind: "app"`, the scopes the request asked for, and the scopes are checked
+against `vc.pay`, `vc.claim` and `oauth2.register`. `expires_in` is the token's
+`exp` minus now.
+
+So one grant type answers with a database row and the other with a JWT, and
+`vc_auth::Kind::App` already exists here for the second. Anything that treats
+"client credentials" as one thing will be wrong about half of it.
+
+**A `client_credentials` request with neither parameter answers
+`unsupported_grant_type`**, because both clauses name one of them and a request
+with neither matches the catch-all instead. See the table above.
+
+### What it needs that does not exist
+
+- basic auth parsing, which is `Plug.BasicAuth.parse_basic_auth/1`: the
+  `Authorization: Basic` header, decoded — no handler here reads that header yet;
+- `get_application_by_client_id_and_verify_secret/2`, and with it a decision the
+  Elixir did not make deliberately: it compares the secret with a pattern match,
+  which is not a constant-time comparison. That is worth deciding rather than
+  inheriting, since the secret is the whole of a client's authentication;
+- `get_application_user_id_by_client_id/2`, which needs `applications` tied to a
+  user — `users.application_id` in the schema is that link — and a token issued
+  with `Kind::App` through the machinery `vc_auth` already has.
+
