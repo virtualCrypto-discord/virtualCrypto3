@@ -26,7 +26,41 @@ Two things worth saying plainly: **`/app` is a stub** — whatever the dashboard
 meant to be, it is not in the old site either; and the documents under
 `/document` are prose, so they belong to the docs site rather than to a rebuild.
 
-## The session model, which the SPA has to replace
+## The session, read out of the old app
+
+The cookie is **signed, not encrypted** — `Plug.Session` is configured with
+`store: :cookie`, `key: "_virtualCrypto_key"`, `signing_salt` and
+`same_site: "Lax"`, `secure` in production only — so its contents are readable by
+the browser and only tamper-proof. A Rust session should be the same kind of
+cookie rather than something more elaborate.
+
+`browser_auth` is an interceptor rather than a guard: a request with no session
+is **redirected** to Discord, and so is one whose stored Discord authorization
+cannot be refreshed.
+
+The login is three steps:
+
+1. generate a `state` of 32 random bytes, base64-url without padding, store
+   `discord_oauth2: {state, continue: <the url that was asked for>}` in the
+   session, and redirect to
+   `https://discord.com/api/oauth2/authorize` with `client_id`, `redirect_uri`,
+   that `state`, `scope=identify` and **`prompt=none`** — Discord shows no
+   consent screen to someone who has already agreed;
+2. `/callback/discord` compares the returned `state` with the session's, then
+   exchanges the code at `https://discord.com/api/oauth2/token`
+   (`grant_type=authorization_code`, `client_id`, `client_secret`,
+   `redirect_uri`, and `Accept: application/json`);
+3. the token is used to read the Discord user, the authorization is stored, and
+   a VC API token is issued — see the next section for what happens to it.
+
+An SPA changes one thing and one thing only: step 3's answer. Because
+`browser_auth` redirects, an `XMLHttpRequest` from the SPA that meets a stale
+session gets a 302 to Discord, which it can do nothing sensible with. Requests
+the SPA makes should therefore be answered `401` with somewhere to log in,
+while the browser's own navigation keeps the redirect that makes the old flow
+work.
+
+## What the old callback does with the token
 
 The old flow is built for a browser that reloads pages, and it shows:
 
