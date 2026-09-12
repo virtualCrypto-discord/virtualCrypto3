@@ -1,0 +1,14 @@
+{
+  "body": {
+    "error": "invalid_request"
+  },
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "x-request-id": "GNRrlg_u4Ak3WsYAAAAK"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me"
+  },
+  "status": 400
+}

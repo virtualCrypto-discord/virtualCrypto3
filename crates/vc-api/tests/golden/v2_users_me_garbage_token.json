@@ -1,0 +1,14 @@
+{
+  "body": {
+    "error": "invalid_token"
+  },
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "x-request-id": "GNRrlhAEEnc3WsYAAABK"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me"
+  },
+  "status": 401
+}

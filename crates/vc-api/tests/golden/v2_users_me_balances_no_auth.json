@@ -1,0 +1,14 @@
+{
+  "body": {
+    "error": "invalid_request"
+  },
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "x-request-id": "GNRrlhC9RPY3WsYAAATB"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me/balances"
+  },
+  "status": 400
+}

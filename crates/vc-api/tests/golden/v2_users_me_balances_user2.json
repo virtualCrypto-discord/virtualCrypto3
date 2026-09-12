@@ -1,0 +1,32 @@
+{
+  "body": [
+    {
+      "amount": "1000",
+      "currency": {
+        "guild": "900000000000000001",
+        "name": "nyan",
+        "pool_amount": "500",
+        "unit": "nyan"
+      }
+    },
+    {
+      "amount": "200000",
+      "currency": {
+        "guild": "900000000000000002",
+        "name": "wan",
+        "pool_amount": "1000",
+        "unit": "wan"
+      }
+    }
+  ],
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "content-type": "application/json; charset=utf-8",
+    "x-request-id": "GNRrlhCW9TI3WsYAAASB"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me/balances"
+  },
+  "status": 200
+}

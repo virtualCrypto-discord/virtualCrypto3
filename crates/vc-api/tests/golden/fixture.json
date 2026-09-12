@@ -1,0 +1,57 @@
+{
+  "users": [
+    {
+      "id": "1",
+      "discord_id": "100000000000000001",
+      "status": "0"
+    },
+    {
+      "id": "2",
+      "discord_id": "100000000000000002",
+      "status": "0"
+    }
+  ],
+  "currencies": [
+    {
+      "id": "1",
+      "name": "nyan",
+      "unit": "nyan",
+      "guild_id": "900000000000000001",
+      "pool_amount": "500"
+    },
+    {
+      "id": "2",
+      "name": "wan",
+      "unit": "wan",
+      "guild_id": "900000000000000002",
+      "pool_amount": "1000"
+    }
+  ],
+  "assets": [
+    {
+      "id": "1",
+      "user_id": "1",
+      "currency_id": "1",
+      "amount": "199500"
+    },
+    {
+      "id": "2",
+      "user_id": "2",
+      "currency_id": "2",
+      "amount": "200000"
+    },
+    {
+      "id": "3",
+      "user_id": "2",
+      "currency_id": "1",
+      "amount": "1000"
+    }
+  ],
+  "discord_users": [
+    {
+      "discord_user_id": "100000000000000001",
+      "token": "stub-token",
+      "refresh_token": "stub-refresh-token"
+    }
+  ]
+}
