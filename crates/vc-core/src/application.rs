@@ -555,6 +555,124 @@ pub fn check_application_type(kind: &str) -> Result<(), MetadataError> {
     }
 }
 
+/// The metadata registration was given, already validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewApplication {
+    pub grant_types: Vec<String>,
+    pub application_type: String,
+    pub client_name: Option<String>,
+    pub client_uri: Option<String>,
+    pub logo_uri: Option<String>,
+    pub webhook_url: Option<String>,
+    pub discord_support_server_invite_slug: Option<String>,
+    /// The caller's Discord id, which registration obtained by asking Discord
+    /// about them.
+    pub owner_discord_id: Option<i64>,
+    pub redirect_uris: Vec<String>,
+}
+
+/// What registration wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registered {
+    pub application_id: i64,
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+/// `register_client/2`: the application, its owner, and its redirect URIs.
+///
+/// One transaction, so a registration that fails half way leaves nothing — and
+/// there is a row to leave behind at every step: the application, the account that
+/// owns it, and one row per redirect URI.
+///
+/// The defaults are the Elixir's, and two of them are silent. `status` is `0`, and
+/// `response_types` is the **literal empty list** rather than the value that was
+/// validated — the Elixir validates it and then does not use it, which
+/// docs/oauth2.md records as a bug with no behaviour behind it. `grant_types`
+/// comes from the caller because it is the validated value.
+pub async fn register(
+    pool: &sqlx::PgPool,
+    new: &NewApplication,
+    private_key: &[u8; 32],
+    public_key: &[u8],
+) -> crate::error::Result<Registered> {
+    let client_id = uuid::Uuid::new_v4();
+    let client_secret = new_secret();
+
+    let mut tx = pool.begin().await?;
+
+    let application_id = sqlx::query_scalar!(
+        "INSERT INTO applications
+             (status, client_id, client_secret, response_types, grant_types,
+              application_type, client_name, client_uri, logo_uri, webhook_url,
+              discord_support_server_invite_slug, owner_discord_id,
+              private_key, public_key, inserted_at, updated_at)
+         VALUES (0, $1, $2, ARRAY[]::openid_connect_response_types[],
+                 $3::text[]::openid_connect_grant_types[],
+                 $4::text::openid_connect_application_type,
+                 $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+        RETURNING id",
+        client_id,
+        client_secret,
+        &new.grant_types,
+        &new.application_type,
+        new.client_name.as_deref(),
+        new.client_uri.as_deref(),
+        new.logo_uri.as_deref(),
+        new.webhook_url.as_deref(),
+        new.discord_support_server_invite_slug.as_deref(),
+        new.owner_discord_id,
+        private_key.to_vec(),
+        public_key,
+        crate::model::utc_now()
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // The account that owns it: an application id and nothing else, which is why
+    // `users.discord_id` is nullable and why its own answer shows a null there.
+    sqlx::query!(
+        "INSERT INTO users (status, application_id, inserted_at, updated_at)
+         VALUES (0, $1, $2, $2)",
+        application_id,
+        crate::model::utc_now()
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    for redirect_uri in &new.redirect_uris {
+        sqlx::query!(
+            "INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at)
+             VALUES ($1, $2, $3, $3)",
+            application_id,
+            redirect_uri,
+            crate::model::utc_now()
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(Registered {
+        application_id,
+        client_id: client_id.to_string(),
+        client_secret,
+    })
+}
+
+/// A client secret: thirty-two random bytes, as the Elixir's
+/// `:crypto.strong_rand_bytes(32)` is, hex-encoded here rather than base64-url.
+///
+/// The spelling differs and the entropy does not: a secret is compared as a
+/// string and never parsed.
+fn new_secret() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("the operating system's randomness");
+
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
