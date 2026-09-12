@@ -235,6 +235,19 @@ pub fn handshake(real: Option<(u16, &Value)>, wrong_key: Option<(u16, &Value)>) 
     }
 }
 
+/// A keypair generated for one handshake, and used for nothing else.
+///
+/// The second request of a handshake is signed with this rather than with the
+/// application's key, because its whole purpose is to be a signature the
+/// application should refuse. It is generated rather than fixed: a constant one
+/// would let an application pass by recognising it instead of by verifying.
+pub fn fresh_keypair() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).expect("the operating system's randomness");
+
+    seed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +414,43 @@ mod tests {
             handshake(Some((200, &ping_body())), None),
             Handshake::Unreachable
         );
+    }
+
+    /// The property the second request rests on: what it sends cannot be verified
+    /// with the application's own public key, so an application that verifies
+    /// anything at all will refuse it.
+    #[test]
+    fn a_fresh_keypair_signs_nothing_the_application_accepts() {
+        let application = SigningKey::from_bytes(&[11u8; 32]);
+        let wrong = fresh_keypair();
+
+        assert_ne!(wrong, application.to_bytes(), "not the application's key");
+
+        let delivery = delivery(&json!({ "type": PING }), &wrong, "https://app.example", 1);
+        let signature: [u8; 64] = delivery
+            .signature
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("32 bytes");
+
+        let message = format!("{}{}", delivery.timestamp, delivery.body);
+
+        assert!(
+            application
+                .verifying_key()
+                .verify(message.as_bytes(), &Signature::from_bytes(&signature))
+                .is_err(),
+            "an application that verifies would refuse this"
+        );
+    }
+
+    /// Two handshakes do not use the same key, or the second request would be
+    /// something an application could recognise rather than verify.
+    #[test]
+    fn two_fresh_keypairs_are_not_the_same_key() {
+        assert_ne!(fresh_keypair(), fresh_keypair());
     }
 }

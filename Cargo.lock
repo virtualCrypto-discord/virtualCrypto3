@@ -2204,6 +2204,7 @@ dependencies = [
  "axum",
  "base64",
  "ed25519-dalek",
+ "getrandom 0.4.3",
  "hex",
  "jsonwebtoken",
  "reqwest",
