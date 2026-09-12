@@ -143,3 +143,48 @@ Phoenix. The SPA's consent POST does not need one, because the session cookie is
 `SameSite=Lax`: a cross-site POST does not carry it, so a forged consent cannot
 be submitted with somebody's session attached. That is the whole of the
 protection, and it is worth knowing that it rests on that attribute.
+
+## The token endpoint (`POST /oauth2/token`), read out of `TokenController`
+
+Four grants, and the shape they answer in is not the same for all of them.
+
+| The request | Answers |
+| --- | --- |
+| `grant_type=authorization_code` with `client_id`, `redirect_uri` and `code` **in the body** | the exchange's own JSON |
+| `grant_type=refresh_token` with `refresh_token` | the same |
+| `grant_type=client_credentials` with basic auth and `guild_id` | a guild-scoped token |
+| `grant_type=client_credentials` with basic auth and `scope` | the application's own scopes |
+| any other `grant_type` | 400 `unsupported_grant_type` |
+| no `grant_type` at all | 400 `invalid_request`, `grant_type_parameter_missing` |
+
+Three things in it are worth knowing before writing any of it.
+
+**The code exchange authenticates with the body, not with basic auth.** It reads
+`client_id` from the parameters, where the other grants use
+`Plug.BasicAuth.parse_basic_auth/1`. Both are legal; this service picked the body
+for that one grant and basic auth for the others.
+
+**There are two scope sets, for different grants.** The browser flow's scopes go
+through `is_valid_scopes?/1`, which allows `openid` and nothing else; client
+credentials are checked against `vc.pay`, `vc.claim` and `oauth2.register` — no
+duplicates, and nothing outside that set. A set of one is not a set of all, so
+neither check can be reused for the other.
+
+**A `client_credentials` request with neither `guild_id` nor `scope` answers
+`unsupported_grant_type`.** Not because the grant is unsupported — it is
+supported twice over — but because both clauses for it name one of those two
+parameters, so a request with neither matches the catch-all clause instead. It is
+a quirk of how the clauses are written, and worth reproducing rather than
+correcting, since a client that sees it can act on it.
+
+Errors are `400` with `{ "error", "error_description" }`, except on the
+credentials path, which answers `{ "error" }` alone.
+
+## Still to read for the token endpoint
+
+`Auth.exchange_token_by_authorization_code/1`, `exchange_token_by_refresh_token/1`
+and `exchange_token_by_client_credentials/1`, all in
+`lib/virtualCrypto/auth/internal/service.ex`. They are what actually redeems a
+code, rotates a refresh token and binds a token to a guild, and each has its own
+refusals.
+
