@@ -204,6 +204,37 @@ async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32,
     }
 }
 
+/// The outcome of the handshake an application must pass to be registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handshake {
+    /// It answers a real signature and refuses a false one.
+    Passed,
+    /// It answered, and something about the answer was wrong.
+    Failed,
+    /// The proxy never said what the application answered.
+    Unreachable,
+}
+
+/// `_verify/3`'s two answers, decided.
+///
+/// Two requests, and each asks a different question. The first is a PING signed
+/// with the application's real key, and must come back `200` carrying the PING
+/// back — an application that answers webhooks at all. The second is the same
+/// PING signed with a keypair generated for the occasion, and must come back
+/// `401` — an application that *checks* them.
+///
+/// That second request is the whole point of doing this twice. An application
+/// that answers `200` to both is not verifying anything and would accept a
+/// forgery from anyone; one that answers `401` to both cannot answer at all. Both
+/// look fine to a single request.
+pub fn handshake(real: Option<(u16, &Value)>, wrong_key: Option<(u16, &Value)>) -> Handshake {
+    match (real, wrong_key) {
+        (Some((200, body)), Some((401, _))) if body["type"] == PING => Handshake::Passed,
+        (Some(_), Some(_)) => Handshake::Failed,
+        _ => Handshake::Unreachable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +347,59 @@ mod tests {
         assert_eq!(body["type"], 2);
         assert_eq!(body["data"][0]["status"], "approved");
         assert_ne!(body["type"], PING, "which is the handshake's");
+    }
+
+    fn ping_body() -> Value {
+        json!({ "type": PING })
+    }
+
+    #[test]
+    fn an_application_that_verifies_passes() {
+        assert_eq!(
+            handshake(Some((200, &ping_body())), Some((401, &json!({})))),
+            Handshake::Passed
+        );
+    }
+
+    /// The case the second request exists for: an application that answers
+    /// everything looks fine to one request and is not verifying anything.
+    #[test]
+    fn an_application_that_answers_everything_fails() {
+        assert_eq!(
+            handshake(Some((200, &ping_body())), Some((200, &ping_body()))),
+            Handshake::Failed
+        );
+    }
+
+    /// And an application that refuses everything cannot answer at all, which is
+    /// not the same as being careful.
+    #[test]
+    fn an_application_that_refuses_everything_fails() {
+        assert_eq!(
+            handshake(Some((401, &json!({}))), Some((401, &json!({})))),
+            Handshake::Failed
+        );
+    }
+
+    /// It has to echo the PING: a 200 is not an answer to the question.
+    #[test]
+    fn a_200_that_is_not_the_ping_fails() {
+        assert_eq!(
+            handshake(Some((200, &json!({ "type": 2 }))), Some((401, &json!({})))),
+            Handshake::Failed
+        );
+    }
+
+    /// A proxy that did not say is not an application that failed.
+    #[test]
+    fn no_answer_is_not_a_failure() {
+        assert_eq!(
+            handshake(None, Some((401, &json!({})))),
+            Handshake::Unreachable
+        );
+        assert_eq!(
+            handshake(Some((200, &ping_body())), None),
+            Handshake::Unreachable
+        );
     }
 }
