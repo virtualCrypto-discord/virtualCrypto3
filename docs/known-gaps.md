@@ -204,3 +204,14 @@ answered. Nothing depended on that, and a status is something a caller can act
 on, so this answers `401` with the same `invalid_token` body the rest of the API
 uses.
 
+### A member's unknown role id is skipped, where the Elixir crashed
+
+`validate_executor` maps the member's role ids through the guild's roles and calls
+`String.to_integer/1` on each result, so a role id the guild does not list raises.
+That is reachable, not theoretical: the member and the guild's roles come from two
+separate Discord calls, and a role deleted between them lands exactly here — which
+makes it a bug rather than a branch, and one that a retry would not fix.
+
+The Rust side skips the id, so the same race costs a permission check that may be
+a moment stale instead of the request.
+

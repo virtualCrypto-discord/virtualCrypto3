@@ -8,12 +8,15 @@
 
 /// The permissions a member has: the permissions of their roles, ORed together.
 ///
-/// A role id the guild does not have is skipped. The Elixir instead indexes the
-/// guild's roles with each of the member's ids and calls `String.to_integer/1` on
-/// whatever comes back, so an unknown id is a crash there rather than a skip. The
-/// two lists agree in any guild Discord has not mangled, which is why this is a
-/// note rather than a decision — but a crash is not worth reproducing for a case
-/// that cannot be reached.
+/// A role id the guild does not have is skipped, which is a **fix** and not a
+/// defensive flourish. The Elixir indexes the guild's roles with each of the
+/// member's ids and calls `String.to_integer/1` on whatever comes back, so an id
+/// that is not there raises.
+///
+/// That is reachable rather than theoretical: the member and the guild's roles
+/// come from two separate Discord calls, and a role deleted between them lands
+/// exactly here. The Elixir's answer is a 500 for the consent screen; this one is
+/// a permission check that may be a moment stale.
 pub fn member_permissions(member_role_ids: &[i64], roles: &[(i64, u64)]) -> u64 {
     member_role_ids
         .iter()
