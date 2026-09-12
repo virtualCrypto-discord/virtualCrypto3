@@ -577,6 +577,10 @@ pub struct Registered {
     pub application_id: i64,
     pub client_id: String,
     pub client_secret: String,
+    /// The account registration created for the application — not the person who
+    /// registered it. It is what the registration access token is issued for, and
+    /// what an `app`-kind token's subject is thereafter.
+    pub user_id: i32,
 }
 
 /// `register_client/2`: the application, its owner, and its redirect URIs.
@@ -631,13 +635,14 @@ pub async fn register(
 
     // The account that owns it: an application id and nothing else, which is why
     // `users.discord_id` is nullable and why its own answer shows a null there.
-    sqlx::query!(
+    let user_id = sqlx::query_scalar!(
         "INSERT INTO users (status, application_id, inserted_at, updated_at)
-         VALUES (0, $1, $2, $2)",
+         VALUES (0, $1, $2, $2)
+        RETURNING id",
         application_id,
         crate::model::utc_now()
     )
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
 
     for redirect_uri in &new.redirect_uris {
@@ -658,6 +663,7 @@ pub async fn register(
         application_id,
         client_id: client_id.to_string(),
         client_secret,
+        user_id,
     })
 }
 
