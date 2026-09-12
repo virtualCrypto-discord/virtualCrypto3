@@ -4,6 +4,8 @@
 //! how a refusal is answered. The rest of the screen is a validation chain, and
 //! each link of it lands on one of these.
 
+use serde::Deserialize;
+
 use vc_core::application::PreauthorizeError;
 
 /// What to do about a refusal.
@@ -47,9 +49,97 @@ pub fn refusal_for(error: PreauthorizeError) -> Refusal {
     }
 }
 
+/// The query an authorization request arrives as, with nothing required: the
+/// Elixir answers a missing parameter with an OAuth error rather than a 400, so
+/// absence has to reach the checks below instead of being rejected on the way in.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AuthorizeQuery {
+    pub response_type: Option<String>,
+    pub client_id: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub scope: Option<String>,
+    pub guild_id: Option<String>,
+    pub state: Option<String>,
+}
+
+/// A well-formed request: what the rest of the chain needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub guild_id: i64,
+    pub state: Option<String>,
+}
+
+/// Why a request could not be started at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Malformed {
+    /// `invalid_request` with `invalid_response_type`. The Elixir renders an
+    /// error for this rather than redirecting, because nothing has been checked
+    /// yet — not even that the client exists.
+    ResponseType,
+    /// `invalid_client_id`, for its absence.
+    NoClientId,
+    /// `invalid_redirect_uri`, for its absence.
+    NoRedirectUri,
+    /// `invalid_request` with `invalid_guild_id`.
+    NoGuildId,
+}
+
+impl Malformed {
+    pub fn refusal(self) -> Refusal {
+        match self {
+            Malformed::ResponseType | Malformed::NoClientId | Malformed::NoRedirectUri => {
+                Refusal::Page
+            }
+            Malformed::NoGuildId => Refusal::redirect("invalid_request", "invalid_guild_id"),
+        }
+    }
+}
+
+impl Request {
+    /// The request, or the reason it cannot be one.
+    ///
+    /// The `scope` default is the Elixir's and it is worth knowing rather than
+    /// tidying: `Map.get(params, "scope", "")` gives `""`, and `String.split/2`
+    /// returns `[""]` for it — "splitting on a non-existing pattern returns the
+    /// original string", and empty parts are dropped only under `trim: true`,
+    /// which the Elixir does not pass. So an omitted `scope` is *one empty
+    /// scope*, which `is_valid_scopes?/1` refuses as `invalid_scope`; writing
+    /// `vec![]` here would quietly widen what the service accepts.
+    pub fn parse(query: AuthorizeQuery) -> Result<Self, Malformed> {
+        if query.response_type.as_deref() != Some("code") {
+            return Err(Malformed::ResponseType);
+        }
+
+        let client_id = query.client_id.ok_or(Malformed::NoClientId)?;
+        let redirect_uri = query.redirect_uri.ok_or(Malformed::NoRedirectUri)?;
+
+        let guild_id = query
+            .guild_id
+            .and_then(|guild_id| guild_id.parse().ok())
+            .ok_or(Malformed::NoGuildId)?;
+
+        Ok(Request {
+            client_id,
+            redirect_uri,
+            scopes: query
+                .scope
+                .unwrap_or_default()
+                .split(' ')
+                .map(str::to_owned)
+                .collect(),
+            guild_id,
+            state: query.state,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vc_core::application::check_scopes;
 
     /// The point of the distinction: a redirect_uri that is not the
     /// application's own is not a place to send a browser, so the refusal must
@@ -95,5 +185,118 @@ mod tests {
                 description: "invalid_guild_id",
             }
         );
+    }
+
+    fn query(pairs: &[(&str, &str)]) -> AuthorizeQuery {
+        let mut query = AuthorizeQuery::default();
+
+        for (name, value) in pairs {
+            match *name {
+                "response_type" => query.response_type = Some((*value).to_owned()),
+                "client_id" => query.client_id = Some((*value).to_owned()),
+                "redirect_uri" => query.redirect_uri = Some((*value).to_owned()),
+                "scope" => query.scope = Some((*value).to_owned()),
+                "guild_id" => query.guild_id = Some((*value).to_owned()),
+                "state" => query.state = Some((*value).to_owned()),
+                other => panic!("no such parameter: {other}"),
+            }
+        }
+
+        query
+    }
+
+    fn complete() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("response_type", "code"),
+            ("client_id", "a-client"),
+            ("redirect_uri", "https://app.example/callback"),
+            ("scope", "openid"),
+            ("guild_id", "42"),
+        ]
+    }
+
+    #[test]
+    fn a_complete_request_is_one() {
+        let parsed = Request::parse(query(&complete())).expect("a request");
+
+        assert_eq!(parsed.client_id, "a-client");
+        assert_eq!(parsed.redirect_uri, "https://app.example/callback");
+        assert_eq!(parsed.scopes, ["openid"]);
+        assert_eq!(parsed.guild_id, 42);
+        assert_eq!(parsed.state, None);
+    }
+
+    #[test]
+    fn the_state_comes_back_out() {
+        let mut pairs = complete();
+        pairs.push(("state", "the-state"));
+
+        let parsed = Request::parse(query(&pairs)).expect("a request");
+
+        assert_eq!(parsed.state.as_deref(), Some("the-state"));
+    }
+
+    /// Anything but the code flow is refused before anything else is looked at.
+    #[test]
+    fn another_response_type_is_refused_first() {
+        let mut pairs = complete();
+        pairs[0] = ("response_type", "token");
+
+        assert_eq!(Request::parse(query(&pairs)), Err(Malformed::ResponseType));
+        assert_eq!(
+            Request::parse(AuthorizeQuery::default()),
+            Err(Malformed::ResponseType)
+        );
+    }
+
+    #[test]
+    fn the_required_parameters_are_required() {
+        for (missing, expected) in [
+            ("client_id", Malformed::NoClientId),
+            ("redirect_uri", Malformed::NoRedirectUri),
+            ("guild_id", Malformed::NoGuildId),
+        ] {
+            let pairs: Vec<_> = complete()
+                .into_iter()
+                .filter(|(name, _)| *name != missing)
+                .collect();
+
+            assert_eq!(Request::parse(query(&pairs)), Err(expected), "{missing}");
+        }
+    }
+
+    /// A guild id that is not a number is a guild Discord does not have, which is
+    /// the same answer the Elixir reaches by asking Discord about nonsense.
+    #[test]
+    fn a_guild_id_that_is_not_a_number_is_refused() {
+        let mut pairs = complete();
+        pairs[4] = ("guild_id", "not-a-number");
+
+        assert_eq!(Request::parse(query(&pairs)), Err(Malformed::NoGuildId));
+    }
+
+    /// The surprising one, pinned so nobody "fixes" it into accepting more: an
+    /// omitted scope is one empty scope, and the scope check refuses it.
+    #[test]
+    fn an_omitted_scope_is_one_empty_scope() {
+        let pairs: Vec<_> = complete()
+            .into_iter()
+            .filter(|(name, _)| *name != "scope")
+            .collect();
+
+        let parsed = Request::parse(query(&pairs)).expect("a request");
+
+        assert_eq!(parsed.scopes, [""]);
+        assert!(check_scopes(&parsed.scopes).is_err());
+    }
+
+    #[test]
+    fn several_scopes_arrive_split_on_spaces() {
+        let mut pairs = complete();
+        pairs[3] = ("scope", "openid profile");
+
+        let parsed = Request::parse(query(&pairs)).expect("a request");
+
+        assert_eq!(parsed.scopes, ["openid", "profile"]);
     }
 }
