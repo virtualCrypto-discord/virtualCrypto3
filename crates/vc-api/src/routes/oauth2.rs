@@ -5,7 +5,7 @@
 //! each link of it lands on one of these.
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use reqwest::Url;
@@ -56,26 +56,151 @@ impl Refusal {
 /// application's own registrations, but "should not happen" is not a reason to
 /// send a browser somewhere unparsed.
 pub fn answer(refusal: Refusal, redirect_uri: &str, state: Option<&str>) -> Response {
-    let (Refusal::Redirect { error, description }, Ok(mut url)) =
-        (refusal, Url::parse(redirect_uri))
-    else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_request" })),
-        )
-            .into_response();
+    let Refusal::Redirect { error, description } = refusal else {
+        return page();
+    };
+
+    let mut pairs = vec![("error", error), ("error_description", description)];
+    if let Some(state) = state {
+        pairs.push(("state", state));
+    }
+
+    to_client(redirect_uri, &pairs)
+}
+
+/// Send the browser back to the client with these parameters, encoded.
+///
+/// The one place a redirect to a client is built, so that the error path and the
+/// success path cannot disagree about how a redirect URI with a query of its own
+/// is added to.
+pub fn to_client(redirect_uri: &str, pairs: &[(&str, &str)]) -> Response {
+    let Ok(mut url) = Url::parse(redirect_uri) else {
+        return page();
     };
 
     {
         let mut query = url.query_pairs_mut();
-        query.append_pair("error", error);
-        query.append_pair("error_description", description);
-        if let Some(state) = state {
-            query.append_pair("state", state);
+        for (name, value) in pairs {
+            query.append_pair(name, value);
         }
     }
 
     Redirect::to(url.as_str()).into_response()
+}
+
+/// The answer for anything that cannot be sent to a client.
+fn page() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "invalid_request" })),
+    )
+        .into_response()
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "invalid_token" })),
+    )
+        .into_response()
+}
+
+/// The body the consent form posts back.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AuthorizeForm {
+    pub response_type: Option<String>,
+    pub action: Option<String>,
+    pub client_id: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub scope: Option<String>,
+    pub guild_id: Option<String>,
+    pub state: Option<String>,
+}
+
+impl From<AuthorizeForm> for AuthorizeQuery {
+    fn from(form: AuthorizeForm) -> Self {
+        Self {
+            response_type: form.response_type,
+            client_id: form.client_id,
+            redirect_uri: form.redirect_uri,
+            scope: form.scope,
+            guild_id: form.guild_id,
+            state: form.state,
+        }
+    }
+}
+
+/// `POST /oauth2/authorize`: the same checks, and then a code.
+///
+/// Unlike the `GET`, **nothing here is answered with a redirect to the client**,
+/// which is not an oversight: an approval that fails has not established that
+/// anything is approved, and the Elixir renders its error page for all of them.
+pub async fn approve(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<AuthorizeForm>,
+) -> Response {
+    // The only action there is. There is no deny: the Elixir has no clause for
+    // one, so its answer to a request without `approve` is a crash rather than
+    // a decision, and a refusal is the decision that was missing.
+    if form.action.as_deref() != Some("approve") {
+        return page();
+    }
+
+    let Ok(request) = Request::parse(form.into()) else {
+        return page();
+    };
+
+    let Some(session) = session::from_headers(&headers, state.session_secret()) else {
+        return unauthorized();
+    };
+    let Some(account_id) = session.user_id else {
+        return unauthorized();
+    };
+
+    if vc_core::application::preauthorize(
+        state.pool(),
+        &request.scopes,
+        &request.redirect_uri,
+        &request.client_id,
+    )
+    .await
+    .is_err()
+    {
+        return page();
+    }
+
+    if describe(&state, &request, account_id).await.is_err() {
+        return page();
+    }
+
+    let issued = vc_core::application::authorize(
+        state.pool(),
+        request.guild_id,
+        &request.scopes,
+        &request.redirect_uri,
+        &request.client_id,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    let Ok(code) = issued else {
+        return page();
+    };
+
+    let scope = request.scopes.join(" ");
+    let guild_id = request.guild_id.to_string();
+
+    let mut pairs = vec![
+        ("code", code.as_str()),
+        ("guild_id", guild_id.as_str()),
+        ("scope", scope.as_str()),
+    ];
+    if let Some(state) = request.state.as_deref() {
+        pairs.push(("state", state));
+    }
+
+    to_client(&request.redirect_uri, &pairs)
 }
 
 /// How `preauthorize`'s four answers are answered.

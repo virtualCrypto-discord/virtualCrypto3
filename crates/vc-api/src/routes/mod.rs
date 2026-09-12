@@ -38,6 +38,7 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         .route("/token", post(web::token))
         // The consent screen, which OAuth2 sends browsers to.
         .route("/oauth2/authorize", get(oauth2::authorize))
+        .route("/oauth2/authorize", post(oauth2::approve))
         .merge(api)
         // Everything nothing else claimed is a client-side route, so the SPA is
         // handed its own index and left to route it.
