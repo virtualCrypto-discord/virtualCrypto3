@@ -298,3 +298,41 @@ with neither matches the catch-all instead. See the table above.
   user — `users.application_id` in the schema is that link — and a token issued
   with `Kind::App` through the machinery `vc_auth` already has.
 
+## Revocation (`POST /oauth2/token/revoke`)
+
+Two shapes, both answering `200` with an empty object:
+
+| The request | What it does |
+| --- | --- |
+| `token=<a token>` | `Guardian.revoke/1` |
+| `jti=<uuid>`, `typ=access`, `kind=app` or `user` | `Guardian.revoke_with_jti/1` |
+| anything else | `400` with an `invalid_request` whose description is one long sentence |
+
+The description is
+`token_or_token_id_type_and_kind_is_not_found_or_invalid_kind_or_type`, which is
+the Elixir's naming and not a mistake here.
+
+### The hole in it, which is worth deciding on
+
+`Guardian.revoke/1` is the **JWT** path: it verifies the token and deletes the
+`user_access_tokens` row belonging to its `jti`. Both of these shapes go there,
+including the one that takes a plain `token`.
+
+But the tokens this endpoint's sibling issues — the `access_tokens` and
+`refresh_tokens` rows, which are held as UUIDs rather than signed — are **not
+JWTs**, so `Guardian.revoke/1` cannot verify them and reaches nothing. The
+functions that would delete them exist in the service and nothing calls them:
+
+```elixir
+def revoke_access_token(access_token)
+def revoke_refresh_token(refresh_token)
+```
+
+So a client can revoke a `client_credentials` JWT through this endpoint, and
+**cannot revoke the token it was handed by `POST /oauth2/token`** — which is the
+one RFC 7009 exists for. Both of those functions are unreachable code as it
+stands, so this is a decision rather than a port: wire them in, or delete them
+and accept that the issued tokens are not revocable. The tables are built for
+the former, and a client that cannot revoke a token it has leaked is the reason
+the endpoint exists.
+
