@@ -1,0 +1,182 @@
+//! `GET/PATCH /oauth2/clients/@me`, and the shape an application is answered in.
+//!
+//! What is here is that shape: the sixteen fields and, more to the point, their
+//! encodings. Three numbers travel as strings, the public key travels as
+//! lowercase hex, and the secret's expiry is the literal zero that dynamic client
+//! registration uses for "never". None of that can be inferred from the columns,
+//! which is why it is written once and tested.
+//!
+//! The endpoints themselves are not here yet: they need the read that fills this
+//! in, and the registration that issues a client secret.
+
+use serde_json::{Value, json};
+
+/// An application as the API answers it, with its owner and its redirect URIs.
+///
+/// Named for what it is rather than for the table it comes from: the record the
+/// endpoints answer with, gathered from three places.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Details {
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uris: Vec<String>,
+    /// The owning account.
+    pub user_id: i32,
+    pub discord_user_id: Option<i64>,
+    pub application_type: String,
+    pub client_name: Option<String>,
+    pub client_uri: Option<String>,
+    pub discord_support_server_invite_slug: Option<String>,
+    pub grant_types: Vec<String>,
+    pub logo_uri: Option<String>,
+    pub owner_discord_id: Option<i64>,
+    pub response_types: Vec<String>,
+    pub webhook_url: Option<String>,
+    /// The application's public key, as raw bytes — the rendering is what makes
+    /// it hex, and doing it here would make the hex a thing two places know.
+    pub public_key: Vec<u8>,
+}
+
+/// `Clients.render_application/1`.
+///
+/// The single read, the list and the registration all answer with this, so an
+/// error here is an error in three endpoints at once.
+pub fn render(details: &Details) -> Value {
+    json!({
+        "client_id": details.client_id,
+        "client_secret": details.client_secret,
+        // The convention for "this secret never expires", which is a zero rather
+        // than a null so that a client reading an integer gets one.
+        "client_secret_expires_at": 0,
+        "redirect_uris": details.redirect_uris,
+        "user_id": details.user_id.to_string(),
+        "discord_user_id": details
+            .discord_user_id
+            .map(|discord_id| discord_id.to_string()),
+        "application_type": details.application_type,
+        "client_name": details.client_name,
+        "client_uri": details.client_uri,
+        "discord_support_server_invite_slug": details.discord_support_server_invite_slug,
+        "grant_types": details.grant_types,
+        "logo_uri": details.logo_uri,
+        "owner_discord_id": details
+            .owner_discord_id
+            .map(|discord_id| discord_id.to_string()),
+        "response_types": details.response_types,
+        "webhook_url": details.webhook_url,
+        // Lowercase hex, and the same spelling as the delivery signature — an
+        // application holds this and compares it with what it registered.
+        "public_key": details
+            .public_key
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn details() -> Details {
+        Details {
+            client_id: "e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f".to_owned(),
+            client_secret: "a-secret".to_owned(),
+            redirect_uris: vec!["https://app.example/callback".to_owned()],
+            user_id: 7,
+            discord_user_id: Some(100_000_000_000_000_001),
+            application_type: "web".to_owned(),
+            client_name: Some("An Application".to_owned()),
+            client_uri: None,
+            discord_support_server_invite_slug: None,
+            grant_types: vec!["authorization_code".to_owned()],
+            logo_uri: None,
+            owner_discord_id: Some(100_000_000_000_000_002),
+            response_types: vec!["code".to_owned()],
+            webhook_url: Some("https://app.example/hook".to_owned()),
+            public_key: vec![0x00, 0xab, 0xff],
+        }
+    }
+
+    /// The three numbers that are strings, which is the thing a client parses and
+    /// therefore the thing that is easy to get wrong.
+    #[test]
+    fn the_numbers_that_are_strings_are_strings() {
+        let rendered = render(&details());
+
+        assert_eq!(rendered["user_id"], "7");
+        assert_eq!(rendered["discord_user_id"], "100000000000000001");
+        assert_eq!(rendered["owner_discord_id"], "100000000000000002");
+        assert!(rendered["user_id"].is_string());
+    }
+
+    /// A null rather than a missing key: `unless ... do ... else nil end` keeps
+    /// the field and nulls it.
+    #[test]
+    fn an_account_without_a_discord_id_is_null_rather_than_absent() {
+        let mut details = details();
+        details.discord_user_id = None;
+
+        let rendered = render(&details);
+
+        assert!(rendered.get("discord_user_id").is_some());
+        assert_eq!(rendered["discord_user_id"], Value::Null);
+    }
+
+    /// Lowercase, because that is what an application would have registered.
+    #[test]
+    fn the_public_key_is_lowercase_hex() {
+        let rendered = render(&details());
+
+        assert_eq!(rendered["public_key"], "00abff");
+    }
+
+    /// The secret's expiry is a zero and never a null, which is the convention
+    /// for a secret that does not expire rather than a missing value.
+    #[test]
+    fn the_secret_never_expires_as_a_zero() {
+        let rendered = render(&details());
+
+        assert_eq!(rendered["client_secret_expires_at"], 0);
+        assert!(!rendered["client_secret_expires_at"].is_null());
+    }
+
+    /// Every field the shape promises, so that a misspelling is a failure here
+    /// rather than three endpoints disagreeing about a name.
+    #[test]
+    fn all_sixteen_fields_are_present() {
+        let rendered = render(&details());
+
+        for field in [
+            "client_id",
+            "client_secret",
+            "client_secret_expires_at",
+            "redirect_uris",
+            "user_id",
+            "discord_user_id",
+            "application_type",
+            "client_name",
+            "client_uri",
+            "discord_support_server_invite_slug",
+            "grant_types",
+            "logo_uri",
+            "owner_discord_id",
+            "response_types",
+            "webhook_url",
+            "public_key",
+        ] {
+            assert!(rendered.get(field).is_some(), "{field} is missing");
+        }
+    }
+
+    /// Absent values travel as nulls rather than being dropped, which is what the
+    /// Elixir's map does.
+    #[test]
+    fn absent_optional_values_travel_as_nulls() {
+        let rendered = render(&details());
+
+        assert_eq!(rendered["client_uri"], Value::Null);
+        assert_eq!(rendered["logo_uri"], Value::Null);
+        assert_eq!(rendered["discord_support_server_invite_slug"], Value::Null);
+    }
+}
