@@ -10,7 +10,7 @@ coverage can still be read off at a glance.
 | `v2/currencies_controller_test.exs` | 15 | `tests/v2_currencies.rs` | ported (15 + 3 extra: path id, path+query, currency without assets) |
 | `v2/claim/claim_controller_test.exs` | 46 | `tests/v2_claims.rs` (get by id + the per-status matrix), `tests/v2_claims_list.rs` (list), `tests/v2_claims_patch.rs` (status transitions and metadata patches), `tests/v2_claims_create.rs` (create) | ported — 4 get-by-id, a per-status × party matrix, 14 list, 19 transition/metadata and 12 create cases, plus extras for behaviour Elixir does not test |
 | `v2/claim/metadata/get_test.exs` | 2 | `tests/v2_claims.rs` | ported — the metadata-scoping cases |
-| `v2/claim/metadata/update_test.exs` | 15 | `tests/v2_claims_patch.rs`, `tests/v2_claims_create.rs` | **partial** — insert/upsert/delete/empty and create-with-metadata are done; the over-limit key, value and entry-count cases remain |
+| `v2/claim/metadata/update_test.exs` | 15 | `tests/v2_claims_metadata.rs`, `tests/v2_claims_patch.rs`, `tests/v2_claims_create.rs` | ported — create/insert/upsert/delete/empty, updates alongside a status transition, per-user privacy, and the key, value and entry-count limits (including the trigger path) |
 | `v2/user_transactions/pay/single/single_user_transaction_controller_test.exs` | 7 | `tests/v2_transactions.rs` | pending |
 | `v2/user_transactions/pay/single/single_user_transaction_controller_idempotency_test.exs` | 5 | `tests/v2_transactions_idempotency.rs` | pending |
 | `v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` | 12 | `tests/v2_transactions.rs` | pending |
