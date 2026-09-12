@@ -3,7 +3,7 @@ use vc_core::currency::{self, CreateError};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, EPHEMERAL, as_int,
-    as_permissions, option_text, value_text,
+    as_permissions, may_manage, option_text, value_text,
 };
 use crate::state::AppState;
 
@@ -133,24 +133,6 @@ fn render_error(reason: Reason, options: &Map<String, Value>) -> Value {
 
 fn option_display(options: &Map<String, Value>, name: &str) -> String {
     options.get(name).map(value_text).unwrap_or_default()
-}
-
-/// `Command.continue_management_command?/2`: a guild that has moved to
-/// application-command permissions wants the administrator bit, and every other
-/// guild is allowed through.
-fn may_manage(guild: Option<&Map<String, Value>>, permissions: u64) -> bool {
-    const ADMINISTRATOR: u64 = 0x8;
-
-    let requires_v2 = guild
-        .and_then(|guild| guild.get("features"))
-        .and_then(Value::as_array)
-        .is_some_and(|features| {
-            features
-                .iter()
-                .any(|feature| feature == "APPLICATION_COMMAND_PERMISSIONS_V2")
-        });
-
-    !requires_v2 || permissions & ADMINISTRATOR == ADMINISTRATOR
 }
 
 /// `Command.name_unit_check/2`. Both regexes match anywhere in the string rather

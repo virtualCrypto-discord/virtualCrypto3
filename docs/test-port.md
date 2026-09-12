@@ -1,9 +1,21 @@
-# Elixir v2 test port
+# Elixir test port
 
-Every test in `test/virtualCrypto_web/controllers/api/v2/` must have a Rust
-counterpart. This table is the checklist; a row is only `ported` when all of its
-cases exist and pass, and extra Rust cases are listed separately so the Elixir
-coverage can still be read off at a glance.
+`virtualCrypto2` has **36 test files and 332 cases**. This is the ledger for all
+of them: every case either has a Rust counterpart or is recorded here as dropped,
+with the reason.
+
+| Area | cases | ported | status |
+| --- | ---: | ---: | --- |
+| v2 REST API | 103 | 103 | complete |
+| Discord interactions | 141 | 44 | in progress |
+| Notifications | 11 | 0 | not started |
+| v1 REST API | 77 | 0 | dropped by decision |
+| **total** | **332** | **147** | |
+
+A row is only `ported` when all of its cases exist and pass, and extra Rust cases
+are listed separately so the Elixir coverage can still be read off at a glance.
+
+## v2 REST API
 
 | Elixir test file | cases | Rust test file | status |
 | --- | ---: | --- | --- |
@@ -16,8 +28,6 @@ coverage can still be read off at a glance.
 | `v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` | 12 | `tests/v2_transactions_bulk.rs` | ported — plus cases for entry validation and an unknown unit |
 | `v2/user_transactions/pay/bulk/bulk_user_transaction_controller_idempotency_test.exs` | 1 | `tests/v2_transactions_bulk.rs` | ported |
 
-Total: 103 Elixir cases, all ported.
-
 The bulk path reproduces `transfer_bulk/3`'s batching rather than transferring
 entry by entry: the units and the receivers are each resolved in one statement,
 the sender's rows are locked once, and the receiver upsert, the sender decrement
@@ -25,10 +35,9 @@ and the history insert are one statement each. A batch therefore costs a fixed
 number of round trips instead of one per entry, and the per-currency totals are
 checked against the locked balances before anything is written.
 
-## Discord interaction tests
+## Discord interactions
 
-`test/.../controllers/api/interactions/` holds 22 files and 141 cases. They are
-the checklist for the interaction types that still answer 501.
+`test/.../controllers/api/interactions/` holds 22 files and 141 cases.
 
 | Elixir test file | cases | Rust file | status |
 | --- | ---: | --- | --- |
@@ -55,14 +64,43 @@ the checklist for the interaction types that still answer 501.
 | `claim/list/claim_list_received_test.exs` | 0 | | empty in Elixir too |
 | `claim/list/claim_list_claimed_test.exs` | 0 | | empty in Elixir too |
 
-Total: 141 cases, 44 ported.
-
 The builders the interaction tests share — `execute_from_guild/2` and its
 component, select, button and modal siblings, plus `setup_money/1` and
 `get_amount/2` — live in `tests/support`, so a test reads like its Elixir
 counterpart. `setup_money/1` inserts the rows its Elixir version ends up with
 rather than calling the domain functions, which keeps each test's data explicit
 and its failures readable.
+
+The `give` command has **no Elixir test at all**; it is exercised only through
+`setup_money/1` calling `Money.give/1`. `tests/interactions_give.rs` therefore
+holds additions rather than ports: they follow `Command.handle/4` and
+`Query.Issue.issue/3` directly.
+
+## Notifications
+
+`test/virtualCrypto/notification/` covers what `Notification.Dispatcher` sends
+to a claimant's application when a claim is approved or denied, through a
+`NotificationSink` test double. It is the specification for the webhook gap in
+`docs/known-gaps.md`, so porting it means implementing that dispatcher, not only
+writing tests.
+
+| Elixir test file | cases | Rust file | status |
+| --- | ---: | --- | --- |
+| `notification/single_test.exs` | 5 | | pending |
+| `notification/bulk_test.exs` | 6 | | pending |
+
+## v1 REST API: dropped
+
+`test/.../controllers/api/v1/` holds four files and 77 cases. The v1 API is not
+being carried over — the decision was that v1 may be abolished while v2 may not
+be broken — so the routes are absent from the router and nothing here is ported.
+
+| Elixir test file | cases |
+| --- | ---: |
+| `v1/info_controller_test.exs` | 15 |
+| `v1/claim_controller_test.exs` | 43 |
+| `v1/single_user_transaction_controller_test.exs` | 7 |
+| `v1/bulk_user_transacion_controller_test.exs` | 12 |
 
 ## Endpoints with no Elixir test
 

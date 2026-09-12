@@ -9,6 +9,7 @@
 pub mod bal;
 pub mod create;
 pub mod delete;
+pub mod give;
 pub mod info;
 pub mod pay;
 
@@ -79,6 +80,24 @@ impl From<crate::discord::DiscordError> for CommandError {
 /// `Interactions.Util.mention/1`.
 pub fn mention(id: impl std::fmt::Display) -> String {
     format!("<@{id}>")
+}
+
+/// `Command.continue_management_command?/2`: a guild that has moved to
+/// application-command permissions wants the administrator bit, and every other
+/// guild is allowed through. `create` and `give` both gate on this.
+pub fn may_manage(guild: Option<&Map<String, Value>>, permissions: u64) -> bool {
+    const ADMINISTRATOR: u64 = 0x8;
+
+    let requires_v2 = guild
+        .and_then(|guild| guild.get("features"))
+        .and_then(Value::as_array)
+        .is_some_and(|features| {
+            features
+                .iter()
+                .any(|feature| feature == "APPLICATION_COMMAND_PERMISSIONS_V2")
+        });
+
+    !requires_v2 || permissions & ADMINISTRATOR == ADMINISTRATOR
 }
 
 /// `Command.cast_int/1`, and what `String.to_integer/1` does to an option.
@@ -178,6 +197,7 @@ pub async fn handle(
         "bal" => bal::handle(state, payload).await,
         "create" => create::handle(state, options, payload).await,
         "delete" => delete::handle(state, options, payload).await,
+        "give" => give::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),

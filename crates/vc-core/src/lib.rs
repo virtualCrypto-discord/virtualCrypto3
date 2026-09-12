@@ -6,6 +6,7 @@ pub mod currency;
 pub mod db;
 pub mod error;
 pub mod idempotency;
+pub mod issue;
 pub mod metadata;
 pub mod model;
 pub mod payment;
