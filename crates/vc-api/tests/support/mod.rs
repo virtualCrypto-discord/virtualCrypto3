@@ -10,14 +10,13 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request};
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
-use time::{Duration, OffsetDateTime, PrimitiveDateTime};
+use time::{OffsetDateTime, PrimitiveDateTime};
 use tower::ServiceExt;
 use uuid::Uuid;
 use vc_api::AppState;
 use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
 use vc_api::rate_limit::RateLimiter;
 use vc_api::state::Links;
-use vc_auth::claims::{AUDIENCE, Claims, ISSUER};
 use vc_core::claim::Transition;
 use vc_core::notification::{NoopNotifier, Notifier};
 
@@ -346,39 +345,18 @@ pub async fn discord_auth_row(
     (row.token, row.refresh_token, row.expires, row.updated_at)
 }
 
-/// Mint a token the way Guardian does: sign the claims and record the jti in
-/// `user_access_tokens`, which is what makes the token acceptable.
+/// Mint a token through the service's own issuance, so the suite exercises what
+/// production runs rather than a parallel copy of it.
 pub async fn mint(pool: &PgPool, subject: i32, scopes: &[&str]) -> String {
-    let jti = Uuid::new_v4();
-    let at = utc_now();
-    let issued = OffsetDateTime::now_utc().unix_timestamp();
-
-    sqlx::query!(
-        "INSERT INTO user_access_tokens (user_id, token_id, expires, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $4)",
+    vc_auth::issue::user_token(
+        pool,
+        JWT_SECRET.as_bytes(),
         i64::from(subject),
-        jti,
-        at + Duration::hours(1),
-        at
+        scopes,
+        OffsetDateTime::now_utc(),
     )
-    .execute(pool)
     .await
-    .expect("insert user access token");
-
-    let claims = Claims {
-        sub: subject.to_string(),
-        exp: issued + 3600,
-        iat: Some(issued),
-        nbf: Some(issued),
-        iss: ISSUER.to_string(),
-        aud: Some(AUDIENCE.to_string()),
-        jti: jti.to_string(),
-        kind: "user".to_string(),
-        scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
-        typ: Some("access".to_string()),
-    };
-
-    vc_auth::jwt::sign(&claims, JWT_SECRET.as_bytes()).expect("sign token")
+    .expect("issue a token")
 }
 
 /// Delete the jti row, exactly like Guardian.revoke/1.

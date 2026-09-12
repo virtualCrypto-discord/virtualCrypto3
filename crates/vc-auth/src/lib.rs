@@ -7,6 +7,7 @@
 pub mod claims;
 pub mod error;
 pub mod extractor;
+pub mod issue;
 pub mod jwt;
 pub mod state;
 
