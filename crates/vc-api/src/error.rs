@@ -49,6 +49,12 @@ pub enum ApiError {
     /// 400 `invalid_request` with the metadata-limit message the controller uses.
     #[error("metadata limit reached")]
     MetadataLimit,
+
+    /// 403 `insufficient_scope` / `token_verification_failed`, which is what the
+    /// payment endpoints use for a token without `vc.pay` (the claim endpoints
+    /// answer `invalid_token` / `permission_denied` instead).
+    #[error("insufficient scope")]
+    InsufficientScope,
 }
 
 /// The controller's message for [`ApiError::MetadataLimit`]. `error_description`
@@ -98,6 +104,14 @@ impl IntoResponse for ApiError {
                 Json(json!({
                     "error": "invalid_request",
                     "error_description": METADATA_LIMIT_MESSAGE,
+                })),
+            )
+                .into_response(),
+            ApiError::InsufficientScope => (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "insufficient_scope",
+                    "error_description": "token_verification_failed",
                 })),
             )
                 .into_response(),

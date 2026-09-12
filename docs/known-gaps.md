@@ -35,6 +35,18 @@ Behaviour that the Elixir service has and this rewrite does not implement yet,
 listed here so it cannot be forgotten. Everything here is deliberately deferred;
 nothing is dropped by accident.
 
+## Bulk payments
+
+`POST /api/v2/users/@me/transactions` also accepts an array body in the Elixir
+service, paying every entry inside one transaction and reporting a bad element as
+`invalid_amount_at_<index>`, `invalid_unit_at_<index>` or
+`invalid_receiver_discord_id_at_<index>`.
+
+**The Rust service implements only the single-object form.** An array body
+currently answers 500 rather than half-working, so the twelve cases in
+`v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` and the
+one in its idempotency sibling are still to port.
+
 ## Notifications for claim status changes
 
 When a claim is approved or denied, Elixir calls

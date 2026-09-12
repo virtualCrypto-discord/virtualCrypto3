@@ -350,6 +350,9 @@ pub enum TransitionError {
     NotFound,
     InvalidStatus,
     InvalidOperator,
+    /// A non-positive amount reached the transfer, which a stored claim cannot
+    /// have; reachable only through a corrupted row.
+    InvalidAmount,
     NotEnoughAmount,
     NotFoundCurrency,
     NotFoundSenderAsset,
@@ -362,6 +365,7 @@ pub enum TransitionError {
 impl From<TransferError> for TransitionError {
     fn from(error: TransferError) -> Self {
         match error {
+            TransferError::InvalidAmount => TransitionError::InvalidAmount,
             TransferError::NotFoundCurrency => TransitionError::NotFoundCurrency,
             TransferError::NotFoundSenderAsset => TransitionError::NotFoundSenderAsset,
             TransferError::NotEnoughAmount => TransitionError::NotEnoughAmount,

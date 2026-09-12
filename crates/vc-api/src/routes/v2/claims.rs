@@ -388,6 +388,7 @@ fn transition_error(error: vc_core::claim::TransitionError) -> ApiError {
             ApiError::Conflict("not_enough_amount")
         }
         TransitionError::NotFoundCurrency => ApiError::InvalidRequest("not_found_currency"),
+        TransitionError::InvalidAmount => ApiError::InvalidRequest("invalid_amount"),
         TransitionError::MetadataLimit => ApiError::MetadataLimit,
         TransitionError::Database(error) => ApiError::Core(vc_core::Error::Database(error)),
     }

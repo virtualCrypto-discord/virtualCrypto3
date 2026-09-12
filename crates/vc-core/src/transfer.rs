@@ -4,6 +4,7 @@ use crate::model::utc_now;
 
 #[derive(Debug)]
 pub enum TransferError {
+    InvalidAmount,
     NotFoundCurrency,
     NotFoundSenderAsset,
     NotEnoughAmount,
@@ -23,6 +24,10 @@ pub async fn transfer(
     amount: i64,
     unit: &str,
 ) -> Result<(), TransferError> {
+    if amount <= 0 {
+        return Err(TransferError::InvalidAmount);
+    }
+
     let currency_id = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
         .fetch_optional(&mut *conn)
         .await
