@@ -40,5 +40,17 @@ dev:
 	. scripts/discord-env.sh && cargo run -p vc-server
 
 # Expose the local server on a public https URL so Discord can reach it.
+# The quick form: a different random hostname on every run.
 tunnel:
 	cloudflared tunnel --url http://localhost:{{port}}
+
+# Authorise cloudflared against your Cloudflare account (one time, opens a browser).
+tunnel-login:
+	cloudflared tunnel login
+
+# Run the named tunnel `vcrypto3-dev`, which serves
+# https://vcrypto-dev.tignear.com from the ingress in ~/.cloudflared/config.yml.
+# Discord's Interactions Endpoint URL is
+# https://vcrypto-dev.tignear.com/api/integrations/discord/interactions
+tunnel-named:
+	cloudflared tunnel run vcrypto3-dev
