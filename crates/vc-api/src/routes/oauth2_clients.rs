@@ -9,7 +9,13 @@
 //! The endpoints themselves are not here yet: they need the read that fills this
 //! in, and the registration that issues a client secret.
 
+use axum::Json;
+use axum::extract::State;
 use serde_json::{Value, json};
+use vc_auth::AuthUser;
+
+use crate::error::ApiError;
+use crate::state::AppState;
 
 /// An application as the API answers it, with its owner and its redirect URIs.
 ///
@@ -134,6 +140,43 @@ pub async fn details(
         response_types: row.response_types,
         webhook_url: row.webhook_url,
         public_key: row.public_key,
+    }))
+}
+
+/// `GET /oauth2/clients/@me`, which is two answers to one path.
+///
+/// A `user` token's subject is a person, and the answer is the applications that
+/// account owns — an array of none or one, since `users.application_id` links an
+/// account to at most one application. An `app` token's subject is the
+/// application's own account, and the answer is that application alone.
+///
+/// Both find it the same way, so the difference is the shape of the answer rather
+/// than the question.
+pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+    let subject = i32::try_from(user.subject)
+        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+
+    // `ApiError` takes `vc_core::Error`, which is where a database error belongs:
+    // the query is the domain's, and this is only the answering of it.
+    let owned = vc_core::user::application_id(state.pool(), subject)
+        .await
+        .map_err(vc_core::Error::from)?;
+
+    let found = match owned {
+        Some(application_id) => details(state.pool(), application_id)
+            .await
+            .map_err(vc_core::Error::from)?,
+        None => None,
+    };
+
+    Ok(Json(match user.kind {
+        vc_auth::Kind::App => match &found {
+            Some(found) => render(found),
+            // An application token whose application is gone: nothing to say
+            // about it, and the token is still a token.
+            None => Value::Null,
+        },
+        vc_auth::Kind::User => Value::Array(found.iter().map(render).collect()),
     }))
 }
 
