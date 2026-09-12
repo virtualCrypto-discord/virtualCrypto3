@@ -150,3 +150,43 @@ pub async fn update_discord_token(
 
     Ok(())
 }
+
+/// `VirtualCrypto.DiscordAuth.insert_user/4`: record the authorization a login
+/// just obtained, and give back the account it belongs to.
+///
+/// A transaction, as the Elixir side is: the account and its authorization are
+/// created together, and a half-written login would leave an account that can
+/// neither be used nor retried.
+///
+/// `updated_at` is set to now on conflict, which is load-bearing rather than
+/// tidy — the refresh window is measured from it, so a login is what starts the
+/// seven days before the next refresh.
+pub async fn insert_user(
+    pool: &PgPool,
+    discord_user_id: i64,
+    token: &str,
+    refresh_token: Option<&str>,
+    expires: PrimitiveDateTime,
+) -> Result<User> {
+    let mut tx = pool.begin().await?;
+
+    let user = insert_if_not_exists(&mut tx, discord_user_id).await?;
+
+    sqlx::query!(
+        "INSERT INTO discord_users (discord_user_id, token, refresh_token, expires, updated_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (discord_user_id)
+         DO UPDATE SET token = $2, refresh_token = $3, expires = $4, updated_at = $5",
+        discord_user_id,
+        token,
+        refresh_token,
+        expires,
+        crate::model::utc_now()
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(user)
+}
