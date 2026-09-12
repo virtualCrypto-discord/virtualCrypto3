@@ -524,3 +524,38 @@ be attempted, because this service has no proxy, is **the service's fault** and
 belongs in the five-hundreds — malformed client metadata is not what happened, and
 saying so would send a user to look at their own request.
 
+## The edit (`PATCH /oauth2/clients/@me`)
+
+`Application.PatchQuery.patch/3`, and it is a patch rather than a replacement:
+every field is optional, and a field that is absent is left alone. The Elixir
+writes it as a pipeline of setters, each of which either changes the query or
+returns `:nop` for "not in this request".
+
+Four things in it are worth knowing.
+
+**`redirect_uris` is replaced wholesale when it is given.** The rows for the
+application are deleted and the ones in the request inserted. So a PATCH that
+sends one URI leaves the application with one URI rather than two, while a PATCH
+that does not mention them leaves them exactly as they were — the difference
+between an empty list and no list, and the reason the Elixir asks
+`Map.fetch/3` for the parameter rather than reading it.
+
+**The webhook is verified only when `webhook_url` is in the request.** The
+handshake is the same one registration performs, and it is skipped for an edit
+that does not name a webhook — which is what makes it possible to change a client
+name on an application whose webhook has since gone silent, rather than being
+unable to edit it at all.
+
+**`Repo.update_all/2` does not touch `updated_at`.** This is the second place that
+matters, after the Discord authorization's refresh: the Elixir updates the row
+without a changeset, so no timestamp is applied. An edit therefore leaves
+`updated_at` where it was, which is observable and worth reproducing rather than
+tidying.
+
+**And it is all one transaction**, so an edit that fails half way — a bad redirect
+URI after a good client name — changes nothing.
+
+The refusals are the metadata validator's, unchanged, and the redirect URI's is the
+same pair as registration's: `invalid_redirect_uri` with
+`redirect_uri_scheme_must_be_http_or_https`.
+
