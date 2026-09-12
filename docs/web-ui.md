@@ -74,3 +74,17 @@ LiveView with real events) and
 `lib/virtualCrypto_web/live/contract/approve_application.ex`. Together they hold
 the connect and contract flows, which are the only parts of the old site whose
 behaviour is not described above.
+
+## How it is served
+
+`web/dist` is the router's **fallback**, not a mount: `/api` and `/health` keep
+their own routes and only what nothing else claims is treated as a client-side
+route. That order is the whole risk of serving a SPA from an API's own origin,
+and `tests/web.rs` pins it — an asset is served as it is, an unknown path answers
+with `index.html`, and `/health` still answers JSON.
+
+`WEB_ROOT` says where the built assets are (`web/dist` by default), because a
+deployment unpacks them somewhere else. Two things follow: **the frontend has to
+be built before the server is started**, and nothing yet gives the hashed assets
+the immutable caching they are built for — they are served without a
+`Cache-Control`, which is correct but wasteful.

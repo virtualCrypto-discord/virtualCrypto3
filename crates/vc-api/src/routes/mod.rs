@@ -14,8 +14,9 @@ use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::state::AppState;
+use tower_http::services::{ServeDir, ServeFile};
 
-pub fn router() -> Router<AppState> {
+pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
     // Everything under `/api` shares the `plug :accepts, ["json"]` pipeline, and
     // the Discord interactions endpoint lives in that scope too.
     let api = Router::new()
@@ -29,6 +30,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .merge(api)
+        // Everything nothing else claimed is a client-side route, so the SPA is
+        // handed its own index and left to route it.
+        .fallback_service(
+            ServeDir::new(&web_root).fallback(ServeFile::new(web_root.join("index.html"))),
+        )
         .layer(
             // Discord only says "the endpoint URL could not be validated", so a
             // request log is what makes the handshake debuggable.
