@@ -269,14 +269,12 @@ fn scheme(headers: &HeaderMap) -> String {
         .to_string()
 }
 
-/// Phoenix builds the URL from `conn.host`, which excludes the port.
+/// The `Host` header verbatim, port included: the documented `link` example is
+/// `<https://localhost:4000/api/v2/users/@me/claims?...>`.
 fn authority(headers: &HeaderMap) -> String {
     headers
         .get(HOST)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .split(':')
-        .next()
         .unwrap_or_default()
         .to_string()
 }

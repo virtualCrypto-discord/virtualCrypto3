@@ -1,5 +1,32 @@
 # Known gaps
 
+## Where the contract comes from
+
+`https://github.com/virtualCrypto-discord/virtualcrypto-docs` is the official
+specification (`docs/api/Rest.md`, `Authz.md`, `Webhook.md`). Two clauses there
+shape how everything is verified:
+
+- *"未知のフィールドは無視しなければなりません(レスポンスへのフィールドの追加や、
+  リクエストへの Optional なフィールドの追加は破壊的な変更とみなされません)"* —
+  unknown fields are ignored, and adding response fields or optional request
+  fields is not a breaking change.
+- *"`error_description` フィールドの内容、およびその存在の有無は仕様の範囲外です"* —
+  the **content and even the presence** of `error_description` is explicitly out
+  of scope. Only `error` / `error_info` and the status code are contractual, so
+  the exact wording and ordering of messages such as the metadata validation
+  details are not chased. (This is why `Rest.md` can document
+  `forbidden`/`invalid_operator` for `GET /claims/:id` while the implementation
+  returns `not_related_user`; both are conformant.)
+
+`Rest.md` does not document `GET /api/v2/users/@me` or
+`GET /api/v2/users/@me/balances` at all, so those two rest on captured goldens.
+
+`Authz.md` documents three token kinds — `user`, `app` and `guild` — and says a
+`guild` token is what may `give`. The implementation's `verify_claims/2` accepts
+only `user` and `app`, so a `guild` token is rejected today; the rewrite mirrors
+the implementation. If `guild` tokens are ever issued, the kind check has to
+grow with them.
+
 Behaviour that the Elixir service has and this rewrite does not implement yet,
 listed here so it cannot be forgotten. Everything here is deliberately deferred;
 nothing is dropped by accident.
@@ -44,12 +71,11 @@ yet. It becomes relevant together with notifications.
 
 ## Not yet verified against captures
 
-- The pagination `link` header on `GET /api/v2/users/@me/claims` is implemented
-  from the controller source (`build_url_from_options/2`): scheme from
-  `x-forwarded-proto`, host from the `Host` header with any port removed, and the
-  query rebuilt from the options. The tests assert only that a full page carries
-  the header and a partial page does not — the exact URL has not been captured
-  from Elixir because its test suite does not exercise pagination.
+- The pagination `link` header on `GET /api/v2/users/@me/claims` follows the
+  example in `Rest.md`: `<scheme>://<Host verbatim, port included><path>?…`, with
+  the query rebuilt as `type`, `order`, `next`, `limit`, `related_*`, then
+  `statuses[]`. The tests assert that a full page carries the header and a partial
+  page does not; asserting the exact URL is still to do.
 - `related_discord_user_id` resolves an existing user, while Elixir's resolver
   may create one. A freshly created user has no claims, so the filter result is
   the same either way, but the side effect differs.
