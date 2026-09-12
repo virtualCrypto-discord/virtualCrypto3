@@ -16,6 +16,18 @@ pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<User>> {
     Ok(user)
 }
 
+pub async fn find_by_discord_id(pool: &PgPool, discord_id: i64) -> Result<Option<User>> {
+    let user = sqlx::query_as!(
+        User,
+        "SELECT id, discord_id, status FROM users WHERE discord_id = $1",
+        discord_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
 pub async fn find_discord_auth(pool: &PgPool, discord_user_id: i64) -> Result<Option<DiscordAuth>> {
     let auth = sqlx::query_as!(
         DiscordAuth,

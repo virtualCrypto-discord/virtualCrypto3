@@ -1,13 +1,18 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{OriginalUri, Path, RawQuery, State};
+use axum::http::HeaderMap;
+use axum::http::header::HOST;
+use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::PrimitiveDateTime;
 use vc_auth::AuthUser;
-use vc_core::claim::ClaimView;
+use vc_core::claim::{ClaimFilter, ClaimView, Cursor, Order, SrFilter};
 
 use crate::discord::filter_profile;
 use crate::error::ApiError;
 use crate::state::AppState;
+
+const STATUSES: [&str; 4] = ["pending", "approved", "denied", "canceled"];
 
 /// `GET /api/v2/users/@me/claims/:id`
 ///
@@ -38,6 +43,130 @@ pub async fn get_by_id(
     }
 
     Ok(Json(serialize_claim(&state, view).await?))
+}
+
+/// `GET /api/v2/users/@me/claims`
+///
+/// Mirrors `ClaimController.me/2` and `Raw.Get.get_claims/7`: the status, side,
+/// related-user, order, cursor and limit parameters are validated in the same
+/// order, and the response carries a `link` header when a full page was returned.
+pub async fn index(
+    State(state): State<AppState>,
+    user: AuthUser,
+    RawQuery(raw): RawQuery,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    if !user.scopes.vc_claim {
+        return Err(ApiError::PermissionDenied);
+    }
+
+    let operator_id = i32::try_from(user.subject)
+        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+
+    let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
+
+    // An absent or empty `statuses[]` means "pending"; anything else is rejected.
+    let mut statuses = params.all("statuses[]");
+    if statuses.is_empty() {
+        statuses.push("pending".to_string());
+    }
+    if !statuses
+        .iter()
+        .all(|status| STATUSES.contains(&status.as_str()))
+    {
+        return Err(ApiError::InvalidRequest("invalid_statuses"));
+    }
+
+    let related_discord = params.one("related_discord_user_id");
+    let related_vc = params.one("related_vc_user_id");
+    let (related_param, related_user_id) = match (&related_discord, &related_vc) {
+        (Some(_), Some(_)) => return Err(ApiError::InvalidRequest("invalid_related_user")),
+        (Some(value), None) => (
+            Some(("related_discord_user_id", value.clone())),
+            Some(parse_related_discord(&state, value).await?),
+        ),
+        (None, Some(value)) => (
+            Some(("related_vc_user_id", value.clone())),
+            Some(parse_number(value).ok_or(ApiError::InvalidRequest("invalid_related_user"))?),
+        ),
+        (None, None) => (None, None),
+    };
+
+    let type_param = params.one("type");
+    let sr_filter = match type_param.as_deref() {
+        None | Some("all") => SrFilter::All,
+        Some("received") => SrFilter::Received,
+        Some("claimed") => SrFilter::Claimed,
+        Some(_) => return Err(ApiError::InvalidRequest("invalid_type")),
+    };
+
+    let limit = match params.one("limit") {
+        None => None,
+        Some(value) => Some(parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?),
+    };
+
+    let on_next = params.one("on_next");
+    let next = params.one("next");
+    let cursor = match (on_next, next) {
+        (Some(_), Some(_)) => return Err(ApiError::InvalidRequest("invalid_cursor")),
+        (Some(value), None) => Cursor::OnNext(parse_number(&value).ok_or_else(numeric_cursor)?),
+        (None, Some(value)) => Cursor::Next(parse_number(&value).ok_or_else(numeric_cursor)?),
+        (None, None) => Cursor::First,
+    };
+
+    let order_param = params.one("order");
+    let order = match order_param.as_deref() {
+        None | Some("desc_claim_id") => Order::Desc,
+        Some("asc_claim_id") => Order::Asc,
+        // `parse_order/1` has no clause for anything else, so Elixir raises here.
+        Some(_) => return Err(ApiError::Internal("invalid order parameter".into())),
+    };
+
+    let claims = vc_core::claim::list(
+        state.pool(),
+        ClaimFilter {
+            operator_id,
+            statuses: &statuses,
+            sr_filter,
+            related_user_id,
+            order,
+            cursor,
+            limit,
+        },
+    )
+    .await?;
+
+    let claims_len = claims.len() as i64;
+    let last_id = claims.last().map(|claim| claim.id);
+    let mut body = Vec::with_capacity(claims.len());
+    for claim in claims {
+        body.push(serialize_claim(&state, claim).await?);
+    }
+
+    let mut response = Json(Value::Array(body)).into_response();
+
+    if let (Some(limit), Some(last_id)) = (limit, last_id)
+        && limit == claims_len
+    {
+        let query = pagination_query(
+            type_param.as_deref().unwrap_or("all"),
+            order_param.as_deref().unwrap_or("desc_claim_id"),
+            last_id,
+            limit,
+            related_param
+                .as_ref()
+                .map(|(key, value)| (*key, value.as_str())),
+            &statuses,
+        );
+
+        if let Ok(value) = header_value(&scheme(&headers), &authority(&headers), uri.path(), &query)
+        {
+            response.headers_mut().insert("link", value);
+        }
+    }
+
+    Ok(response)
 }
 
 /// `format_claim/2`: amounts and ids as strings, timestamps as UTC with a `Z`,
@@ -84,10 +213,163 @@ async fn discord_user(state: &AppState, discord_id: Option<i64>) -> Result<Value
     }
 }
 
+/// `related_discord_user_id` is resolved to a virtualCrypto user, which is what
+/// the claim filter needs. Elixir's resolver may create the user; a lookup is
+/// enough here because a user without claims matches nothing either way.
+async fn parse_related_discord(state: &AppState, value: &str) -> Result<i64, ApiError> {
+    let discord_id = parse_number(value).ok_or(ApiError::InvalidRequest("invalid_related_user"))?;
+    let user = vc_core::user::find_by_discord_id(state.pool(), discord_id)
+        .await?
+        .ok_or(ApiError::InvalidRequest("invalid_related_user"))?;
+
+    Ok(i64::from(user.id))
+}
+
+fn numeric_cursor() -> ApiError {
+    ApiError::Internal("non-numeric cursor".into())
+}
+
+fn parse_number(value: &str) -> Option<i64> {
+    value.parse::<i64>().ok()
+}
+
+/// `build_url_from_options/2`: the query is rebuilt from the options, in this
+/// order, with `statuses[]` percent-encoded the way `URI.encode_query/1` does.
+fn pagination_query(
+    type_param: &str,
+    order_param: &str,
+    next: i64,
+    limit: i64,
+    related: Option<(&str, &str)>,
+    statuses: &[String],
+) -> String {
+    let mut parts = vec![
+        format!("type={type_param}"),
+        format!("order={order_param}"),
+        format!("next={next}"),
+        format!("limit={limit}"),
+    ];
+
+    if let Some((key, value)) = related {
+        parts.push(format!("{key}={value}"));
+    }
+
+    for status in statuses {
+        parts.push(format!("statuses%5B%5D={status}"));
+    }
+
+    parts.join("&")
+}
+
+fn scheme(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("http")
+        .to_string()
+}
+
+/// Phoenix builds the URL from `conn.host`, which excludes the port.
+fn authority(headers: &HeaderMap) -> String {
+    headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn header_value(
+    scheme: &str,
+    authority: &str,
+    path: &str,
+    query: &str,
+) -> Result<axum::http::HeaderValue, axum::http::header::InvalidHeaderValue> {
+    axum::http::HeaderValue::from_str(&format!(
+        "<{scheme}://{authority}{path}?{query}>; rel=\"next\""
+    ))
+}
+
 /// `DateTime.from_naive!(naive, "Etc/UTC")` serialized by Jason.
 fn format_timestamp(value: PrimitiveDateTime) -> String {
     let format =
         time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 
     value.format(&format).unwrap_or_default()
+}
+
+/// Query parameters as ordered pairs, so repeated keys survive the way Plug's
+/// `statuses[]` handling preserves them.
+struct QueryParams {
+    pairs: Vec<(String, String)>,
+}
+
+impl QueryParams {
+    fn parse(raw: &str) -> Self {
+        let pairs = raw
+            .split('&')
+            .filter(|pair| !pair.is_empty())
+            .map(|pair| match pair.split_once('=') {
+                Some((key, value)) => (decode(key), decode(value)),
+                None => (decode(pair), String::new()),
+            })
+            .collect();
+
+        Self { pairs }
+    }
+
+    fn all(&self, key: &str) -> Vec<String> {
+        self.pairs
+            .iter()
+            .filter(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.clone())
+            .collect()
+    }
+
+    fn one(&self, key: &str) -> Option<String> {
+        self.pairs
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.clone())
+    }
+}
+
+fn decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len()
+                && bytes[index + 1].is_ascii_hexdigit()
+                && bytes[index + 2].is_ascii_hexdigit() =>
+            {
+                let hex = &input[index + 1..index + 3];
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
 }

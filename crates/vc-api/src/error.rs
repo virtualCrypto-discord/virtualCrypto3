@@ -33,6 +33,10 @@ pub enum ApiError {
     /// 404 `not_found`.
     #[error("not found")]
     NotFound,
+
+    /// 400 `invalid_request` with one of the controller's error codes.
+    #[error("invalid request: {0}")]
+    InvalidRequest(&'static str),
 }
 
 impl IntoResponse for ApiError {
@@ -51,6 +55,11 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "not_found", "error_description": "not_found" })),
+            )
+                .into_response(),
+            ApiError::InvalidRequest(description) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_request", "error_description": description })),
             )
                 .into_response(),
             ApiError::Core(vc_core::Error::UserNotFound(_))
