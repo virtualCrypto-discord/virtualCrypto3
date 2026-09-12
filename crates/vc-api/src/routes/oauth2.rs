@@ -5,12 +5,15 @@
 //! each link of it lands on one of these.
 
 use axum::Json;
-use axum::http::StatusCode;
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::session;
+use crate::state::AppState;
 use vc_core::application::PreauthorizeError;
 
 /// What to do about a refusal.
@@ -179,6 +182,176 @@ impl Request {
             state: query.state,
         })
     }
+}
+
+/// What the screen shows, and what it has to post back to approve.
+#[derive(Debug, Serialize)]
+pub struct Consent {
+    pub client_name: Option<String>,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub guild_id: i64,
+    pub state: Option<String>,
+}
+
+/// `GET /oauth2/authorize`: check the request, then describe the consent.
+///
+/// The browser is sent to `/login` rather than answered when it has no session.
+/// An SPA's own requests want a 401, but this is a navigation, and a person who
+/// is not logged in is a person who should log in and come back.
+pub async fn authorize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Query(query): Query<AuthorizeQuery>,
+) -> Response {
+    // Kept before the parse takes the query, because a malformed request still
+    // has somewhere to be sent if it named a redirect URI.
+    let redirect_uri = query.redirect_uri.clone();
+    let sent_state = query.state.clone();
+
+    let request = match Request::parse(query) {
+        Ok(request) => request,
+        Err(malformed) => {
+            let refusal = malformed.refusal();
+
+            return match (refusal, redirect_uri.as_deref()) {
+                (Refusal::Redirect { .. }, Some(redirect_uri)) => {
+                    answer(refusal, redirect_uri, sent_state.as_deref())
+                }
+                _ => answer(Refusal::Page, redirect_uri.as_deref().unwrap_or(""), None),
+            };
+        }
+    };
+
+    let Some(session) = session::from_headers(&headers, state.session_secret()) else {
+        return to_login(&uri);
+    };
+    let Some(account_id) = session.user_id else {
+        return to_login(&uri);
+    };
+
+    let preauthorized = match vc_core::application::preauthorize(
+        state.pool(),
+        &request.scopes,
+        &request.redirect_uri,
+        &request.client_id,
+    )
+    .await
+    {
+        Ok(preauthorized) => preauthorized,
+        Err(error) => {
+            return answer(
+                refusal_for(error),
+                &request.redirect_uri,
+                request.state.as_deref(),
+            );
+        }
+    };
+
+    match describe(&state, &request, account_id).await {
+        Ok(guild_id) => Json(Consent {
+            client_name: preauthorized.client_name,
+            client_id: request.client_id,
+            redirect_uri: request.redirect_uri,
+            scopes: request.scopes,
+            guild_id,
+            state: request.state,
+        })
+        .into_response(),
+        Err(refusal) => answer(refusal, &request.redirect_uri, request.state.as_deref()),
+    }
+}
+
+/// Send the browser to log in and come back here.
+fn to_login(uri: &Uri) -> Response {
+    let here = uri
+        .path_and_query()
+        .map(axum::http::uri::PathAndQuery::as_str)
+        .unwrap_or("/");
+
+    // Encoded rather than interpolated, for the same reason a refusal is: the
+    // value is partly the browser's own.
+    let mut login = Url::parse("http://placeholder/").expect("a base url");
+    login.set_path("/login");
+    login.query_pairs_mut().append_pair("continue", here);
+
+    // `Url` has no `path_and_query`, and does not need one: the pair is the path
+    // and whatever the encoder produced as the query.
+    let login = format!(
+        "{}{}",
+        login.path(),
+        login
+            .query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default()
+    );
+
+    Redirect::to(&login).into_response()
+}
+
+/// The guild checks, and the account's right to act for it.
+///
+/// Answers with the guild id, which the screen shows and which the code that
+/// follows is bound to.
+async fn describe(state: &AppState, request: &Request, account_id: i64) -> Result<i64, Refusal> {
+    let guild = state
+        .discord()
+        .get_guild(request.guild_id)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| Refusal::redirect("invalid_request", "invalid_guild_id"))?;
+
+    // A grant belongs to a guild, so the bot has to be in it: one the bot cannot
+    // see is not a guild it can grant anything in.
+    let in_guild = state
+        .discord()
+        .get_guild_member(request.guild_id, state.discord().bot_user_id())
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+
+    if !in_guild {
+        return Err(Refusal::redirect("invalid_request", "invalid_guild_id"));
+    }
+
+    let account = vc_core::user::find_by_id(state.pool(), account_id as i32)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| Refusal::redirect("invalid_request", "permission_denied"))?;
+
+    // The Elixir used the session's VirtualCrypto id as a Discord id here, which
+    // is why its answer was always no.
+    let Some(discord_id) = account.discord_id else {
+        return Err(Refusal::redirect("invalid_request", "permission_denied"));
+    };
+
+    let member = state
+        .discord()
+        .get_guild_member(request.guild_id, discord_id)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| Refusal::redirect("invalid_request", "invalid_guild_id"))?;
+
+    let roles = state
+        .discord()
+        .get_roles(request.guild_id)
+        .await
+        .unwrap_or_default();
+
+    let facts = crate::permissions::guild_facts(&guild, &member, &roles)
+        .ok_or_else(|| Refusal::redirect("invalid_request", "invalid_guild_id"))?;
+
+    if !crate::permissions::may_act_for_guild(discord_id, &facts) {
+        return Err(Refusal::redirect("invalid_request", "permission_denied"));
+    }
+
+    Ok(request.guild_id)
 }
 
 #[cfg(test)]
