@@ -14,6 +14,116 @@ pub enum RedirectUriError {
     Scheme,
 }
 
+/// Why an authorization request was refused, in the API's own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreauthorizeError {
+    /// `invalid_client_id` — including a `client_id` that is not a UUID at all,
+    /// which the Elixir reaches by casting and getting `:error`.
+    InvalidClientId,
+    /// `invalid_redirect_uri` — not one of the application's own.
+    InvalidRedirectUri,
+    /// `unauthorized_client` with `invalid_application_grant_type`.
+    InvalidApplicationGrantType,
+    /// `invalid_request` with `invalid_scope`.
+    InvalidScope,
+}
+
+/// What the consent screen has to show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preauthorized {
+    pub client_name: Option<String>,
+}
+
+/// `validate_authorization_request_and_get_application_info/3`, which is what
+/// `preauthorize` is: four questions, asked in this order, each with its own
+/// refusal. The order is the contract — a request that fails two of them is
+/// answered by the earlier one.
+pub async fn preauthorize(
+    pool: &sqlx::PgPool,
+    scopes: &[String],
+    redirect_uri: &str,
+    client_id: &str,
+) -> Result<Preauthorized, PreauthorizeError> {
+    let application = find_by_client_id(pool, client_id)
+        .await
+        .map_err(|_| PreauthorizeError::InvalidClientId)?
+        .ok_or(PreauthorizeError::InvalidClientId)?;
+
+    if !redirect_uri_is_registered(pool, application.id, redirect_uri)
+        .await
+        .map_err(|_| PreauthorizeError::InvalidRedirectUri)?
+    {
+        return Err(PreauthorizeError::InvalidRedirectUri);
+    }
+
+    if !application
+        .grant_types
+        .iter()
+        .any(|g| g == "authorization_code")
+    {
+        return Err(PreauthorizeError::InvalidApplicationGrantType);
+    }
+
+    if check_scopes(scopes).is_err() {
+        return Err(PreauthorizeError::InvalidScope);
+    }
+
+    Ok(Preauthorized {
+        client_name: application.client_name,
+    })
+}
+
+/// What an application is, as far as this check needs to know.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct Application {
+    pub id: i64,
+    pub client_name: Option<String>,
+    pub grant_types: Vec<String>,
+}
+
+/// `get_application_by_client_id/1`: a `client_id` that is not a UUID is not
+/// found, rather than an error — the Elixir casts first and only queries a
+/// value that survived the cast.
+pub async fn find_by_client_id(
+    pool: &sqlx::PgPool,
+    client_id: &str,
+) -> Result<Option<Application>, sqlx::Error> {
+    let Ok(client_id) = uuid::Uuid::parse_str(client_id) else {
+        return Ok(None);
+    };
+
+    sqlx::query_as!(
+        Application,
+        "SELECT id, client_name, grant_types::text[] AS \"grant_types!\"
+           FROM applications WHERE client_id = $1",
+        client_id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+/// `validate_redirect_uri/2`: an exact match against the application's own
+/// registrations. No normalisation, no trailing-slash forgiveness — a string
+/// comparison, which is what the Elixir does.
+pub async fn redirect_uri_is_registered(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+    redirect_uri: &str,
+) -> Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar!(
+        "SELECT EXISTS(
+             SELECT 1 FROM redirect_uris
+              WHERE application_id = $1 AND redirect_uri = $2
+         ) AS \"exists!\"",
+        application_id,
+        redirect_uri
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(found)
+}
+
 /// The one scope the service has ever accepted.
 pub const OPENID: &str = "openid";
 
