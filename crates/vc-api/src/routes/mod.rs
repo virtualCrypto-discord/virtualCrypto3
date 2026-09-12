@@ -10,6 +10,8 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::json;
+use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 use crate::state::AppState;
 
@@ -24,7 +26,16 @@ pub fn router() -> Router<AppState> {
         .merge(v2::router())
         .layer(middleware::from_fn(require_json_accept));
 
-    Router::new().route("/health", get(health)).merge(api)
+    Router::new()
+        .route("/health", get(health))
+        .merge(api)
+        .layer(
+            // Discord only says "the endpoint URL could not be validated", so a
+            // request log is what makes the handshake debuggable.
+            TraceLayer::new_for_http()
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
 }
 
 async fn health() -> Json<serde_json::Value> {

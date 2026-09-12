@@ -41,6 +41,9 @@
           flyctl
           just
           direnv
+          cloudflared
+          curl
+          jq
         ];
 
         deps = with pkgs; [
