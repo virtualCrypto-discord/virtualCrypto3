@@ -299,6 +299,61 @@ pub async fn take_code(
     Ok(taken)
 }
 
+/// Compare two secrets without the time taken saying how much of one was right.
+///
+/// The Elixir compares with a pattern match, which is not constant-time, and
+/// this is the decision docs/oauth2.md recorded as worth making rather than
+/// inheriting: the secret is the whole of a client's authentication.
+///
+/// The length is still visible in the time taken. Hiding it needs both sides
+/// hashed, and the secret is not stored hashed here, so that would be a change
+/// to the schema rather than to this function.
+fn secrets_match(presented: &str, stored: &str) -> bool {
+    let (presented, stored) = (presented.as_bytes(), stored.as_bytes());
+
+    if presented.len() != stored.len() {
+        return false;
+    }
+
+    presented
+        .iter()
+        .zip(stored)
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
+}
+
+/// `get_application_by_client_id_and_verify_secret/2`.
+///
+/// `None` for a client that does not exist and for one whose secret is wrong,
+/// which is the Elixir's answer too — it distinguishes them internally and the
+/// caller does not, so a caller cannot tell a mistyped secret from a mistyped id.
+pub async fn verify_secret(
+    pool: &sqlx::PgPool,
+    client_id: &str,
+    client_secret: &str,
+) -> std::result::Result<Option<Application>, sqlx::Error> {
+    let Ok(client_id) = uuid::Uuid::parse_str(client_id) else {
+        return Ok(None);
+    };
+
+    let row = sqlx::query!(
+        "SELECT id, client_secret FROM applications WHERE client_id = $1",
+        client_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(stored) = row.and_then(|row| row.client_secret) else {
+        return Ok(None);
+    };
+
+    if !secrets_match(client_secret, &stored) {
+        return Ok(None);
+    }
+
+    find_by_client_id(pool, &client_id.to_string()).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

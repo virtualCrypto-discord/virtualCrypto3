@@ -392,3 +392,19 @@ pub async fn exchange_refresh_token(
         refresh_token,
     })
 }
+
+/// The grant an application holds in a guild, if it holds one.
+///
+/// A client credentials request names a guild it wants a token for, and a guild
+/// the application has never been granted anything in is not one it can have.
+pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Result<Option<i64>> {
+    let found = sqlx::query_scalar!(
+        "SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2",
+        application_id,
+        guild_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(found)
+}

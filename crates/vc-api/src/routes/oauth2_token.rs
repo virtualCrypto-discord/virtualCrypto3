@@ -14,7 +14,11 @@ use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
 
-use vc_core::grant::{EXPIRES_IN, ExchangeError, exchange_code, exchange_refresh_token};
+use vc_core::application::verify_secret;
+use vc_core::grant::{
+    EXPIRES_IN, ExchangeError, create_access_token, create_refresh_token, exchange_code,
+    exchange_refresh_token, grant_for,
+};
 
 use crate::state::AppState;
 
@@ -42,7 +46,7 @@ pub async fn token(
         None => error("invalid_request", "grant_type_parameter_missing"),
         Some("authorization_code") => exchange(&state, form).await,
         Some("refresh_token") => refresh(&state, form).await,
-        Some("client_credentials") => credentials(&headers),
+        Some("client_credentials") => credentials(&state, &headers, form).await,
         Some(_) => unsupported(),
     }
 }
@@ -56,16 +60,74 @@ pub async fn token(
 /// presents none the same way, and that much is worth answering correctly now:
 /// `invalid_client`, which is what the Elixir answers for a header it cannot
 /// parse.
-fn credentials(headers: &HeaderMap) -> Response {
-    if basic_auth(headers).is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_client" })),
-        )
-            .into_response();
+async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Response {
+    let Some((client_id, client_secret)) = basic_auth(headers) else {
+        return invalid_client();
+    };
+
+    // A guild is the shape this answers; the `scope` shape issues a JWT instead
+    // and is not written yet.
+    let Some(guild_id) = form.guild_id else {
+        return unsupported();
+    };
+
+    let Ok(guild_id) = guild_id.parse::<i64>() else {
+        return error("invalid_request", "guild_id");
+    };
+
+    let application = verify_secret(state.pool(), &client_id, &client_secret)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(application) = application else {
+        return invalid_client();
+    };
+
+    let granted = grant_for(state.pool(), application.id, guild_id)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(grant_id) = granted else {
+        return invalid_client();
+    };
+
+    let now = OffsetDateTime::now_utc();
+
+    let Ok(access_token) = create_access_token(state.pool(), grant_id, now).await else {
+        return invalid_client();
+    };
+
+    let mut body = json!({
+        "access_token": access_token,
+        "token_type": "Bearer",
+        // The clock's answer here, where the code exchange writes a literal. The
+        // two agree to within the second it takes to say so.
+        "expires_in": EXPIRES_IN,
+    });
+
+    if application
+        .grant_types
+        .iter()
+        .any(|grant| grant == "refresh_token")
+    {
+        let Ok(refresh_token) = create_refresh_token(state.pool(), grant_id, now).await else {
+            return invalid_client();
+        };
+
+        body["refresh_token"] = json!(refresh_token);
     }
 
-    unsupported()
+    Json(body).into_response()
+}
+
+fn invalid_client() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "invalid_client" })),
+    )
+        .into_response()
 }
 
 /// `grant_type=authorization_code`.
