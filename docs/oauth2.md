@@ -57,16 +57,30 @@ The answer is:
 `client_secret_expires_at` of `0` is the dynamic-client-registration convention
 for "never", and is not a bug.
 
-## Still to read before implementing
+## Where the rules actually live
 
-- `VirtualCryptoWeb.Clients.render_application/1` — the shape both the list and
-  the single read share, and therefore the one that has to be exact;
-- `VirtualCrypto.Auth.register_application/2`, `get_application/1`,
-  `get_user_applications/1`;
-- `Auth.Application.PatchQuery.patch/3` and the metadata validator
-  (`application_metedata_validator.ex`);
-- `Auth.RedirectUris`, so the scheme rule above becomes the real one;
-- the token and revocation controllers, once the application half stands.
+Each of these was located, so the next reader does not have to look:
+
+- **the public shape** of an application, shared by the list and the single read:
+  `lib/virtualCrypto_web/controllers/oauth2/client_json.ex` and `clients_json.ex`.
+  If this is wrong, both endpoints are wrong together.
+- **registration**: `Auth.register_application/2` and the validation it runs,
+  `lib/virtualCrypto/auth/internal/application.ex` — the `req` fetches and their
+  errors (`redirect_uris_must_be_array`, and the scheme rule at line 60:
+  `URI.parse(&1).scheme in ["http", "https"]`);
+- **the metadata validator**: `application_metedata_validator.ex` (the spelling is
+  the file's), which is where `client_uri`, `webhook_url` and `logo_uri` are each
+  checked — the last of them allowing `data:` or `https`, and nothing else;
+- **editing**: `application_patch_query_service.ex`, which repeats the same
+  redirect-URI scheme rule at lines 141 and 165;
+- **`Auth.RedirectUris` is only an Ecto schema** — no logic, so nothing to port
+  from it; the rule above is the whole of it;
+- **the code and its exchange**: `Auth.InternalAction.Util.make_secure_random_code/0`
+  is 32 random bytes base64-url without padding, and the service delegates the
+  real work to `lib/virtualCrypto/auth/internal/service.ex`;
+- **the token and revocation controllers**: `oauth2/token_controller.ex`,
+  `token_revocation_controller.ex` and their `_json.ex` siblings, once the
+  application half stands.
 
 ## The database side
 
