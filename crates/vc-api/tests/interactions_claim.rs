@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{ClaimSet, execute_from_guild, fake, get_amount, interaction, setup_claim, state};
 use vc_api::claim_list::{ListOptions, Page, Position};
-use vc_api::custom_id::ui::button::{ListScope, claim_list};
+use vc_api::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
 use vc_api::custom_id::ui::select_menu::claim_select;
 
 const COLOR_ERROR: i64 = 0x00EA_3875;
@@ -985,4 +985,306 @@ async fn list_renders_the_first_page(pool: PgPool) {
             .collect::<Vec<_>>(),
         vec![json!(false); ids.len()]
     );
+}
+
+/// The button path's own wording, which differs from the command path's.
+const BUTTON_UNAUTHORIZED: &str = "エラー: この請求に対してこの操作を行う権限がありません。";
+const BUTTON_ALREADY_PROCESSED: &str = "エラー: 処理しようとした請求はすでに処理済みです。";
+const BUTTON_NO_MONEY: &str = "エラー: お金が足りません。";
+const BUTTON_NOT_FOUND: &str = "エラー: そのidの請求は見つかりませんでした。";
+
+/// `InteractionsControllerTest.Claim.List.Helper.action_data/2`: a `type 3`
+/// button press, carrying the token the follow-up is posted to.
+fn action_data(custom_id: String, user: i64) -> Value {
+    json!({
+        "type": 3,
+        "data": { "custom_id": custom_id, "component_type": 2 },
+        "member": {
+            "user": { "id": user.to_string() },
+            "permissions": "18446744073709551615",
+        },
+        "token": "discord_interaction_token",
+        "application_id": "1234578901234567",
+        "guild_id": "494780225280802817",
+    })
+}
+
+/// `Helper.test_common/3`'s payload: the action, the list's options, and the
+/// claims it applies to.
+fn action_custom_id(action: Action, ids: &[i64]) -> String {
+    let mut payload = claim_action(action).to_vec();
+    payload.extend_from_slice(&list_options(Position::All).encode());
+    payload.extend_from_slice(&vc_api::claim_list::encode_claim_ids(ids));
+
+    vc_api::custom_id::encode(0, &payload)
+}
+
+/// Presses the button and reads back the follow-up body, which is where the
+/// outcome is reported.
+async fn press(
+    api: &std::sync::Arc<support::FakeDiscord>,
+    pool: PgPool,
+    action: Action,
+    ids: &[i64],
+    user: i64,
+) -> (support::Response, Value) {
+    let response = interaction(
+        vc_api::router(state(pool, api.clone())),
+        action_data(action_custom_id(action, ids), user),
+    )
+    .await;
+
+    let mut posted = api.webhooks();
+    let body = posted.pop().expect("a follow-up was posted");
+
+    (response, body)
+}
+
+async fn assert_action_error(pool: PgPool, action: Action, claim: i64, user: i64, content: &str) {
+    let api = fake();
+    let (response, body) = press(&api, pool, action, &[claim], user).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(body, json!({ "content": content, "flags": 64 }));
+}
+
+/// The one case in each file that carries the action through: the money moves,
+/// the follow-up names the claim, and the list is redrawn for whoever pressed.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_approve_pays_the_claimant(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+    let claim_id = claims.id(0);
+
+    let claimant_before = get_amount(&pool, money.user1, money.currency).await;
+    let payer_before = get_amount(&pool, money.user2, money.currency).await;
+
+    let api = fake();
+    let (response, body) = press(
+        &api,
+        pool.clone(),
+        Action::Approve,
+        &[claim_id],
+        money.user2,
+    )
+    .await;
+
+    assert_eq!(
+        body,
+        json!({
+            "content": format!("id: `{claim_id}` の請求を承諾し、支払いました。"),
+            "flags": 64,
+        })
+    );
+
+    // The press answers with the list redrawn, not with the outcome.
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(7));
+    assert_eq!(response.body["data"]["flags"], json!(64));
+    assert_eq!(
+        response.body["data"]["embeds"][0]["title"],
+        json!("請求一覧(all)")
+    );
+
+    // Only user2's other claim is left, so the page holds one row.
+    let remaining = first_page(&pool, 2).await;
+    assert_eq!(remaining.claims.len(), 1);
+    assert_eq!(remaining.claims[0].id, claims.id(1));
+    assert_eq!(
+        response.body["data"]["components"][1]["components"][0]["max_values"],
+        json!(1)
+    );
+
+    let claim = vc_core::claim::view(&pool, 1, claim_id)
+        .await
+        .expect("a lookup")
+        .expect("the claim exists");
+    assert_eq!(claim.status.as_deref(), Some("approved"));
+
+    assert_eq!(
+        get_amount(&pool, money.user1, money.currency).await,
+        claimant_before + 500
+    );
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        payer_before - 500
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_the_claimant(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(0),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_an_unrelated_user(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Approve, claims.id(0), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_reports_a_payer_who_cannot_cover_the_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(1),
+        money.user1,
+        BUTTON_NO_MONEY,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_the_claimant_of_an_unaffordable_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(1),
+        money.user2,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_an_unrelated_user_of_an_unaffordable_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Approve, claims.id(1), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_reports_an_already_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(2),
+        money.user2,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_the_claimant_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(2),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_an_unrelated_user_of_an_approved_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Approve, claims.id(2), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_reports_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(3),
+        money.user2,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_the_claimant_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(3),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_an_unrelated_user_of_a_denied_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Approve, claims.id(3), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_reports_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(4),
+        money.user2,
+        BUTTON_ALREADY_PROCESSED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_the_claimant_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(
+        pool,
+        Action::Approve,
+        claims.id(4),
+        money.user1,
+        BUTTON_UNAUTHORIZED,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_rejects_an_unrelated_user_of_a_canceled_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    assert_action_error(pool, Action::Approve, claims.id(4), -1, BUTTON_UNAUTHORIZED).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn button_approve_reports_an_unknown_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    assert_action_error(pool, Action::Approve, 0, money.user1, BUTTON_NOT_FOUND).await;
 }

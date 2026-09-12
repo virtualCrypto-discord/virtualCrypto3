@@ -5,7 +5,7 @@ use super::format_date_time;
 use crate::claim_list::{ListOptions, Page, Position, encode_claim_ids};
 use crate::command::{
     ACTION_ROW, BUTTON, BUTTON_STYLE_SECONDARY, CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND,
-    CommandError, EPHEMERAL, SELECT_MENU, as_int, get_user, mention,
+    CommandError, EPHEMERAL, SELECT_MENU, UPDATE_MESSAGE, as_int, get_user, mention,
 };
 use crate::custom_id::ui::button::{ListScope, claim_list};
 use crate::custom_id::ui::select_menu::claim_select;
@@ -50,7 +50,13 @@ pub async fn page(state: &AppState, me: i64, options: ListOptions) -> Result<Val
     )
     .await?;
 
-    Ok(render(options.position, &page, me, &options))
+    Ok(render(
+        options.position,
+        &page,
+        me,
+        &options,
+        UPDATE_MESSAGE,
+    ))
 }
 
 /// `List.extract_statuses/1` for options that already carry the bits.
@@ -110,7 +116,13 @@ pub async fn handle(
     )
     .await?;
 
-    Ok(render(position, &page, me, &options))
+    Ok(render(
+        position,
+        &page,
+        me,
+        &options,
+        CHANNEL_MESSAGE_WITH_SOURCE,
+    ))
 }
 
 /// `List.extract_statuses/1`: the flags that are set, in the order a small map
@@ -151,7 +163,13 @@ fn list_scope(position: Position) -> ListScope {
 }
 
 /// `Listing.render/2` for a command or a list button.
-fn render(position: Position, page: &ClaimPage, me: i64, options: &ListOptions) -> Value {
+fn render(
+    position: Position,
+    page: &ClaimPage,
+    me: i64,
+    options: &ListOptions,
+    kind: i64,
+) -> Value {
     let pending: Vec<&ClaimView> = page
         .claims
         .iter()
@@ -181,7 +199,7 @@ fn render(position: Position, page: &ClaimPage, me: i64, options: &ListOptions) 
     // command cannot do.
 
     json!({
-        "type": CHANNEL_MESSAGE_WITH_SOURCE,
+        "type": kind,
         "data": {
             "flags": EPHEMERAL,
             "embeds": [embed],
