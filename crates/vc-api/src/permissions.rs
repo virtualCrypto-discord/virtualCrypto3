@@ -6,6 +6,65 @@
 //! a REST lookup instead, so the number has to be built here — the Elixir ORs
 //! together the permissions of the roles the member carries.
 
+use serde_json::{Map, Value};
+
+use crate::command::{as_int, as_permissions};
+
+/// What the consent screen needs to know about a guild and one member of it,
+/// read out of Discord's own JSON.
+///
+/// All three of these numbers arrive as *strings*: a guild's `owner_id`, a
+/// member's `roles`, and a role's `permissions` — a bit set that needs all
+/// sixty-four bits, which is why it is read as a `u64`. That is what makes this
+/// worth being a function with tests rather than three lines inside a handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuildFacts {
+    pub owner_id: i64,
+    pub member_role_ids: Vec<i64>,
+    pub roles: Vec<(i64, u64)>,
+}
+
+/// Read them, or nothing if Discord answered with something unreadable.
+///
+/// `None` here is not "not a member" — a member who is not there is `None` from
+/// the lookup that produced these. This is a payload that does not make sense,
+/// and the caller answers it as a bad request.
+pub fn guild_facts(
+    guild: &Map<String, Value>,
+    member: &Map<String, Value>,
+    roles: &[Map<String, Value>],
+) -> Option<GuildFacts> {
+    let owner_id = guild.get("owner_id").and_then(as_int)?;
+
+    let member_role_ids = member
+        .get("roles")
+        .and_then(Value::as_array)?
+        .iter()
+        .map(as_int)
+        .collect::<Option<Vec<i64>>>()?;
+
+    let roles = roles
+        .iter()
+        .map(|role| Some((as_int(role.get("id")?)?, as_permissions(role.get("permissions")?)?)))
+        .collect::<Option<Vec<(i64, u64)>>>()?;
+
+    Some(GuildFacts {
+        owner_id,
+        member_role_ids,
+        roles,
+    })
+}
+
+/// `validate_executor`'s question: may this account act for the guild?
+///
+/// The account id is a **Discord** id. The Elixir passed the session's
+/// VirtualCrypto user id here instead, which is why its answer was always no —
+/// see the deliberate differences in docs/known-gaps.md.
+pub fn may_act_for_guild(account_discord_id: i64, facts: &GuildFacts) -> bool {
+    account_discord_id == facts.owner_id
+        || is_administrator(member_permissions(&facts.member_role_ids, &facts.roles))
+}
+
 /// The permissions a member has: the permissions of their roles, ORed together.
 ///
 /// A role id the guild does not have is skipped, which is a **fix** and not a
@@ -33,6 +92,7 @@ pub fn member_permissions(member_role_ids: &[i64], roles: &[(i64, u64)]) -> u64 
 mod tests {
     use super::*;
     use crate::command::is_administrator;
+    use serde_json::json;
 
     #[test]
     fn a_member_holds_what_their_roles_hold() {
@@ -75,5 +135,82 @@ mod tests {
             &[(7, 0x1), (8, 0x8)]
         )));
         assert!(!is_administrator(member_permissions(&[7], &[(7, 0x1)])));
+    }
+}
+
+    fn facts() -> GuildFacts {
+        guild_facts(
+            &json!({ "owner_id": "10" }).as_object().cloned().unwrap(),
+            &json!({ "roles": ["20", "21"] }).as_object().cloned().unwrap(),
+            &[
+                json!({ "id": "20", "permissions": "1" }).as_object().cloned().unwrap(),
+                json!({ "id": "21", "permissions": "8" }).as_object().cloned().unwrap(),
+            ],
+        )
+        .expect("facts")
+    }
+
+    /// All three numbers arrive as strings, which is the whole reason this is a
+    /// function rather than three lines in a handler.
+    #[test]
+    fn the_numbers_are_read_out_of_strings() {
+        assert_eq!(
+            facts(),
+            GuildFacts {
+                owner_id: 10,
+                member_role_ids: vec![20, 21],
+                roles: vec![(20, 1), (21, 8)],
+            }
+        );
+    }
+
+    #[test]
+    fn the_owner_may_act_without_any_role() {
+        let facts = GuildFacts {
+            owner_id: 10,
+            member_role_ids: vec![],
+            roles: vec![],
+        };
+
+        assert!(may_act_for_guild(10, &facts));
+    }
+
+    #[test]
+    fn an_administrator_role_may_act() {
+        assert!(may_act_for_guild(99, &facts()));
+    }
+
+    /// A member who is neither the owner nor an administrator may not, which is
+    /// the answer the Elixir gave to everyone.
+    #[test]
+    fn a_member_without_the_bit_may_not() {
+        let facts = GuildFacts {
+            owner_id: 10,
+            member_role_ids: vec![20],
+            roles: vec![(20, 1)],
+        };
+
+        assert!(!may_act_for_guild(99, &facts));
+    }
+
+    #[test]
+    fn an_unreadable_payload_is_no_facts() {
+        assert_eq!(
+            guild_facts(
+                &json!({}).as_object().cloned().unwrap(),
+                &json!({ "roles": [] }).as_object().cloned().unwrap(),
+                &[],
+            ),
+            None
+        );
+
+        assert_eq!(
+            guild_facts(
+                &json!({ "owner_id": "10" }).as_object().cloned().unwrap(),
+                &json!({ "roles": ["20"] }).as_object().cloned().unwrap(),
+                &[json!({ "id": "20" }).as_object().cloned().unwrap()],
+            ),
+            None
+        );
     }
 }
