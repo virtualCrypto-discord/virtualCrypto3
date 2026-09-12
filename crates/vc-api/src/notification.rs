@@ -55,6 +55,62 @@ pub fn delivery(event: &Value, private_key: &[u8; 32], forward: &str, timestamp:
     }
 }
 
+/// A client for the proxy, and the certificate it demands.
+///
+/// The worker is protected by **mutual** TLS: it presents a certificate and
+/// requires one. A client without the certificate is not a client it will answer,
+/// which is why the identity is built here rather than left to a caller.
+pub struct Proxy {
+    http: reqwest::Client,
+    url: String,
+}
+
+impl Proxy {
+    /// The certificate and its key, as PEM, which is how `reqwest` takes an
+    /// identity: both together in one buffer.
+    pub fn new(
+        url: impl Into<String>,
+        certificate: &[u8],
+        key: &[u8],
+    ) -> Result<Self, reqwest::Error> {
+        let mut pem = certificate.to_vec();
+        pem.push(b'\n');
+        pem.extend_from_slice(key);
+
+        let http = reqwest::Client::builder()
+            .identity(reqwest::Identity::from_pem(&pem)?)
+            .build()?;
+
+        Ok(Self {
+            http,
+            url: url.into(),
+        })
+    }
+
+    /// Send a delivery, answering with the status the *destination* gave.
+    ///
+    /// `None` is a proxy that did not say: the status travels in `X-Status`
+    /// because the proxy's own answer is a `200` whatever the destination did,
+    /// and a caller that cannot tell those apart cannot act on either.
+    pub async fn send(&self, delivery: &Delivery) -> Result<Option<u16>, reqwest::Error> {
+        let response = self
+            .http
+            .post(&self.url)
+            .header("X-Signature-Ed25519", &delivery.signature)
+            .header("X-Signature-Timestamp", delivery.timestamp.to_string())
+            .header(FORWARD, &delivery.forward)
+            .body(delivery.body.clone())
+            .send()
+            .await?;
+
+        Ok(response
+            .headers()
+            .get(STATUS)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +200,19 @@ mod tests {
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "{}",
             delivery.signature
+        );
+    }
+
+    /// The worker demands a certificate, so a client built without one that
+    /// parses is not a client — and it fails where it is built rather than at the
+    /// first delivery.
+    #[test]
+    fn a_proxy_needs_a_certificate_it_can_use() {
+        let built = Proxy::new("https://proxy.example/", b"not a certificate", b"not a key");
+
+        assert!(
+            built.is_err(),
+            "a certificate that does not parse was accepted"
         );
     }
 }
