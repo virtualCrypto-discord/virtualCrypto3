@@ -141,3 +141,35 @@ Two gaps, both found by looking rather than assuming:
 The scopes a browser login is issued are the old app's three:
 `oauth2.register`, `vc.pay` and `vc.claim`, with `kind` of `user`. `Kind::App`
 already exists for the client-credentials tokens the OAuth2 provider will need.
+
+### The exact shape of a token, so it does not have to be rediscovered
+
+Issuance is two steps, and the second is the one that is easy to miss: sign the
+claims, **and** write the `jti` down. A token whose id is not recorded cannot be
+revoked, and `Guardian.revoke/1` is a `DELETE` against exactly that row.
+
+```sql
+INSERT INTO user_access_tokens (user_id, token_id, expires, inserted_at, updated_at)
+VALUES ($1, $2, $3, $4, $4)
+```
+
+and the claims, whose values the API verifier already expects:
+
+```rust
+Claims {
+    sub:   user_id.to_string(),
+    exp:   issued_at + 3600,
+    iat:   Some(issued_at),
+    nbf:   Some(issued_at),
+    iss:   "virtualCrypto",          // vc_auth::ISSUER
+    aud:   Some("virtualCrypto"),    // vc_auth::AUDIENCE
+    jti:   uuid,                      // the same one that was inserted
+    kind:  "user",
+    scopes: [...],
+    typ:   Some("access".to_string()),
+}
+```
+
+The hour is Guardian's, not a choice, and `iat`/`nbf`/`typ` are all set — a
+token missing any of them fails verification, which is how the test support
+learned to build them.
