@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -287,4 +289,50 @@ pub fn assert_matches_golden(actual: &Response, expected: &Golden) {
         content_type.starts_with("application/json"),
         "expected a JSON content-type, got {content_type}"
     );
+}
+
+/// Assert on the parts of a response that are the API contract.
+pub fn assert_json(actual: &Response, status: u16, body: Value) {
+    assert_eq!(actual.status, status, "status");
+    assert_eq!(actual.body, body, "body");
+}
+
+/// A currency row with an explicit id and pool so fixtures are deterministic.
+pub async fn insert_currency(
+    pool: &PgPool,
+    id: i64,
+    name: &str,
+    unit: &str,
+    guild_id: i64,
+    pool_amount: i64,
+) {
+    let at = utc_now();
+    sqlx::query!(
+        "INSERT INTO currencies (id, name, unit, guild_id, pool_amount, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)",
+        id,
+        name,
+        unit,
+        guild_id,
+        pool_amount,
+        at
+    )
+    .execute(pool)
+    .await
+    .expect("insert currency");
+}
+
+pub async fn insert_asset(pool: &PgPool, user_id: i32, currency_id: i64, amount: i64) {
+    let at = utc_now();
+    sqlx::query!(
+        "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $4)",
+        i64::from(user_id),
+        currency_id,
+        amount,
+        at
+    )
+    .execute(pool)
+    .await
+    .expect("insert asset");
 }
