@@ -53,3 +53,61 @@ pub async fn pay(
 
     Ok(())
 }
+
+/// One entry of a bulk payment.
+#[derive(Debug, Clone)]
+pub struct BulkPayment {
+    pub unit: String,
+    pub receiver_discord_id: i64,
+    pub amount: i64,
+}
+
+/// `Money.create_payments/3`: every entry is paid inside a single transaction, so
+/// one failure leaves nothing behind.
+///
+/// Elixir batches this with `transfer_bulk/3`, which checks the per-currency
+/// totals up front. Doing the transfers one at a time inside one transaction
+/// reaches the same state and the same errors — an over-committed balance fails
+/// on the entry that cannot be covered and the transaction rolls back.
+pub async fn pay_bulk(
+    pool: &PgPool,
+    sender_id: i32,
+    payments: &[BulkPayment],
+) -> Result<(), PayError> {
+    let mut tx = pool.begin().await.map_err(PayError::Database)?;
+
+    for payment in payments {
+        let known = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", payment.unit)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(PayError::Database)?;
+
+        if known.is_none() {
+            return Err(PayError::NotFoundCurrency);
+        }
+
+        let receiver = crate::user::insert_if_not_exists(&mut tx, payment.receiver_discord_id)
+            .await
+            .map_err(PayError::Database)?;
+
+        crate::transfer::transfer(
+            &mut tx,
+            sender_id,
+            receiver.id,
+            payment.amount,
+            &payment.unit,
+        )
+        .await
+        .map_err(|error| match error {
+            TransferError::InvalidAmount => PayError::InvalidAmount,
+            TransferError::NotFoundCurrency => PayError::NotFoundCurrency,
+            TransferError::NotFoundSenderAsset => PayError::NotFoundSenderAsset,
+            TransferError::NotEnoughAmount => PayError::NotEnoughAmount,
+            TransferError::Database(error) => PayError::Database(error),
+        })?;
+    }
+
+    tx.commit().await.map_err(PayError::Database)?;
+
+    Ok(())
+}

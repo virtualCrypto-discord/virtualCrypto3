@@ -55,6 +55,10 @@ pub enum ApiError {
     /// answer `invalid_token` / `permission_denied` instead).
     #[error("insufficient scope")]
     InsufficientScope,
+
+    /// 400 `invalid_request` / `invalid_<tag>_at_<index>` from a bulk body entry.
+    #[error("invalid {tag} at {index}")]
+    BulkInvalid { tag: &'static str, index: usize },
 }
 
 /// The controller's message for [`ApiError::MetadataLimit`]. `error_description`
@@ -112,6 +116,14 @@ impl IntoResponse for ApiError {
                 Json(json!({
                     "error": "insufficient_scope",
                     "error_description": "token_verification_failed",
+                })),
+            )
+                .into_response(),
+            ApiError::BulkInvalid { tag, index } => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_request",
+                    "error_description": format!("invalid_{tag}_at_{index}"),
                 })),
             )
                 .into_response(),

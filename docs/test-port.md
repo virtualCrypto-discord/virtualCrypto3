@@ -13,10 +13,15 @@ coverage can still be read off at a glance.
 | `v2/claim/metadata/update_test.exs` | 15 | `tests/v2_claims_metadata.rs`, `tests/v2_claims_patch.rs`, `tests/v2_claims_create.rs` | ported — create/insert/upsert/delete/empty, updates alongside a status transition, per-user privacy, and the key, value and entry-count limits (including the trigger path) |
 | `v2/user_transactions/pay/single/single_user_transaction_controller_test.exs` | 7 | `tests/v2_transactions.rs` | ported — plus a case for an unquoted idempotency key |
 | `v2/user_transactions/pay/single/single_user_transaction_controller_idempotency_test.exs` | 5 | `tests/v2_transactions.rs` | ported |
-| `v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` | 12 | `tests/v2_transactions_bulk.rs` | pending — the bulk body is not implemented (see docs/known-gaps.md) |
-| `v2/user_transactions/pay/bulk/bulk_user_transaction_controller_idempotency_test.exs` | 1 | `tests/v2_transactions_bulk.rs` | pending — same |
+| `v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` | 12 | `tests/v2_transactions_bulk.rs` | ported — plus cases for entry validation and an unknown unit |
+| `v2/user_transactions/pay/bulk/bulk_user_transaction_controller_idempotency_test.exs` | 1 | `tests/v2_transactions_bulk.rs` | ported |
 
-Total: 103 Elixir cases.
+Total: 103 Elixir cases, all ported.
+
+One implementation note: the bulk path pays entry by entry inside a single
+transaction rather than using Elixir's `transfer_bulk/3`. The state and the
+errors are the same — an over-committed balance fails on the entry that cannot be
+covered and everything rolls back — but the batching is not reproduced.
 
 ## Endpoints with no Elixir test
 

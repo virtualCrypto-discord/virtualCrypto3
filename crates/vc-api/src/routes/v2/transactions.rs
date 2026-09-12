@@ -82,7 +82,13 @@ pub async fn post(
         }
     };
 
-    let (status, body) = single(&state, &user, operator_id, &body).await?;
+    let (status, body) = if let Some(object) = body.as_object() {
+        single(&state, &user, operator_id, object).await?
+    } else if body.is_array() {
+        bulk(&state, &user, operator_id, &body).await?
+    } else {
+        missing_parameter()
+    };
 
     if let Some(key) = claimed {
         vc_core::idempotency::register(
@@ -107,18 +113,8 @@ async fn single(
     state: &AppState,
     user: &AuthUser,
     operator_id: i32,
-    body: &Value,
+    object: &serde_json::Map<String, Value>,
 ) -> Result<(StatusCode, Value), ApiError> {
-    let Some(object) = body.as_object() else {
-        if body.is_array() {
-            return Err(ApiError::Internal(
-                "bulk payments are not implemented yet".into(),
-            ));
-        }
-
-        return Ok(missing_parameter());
-    };
-
     let Some((unit, receiver, amount)) = (match (
         object.get("unit"),
         object.get("receiver_discord_id"),
@@ -156,6 +152,63 @@ async fn single(
     )
     .await
     {
+        Ok(()) => Ok((StatusCode::CREATED, json!({}))),
+        Err(error) => Ok(payment_error(error)),
+    }
+}
+
+/// The bulk clause: the body is an array of the single-payment objects.
+///
+/// `convert_list/1` reads each entry's amount, then its unit, then its receiver,
+/// and reports the first problem with the index it appeared at.
+async fn bulk(
+    state: &AppState,
+    user: &AuthUser,
+    operator_id: i32,
+    body: &Value,
+) -> Result<(StatusCode, Value), ApiError> {
+    let list = body.as_array().expect("the caller checked for an array");
+
+    let mut payments = Vec::with_capacity(list.len());
+    for (index, element) in list.iter().enumerate() {
+        let object = element.as_object().ok_or(ApiError::BulkInvalid {
+            tag: "amount",
+            index,
+        })?;
+
+        let amount = object
+            .get("amount")
+            .and_then(Value::as_str)
+            .and_then(parse_number)
+            .ok_or(ApiError::BulkInvalid {
+                tag: "amount",
+                index,
+            })?;
+        let unit = object
+            .get("unit")
+            .and_then(Value::as_str)
+            .ok_or(ApiError::BulkInvalid { tag: "unit", index })?;
+        let receiver_discord_id = object
+            .get("receiver_discord_id")
+            .and_then(Value::as_str)
+            .and_then(parse_number)
+            .ok_or(ApiError::BulkInvalid {
+                tag: "receiver_discord_id",
+                index,
+            })?;
+
+        payments.push(vc_core::payment::BulkPayment {
+            unit: unit.to_string(),
+            receiver_discord_id,
+            amount,
+        });
+    }
+
+    if !user.scopes.vc_pay {
+        return Err(ApiError::InsufficientScope);
+    }
+
+    match vc_core::payment::pay_bulk(state.pool(), operator_id, &payments).await {
         Ok(()) => Ok((StatusCode::CREATED, json!({}))),
         Err(error) => Ok(payment_error(error)),
     }
