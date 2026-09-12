@@ -6,7 +6,7 @@
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
-use vc_core::application::{authorize, take_code};
+use vc_core::application::{authorize, take_code, webhook_data};
 use vc_core::grant::{
     EXPIRES_IN, ExchangeError, REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes,
     create_refresh_token, exchange_code, exchange_refresh_token, grant_for_code,
@@ -508,4 +508,37 @@ async fn something_that_is_not_a_token_revokes_nothing(pool: PgPool) {
             .await
             .expect("an answer")
     );
+}
+
+/// An application's webhook is its own: the URL it registered, and the keypair it
+/// verifies deliveries with. An application that registered none has one column
+/// null, which is an application with nothing to be told.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_applications_webhook_is_read_back(pool: PgPool) {
+    let application_id = application(&pool).await;
+
+    sqlx::query!(
+        "UPDATE applications SET webhook_url = $2 WHERE id = $1",
+        application_id,
+        "https://app.example/hook"
+    )
+    .execute(&pool)
+    .await
+    .expect("set the webhook url");
+
+    let found = webhook_data(&pool, application_id)
+        .await
+        .expect("an answer")
+        .expect("the application");
+
+    assert_eq!(
+        found.webhook_url.as_deref(),
+        Some("https://app.example/hook")
+    );
+    assert_eq!(found.public_key, vec![0u8], "the fixture's key");
+    assert_eq!(found.private_key, vec![0u8]);
+
+    let missing = webhook_data(&pool, 999_999).await.expect("an answer");
+
+    assert_eq!(missing, None);
 }

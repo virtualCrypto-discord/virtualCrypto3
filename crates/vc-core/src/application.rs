@@ -354,6 +354,36 @@ pub async fn verify_secret(
     find_by_client_id(pool, &client_id.to_string()).await
 }
 
+/// What an application wants events sent to, and what it verifies them with.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct WebhookData {
+    /// `None` for an application that registered without one, which is an
+    /// application with nothing to be told — the Elixir's `:nop`.
+    pub webhook_url: Option<String>,
+    pub public_key: Vec<u8>,
+    pub private_key: Vec<u8>,
+}
+
+/// `get_application_webhook_data/1`.
+///
+/// Both key columns are `NOT NULL` in the schema and are the application's own:
+/// the service signs what it sends with the private half, and the application
+/// verifies with the public one. Neither is this service's key.
+pub async fn webhook_data(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+) -> std::result::Result<Option<WebhookData>, sqlx::Error> {
+    let found = sqlx::query_as!(
+        WebhookData,
+        "SELECT webhook_url, public_key, private_key FROM applications WHERE id = $1",
+        application_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
