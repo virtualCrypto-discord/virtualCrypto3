@@ -1,4 +1,5 @@
 pub mod interactions;
+pub mod oauth2;
 pub mod v2;
 pub mod web;
 
