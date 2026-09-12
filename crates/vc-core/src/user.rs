@@ -194,3 +194,22 @@ pub async fn insert_user(
 
     Ok(user)
 }
+
+/// The user an application acts as: the row whose `application_id` points at it.
+///
+/// `Auth.get_application_user_id_by_client_id/2` does this and the secret check
+/// in one query, which makes the secret comparison a database's. Here the secret
+/// has already been compared in constant time, so this is only the link.
+pub async fn application_user_id(
+    pool: &PgPool,
+    application_id: i64,
+) -> std::result::Result<Option<i32>, sqlx::Error> {
+    let found = sqlx::query_scalar!(
+        "SELECT id FROM users WHERE application_id = $1",
+        application_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(found)
+}

@@ -1,9 +1,10 @@
 //! `POST /oauth2/token`: the grants a client can use.
 //!
-//! The code exchange is here; the refresh and the two `client_credentials` shapes
-//! are not yet, and answer `unsupported_grant_type` until they are — the same
-//! answer a client gets for a grant that does not exist, which is the closest
-//! thing to the truth that this endpoint can currently tell.
+//! Three of the four grants are here: the code exchange, the refresh, and
+//! `client_credentials` in both of its shapes — which are two mechanisms wearing
+//! one name, and are documented as such in docs/oauth2.md.
+//!
+//! Revocation is not here yet.
 
 use axum::Json;
 use axum::extract::{Form, State};
@@ -14,7 +15,8 @@ use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
 
-use vc_core::application::verify_secret;
+use vc_auth::issue::{app_scopes_are_valid, app_token};
+use vc_core::application::{Application, verify_secret};
 use vc_core::grant::{
     EXPIRES_IN, ExchangeError, create_access_token, create_refresh_token, exchange_code,
     exchange_refresh_token, grant_for,
@@ -65,23 +67,32 @@ async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> 
         return invalid_client();
     };
 
-    // A guild is the shape this answers; the `scope` shape issues a JWT instead
-    // and is not written yet.
-    let Some(guild_id) = form.guild_id else {
-        return unsupported();
-    };
-
-    let Ok(guild_id) = guild_id.parse::<i64>() else {
-        return error("invalid_request", "guild_id");
-    };
-
-    let application = verify_secret(state.pool(), &client_id, &client_secret)
+    let verified = verify_secret(state.pool(), &client_id, &client_secret)
         .await
         .ok()
         .flatten();
 
-    let Some(application) = application else {
+    let Some(application) = verified else {
         return invalid_client();
+    };
+
+    // In this order, as the Elixir's clauses are: a request that carries both a
+    // guild and a scope gets the guild's answer.
+    if let Some(guild_id) = form.guild_id {
+        return granted_in_guild(state, &application, &guild_id).await;
+    }
+
+    if let Some(scope) = form.scope {
+        return scoped(state, &application, &scope).await;
+    }
+
+    unsupported()
+}
+
+/// The shape that answers with a row: a token for a grant in a guild.
+async fn granted_in_guild(state: &AppState, application: &Application, guild_id: &str) -> Response {
+    let Ok(guild_id) = guild_id.parse::<i64>() else {
+        return error("invalid_request", "guild_id");
     };
 
     let granted = grant_for(state.pool(), application.id, guild_id)
@@ -102,8 +113,8 @@ async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> 
     let mut body = json!({
         "access_token": access_token,
         "token_type": "Bearer",
-        // The clock's answer here, where the code exchange writes a literal. The
-        // two agree to within the second it takes to say so.
+        // The constant here, where the Elixir subtracts the clock from the row it
+        // has just written. The two agree to within the second it takes to say so.
         "expires_in": EXPIRES_IN,
     });
 
@@ -120,6 +131,51 @@ async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> 
     }
 
     Json(body).into_response()
+}
+
+/// The shape that answers with a signed JWT, for the application itself rather
+/// than for a guild.
+async fn scoped(state: &AppState, application: &Application, scope: &str) -> Response {
+    // `String.split/2` on the empty string gives one empty scope, so a request
+    // with `scope=` is refused rather than treated as asking for nothing.
+    let scopes: Vec<&str> = scope.split(' ').collect();
+
+    if !app_scopes_are_valid(&scopes) {
+        // No description: the credentials view renders this error alone.
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_request" })),
+        )
+            .into_response();
+    }
+
+    let subject = vc_core::user::application_user_id(state.pool(), application.id)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(subject) = subject else {
+        return invalid_client();
+    };
+
+    let issued = app_token(
+        state.pool(),
+        state.jwt_secret(),
+        i64::from(subject),
+        &scopes,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    match issued {
+        Ok(access_token) => Json(json!({
+            "access_token": access_token,
+            "expires_in": EXPIRES_IN,
+            "token_type": "Bearer",
+        }))
+        .into_response(),
+        Err(_) => invalid_client(),
+    }
 }
 
 fn invalid_client() -> Response {

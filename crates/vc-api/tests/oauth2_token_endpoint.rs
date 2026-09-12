@@ -103,3 +103,48 @@ async fn a_code_we_did_not_issue_is_a_bad_request(pool: PgPool) {
     assert_eq!(body["error"], "invalid_grant");
     assert_eq!(body["error_description"], "invalid_code");
 }
+
+/// Nothing read an `Authorization` header here until the credentials grants did,
+/// and a client without one is refused the same way in both of them.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn credentials_without_basic_auth_are_refused(pool: PgPool) {
+    let app = vc_api::router(state(pool, fake()));
+
+    let (status, body) = form(app, "grant_type=client_credentials&guild_id=1").await;
+
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "invalid_client");
+}
+
+/// An application that does not exist and one whose secret is wrong are one
+/// answer, which is what the Elixir's caller ends up giving too.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn credentials_that_do_not_verify_are_refused(pool: PgPool) {
+    let app = vc_api::router(state(pool, fake()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/oauth2/token")
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                // "x:y"
+                .header(axum::http::header::AUTHORIZATION, "Basic eDp5")
+                .body(Body::from("grant_type=client_credentials&scope=vc.pay"))
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+
+    assert_eq!(body["error"], "invalid_client");
+}
