@@ -16,6 +16,63 @@ use crate::state::AppState;
 const MAX_COLUMN_COUNT: u8 = 5;
 const LIMIT: i64 = 5;
 
+/// `List.Component.page/2`: re-render the list for the operator, which is the
+/// response a button press gets rather than a fresh command.
+pub async fn page(state: &AppState, me: i64, options: ListOptions) -> Result<Value, CommandError> {
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+    let statuses = statuses_of(&options);
+    let related_user = options.related_user.map(|id| id as i64);
+
+    let page = match options.page {
+        Page::Number(number) => i64::from(number),
+        // `:last` is a page number the caller does not know yet.
+        Page::Last => {
+            vc_core::claim::last_page_number(
+                state.pool(),
+                account,
+                &statuses,
+                sr_filter(options.position),
+                related_user,
+                LIMIT,
+            )
+            .await?
+        }
+    };
+
+    let page = vc_core::claim::list_page(
+        state.pool(),
+        account,
+        &statuses,
+        sr_filter(options.position),
+        related_user,
+        page,
+        LIMIT,
+    )
+    .await?;
+
+    Ok(render(options.position, &page, me, &options))
+}
+
+/// `List.extract_statuses/1` for options that already carry the bits.
+fn statuses_of(options: &ListOptions) -> Vec<String> {
+    let mut statuses: Vec<String> = [
+        ("approved", options.approved),
+        ("canceled", options.canceled),
+        ("denied", options.denied),
+        ("pending", options.pending),
+    ]
+    .into_iter()
+    .filter(|(_, set)| *set)
+    .map(|(name, _)| name.to_string())
+    .collect();
+
+    if statuses.is_empty() {
+        statuses.push("pending".to_string());
+    }
+
+    statuses
+}
+
 /// `Command.handle/4` for `claim list`, `claim received` and `claim sent`.
 pub async fn handle(
     state: &AppState,

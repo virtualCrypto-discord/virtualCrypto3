@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -37,6 +38,7 @@ pub struct FakeDiscord {
     payload: Map<String, Value>,
     guild: Map<String, Value>,
     refresh_calls: AtomicUsize,
+    webhooks: Mutex<Vec<Value>>,
 }
 
 impl FakeDiscord {
@@ -55,11 +57,21 @@ impl FakeDiscord {
             payload: golden_discord_payload(),
             guild,
             refresh_calls: AtomicUsize::new(0),
+            webhooks: Mutex::new(Vec::new()),
         }
     }
 
     pub fn refresh_calls(&self) -> usize {
         self.refresh_calls.load(Ordering::SeqCst)
+    }
+
+    /// The bodies `post_webhook_message` has been handed, in order — what the
+    /// Elixir tests read out of their process mailbox.
+    pub fn webhooks(&self) -> Vec<Value> {
+        self.webhooks
+            .lock()
+            .expect("the fake is not poisoned")
+            .clone()
     }
 }
 
@@ -80,6 +92,20 @@ impl DiscordApi for FakeDiscord {
         guild.insert("id".to_string(), Value::String(guild_id.to_string()));
 
         Ok(Some(guild))
+    }
+
+    async fn post_webhook_message(
+        &self,
+        _application_id: &str,
+        _token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.webhooks
+            .lock()
+            .expect("the fake is not poisoned")
+            .push(body.clone());
+
+        Ok(())
     }
 
     async fn refresh_token(&self, _refresh_token: &str) -> Result<RefreshedToken, DiscordError> {

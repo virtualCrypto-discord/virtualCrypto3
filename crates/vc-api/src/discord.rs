@@ -52,6 +52,16 @@ pub trait DiscordApi: Send + Sync {
     /// stores after a 404.
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError>;
 
+    /// `post_webhook_message/3`: the follow-up a component answers with, which
+    /// is where a button's result is shown. The Elixir tests swap the service
+    /// for one that records the body instead of sending it.
+    async fn post_webhook_message(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError>;
+
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError>;
 }
 
@@ -165,6 +175,32 @@ impl DiscordApi for HttpDiscordApi {
                 "expected a JSON object, got {other}"
             ))),
         }
+    }
+
+    async fn post_webhook_message(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        let response = self
+            .http
+            .post(format!(
+                "https://discord.com/api/webhooks/{application_id}/{token}"
+            ))
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(DiscordError::Request(format!(
+                "the webhook answered {}",
+                response.status()
+            )));
+        }
+
+        Ok(())
     }
 
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError> {

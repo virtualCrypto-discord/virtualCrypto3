@@ -36,11 +36,41 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
         Some(2) => command(&state, &payload).await,
-        // 3 message components, 4 autocomplete and 5 modals are the remaining
-        // work; see docs/known-gaps.md.
-        Some(kind @ 3..=5) => text(
+        Some(3) => component(&state, &payload).await,
+        // 4 autocomplete and 5 modals are the remaining work; see
+        // docs/known-gaps.md.
+        Some(kind @ 4..=5) => text(
             StatusCode::NOT_IMPLEMENTED,
             &format!("interaction type {kind} is not implemented yet"),
+        ),
+        _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+    }
+}
+
+/// `verified/2` for `type` 3: a message component. `component_type` picks the
+/// handler and the `custom_id` carries the state it acts on.
+async fn component(state: &AppState, payload: &Value) -> Response {
+    let data = payload.get("data");
+
+    let custom_id = data
+        .and_then(|data| data.get("custom_id"))
+        .and_then(Value::as_str);
+    let component_type = data
+        .and_then(|data| data.get("component_type"))
+        .and_then(Value::as_i64);
+
+    match (component_type, custom_id) {
+        (Some(2), Some(custom_id)) => {
+            match crate::command::claim::button::handle(state, custom_id, payload).await {
+                Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+                Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+                Err(CommandError::Internal(error)) => error.into_response(),
+            }
+        }
+        // Select menus are the next component to land.
+        (Some(3), Some(_)) => text(
+            StatusCode::NOT_IMPLEMENTED,
+            "select menus are not implemented yet",
         ),
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }

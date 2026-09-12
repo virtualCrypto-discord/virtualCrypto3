@@ -249,6 +249,35 @@ pub async fn list(pool: &PgPool, filter: ClaimFilter<'_>) -> Result<Vec<ClaimVie
     Ok(rows.into_iter().map(Row::into_view).collect())
 }
 
+/// The number of the last page, which is what `:last` asks for.
+pub async fn last_page_number(
+    pool: &PgPool,
+    operator_id: i32,
+    statuses: &[String],
+    sr_filter: SrFilter,
+    related_user_id: Option<i64>,
+    limit: i64,
+) -> Result<i64> {
+    let total = sqlx::query_scalar!(
+        "SELECT count(c.id) AS \"total!\"
+           FROM claims c
+          WHERE c.status::text = ANY($1)
+            AND (($2 = 'all' AND (c.payer_user_id = $3 OR c.claimant_user_id = $3))
+              OR ($2 = 'received' AND c.payer_user_id = $3)
+              OR ($2 = 'claimed' AND c.claimant_user_id = $3))
+            AND ($4::bigint IS NULL
+                 OR c.payer_user_id = $4 OR c.claimant_user_id = $4)",
+        statuses,
+        sr_filter.as_str(),
+        i64::from(operator_id),
+        related_user_id
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(((total + limit - 1) / limit).max(1))
+}
+
 /// Where a pagination button moves to. `:last` cannot be expressed as a number,
 /// so the payload carries a page of zero for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -901,7 +930,7 @@ pub async fn update_claims(
     notifier: &dyn Notifier,
     operator_id: i32,
     partial_claims: &[PartialClaim],
-) -> std::result::Result<(), UpdateClaimsError> {
+) -> std::result::Result<Vec<i64>, UpdateClaimsError> {
     let mut seen = std::collections::HashSet::new();
     for partial in partial_claims {
         if !seen.insert(partial.id) {
@@ -983,7 +1012,7 @@ pub async fn update_claims(
             .collect()
     };
 
-    let mut notified: Vec<i64> = Vec::new();
+    let mut updated: Vec<i64> = Vec::new();
 
     let approving = group("approved");
     if !approving.is_empty() {
@@ -1026,7 +1055,7 @@ pub async fn update_claims(
 
         let approving_ids: Vec<i64> = approving.iter().map(|claim| claim.id).collect();
         update_statuses(&mut tx, &approving_ids, "approved", time).await?;
-        notified.extend(approving_ids);
+        updated.extend(approving_ids);
     }
 
     let denying = group("denied");
@@ -1045,7 +1074,7 @@ pub async fn update_claims(
 
         let denying_ids: Vec<i64> = denying.iter().map(|claim| claim.id).collect();
         update_statuses(&mut tx, &denying_ids, "denied", time).await?;
-        notified.extend(denying_ids);
+        updated.extend(denying_ids);
     }
 
     let canceling = group("canceled");
@@ -1064,6 +1093,7 @@ pub async fn update_claims(
 
         let canceling_ids: Vec<i64> = canceling.iter().map(|claim| claim.id).collect();
         update_statuses(&mut tx, &canceling_ids, "canceled", time).await?;
+        updated.extend(canceling_ids);
     }
 
     // The operator's own metadata, for the claims that asked it to change.
@@ -1087,12 +1117,13 @@ pub async fn update_claims(
 
     tx.commit().await.map_err(UpdateClaimsError::Database)?;
 
-    // One notification per claimant, carrying every event for that claimant.
+    // One notification per claimant, carrying every event for that claimant. A
+    // cancelled claim has no event, which is how it drops out here.
     let mut grouped: Vec<(i32, Vec<Value>)> = Vec::new();
-    for id in notified {
-        let claim = &claims[&id];
+    for id in &updated {
+        let claim = &claims[id];
 
-        let Some((claimant_id, event)) = claim_notification(pool, id, claim.claimant_id)
+        let Some((claimant_id, event)) = claim_notification(pool, *id, claim.claimant_id)
             .await
             .map_err(UpdateClaimsError::Database)?
         else {
@@ -1109,7 +1140,7 @@ pub async fn update_claims(
         notifier.notify_claim_update(claimant_id, &events);
     }
 
-    Ok(())
+    Ok(updated)
 }
 
 /// `Query.Claim.update_claims_status/3`: one statement for the whole group.
