@@ -6,6 +6,7 @@
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
+use vc_core::application::{authorize, take_code};
 use vc_core::grant::{
     REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes, create_refresh_token,
     grant_for_code, replace_refresh_token,
@@ -255,4 +256,56 @@ async fn an_expired_refresh_token_cannot_be_replaced(pool: PgPool) {
         .expect("an answer");
 
     assert_eq!(replaced, None);
+}
+
+/// The code is spent by taking it, which is what lets the exchange tell a code
+/// somebody already redeemed from one that was never issued.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_code_can_only_be_taken_once(pool: PgPool) {
+    let application_id = application(&pool).await;
+    let client_id = sqlx::query_scalar!(
+        "SELECT client_id::text AS \"client_id!\" FROM applications WHERE id = $1",
+        application_id
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the client id");
+
+    sqlx::query!(
+        "INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at)
+         VALUES ($1, 'https://app.example/callback', now()::timestamp(0), now()::timestamp(0))",
+        application_id
+    )
+    .execute(&pool)
+    .await
+    .expect("the redirect uri");
+
+    let now = OffsetDateTime::now_utc();
+    let code = authorize(
+        &pool,
+        42,
+        &["openid".to_string()],
+        "https://app.example/callback",
+        &client_id,
+        now,
+    )
+    .await
+    .expect("a code");
+
+    let taken = take_code(&pool, &code)
+        .await
+        .expect("an answer")
+        .expect("the code");
+
+    assert_eq!(taken.application_id, Some(application_id));
+    assert_eq!(taken.guild_id, Some(42));
+    assert_eq!(
+        taken.redirect_uri.as_deref(),
+        Some("https://app.example/callback")
+    );
+    assert_eq!(taken.scopes, ["openid"]);
+
+    let again = take_code(&pool, &code).await.expect("an answer");
+
+    assert_eq!(again, None, "it was spent the first time");
 }

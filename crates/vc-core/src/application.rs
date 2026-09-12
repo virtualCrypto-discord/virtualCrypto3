@@ -266,6 +266,39 @@ fn scheme(uri: &str) -> Option<String> {
     Some(scheme.to_ascii_lowercase())
 }
 
+/// An authorization code, as it was when it was taken.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct TakenCode {
+    pub application_id: Option<i64>,
+    pub guild_id: Option<i64>,
+    pub redirect_uri: Option<String>,
+    pub scopes: Vec<String>,
+    pub expires: Option<time::PrimitiveDateTime>,
+}
+
+/// `get_and_delete_unbound_authorization_code/1`: the code, deleted as it is read.
+///
+/// Taking is how a code is spent, so a second call for the same one finds
+/// nothing — which is what lets the exchange tell a reused code from an unknown
+/// one, and is the reason this is a `DELETE ... RETURNING` rather than a read
+/// with a delete after it.
+pub async fn take_code(
+    pool: &sqlx::PgPool,
+    code: &str,
+) -> std::result::Result<Option<TakenCode>, sqlx::Error> {
+    let taken = sqlx::query_as!(
+        TakenCode,
+        r#"DELETE FROM authorization_codes WHERE code = $1
+        RETURNING application_id, guild_id, redirect_uri,
+                  scopes::text[] AS "scopes!", expires"#,
+        code
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(taken)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
