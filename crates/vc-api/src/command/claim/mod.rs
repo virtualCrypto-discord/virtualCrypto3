@@ -1,10 +1,13 @@
 pub mod action;
+pub mod list;
 pub mod make;
 pub mod show;
 
 use serde_json::{Map, Value, json};
 use time::PrimitiveDateTime;
 use vc_core::claim::Transition;
+
+use crate::claim_list::Position;
 
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError, EPHEMERAL};
 use crate::state::AppState;
@@ -27,6 +30,9 @@ pub async fn handle(
         "cancel" => action::handle(state, sub_options, payload, Transition::Canceled).await,
         "deny" => action::handle(state, sub_options, payload, Transition::Denied).await,
         "make" => make::handle(state, sub_options, payload).await,
+        "list" => list::handle(state, sub_options, payload, Position::All).await,
+        "received" => list::handle(state, sub_options, payload, Position::Received).await,
+        "sent" => list::handle(state, sub_options, payload, Position::Claimed).await,
         "show" => show::handle(state, sub_options, payload).await,
         _ => Err(CommandError::Unknown),
     }

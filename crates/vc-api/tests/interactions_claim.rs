@@ -8,6 +8,9 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{ClaimSet, execute_from_guild, fake, get_amount, interaction, setup_claim, state};
+use vc_api::claim_list::{ListOptions, Page, Position};
+use vc_api::custom_id::ui::button::{ListScope, claim_list};
+use vc_api::custom_id::ui::select_menu::claim_select;
 
 const COLOR_ERROR: i64 = 0x00EA_3875;
 const COLOR_BRAND: i64 = 6_431_213;
@@ -793,4 +796,193 @@ async fn cancel_reports_an_unknown_claim(pool: PgPool) {
     let response = patch(pool, "cancel", -1, money.user1).await;
 
     assert_message(&response, NOT_FOUND);
+}
+
+/// `InteractionsControllerTest.Claim.Helper.list_from_guild/1`.
+fn list_from_guild(user: i64) -> Value {
+    execute_from_guild(
+        json!({
+            "name": "claim",
+            "options": [{ "name": "list", "options": [] }],
+        }),
+        user,
+    )
+}
+
+/// The options the command opens with: pending only, first page, no filter.
+fn list_options(position: Position) -> ListOptions {
+    ListOptions {
+        pending: true,
+        approved: false,
+        denied: false,
+        canceled: false,
+        position,
+        page: Page::Number(1),
+        related_user: None,
+    }
+}
+
+fn scope(position: Position) -> ListScope {
+    match position {
+        Position::All => ListScope::All,
+        Position::Received => ListScope::Received,
+        Position::Claimed => ListScope::Claimed,
+    }
+}
+
+/// `Listing.custom_id/4`, so a pagination button can be compared exactly.
+fn page_custom_id(k: u8, position: Position, page: Page, options: &ListOptions) -> String {
+    let mut payload = claim_list(scope(position)).to_vec();
+    payload.extend_from_slice(&ListOptions { page, ..*options }.encode());
+
+    vc_api::custom_id::encode(k, &payload)
+}
+
+/// `Listing.selection_select_row/5`'s payload.
+fn select_custom_id(ids: &[i64], options: &ListOptions) -> String {
+    let mut payload = claim_select().to_vec();
+    payload.extend_from_slice(&options.encode());
+    payload.extend_from_slice(&vc_api::claim_list::encode_claim_ids(ids));
+
+    vc_api::custom_id::encode(5, &payload)
+}
+
+fn claim_icon(me: i64, claim: &vc_core::claim::ClaimView) -> &'static str {
+    let claimant = claim.claimant.discord_id == Some(me);
+    let payer = claim.payer.discord_id == Some(me);
+
+    match (claimant, payer) {
+        (true, true) => "📤📥",
+        (true, false) => "📤",
+        (false, true) => "📥",
+        (false, false) => "",
+    }
+}
+
+/// The page all of these commands open on: pending claims only, newest first.
+async fn first_page(pool: &PgPool, account: i32) -> vc_core::claim::ClaimPage {
+    vc_core::claim::list_page(
+        pool,
+        account,
+        &["pending".to_string()],
+        vc_core::claim::SrFilter::All,
+        None,
+        1,
+        5,
+    )
+    .await
+    .expect("the page")
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn list_reports_an_empty_page(pool: PgPool) {
+    setup_claim(&pool).await;
+
+    let response = interaction(router(pool), list_from_guild(-1)).await;
+
+    let options = list_options(Position::All);
+    let reload = page_custom_id(4, Position::All, Page::Number(1), &options);
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        json!({
+            "type": 4,
+            "data": {
+                "flags": 64,
+                "components": [{
+                    "type": 1,
+                    "components": [
+                        { "type": 2, "style": 2, "emoji": { "name": "⏪" }, "custom_id": "disabled-0", "disabled": true },
+                        { "type": 2, "style": 2, "emoji": { "name": "⏮️" }, "custom_id": "disabled-1", "disabled": true },
+                        { "type": 2, "style": 2, "emoji": { "name": "⏭️" }, "custom_id": "disabled-2", "disabled": true },
+                        { "type": 2, "style": 2, "emoji": { "name": "⏩" }, "custom_id": "disabled-3", "disabled": true },
+                        { "type": 2, "style": 2, "emoji": { "name": "🔄" }, "custom_id": reload },
+                    ],
+                }],
+                "embeds": [{
+                    "title": "請求一覧(all)",
+                    "color": COLOR_BRAND,
+                    "fields": [],
+                    "description": "表示する内容がありません。",
+                }],
+            },
+        })
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn list_renders_the_first_page(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = interaction(router(pool.clone()), list_from_guild(money.user1)).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(4));
+    assert_eq!(response.body["data"]["flags"], json!(64));
+
+    let page = first_page(&pool, 1).await;
+    assert_eq!(
+        page.claims.len(),
+        3,
+        "user1 is party to three pending claims"
+    );
+
+    let expected: Vec<Value> = page
+        .claims
+        .iter()
+        .map(|claim| {
+            json!({
+                "name": format!("◻️{}{}", claim_icon(money.user1, claim), claim.id),
+                "value": format!(
+                    "状態　: ⌛未決定\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
+                    claim.amount.unwrap_or_default(),
+                    claim.currency.unit.clone().unwrap_or_default(),
+                    claim.claimant.discord_id.unwrap_or_default(),
+                    claim.payer.discord_id.unwrap_or_default(),
+                    claim.inserted_at.assume_utc().unix_timestamp(),
+                ),
+            })
+        })
+        .collect();
+
+    let embed = &response.body["data"]["embeds"][0];
+    assert_eq!(embed["title"], json!("請求一覧(all)"));
+    assert_eq!(embed["color"], json!(COLOR_BRAND));
+    assert_eq!(embed["fields"], json!(expected));
+
+    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
+    let options = list_options(Position::All);
+
+    assert_eq!(
+        response.body["data"]["components"][0]["components"],
+        json!([
+            { "type": 2, "style": 2, "emoji": { "name": "⏪" }, "custom_id": "disabled-0", "disabled": true },
+            { "type": 2, "style": 2, "emoji": { "name": "⏮️" }, "custom_id": "disabled-1", "disabled": true },
+            { "type": 2, "style": 2, "emoji": { "name": "⏭️" }, "custom_id": "disabled-2", "disabled": true },
+            { "type": 2, "style": 2, "emoji": { "name": "⏩" }, "custom_id": "disabled-3", "disabled": true },
+            {
+                "type": 2,
+                "style": 2,
+                "emoji": { "name": "🔄" },
+                "custom_id": page_custom_id(4, Position::All, Page::Number(1), &options),
+            },
+        ])
+    );
+
+    let select = &response.body["data"]["components"][1]["components"][0];
+    assert_eq!(select["type"], json!(3));
+    assert_eq!(select["min_values"], json!(0));
+    assert_eq!(select["max_values"], json!(ids.len()));
+    assert_eq!(select["custom_id"], json!(select_custom_id(&ids, &options)));
+    assert_eq!(
+        select["options"]
+            .as_array()
+            .expect("the choices")
+            .iter()
+            .map(|choice| choice["default"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(false); ids.len()]
+    );
 }

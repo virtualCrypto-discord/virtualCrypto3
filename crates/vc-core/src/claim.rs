@@ -249,6 +249,100 @@ pub async fn list(pool: &PgPool, filter: ClaimFilter<'_>) -> Result<Vec<ClaimVie
     Ok(rows.into_iter().map(Row::into_view).collect())
 }
 
+/// Where a pagination button moves to. `:last` cannot be expressed as a number,
+/// so the payload carries a page of zero for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageTarget {
+    Last,
+    Number(i64),
+}
+
+/// A page of the claim list, and the pages its buttons move to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimPage {
+    pub claims: Vec<ClaimView>,
+    pub first: Option<i64>,
+    pub prev: Option<i64>,
+    pub next: Option<PageTarget>,
+    pub last: Option<PageTarget>,
+    pub page: i64,
+}
+
+/// `Raw.Get.get_claims/7` for `%{page: n}`: one more row than the page holds is
+/// fetched, which is how the caller learns whether another page follows.
+pub async fn list_page(
+    pool: &PgPool,
+    operator_id: i32,
+    statuses: &[String],
+    sr_filter: SrFilter,
+    related_user_id: Option<i64>,
+    page: i64,
+    limit: i64,
+) -> Result<ClaimPage> {
+    let rows = sqlx::query_as!(
+        Row,
+        "SELECT c.id AS \"claim_id!\",
+                c.amount AS claim_amount,
+                c.status::text AS claim_status,
+                c.inserted_at AS \"claim_inserted_at!\",
+                c.updated_at AS \"claim_updated_at!\",
+                cur.name AS currency_name,
+                cur.unit AS currency_unit,
+                cur.guild_id AS currency_guild_id,
+                cur.pool_amount AS currency_pool_amount,
+                cl.id AS \"claimant_id!\",
+                cl.discord_id AS claimant_discord_id,
+                py.id AS \"payer_id!\",
+                py.discord_id AS payer_discord_id,
+                COALESCE(m.metadata, '{}'::jsonb) AS \"metadata!\"
+           FROM claims c
+           JOIN currencies cur ON c.currency_id = cur.id
+           JOIN users cl ON c.claimant_user_id = cl.id
+           JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN claim_metadata m
+                  ON c.id = m.claim_id AND m.owner_user_id = $4
+          WHERE c.status::text = ANY($1)
+            AND (($2 = 'all' AND (c.payer_user_id = $4 OR c.claimant_user_id = $4))
+              OR ($2 = 'received' AND c.payer_user_id = $4)
+              OR ($2 = 'claimed' AND c.claimant_user_id = $4))
+            AND ($3::bigint IS NULL
+                 OR c.payer_user_id = $3 OR c.claimant_user_id = $3)
+          ORDER BY c.id DESC
+          LIMIT $5
+         OFFSET $6",
+        statuses,
+        sr_filter.as_str(),
+        related_user_id,
+        i64::from(operator_id),
+        limit + 1,
+        limit * (page - 1)
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
+    let claims: Vec<ClaimView> = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(Row::into_view)
+        .collect();
+
+    Ok(ClaimPage {
+        claims,
+        // `{first, prev}` are 1 and n - 1, or nothing on the first page.
+        first: if page != 1 { Some(1) } else { None },
+        prev: if page != 1 { Some(page - 1) } else { None },
+        // `{last, next}` are `:last` and n + 1, or nothing on the last page.
+        last: if more { Some(PageTarget::Last) } else { None },
+        next: if more {
+            Some(PageTarget::Number(page + 1))
+        } else {
+            None
+        },
+        page,
+    })
+}
+
 /// `Query.Claim.create_claim/5` failures.
 #[derive(Debug)]
 pub enum CreateError {
