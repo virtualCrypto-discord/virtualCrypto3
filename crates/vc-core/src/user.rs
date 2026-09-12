@@ -62,6 +62,42 @@ pub async fn insert_if_not_exists(
     }
 }
 
+/// Resolve several discord ids at once, creating the accounts that are missing.
+///
+/// `UserResolver.resolve_ids/1` does the same: a fixed number of statements
+/// regardless of how many ids are asked for, rather than one per id.
+pub async fn resolve_ids(
+    conn: &mut PgConnection,
+    discord_ids: &[i64],
+) -> std::result::Result<std::collections::HashMap<i64, i32>, sqlx::Error> {
+    if discord_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let now = crate::model::utc_now();
+    sqlx::query!(
+        "INSERT INTO users (discord_id, status, inserted_at, updated_at)
+         SELECT t.discord_id, 0, $2, $2 FROM UNNEST($1::bigint[]) AS t(discord_id)
+         ON CONFLICT (discord_id) DO NOTHING",
+        discord_ids,
+        now
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    let rows = sqlx::query!(
+        "SELECT id, discord_id FROM users WHERE discord_id = ANY($1)",
+        discord_ids
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.discord_id.map(|discord_id| (discord_id, row.id)))
+        .collect())
+}
+
 pub async fn find_discord_auth(pool: &PgPool, discord_user_id: i64) -> Result<Option<DiscordAuth>> {
     let auth = sqlx::query_as!(
         DiscordAuth,
