@@ -8,8 +8,8 @@ use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 use vc_core::application::{authorize, take_code};
 use vc_core::grant::{
-    REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes, create_refresh_token,
-    grant_for_code, replace_refresh_token,
+    EXPIRES_IN, ExchangeError, REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes,
+    create_refresh_token, exchange_code, grant_for_code, replace_refresh_token,
 };
 
 async fn application(pool: &PgPool) -> i64 {
@@ -308,4 +308,99 @@ async fn a_code_can_only_be_taken_once(pool: PgPool) {
     let again = take_code(&pool, &code).await.expect("an answer");
 
     assert_eq!(again, None, "it was spent the first time");
+}
+
+/// An application with a registered redirect URI, and its client id.
+async fn application_with_callback(pool: &PgPool) -> (i64, String) {
+    let application_id = application(pool).await;
+
+    sqlx::query!(
+        "INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at)
+         VALUES ($1, 'https://app.example/callback', now()::timestamp(0), now()::timestamp(0))",
+        application_id
+    )
+    .execute(pool)
+    .await
+    .expect("the redirect uri");
+
+    let client_id = sqlx::query_scalar!(
+        "SELECT client_id::text AS \"client_id!\" FROM applications WHERE id = $1",
+        application_id
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the client id");
+
+    (application_id, client_id)
+}
+
+/// The exchange, and then the same code again — which is the difference the whole
+/// refusal taxonomy exists for.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_code_is_exchanged_once(pool: PgPool) {
+    let (_, client_id) = application_with_callback(&pool).await;
+    let now = OffsetDateTime::now_utc();
+    let callback = "https://app.example/callback";
+
+    let code = authorize(
+        &pool,
+        42,
+        &["openid".to_string()],
+        callback,
+        &client_id,
+        now,
+    )
+    .await
+    .expect("a code");
+
+    let exchanged = exchange_code(&pool, &client_id, callback, &code, now)
+        .await
+        .expect("an exchange");
+
+    assert_eq!(exchanged.scopes, ["openid"]);
+    assert_eq!(exchanged.expires_in, EXPIRES_IN);
+    assert!(
+        exchanged.refresh_token.is_none(),
+        "the application does not take refresh tokens, so none is issued"
+    );
+
+    // The token is a row, and the grant is one grant.
+    let tokens = sqlx::query!(
+        "SELECT COUNT(*) AS count FROM access_tokens WHERE token_id = $1",
+        Uuid::parse_str(&exchanged.access_token).expect("the token is a uuid")
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count the tokens");
+
+    assert_eq!(tokens.count, Some(1));
+
+    let grants = sqlx::query!("SELECT COUNT(*) AS count FROM grants")
+        .fetch_one(&pool)
+        .await
+        .expect("count the grants");
+
+    assert_eq!(grants.count, Some(1));
+
+    // And the code is spent: `used_code`, not `invalid_code`.
+    let again = exchange_code(&pool, &client_id, callback, &code, now).await;
+
+    assert_eq!(again, Err(ExchangeError::UsedCode));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_code_that_was_never_issued_is_not_a_reuse(pool: PgPool) {
+    let (_, client_id) = application_with_callback(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let exchanged = exchange_code(
+        &pool,
+        &client_id,
+        "https://app.example/callback",
+        "not-a-code-we-made",
+        now,
+    )
+    .await;
+
+    assert_eq!(exchanged, Err(ExchangeError::InvalidCode));
 }

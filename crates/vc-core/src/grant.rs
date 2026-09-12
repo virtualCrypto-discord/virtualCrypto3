@@ -4,6 +4,7 @@ use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
+use crate::application::{find_by_client_id, redirect_uri_is_registered, take_code};
 use crate::error::Result;
 
 /// How long an access token is good for: the Elixir's `3600` seconds.
@@ -182,4 +183,166 @@ pub async fn replace_refresh_token(
     Ok(replaced
         .and_then(|row| row.grant_id)
         .map(|grant_id| (grant_id, new_token_id.to_string())))
+}
+
+/// An hour, as the literal the Elixir writes for the code exchange. The refresh
+/// exchange computes the same hour from the clock, and the difference is
+/// reproduced rather than harmonised.
+pub const EXPIRES_IN: i64 = 3600;
+
+/// Why a code could not be exchanged, in the API's own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExchangeError {
+    /// `invalid_grant`, `invalid_code`: never issued, or past its fifteen
+    /// minutes. The Elixir answers both the same way, so this does too.
+    InvalidCode,
+    /// `invalid_grant`, `used_code`: spent. A client can act on the difference.
+    UsedCode,
+    /// `invalid_request`, `not_found_client`.
+    NotFoundClient,
+    /// `invalid_grant`, `issued_to_other_client`.
+    IssuedToOtherClient,
+    /// `invalid_grant`, `redirect_uri_mismatch`.
+    RedirectUriMismatch,
+}
+
+impl ExchangeError {
+    pub fn error(self) -> &'static str {
+        match self {
+            ExchangeError::InvalidCode | ExchangeError::UsedCode => "invalid_grant",
+            ExchangeError::NotFoundClient => "invalid_request",
+            ExchangeError::IssuedToOtherClient | ExchangeError::RedirectUriMismatch => {
+                "invalid_grant"
+            }
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ExchangeError::InvalidCode => "invalid_code",
+            ExchangeError::UsedCode => "used_code",
+            ExchangeError::NotFoundClient => "not_found_client",
+            ExchangeError::IssuedToOtherClient => "issued_to_other_client",
+            ExchangeError::RedirectUriMismatch => "redirect_uri_mismatch",
+        }
+    }
+}
+
+/// What a code is exchanged for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exchanged {
+    pub access_token: String,
+    /// Present only if the application lists `refresh_token` among its grant
+    /// types, which is how an application opts out of being refreshable.
+    pub refresh_token: Option<String>,
+    pub scopes: Vec<String>,
+    pub expires_in: i64,
+}
+
+/// Whether some grant still remembers this code.
+///
+/// The other half of telling a spent code from one that was never issued: the
+/// grant keeps the code it was last redeemed with, so a code in a grant's memory
+/// was spent, and one nowhere at all is a code that never existed.
+async fn grant_remembers_code(pool: &PgPool, code: &str) -> std::result::Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM grants WHERE latest_code = $1) AS "exists!""#,
+        code
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(found)
+}
+
+/// `token_authorization_code/4`.
+///
+/// The order is the Elixir's and it is the contract: the code is spent first
+/// (taking it is what spends it), then its expiry, then the application, then
+/// that the code was issued to *this* application, then the redirect URI, and
+/// only then a grant and its tokens.
+pub async fn exchange_code(
+    pool: &PgPool,
+    client_id: &str,
+    redirect_uri: &str,
+    code: &str,
+    now: OffsetDateTime,
+) -> std::result::Result<Exchanged, ExchangeError> {
+    let taken = match take_code(pool, code).await {
+        Ok(Some(taken)) => taken,
+        Ok(None) => {
+            return Err(
+                match grant_remembers_code(pool, code).await.unwrap_or(false) {
+                    true => ExchangeError::UsedCode,
+                    false => ExchangeError::InvalidCode,
+                },
+            );
+        }
+        Err(_) => return Err(ExchangeError::InvalidCode),
+    };
+
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    if taken.expires.is_none_or(|expires| expires <= at) {
+        return Err(ExchangeError::InvalidCode);
+    }
+
+    let application = find_by_client_id(pool, client_id)
+        .await
+        .map_err(|_| ExchangeError::NotFoundClient)?
+        .ok_or(ExchangeError::NotFoundClient)?;
+
+    if taken.application_id != Some(application.id) {
+        return Err(ExchangeError::IssuedToOtherClient);
+    }
+
+    if !redirect_uri_is_registered(pool, application.id, redirect_uri)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(ExchangeError::RedirectUriMismatch);
+    }
+
+    let granted = grant_for_code(
+        pool,
+        application.id,
+        taken.guild_id.unwrap_or_default(),
+        code,
+        now,
+    )
+    .await
+    .map_err(|_| ExchangeError::InvalidCode)?;
+
+    let Some(grant_id) = granted else {
+        return Err(ExchangeError::UsedCode);
+    };
+
+    create_grant_scopes(pool, grant_id, &taken.scopes, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidCode)?;
+
+    let access_token = create_access_token(pool, grant_id, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidCode)?;
+
+    let refresh_token = if application
+        .grant_types
+        .iter()
+        .any(|grant| grant == "refresh_token")
+    {
+        Some(
+            create_refresh_token(pool, grant_id, now)
+                .await
+                .map_err(|_| ExchangeError::InvalidCode)?,
+        )
+    } else {
+        None
+    };
+
+    Ok(Exchanged {
+        access_token,
+        refresh_token,
+        scopes: taken.scopes,
+        expires_in: EXPIRES_IN,
+    })
 }
