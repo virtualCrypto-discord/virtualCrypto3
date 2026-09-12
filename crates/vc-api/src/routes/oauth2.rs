@@ -101,13 +101,18 @@ impl Malformed {
 impl Request {
     /// The request, or the reason it cannot be one.
     ///
-    /// The `scope` default is the Elixir's and it is worth knowing rather than
-    /// tidying: `Map.get(params, "scope", "")` gives `""`, and `String.split/2`
-    /// returns `[""]` for it — "splitting on a non-existing pattern returns the
-    /// original string", and empty parts are dropped only under `trim: true`,
-    /// which the Elixir does not pass. So an omitted `scope` is *one empty
-    /// scope*, which `is_valid_scopes?/1` refuses as `invalid_scope`; writing
-    /// `vec![]` here would quietly widen what the service accepts.
+    /// An omitted `scope` is refused, and that is the contract rather than an
+    /// accident of the code that reaches it: `Authz.md` says the parameter's
+    /// value "must be chosen" from the scope table, and RFC 6749 permits
+    /// answering `invalid_scope` when there is no default to fall back on.
+    ///
+    /// The route there is roundabout. `Map.get(params, "scope", "")` gives `""`,
+    /// and `String.split/2` returns `[""]` for it — "splitting on a non-existing
+    /// pattern returns the original string", and empty parts are dropped only
+    /// under `trim: true`, which the Elixir does not pass. So an omitted `scope`
+    /// is *one empty scope* rather than none, and `is_valid_scopes?/1` refuses
+    /// it. Writing `vec![]` here would quietly widen what the service accepts,
+    /// which is the one thing the refusal's shape makes easy to do.
     pub fn parse(query: AuthorizeQuery) -> Result<Self, Malformed> {
         if query.response_type.as_deref() != Some("code") {
             return Err(Malformed::ResponseType);
