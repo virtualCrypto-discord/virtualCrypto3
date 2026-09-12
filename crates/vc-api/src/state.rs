@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 use vc_auth::AuthState;
+use vc_core::notification::Notifier;
 
 use crate::discord::DiscordApi;
 
@@ -27,6 +28,7 @@ pub struct AppState {
     discord_public_key: Arc<[u8; 32]>,
     links: Arc<Links>,
     discord: Arc<dyn DiscordApi>,
+    notifier: Arc<dyn Notifier>,
 }
 
 impl AppState {
@@ -36,6 +38,7 @@ impl AppState {
         discord_public_key: [u8; 32],
         links: Links,
         discord: Arc<dyn DiscordApi>,
+        notifier: Arc<dyn Notifier>,
     ) -> Self {
         Self {
             pool,
@@ -43,6 +46,7 @@ impl AppState {
             discord_public_key: Arc::new(discord_public_key),
             links: Arc::new(links),
             discord,
+            notifier,
         }
     }
 
@@ -52,6 +56,11 @@ impl AppState {
 
     pub fn discord(&self) -> &Arc<dyn DiscordApi> {
         &self.discord
+    }
+
+    /// The claim-update dispatcher, which a test replaces with its own sink.
+    pub fn notifier(&self) -> &dyn Notifier {
+        self.notifier.as_ref()
     }
 
     pub fn links(&self) -> &Links {

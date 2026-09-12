@@ -54,6 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             discord_client_secret,
             discord_bot_token,
         )),
+        // The webhook transport is not implemented; see docs/known-gaps.md.
+        Arc::new(vc_core::notification::NoopNotifier),
     );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

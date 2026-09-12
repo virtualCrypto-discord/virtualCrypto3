@@ -85,17 +85,22 @@ pub fn mention(id: impl std::fmt::Display) -> String {
 /// `Command.continue_management_command?/2`: a guild that has moved to
 /// application-command permissions wants the administrator bit, and every other
 /// guild is allowed through. `create` and `give` both gate on this.
+///
+/// Discord has finished migrating guilds to the new permission system, so in
+/// practice every guild carries the feature and the administrator bit is always
+/// required. The branch is kept because that is what Elixir does and what the
+/// ported tests pin. A payload with no readable feature list fails closed — one
+/// that grants a privilege is worse than one that asks for it — where Elixir
+/// raises on the same input.
 pub fn may_manage(guild: Option<&Map<String, Value>>, permissions: u64) -> bool {
     const ADMINISTRATOR: u64 = 0x8;
 
-    let requires_v2 = guild
-        .and_then(|guild| guild.get("features"))
-        .and_then(Value::as_array)
-        .is_some_and(|features| {
-            features
-                .iter()
-                .any(|feature| feature == "APPLICATION_COMMAND_PERMISSIONS_V2")
-        });
+    let requires_v2 = match guild.and_then(|guild| guild.get("features")) {
+        Some(Value::Array(features)) => features
+            .iter()
+            .any(|feature| feature == "APPLICATION_COMMAND_PERMISSIONS_V2"),
+        _ => true,
+    };
 
     !requires_v2 || permissions & ADMINISTRATOR == ADMINISTRATOR
 }

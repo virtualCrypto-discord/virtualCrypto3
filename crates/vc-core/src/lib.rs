@@ -9,6 +9,7 @@ pub mod idempotency;
 pub mod issue;
 pub mod metadata;
 pub mod model;
+pub mod notification;
 pub mod payment;
 pub mod transfer;
 pub mod user;

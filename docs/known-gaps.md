@@ -43,11 +43,12 @@ claimant to their application and POSTs an Ed25519-signed event to the
 application's `webhook_url` through the Cloudflare Workers proxy (mutual TLS,
 `X-Signature-Ed25519` / `X-Signature-Timestamp` headers, `X-Forward` target).
 
-**The Rust service does not send these notifications.** Claim status transitions
-therefore complete without notifying anyone. This is the most significant
-functional gap in Milestone 1.
-
-Bringing it in requires, from the OAuth2/application side of the domain:
+The Rust service builds and dispatches that event — `vc_core::notification::Notifier`
+is the seam, the payload matches `format_claim_for_notification/1`, and
+`tests/notification.rs` pins it against the same assertions the Elixir suite
+makes. **What is still missing is transport**: the server runs with
+`NoopNotifier`, so nothing actually reaches an application. That half needs the
+OAuth2/application side of the domain, which does not exist here yet:
 
 - the `applications` row's `webhook_url`, `public_key` and `private_key`;
 - `VirtualCrypto.Exterior.User.Resolver` to turn the claimant into an application;

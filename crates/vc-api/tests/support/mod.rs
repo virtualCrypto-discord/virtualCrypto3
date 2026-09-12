@@ -16,6 +16,7 @@ use vc_api::AppState;
 use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
 use vc_api::state::Links;
 use vc_auth::claims::{AUDIENCE, Claims, ISSUER};
+use vc_core::notification::{NoopNotifier, Notifier};
 
 pub const JWT_SECRET: &str = "test-secret";
 pub const REFRESHED_TOKEN: &str = "refreshed-token";
@@ -133,7 +134,24 @@ pub fn fake_with_guild(guild: Value) -> Arc<FakeDiscord> {
 }
 
 pub fn state(pool: PgPool, discord: Arc<FakeDiscord>) -> AppState {
-    AppState::new(pool, JWT_SECRET, discord_public_key(), links(), discord)
+    state_with_notifier(pool, discord, Arc::new(NoopNotifier))
+}
+
+/// A state whose claim transitions report to `notifier`, which is how the
+/// notification tests watch what would be delivered.
+pub fn state_with_notifier(
+    pool: PgPool,
+    discord: Arc<FakeDiscord>,
+    notifier: Arc<dyn Notifier>,
+) -> AppState {
+    AppState::new(
+        pool,
+        JWT_SECRET,
+        discord_public_key(),
+        links(),
+        discord,
+        notifier,
+    )
 }
 
 /// The URLs from `config/test.exs`, which the help and invite responses embed

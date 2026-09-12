@@ -1,10 +1,11 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::types::Json;
 use sqlx::{PgConnection, PgPool};
 use time::PrimitiveDateTime;
 
 use crate::error::Result;
 use crate::model::utc_now;
+use crate::notification::Notifier;
 use crate::transfer::TransferError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -509,6 +510,94 @@ async fn delete_metadata(
     Ok(())
 }
 
+/// `Money.format_claim_for_notification/1`: the event an application receives
+/// about a claim of one of its users, together with the claimant it belongs to.
+///
+/// The metadata is the claimant's own row, which is what `approve_claim/3`
+/// passes after taking it off the transition result — never the operator's.
+async fn claim_notification(
+    pool: &PgPool,
+    claim_id: i64,
+    claimant_id: i64,
+) -> std::result::Result<Option<(i32, Value)>, sqlx::Error> {
+    let row = sqlx::query!(
+        "SELECT c.id, c.amount, c.status::text AS status, c.updated_at,
+                cur.id AS \"currency_id!\", cur.unit, cur.name,
+                cur.guild_id, cur.pool_amount,
+                payer.id AS \"payer_id!\", payer.discord_id,
+                claimant.id AS \"claimant_id!\"
+           FROM claims c
+           JOIN currencies cur ON cur.id = c.currency_id
+           JOIN users payer ON payer.id = c.payer_user_id
+           JOIN users claimant ON claimant.id = c.claimant_user_id
+          WHERE c.id = $1",
+        claim_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    // `format_claim_for_notification/1` only describes the two statuses it
+    // announces; its `case` has no clause for anything else.
+    let status = match row.status.as_deref() {
+        Some("approved") => "approved",
+        Some("denied") => "denied",
+        _ => return Ok(None),
+    };
+
+    let payer = match row.discord_id {
+        Some(discord_id) => json!({
+            "id": row.payer_id,
+            "discord": { "id": discord_id.to_string() },
+        }),
+        None => json!({ "id": row.payer_id }),
+    };
+
+    let metadata = sqlx::query_scalar!(
+        "SELECT metadata FROM claim_metadata WHERE claim_id = $1 AND owner_user_id = $2",
+        claim_id,
+        claimant_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_else(|| json!({}));
+
+    let event = json!({
+        "id": row.id,
+        "status": status,
+        "amount": row.amount.unwrap_or_default().to_string(),
+        "updated_at": timestamp(row.updated_at),
+        "metadata": metadata,
+        "payer": payer,
+        "currency": {
+            "id": row.currency_id,
+            "unit": row.unit,
+            "name": row.name,
+            "guild": row.guild_id.map(|id| id.to_string()).unwrap_or_default(),
+            "pool_amount": row.pool_amount.map(|amount| amount.to_string()).unwrap_or_default(),
+        },
+    });
+
+    Ok(Some((row.claimant_id, event)))
+}
+
+/// How Jason writes a UTC `DateTime`: second precision with a trailing `Z`,
+/// which is what `DateTime.from_naive!("Etc/UTC")` serializes to.
+fn timestamp(value: PrimitiveDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        value.year(),
+        value.month() as u8,
+        value.day(),
+        value.hour(),
+        value.minute(),
+        value.second(),
+    )
+}
+
 /// `Money.approve_claim/3` and friends: lock, validate the operator, require
 /// `pending`, move the money for an approval, then transition and set metadata.
 ///
@@ -516,6 +605,7 @@ async fn delete_metadata(
 /// status, and the transfer happens before the status update.
 pub async fn transition(
     pool: &PgPool,
+    notifier: &dyn Notifier,
     operator_id: i32,
     claim_id: i64,
     transition: Transition,
@@ -570,6 +660,16 @@ pub async fn transition(
     .await?;
 
     tx.commit().await.map_err(TransitionError::Database)?;
+
+    // `Money.approve_claim/3` and `deny_claim/3` notify the claimant once the
+    // transaction has committed; `cancel_claim/3` tells nobody.
+    if transition.requires_payer()
+        && let Some((claimant_id, event)) = claim_notification(pool, claim_id, locked.claimant_id)
+            .await
+            .map_err(TransitionError::Database)?
+    {
+        notifier.notify_claim_update(claimant_id, &[event]);
+    }
 
     Ok(())
 }

@@ -350,9 +350,16 @@ pub async fn patch(
             Some(json!({}))
         };
 
-        vc_core::claim::transition(state.pool(), operator_id, claim_id, transition, metadata)
-            .await
-            .map_err(transition_error)?;
+        vc_core::claim::transition(
+            state.pool(),
+            state.notifier(),
+            operator_id,
+            claim_id,
+            transition,
+            metadata,
+        )
+        .await
+        .map_err(transition_error)?;
     } else if has_metadata {
         let details = metadata
             .as_ref()

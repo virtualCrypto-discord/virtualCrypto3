@@ -8,9 +8,9 @@ with the reason.
 | --- | ---: | ---: | --- |
 | v2 REST API | 103 | 103 | complete |
 | Discord interactions | 141 | 44 | in progress |
-| Notifications | 11 | 0 | not started |
+| Notifications | 11 | 5 | in progress |
 | v1 REST API | 77 | 0 | dropped by decision |
-| **total** | **332** | **147** | |
+| **total** | **332** | **152** | |
 
 A row is only `ported` when all of its cases exist and pass, and extra Rust cases
 are listed separately so the Elixir coverage can still be read off at a glance.
@@ -80,14 +80,15 @@ holds additions rather than ports: they follow `Command.handle/4` and
 
 `test/virtualCrypto/notification/` covers what `Notification.Dispatcher` sends
 to a claimant's application when a claim is approved or denied, through a
-`NotificationSink` test double. It is the specification for the webhook gap in
-`docs/known-gaps.md`, so porting it means implementing that dispatcher, not only
-writing tests.
+`NotificationSink` test double. `vc_core::notification::Notifier` is that seam,
+and the payloads are pinned in `tests/notification.rs`. Delivering them needs the
+application side of the domain, which is not built yet — see
+`docs/known-gaps.md`.
 
 | Elixir test file | cases | Rust file | status |
 | --- | ---: | --- | --- |
-| `notification/single_test.exs` | 5 | | pending |
-| `notification/bulk_test.exs` | 6 | | pending |
+| `notification/single_test.exs` | 5 | `tests/notification.rs` | ported |
+| `notification/bulk_test.exs` | 6 | | pending — needs `update_claims/2` |
 
 ## v1 REST API: dropped
 
