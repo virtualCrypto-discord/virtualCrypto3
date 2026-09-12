@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Details {
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret: Option<String>,
     pub redirect_uris: Vec<String>,
     /// The owning account.
     pub user_id: i32,
@@ -74,6 +74,69 @@ pub fn render(details: &Details) -> Value {
     })
 }
 
+/// The read that fills [`Details`] in: the application, the account that owns it,
+/// and its redirect URIs.
+///
+/// Three places in two queries. The join is on `users.application_id`, which is
+/// the only link between an application and the account that registered it.
+pub async fn details(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+) -> std::result::Result<Option<Details>, sqlx::Error> {
+    let row = sqlx::query!(
+        r#"SELECT a.client_id::text AS "client_id!",
+                  a.client_secret,
+                  a.application_type::text AS "application_type!",
+                  a.client_name,
+                  a.client_uri,
+                  a.discord_support_server_invite_slug,
+                  a.grant_types::text[] AS "grant_types!",
+                  a.logo_uri,
+                  a.owner_discord_id,
+                  a.response_types::text[] AS "response_types!",
+                  a.webhook_url,
+                  a.public_key,
+                  u.id AS user_id,
+                  u.discord_id AS user_discord_id
+             FROM applications a
+             JOIN users u ON u.application_id = a.id
+            WHERE a.id = $1"#,
+        application_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let redirect_uris = sqlx::query_scalar!(
+        r#"SELECT redirect_uri AS "redirect_uri!" FROM redirect_uris
+            WHERE application_id = $1"#,
+        application_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(Some(Details {
+        client_id: row.client_id,
+        client_secret: row.client_secret,
+        redirect_uris,
+        user_id: row.user_id,
+        discord_user_id: row.user_discord_id,
+        application_type: row.application_type,
+        client_name: row.client_name,
+        client_uri: row.client_uri,
+        discord_support_server_invite_slug: row.discord_support_server_invite_slug,
+        grant_types: row.grant_types,
+        logo_uri: row.logo_uri,
+        owner_discord_id: row.owner_discord_id,
+        response_types: row.response_types,
+        webhook_url: row.webhook_url,
+        public_key: row.public_key,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,7 +144,7 @@ mod tests {
     fn details() -> Details {
         Details {
             client_id: "e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f".to_owned(),
-            client_secret: "a-secret".to_owned(),
+            client_secret: Some("a-secret".to_owned()),
             redirect_uris: vec!["https://app.example/callback".to_owned()],
             user_id: 7,
             discord_user_id: Some(100_000_000_000_000_001),
