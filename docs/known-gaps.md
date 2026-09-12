@@ -133,11 +133,11 @@ Two items in the original plan were dropped by decision, not forgotten:
 ## Discord interactions
 
 `POST /api/integrations/discord/interactions` verifies the Ed25519 signature over
-`timestamp <> body` and answers PING (type 1) with a PONG. Type 2 (application
-commands) is dispatched to a handler per command name, and the commands that are
-still missing are listed in `docs/test-port.md`. Types 3 (message components), 4
-(autocomplete) and 5 (modals) answer 501 until the button, select menu and modal
-paths land, so the components a reply draws are inert.
+`timestamp <> body` and answers PING (type 1) with a PONG. Types 2 (application
+commands), 3 (message components) and 5 (modals) are dispatched by name or by
+`component_type`, with the state each one acts on packed into its `custom_id`.
+Type 4 (autocomplete) answers 501, so the currency and claim suggestions the
+commands describe do not appear while an option is being typed.
 
 One deviation: a command name that no `Command.handle/4` clause matches answers
 400 `Type Not Found`, where Elixir has no clause either and so raises, producing
