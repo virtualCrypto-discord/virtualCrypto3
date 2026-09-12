@@ -104,6 +104,27 @@ pub fn app_scopes_are_valid(scopes: &[&str]) -> bool {
     unique.len() == scopes.len() && scopes.iter().all(|scope| APP_SCOPES.contains(scope))
 }
 
+/// `Guardian.revoke_with_jti/1`: forget a JWT by the id it was issued under.
+///
+/// The row is the only thing that makes a JWT revocable — its signature stays
+/// valid until it expires — so this is the JWT half of revocation. It is also the
+/// whole of what the Elixir's endpoint knew how to do, which is why a client
+/// could revoke an app's token there and not one it had just been issued.
+///
+/// The `kind` is not consulted: the table does not record one, so both kinds are
+/// revoked the same way, by the `jti` alone.
+pub async fn revoke_by_jti(pool: &PgPool, jti: &str) -> Result<bool, AuthError> {
+    let Ok(jti) = Uuid::parse_str(jti) else {
+        return Ok(false);
+    };
+
+    let deleted = sqlx::query!("DELETE FROM user_access_tokens WHERE token_id = $1", jti)
+        .execute(pool)
+        .await?;
+
+    Ok(deleted.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

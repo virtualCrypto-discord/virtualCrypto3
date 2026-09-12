@@ -15,11 +15,11 @@ use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
 
-use vc_auth::issue::{app_scopes_are_valid, app_token};
+use vc_auth::issue::{app_scopes_are_valid, app_token, revoke_by_jti};
 use vc_core::application::{Application, verify_secret};
 use vc_core::grant::{
     EXPIRES_IN, ExchangeError, create_access_token, create_refresh_token, exchange_code,
-    exchange_refresh_token, grant_for,
+    exchange_refresh_token, grant_for, revoke_access_token, revoke_refresh_token,
 };
 
 use crate::state::AppState;
@@ -357,4 +357,65 @@ mod tests {
         assert_eq!(basic_auth(&headers("Basic not-base64!!")), None);
         assert_eq!(basic_auth(&headers("Basic Y2xpZW50")), None, "no colon");
     }
+}
+
+/// The body `POST /oauth2/token/revoke` arrives as.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RevokeForm {
+    pub token: Option<String>,
+    pub jti: Option<String>,
+    pub typ: Option<String>,
+    pub kind: Option<String>,
+}
+
+/// `POST /oauth2/token/revoke`.
+///
+/// Two shapes, as the Elixir has. The one that takes a plain `token` goes
+/// further here: the Elixir sends it to `Guardian.revoke/1`, which can only
+/// verify a JWT, so the tokens `POST /oauth2/token` issues were not revocable by
+/// the endpoint that exists to revoke them. This tries the JWT first and then
+/// the two rows this service issues.
+///
+/// A `token` that is none of those is still `200`: RFC 7009 says a revocation
+/// endpoint must not say whether the token existed, and a client that has
+/// already forgotten a token should not be told off for tidying up.
+pub async fn revoke(State(state): State<AppState>, Form(form): Form<RevokeForm>) -> Response {
+    if let Some(token) = form.token {
+        if let Ok(claims) = vc_auth::jwt::verify(&token, state.jwt_secret()) {
+            let _ = revoke_by_jti(state.pool(), &claims.jti).await;
+
+            return revoked();
+        }
+
+        let _ = revoke_access_token(state.pool(), &token).await;
+        let _ = revoke_refresh_token(state.pool(), &token).await;
+
+        return revoked();
+    }
+
+    if let (Some(jti), Some(typ), Some(kind)) = (form.jti, form.typ, form.kind)
+        && typ == "access"
+        && matches!(kind.as_str(), "app" | "user")
+    {
+        let _ = revoke_by_jti(state.pool(), &jti).await;
+
+        return revoked();
+    }
+
+    // The Elixir's own sentence, which is one word longer than it needs to be and
+    // is what a client may already be matching on.
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "invalid_request",
+            "error_description":
+                "token_or_token_id_type_and_kind_is_not_found_or_invalid_kind_or_type",
+        })),
+    )
+        .into_response()
+}
+
+/// The answer to a revocation that happened, or to one that had nothing to do.
+fn revoked() -> Response {
+    Json(json!({})).into_response()
 }
