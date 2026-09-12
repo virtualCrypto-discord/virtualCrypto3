@@ -69,6 +69,12 @@ pub trait DiscordApi: Send + Sync {
     /// drives. Discord answers both grants with the same document, which is why
     /// this returns what a refresh does.
     async fn exchange_code(&self, code: &str) -> Result<RefreshedToken, DiscordError>;
+
+    /// Where to send a browser so it can authorize. It belongs here rather than
+    /// in configuration because the client id and the redirect URI it has to
+    /// agree with are already this client's business, and because a test can
+    /// then recognize the URL without building one.
+    fn authorize_url(&self, state: &str) -> String;
 }
 
 /// How long a Discord lookup is remembered, matching the Elixir cache's TTL.
@@ -238,6 +244,10 @@ impl DiscordApi for CachedDiscord {
 
     async fn exchange_code(&self, code: &str) -> Result<RefreshedToken, DiscordError> {
         self.inner.exchange_code(code).await
+    }
+
+    fn authorize_url(&self, state: &str) -> String {
+        self.inner.authorize_url(state)
     }
 }
 
@@ -444,6 +454,16 @@ impl DiscordApi for HttpDiscordApi {
             expires_in: body["expires_in"].as_i64().unwrap_or_default(),
             refresh_token: body["refresh_token"].as_str().map(str::to_owned),
         })
+    }
+
+    /// The parameters are the old app's, spelled out: `scope=identify`, because
+    /// the bot only ever needs to know who someone is, and `prompt=none`,
+    /// because Discord should not ask again someone who already agreed.
+    fn authorize_url(&self, state: &str) -> String {
+        format!(
+            "https://discord.com/api/oauth2/authorize             ?client_id={}&redirect_uri={}&response_type=code&scope=identify&prompt=none&state={}",
+            self.client_id, self.redirect_uri, state
+        )
     }
 }
 

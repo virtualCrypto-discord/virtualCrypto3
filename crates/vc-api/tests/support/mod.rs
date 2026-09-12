@@ -138,6 +138,12 @@ impl DiscordApi for FakeDiscord {
         })
     }
 
+    /// Recognizable rather than real, so a test can assert a browser was sent to
+    /// Discord and to which state.
+    fn authorize_url(&self, state: &str) -> String {
+        format!("https://discord.test/authorize?state={state}")
+    }
+
     /// Discord returns ids as strings; the Elixir test fake happened to echo the
     /// integer it was given, but production always sees a string.
     async fn get_user(
