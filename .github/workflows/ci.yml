@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      # The same major version the baseline was generated from: `baseline-check`
+      # compares a dump of the schema, and pg_dump is fussy about that.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain and every tool come from the flake, which is also what a
+      # laptop uses, so a difference between them is a difference in the flake.
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check
+        env:
+          PGPASSWORD: postgres
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            just db-create
+            just migrate
+            just check
+          '

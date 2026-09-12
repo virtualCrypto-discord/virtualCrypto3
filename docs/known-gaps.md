@@ -147,6 +147,12 @@ Two items in the original plan were dropped by decision, not forgotten:
   Elixir and the Rust service — is not built. The ported contract tests and the
   captured goldens are the evidence of compatibility instead.
 
+CI is no longer one of these. `.github/workflows/ci.yml` brings up a Postgres 17
+— the major version the baseline was generated from — and runs `just check`,
+which is the same four gates a laptop runs. The database is what the `sqlx`
+macros compile against, so no `.sqlx` offline cache is committed and none can go
+stale.
+
 ## Discord interactions
 
 `POST /api/integrations/discord/interactions` verifies the Ed25519 signature over

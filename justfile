@@ -18,6 +18,12 @@ migrate:
 fmt:
 	cargo fmt --all
 
+# The four gates CI runs, in the order it runs them.
+check: fmt-check lint test baseline-check
+
+fmt-check:
+	cargo fmt --all --check
+
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
