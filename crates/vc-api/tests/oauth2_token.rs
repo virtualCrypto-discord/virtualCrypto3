@@ -6,7 +6,10 @@
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
-use vc_core::grant::{create_access_token, create_grant_scopes, grant_for_code};
+use vc_core::grant::{
+    REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes, create_refresh_token,
+    grant_for_code, replace_refresh_token,
+};
 
 async fn application(pool: &PgPool) -> i64 {
     sqlx::query_scalar!(
@@ -173,4 +176,83 @@ async fn scopes_are_recorded_once_however_often_they_are_given(pool: PgPool) {
 
     assert_eq!(stored.len(), 1, "given twice, recorded once");
     assert_eq!(stored[0].scope, "openid");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_grant_has_one_refresh_token_thats_months_long(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let first = create_refresh_token(&pool, grant_id, now)
+        .await
+        .expect("a refresh token");
+    let second = create_refresh_token(&pool, grant_id, now)
+        .await
+        .expect("another one");
+
+    assert_ne!(first, second, "the second replaced the first");
+
+    let stored = sqlx::query!(
+        "SELECT grant_id, expires FROM refresh_tokens WHERE token_id = $1",
+        Uuid::parse_str(&second).expect("a uuid")
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the row");
+
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    assert_eq!(stored.grant_id, Some(grant_id));
+    assert_eq!(stored.expires, Some(at + REFRESH_TOKEN_TTL));
+
+    let count = sqlx::query!("SELECT COUNT(*) AS count FROM refresh_tokens")
+        .fetch_one(&pool)
+        .await
+        .expect("count them");
+
+    assert_eq!(count.count, Some(1), "one per grant, not a pile");
+}
+
+/// Rotation: the old value is gone the moment a new one is issued, which is the
+/// point of handing out a new one at all.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn replacing_a_refresh_token_retires_the_old_one(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let old = create_refresh_token(&pool, grant_id, now)
+        .await
+        .expect("a refresh token");
+
+    let replaced = replace_refresh_token(&pool, Uuid::parse_str(&old).unwrap(), now)
+        .await
+        .expect("an answer")
+        .expect("a live token");
+
+    assert_eq!(replaced.0, grant_id);
+    assert_ne!(replaced.1, old);
+
+    let again = replace_refresh_token(&pool, Uuid::parse_str(&old).unwrap(), now)
+        .await
+        .expect("an answer");
+
+    assert_eq!(again, None, "the old one is not a token any more");
+}
+
+/// The expiry is part of what is matched, so an expired token cannot be given
+/// another six months by presenting it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_expired_refresh_token_cannot_be_replaced(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let stale = create_refresh_token(&pool, grant_id, now - Duration::days(200))
+        .await
+        .expect("a refresh token");
+
+    let replaced = replace_refresh_token(&pool, Uuid::parse_str(&stale).unwrap(), now)
+        .await
+        .expect("an answer");
+
+    assert_eq!(replaced, None);
 }

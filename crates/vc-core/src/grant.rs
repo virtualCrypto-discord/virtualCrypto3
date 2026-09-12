@@ -112,3 +112,74 @@ pub async fn create_grant_scopes(
 
     Ok(())
 }
+
+/// How long a refresh token lasts: the Elixir's `180 * 24 * 60 * 60` seconds.
+pub const REFRESH_TOKEN_TTL: Duration = Duration::days(180);
+
+/// `RefreshToken.create_refresh_token/2`: the grant's refresh token, replacing
+/// whatever it had.
+///
+/// One per grant — the insert conflicts on `grant_id` — which is what makes a
+/// refresh token a thing that can be rotated out of existence rather than
+/// accumulated.
+///
+/// The Elixir's five-attempt retry is not here for the same reason it is absent
+/// from `create_access_token`: it looks the row up with `Repo.get/2` and a
+/// keyword list, so the one path that reaches it raises. The same unreachable
+/// branch appears in both functions, which is what a copy is.
+pub async fn create_refresh_token(
+    pool: &PgPool,
+    grant_id: i64,
+    now: OffsetDateTime,
+) -> Result<String> {
+    let token_id = Uuid::new_v4();
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    // No `RETURNING`: the column is nullable, so it would come back as an
+    // `Option`, and the value to answer with is the one just written.
+    sqlx::query!(
+        "INSERT INTO refresh_tokens (grant_id, token_id, expires, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $4)
+         ON CONFLICT (grant_id) DO UPDATE
+            SET token_id = $2, expires = $3, updated_at = $4",
+        grant_id,
+        token_id,
+        at + REFRESH_TOKEN_TTL,
+        at
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(token_id.to_string())
+}
+
+/// `RefreshToken.replace_refresh_token/2`: swap a live token for a new one,
+/// answering with the grant it belonged to.
+///
+/// The expiry is part of the match, so an expired token cannot be rotated: it is
+/// not found rather than given another six months. `None` is that, and the
+/// caller answers it as `invalid_refresh_token`.
+pub async fn replace_refresh_token(
+    pool: &PgPool,
+    old_token_id: Uuid,
+    now: OffsetDateTime,
+) -> Result<Option<(i64, String)>> {
+    let new_token_id = Uuid::new_v4();
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let replaced = sqlx::query!(
+        "UPDATE refresh_tokens
+            SET token_id = $1, updated_at = $3
+          WHERE token_id = $2 AND expires >= $3
+        RETURNING grant_id",
+        new_token_id,
+        old_token_id,
+        at
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(replaced
+        .and_then(|row| row.grant_id)
+        .map(|grant_id| (grant_id, new_token_id.to_string())))
+}
