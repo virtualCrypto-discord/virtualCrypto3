@@ -654,6 +654,95 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Response>> {
     Ok(changes)
 }
 
+/// `PATCH /oauth2/clients/@me`: edit the application the token is for.
+///
+/// An `app` token, because the application is asking about itself — and nothing
+/// is written for the fields the request does not name, which is what `changes`
+/// preserves and `patch` honours.
+pub async fn edit(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<Map<String, Value>>,
+) -> Response {
+    if user.kind != vc_auth::Kind::App {
+        return refused(
+            StatusCode::UNAUTHORIZED,
+            "invalid_kind",
+            "an application token is required",
+        );
+    }
+
+    if !user.scopes.oauth2_register {
+        return refused(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "oauth2.register is required",
+        );
+    }
+
+    let changes = match changes(&body) {
+        Ok(changes) => changes,
+        Err(refusal) => return *refusal,
+    };
+
+    let Ok(subject) = i32::try_from(user.subject) else {
+        return internal("the token's subject is not an account id");
+    };
+
+    let found = vc_core::user::application_id(state.pool(), subject)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(application_id) = found else {
+        return internal("the application's account is gone");
+    };
+
+    // A named webhook is verified with the key the application **already** has, not
+    // with a fresh pair: the pair is what it verifies deliveries with, so a new one
+    // would be a handshake nobody could answer.
+    if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
+        let Some(proxy) = state.webhook_proxy() else {
+            return internal("no webhook proxy is configured");
+        };
+
+        let webhook = vc_core::application::webhook_data(state.pool(), application_id)
+            .await
+            .ok()
+            .flatten();
+
+        let Some(webhook) = webhook else {
+            return internal("the application has no webhook data");
+        };
+
+        let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
+            return internal("the application's private key is not 32 bytes");
+        };
+
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or_default();
+
+        if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
+            return refused(
+                StatusCode::BAD_REQUEST,
+                "webhook_verification_failed",
+                "the webhook did not verify",
+            );
+        }
+    }
+
+    if vc_core::application::patch(state.pool(), application_id, &changes)
+        .await
+        .is_err()
+    {
+        return internal("the application could not be written");
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
