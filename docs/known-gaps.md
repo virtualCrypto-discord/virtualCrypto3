@@ -19,7 +19,11 @@ shape how everything is verified:
   returns `not_related_user`; both are conformant.)
 
 `Rest.md` does not document `GET /api/v2/users/@me` or
-`GET /api/v2/users/@me/balances` at all, so those two rest on captured goldens.
+`GET /api/v2/users/@me/balances` at all, and the reason is that they are consumed
+only by the web frontend. Their JSON is therefore an *internal* shape rather than
+a published contract: the goldens are a convenience, not a promise, and both
+endpoints may change or disappear alongside the frontend rewrite. Do not spend
+fidelity effort on them the way the documented endpoints deserve.
 
 `Authz.md` documents three token kinds — `user`, `app` and `guild` — and says a
 `guild` token is what may `give`. The implementation's `verify_claims/2` accepts
