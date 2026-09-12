@@ -15,6 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 use vc_auth::AuthUser;
 
 use vc_core::application::{
@@ -22,7 +23,9 @@ use vc_core::application::{
     check_response_types, check_slug, check_url,
 };
 
+use crate::discord_auth::resolve_token;
 use crate::error::ApiError;
+use crate::notification::{Handshake, fresh_keypair, verify};
 use crate::state::AppState;
 
 /// An application as the API answers it, with its owner and its redirect URIs.
@@ -413,6 +416,146 @@ mod registration_tests {
 
         assert_eq!(status(&response), 400);
     }
+}
+
+/// `POST /oauth2/clients`: register an application.
+///
+/// The order is the Elixir's, and each step has its own refusal: the metadata,
+/// then the owner's Discord authorization, then who Discord says they are, then —
+/// only if a webhook was given — whether it verifies, and then the writing.
+pub async fn register(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<Registration>,
+) -> Response {
+    let mut new = match checked(&user, body) {
+        Ok(new) => new,
+        Err(refusal) => return *refusal,
+    };
+
+    let Some(subject) = i32::try_from(user.subject).ok() else {
+        return internal("the token's subject is not an account id");
+    };
+
+    let Some(account) = vc_core::user::find_by_id(state.pool(), subject)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return internal("the registering account is gone");
+    };
+
+    let Some(discord_id) = account.discord_id else {
+        return internal("the registering account has no discord id");
+    };
+
+    let Some(authorization) = vc_core::user::find_discord_auth(state.pool(), discord_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return internal("the registering account has no authorization");
+    };
+
+    let Ok(token) = resolve_token(&state, discord_id, &authorization).await else {
+        return internal("the authorization could not be refreshed");
+    };
+
+    let Ok(profile) = state.discord().get_user_info(&token).await else {
+        return internal("discord could not be asked about the account");
+    };
+
+    // A bot account may not register: an application registering applications is
+    // not what this endpoint is for.
+    if profile.get("bot").and_then(Value::as_bool).unwrap_or(false) {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "user_verification_failed",
+            "a bot account may not register",
+        );
+    }
+
+    new.owner_discord_id = profile
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| id.parse().ok());
+
+    // Both halves, because the row needs both: the private one signs deliveries
+    // and the public one is what the application verifies them with.
+    let private_key = fresh_keypair();
+    let public_key = ed25519_dalek::SigningKey::from_bytes(&private_key)
+        .verifying_key()
+        .to_bytes();
+
+    if let Some(webhook_url) = new.webhook_url.as_deref() {
+        let Some(proxy) = state.webhook_proxy() else {
+            // Not the application's fault, and saying "verification failed" would
+            // send someone to look at a request that is fine.
+            return internal("no webhook proxy is configured");
+        };
+
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or_default();
+
+        if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
+            return refused(
+                StatusCode::BAD_REQUEST,
+                "webhook_verification_failed",
+                "the webhook did not verify",
+            );
+        }
+    }
+
+    let registered =
+        match vc_core::application::register(state.pool(), &new, &private_key, &public_key).await {
+            Ok(registered) => registered,
+            Err(_) => return internal("the application could not be written"),
+        };
+
+    // The registration access token is issued for the account registration
+    // created — the application rather than the person who registered it.
+    let issued = vc_auth::issue::app_token(
+        state.pool(),
+        state.jwt_secret(),
+        i64::from(registered.user_id),
+        &["oauth2.register"],
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    let Ok(access_token) = issued else {
+        return internal("the registration token could not be issued");
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "client_id": registered.client_id,
+            "client_secret": registered.client_secret,
+            "registration_access_token": access_token,
+            "registration_client_uri": format!("{}/oauth2/clients/@me", state.links().site_url),
+            "client_secret_expires_at": 0,
+        })),
+    )
+        .into_response()
+}
+
+/// A refusal that is this service's fault rather than the caller's.
+///
+/// A registration can fail because Discord is unreachable, because the database
+/// will not take the write, or because this service has no proxy — and none of
+/// those is something the caller can act on, so none of them is answered as though
+/// the request were wrong.
+fn internal(why: &str) -> Response {
+    tracing::error!(why, "a registration could not be completed");
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "server_error" })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

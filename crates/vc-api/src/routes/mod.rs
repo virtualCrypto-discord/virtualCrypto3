@@ -43,6 +43,7 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         .route("/oauth2/authorize", post(oauth2::approve))
         .route("/oauth2/token", post(oauth2_token::token))
         .route("/oauth2/clients/@me", get(oauth2_clients::mine))
+        .route("/oauth2/clients", post(oauth2_clients::register))
         .route("/oauth2/token/revoke", post(oauth2_token::revoke))
         .merge(api)
         // Everything nothing else claimed is a client-side route, so the SPA is
