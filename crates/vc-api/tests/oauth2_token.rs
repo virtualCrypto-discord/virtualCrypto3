@@ -9,7 +9,8 @@ use uuid::Uuid;
 use vc_core::application::{authorize, take_code};
 use vc_core::grant::{
     EXPIRES_IN, ExchangeError, REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes,
-    create_refresh_token, exchange_code, grant_for_code, replace_refresh_token,
+    create_refresh_token, exchange_code, exchange_refresh_token, grant_for_code,
+    replace_refresh_token,
 };
 
 async fn application(pool: &PgPool) -> i64 {
@@ -403,4 +404,50 @@ async fn a_code_that_was_never_issued_is_not_a_reuse(pool: PgPool) {
     .await;
 
     assert_eq!(exchanged, Err(ExchangeError::InvalidCode));
+}
+
+/// Refreshing rotates the refresh token as well, which is what makes a stolen
+/// one useless the second time it is presented.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_refresh_retires_the_token_that_was_presented(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let presented = create_refresh_token(&pool, grant_id, now)
+        .await
+        .expect("a refresh token");
+
+    let refreshed = exchange_refresh_token(&pool, &presented, now)
+        .await
+        .expect("a refresh");
+
+    assert_ne!(
+        refreshed.refresh_token, presented,
+        "the token that was presented is not the one that came back"
+    );
+
+    // The access token is a row against the same grant.
+    let stored = sqlx::query!(
+        "SELECT grant_id FROM access_tokens WHERE token_id = $1",
+        Uuid::parse_str(&refreshed.access_token).expect("a uuid")
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the row");
+
+    assert_eq!(stored.grant_id, Some(grant_id));
+
+    // And presenting it again is not a refresh any more.
+    let again = exchange_refresh_token(&pool, &presented, now).await;
+
+    assert_eq!(again, Err(ExchangeError::InvalidRefreshToken));
+}
+
+/// A refresh token is a row's id, so anything that is not a UUID is not a token
+/// rather than a database error.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_refresh_token_that_is_not_a_uuid_is_not_a_token(pool: PgPool) {
+    let refreshed = exchange_refresh_token(&pool, "not-a-uuid", OffsetDateTime::now_utc()).await;
+
+    assert_eq!(refreshed, Err(ExchangeError::InvalidRefreshToken));
 }

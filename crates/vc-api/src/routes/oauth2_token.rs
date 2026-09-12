@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
 
-use vc_core::grant::{ExchangeError, exchange_code};
+use vc_core::grant::{EXPIRES_IN, ExchangeError, exchange_code, exchange_refresh_token};
 
 use crate::state::AppState;
 
@@ -24,7 +24,6 @@ pub struct TokenForm {
     pub client_id: Option<String>,
     pub redirect_uri: Option<String>,
     pub code: Option<String>,
-    #[allow(dead_code)]
     pub refresh_token: Option<String>,
     #[allow(dead_code)]
     pub scope: Option<String>,
@@ -37,6 +36,7 @@ pub async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -
     match form.grant_type.as_deref() {
         None => error("invalid_request", "grant_type_parameter_missing"),
         Some("authorization_code") => exchange(&state, form).await,
+        Some("refresh_token") => refresh(&state, form).await,
         Some(_) => unsupported(),
     }
 }
@@ -79,6 +79,29 @@ async fn exchange(state: &AppState, form: TokenForm) -> Response {
 
             Json(body).into_response()
         }
+        Err(error) => refused(error),
+    }
+}
+
+/// `grant_type=refresh_token`.
+async fn refresh(state: &AppState, form: TokenForm) -> Response {
+    let Some(refresh_token) = form.refresh_token else {
+        return error("invalid_request", "refresh_token");
+    };
+
+    let refreshed =
+        exchange_refresh_token(state.pool(), &refresh_token, OffsetDateTime::now_utc()).await;
+
+    match refreshed {
+        Ok(refreshed) => Json(json!({
+            "access_token": refreshed.access_token,
+            "token_type": "Bearer",
+            // The literal the Elixir writes here, rather than the clock the
+            // credentials path uses. Reproduced, not harmonised.
+            "expires_in": EXPIRES_IN,
+            "refresh_token": refreshed.refresh_token,
+        }))
+        .into_response(),
         Err(error) => refused(error),
     }
 }

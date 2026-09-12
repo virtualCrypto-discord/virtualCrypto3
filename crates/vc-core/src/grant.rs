@@ -204,6 +204,9 @@ pub enum ExchangeError {
     IssuedToOtherClient,
     /// `invalid_grant`, `redirect_uri_mismatch`.
     RedirectUriMismatch,
+    /// `invalid_grant`, `invalid_refresh_token`: unknown, expired, or already
+    /// rotated away by the exchange that replaced it.
+    InvalidRefreshToken,
 }
 
 impl ExchangeError {
@@ -211,9 +214,9 @@ impl ExchangeError {
         match self {
             ExchangeError::InvalidCode | ExchangeError::UsedCode => "invalid_grant",
             ExchangeError::NotFoundClient => "invalid_request",
-            ExchangeError::IssuedToOtherClient | ExchangeError::RedirectUriMismatch => {
-                "invalid_grant"
-            }
+            ExchangeError::IssuedToOtherClient
+            | ExchangeError::RedirectUriMismatch
+            | ExchangeError::InvalidRefreshToken => "invalid_grant",
         }
     }
 
@@ -224,6 +227,7 @@ impl ExchangeError {
             ExchangeError::NotFoundClient => "not_found_client",
             ExchangeError::IssuedToOtherClient => "issued_to_other_client",
             ExchangeError::RedirectUriMismatch => "redirect_uri_mismatch",
+            ExchangeError::InvalidRefreshToken => "invalid_refresh_token",
         }
     }
 }
@@ -344,5 +348,47 @@ pub async fn exchange_code(
         refresh_token,
         scopes: taken.scopes,
         expires_in: EXPIRES_IN,
+    })
+}
+
+/// What a refresh token is exchanged for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refreshed {
+    pub access_token: String,
+    /// The replacement. There is always one: refreshing retires the token that
+    /// was presented, which is what stops a stolen one being useful twice.
+    pub refresh_token: String,
+}
+
+/// `token_refresh_token/1`: a new access token, and a new refresh token with it.
+///
+/// Its answer carries no `scopes`, unlike the code exchange's. The grant knows
+/// them and the client is expected to have kept them; the two exchanges
+/// disagreeing about that is the Elixir's, and is reproduced.
+pub async fn exchange_refresh_token(
+    pool: &PgPool,
+    refresh_token: &str,
+    now: OffsetDateTime,
+) -> std::result::Result<Refreshed, ExchangeError> {
+    // The token is a row's `token_id`, so anything that is not a UUID is not a
+    // token rather than a database error.
+    let Ok(presented) = Uuid::parse_str(refresh_token) else {
+        return Err(ExchangeError::InvalidRefreshToken);
+    };
+
+    let replaced = replace_refresh_token(pool, presented, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidRefreshToken)?
+        .ok_or(ExchangeError::InvalidRefreshToken)?;
+
+    let (grant_id, refresh_token) = replaced;
+
+    let access_token = create_access_token(pool, grant_id, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidRefreshToken)?;
+
+    Ok(Refreshed {
+        access_token,
+        refresh_token,
     })
 }
