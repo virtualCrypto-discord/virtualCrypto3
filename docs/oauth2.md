@@ -14,10 +14,10 @@ work, not porting work.
 | `GET /oauth2/clients/@me` | `user` kind, `oauth2.register` scope | the caller's applications |
 | `GET /oauth2/clients/@me` | `app` kind, `oauth2.register` scope | one application |
 | `PATCH /oauth2/clients/@me` | `app` kind, `oauth2.register` scope | 204, or 400 |
-| `GET/POST /oauth2/authorize` | browser session | the consent screen — **needs the web UI** |
+| `GET/POST /oauth2/authorize` | browser session | the consent screen — read below |
 | `POST /oauth2/token` | client credentials | not read yet |
 | `POST /oauth2/token/revoke` | client credentials | not read yet |
-| `POST /token` | browser session | a VC API token — **needs the web UI** |
+| `POST /token` | browser session | a VC API token — **implemented** |
 
 Note the same path means different things by method: `GET /oauth2/clients/@me`
 lists what the *user* owns, and the sibling `ClientController` answers the *app*
@@ -75,3 +75,47 @@ for "never", and is not a bug.
 already — the schema was reproduced from Ecto — so this milestone needs queries
 and handlers, not migrations. `users.application_id` is the link from an
 application to the account that owns it.
+
+## The consent screen (`GET/POST /oauth2/authorize`)
+
+Read out of `AuthorizeController`. It is a **guild-scoped** consent: the request
+names a guild, and the grant it produces belongs to that guild, which is why the
+`grants` and `authorization_codes` tables carry a guild id.
+
+The request carries `response_type=code`, `client_id`, `redirect_uri`, `scope`
+(optional, empty by default), **`guild_id`** (required) and optionally `state`.
+
+`GET` validates, in this order:
+
+1. `Auth.preauthorize/1` — the client exists, the redirect URI is one of its own,
+   and the scopes are known. A bad client or redirect URI is an **error page**,
+   never a redirect: the redirect target is exactly what has not been trusted yet.
+2. the guild exists;
+3. **the bot is a member of it** — looked up by the bot's own client id;
+4. **the logged-in user may act for it**: the guild owner, or a member whose
+   roles' permissions include the administrator bit.
+
+and then renders a form with one **Approve** button and hidden fields carrying all
+of the above plus a CSRF token. There is no deny button and no `deny` action.
+
+`POST` repeats the validations, calls `Auth.authorize/1` for the code, and answers
+**303 to the redirect URI** with `code`, `guild_id`, `scope` and `state`. Its
+errors do *not* redirect, unlike `GET`'s, which redirects with `error`,
+`error_description` and `state` for everything except the two that cannot.
+
+### Two things that cannot have worked
+
+Both are worth deciding on rather than porting:
+
+- **`validate_executor` looks the logged-in user up in Discord by the wrong id.**
+  It passes the session's `user.id` to `get_guild_member_with_status_code/2` as
+  a *Discord* user id, and compares it against `guild["owner_id"]` — but the
+  session stores the **VirtualCrypto** user id (`save_token` puts `vc.id` there),
+  which is a small serial while Discord ids are snowflakes. So the lookup cannot
+  return 200 and the comparison cannot hold: **nobody could ever have reached the
+  Approve button.** Repairing it means reading the user's `discord_id` from the
+  database and asking Discord with that.
+- **A missing session raises.** With no session the `with` falls through to
+  `raise "session validation error!"`, which is a 500 rather than a trip to the
+  login page. Now that the session and `/login` exist, the sensible answer is to
+  send the browser to log in and come back to the consent screen.
