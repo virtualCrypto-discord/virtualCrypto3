@@ -6,6 +6,7 @@ pub mod claim;
 pub mod currency;
 pub mod db;
 pub mod error;
+pub mod grant;
 pub mod idempotency;
 pub mod issue;
 pub mod metadata;
