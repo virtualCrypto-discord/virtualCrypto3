@@ -8,6 +8,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+jsonwebtoken.workspace = true
 vc-core.workspace = true
 vc-auth.workspace = true
 axum.workspace = true
