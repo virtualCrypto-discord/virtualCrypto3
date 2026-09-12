@@ -8,7 +8,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::command::{as_int, as_permissions};
+use crate::command::{as_int, as_permissions, is_administrator};
 
 /// What the consent screen needs to know about a guild and one member of it,
 /// read out of Discord's own JSON.
@@ -45,7 +45,12 @@ pub fn guild_facts(
 
     let roles = roles
         .iter()
-        .map(|role| Some((as_int(role.get("id")?)?, as_permissions(role.get("permissions")?)?)))
+        .map(|role| {
+            Some((
+                as_int(role.get("id")?)?,
+                as_permissions(role.get("permissions")?)?,
+            ))
+        })
         .collect::<Option<Vec<(i64, u64)>>>()?;
 
     Some(GuildFacts {
@@ -91,7 +96,6 @@ pub fn member_permissions(member_role_ids: &[i64], roles: &[(i64, u64)]) -> u64 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::is_administrator;
     use serde_json::json;
 
     #[test]
@@ -136,15 +140,23 @@ mod tests {
         )));
         assert!(!is_administrator(member_permissions(&[7], &[(7, 0x1)])));
     }
-}
 
     fn facts() -> GuildFacts {
         guild_facts(
             &json!({ "owner_id": "10" }).as_object().cloned().unwrap(),
-            &json!({ "roles": ["20", "21"] }).as_object().cloned().unwrap(),
+            &json!({ "roles": ["20", "21"] })
+                .as_object()
+                .cloned()
+                .unwrap(),
             &[
-                json!({ "id": "20", "permissions": "1" }).as_object().cloned().unwrap(),
-                json!({ "id": "21", "permissions": "8" }).as_object().cloned().unwrap(),
+                json!({ "id": "20", "permissions": "1" })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+                json!({ "id": "21", "permissions": "8" })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
             ],
         )
         .expect("facts")
