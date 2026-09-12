@@ -410,3 +410,35 @@ empty list rather than a list containing a null.
 `vc_core` carries an id, a client name and the grant types — the three fields
 `preauthorize` asks about — and this answer shows fourteen more.
 
+## What registration actually does, now that it is read
+
+`Auth.register_application/2`, inside a transaction, and three details in it are
+worth more than the steps around them.
+
+**Two defaults.** `application_type` becomes `"web"` when the request does not
+name one, and `grant_types` becomes **`[]`** — an empty list, not the column's
+default. So a registration that asks for nothing gets an application that can do
+nothing: without `authorization_code` among its grants, `preauthorize` refuses
+every consent request it could ever make. That is the Elixir's behaviour and it is
+silent, which is why it is written here.
+
+**The owning account is created by registration,** not before it:
+
+```elixir
+{:ok, user} = Repo.insert(%VirtualCrypto.User.User{application_id: data.application.id})
+```
+
+A `users` row with an application id and nothing else. That is why `users.discord_id`
+is nullable, and why the answer to `GET /oauth2/clients/@me` shows
+`"discord_user_id": null` for an application's own account — the account is not a
+person and never had a Discord id. The two facts are the same fact, seen from two
+ends.
+
+**The keypair is generated here,** by the service, with the same call the
+handshake uses for its fresh one: `:public_key.generate_key({:namedCurve, :ed25519})`.
+The private half is stored for signing deliveries and the public half for the
+application to verify with.
+
+And the whole of it — the application, its owner, its scopes — is one transaction,
+so a registration that fails half way leaves nothing.
+
