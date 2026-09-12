@@ -1,0 +1,18 @@
+[Unit]
+Description=Cloudflare Tunnel for the virtualCrypto3 dev server
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Installed into the user profile with `nix profile add nixpkgs#cloudflared`,
+# so no root is involved anywhere in this unit.
+ExecStart=%h/.nix-profile/bin/cloudflared tunnel run vcrypto3-dev
+# cloudflared reads %h/.cloudflared/config.yml, which holds the ingress for
+# https://vcrypto-dev.tignear.com -> http://localhost:8080.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

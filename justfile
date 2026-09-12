@@ -50,7 +50,21 @@ tunnel-login:
 
 # Run the named tunnel `vcrypto3-dev`, which serves
 # https://vcrypto-dev.tignear.com from the ingress in ~/.cloudflared/config.yml.
-# Discord's Interactions Endpoint URL is
-# https://vcrypto-dev.tignear.com/api/integrations/discord/interactions
+# The Discord Interactions Endpoint URL is that host plus
+# /api/integrations/discord/interactions.
+# Run it in the foreground for QA; `tunnel-service` keeps it up in the background.
 tunnel-named:
 	cloudflared tunnel run vcrypto3-dev
+
+# Install, enable and start the user-level systemd unit that keeps the tunnel up.
+# It runs in your own systemd session, so no root is involved anywhere.
+tunnel-service:
+	mkdir -p ~/.config/systemd/user
+	install -m 644 systemd/cloudflared.service ~/.config/systemd/user/cloudflared.service
+	systemctl --user daemon-reload
+	systemctl --user enable --now cloudflared
+	systemctl --user --no-pager status cloudflared
+
+# Follow the tunnel service log.
+tunnel-logs:
+	journalctl --user -u cloudflared -f
