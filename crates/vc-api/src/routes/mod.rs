@@ -1,5 +1,6 @@
 pub mod interactions;
 pub mod v2;
+pub mod web;
 
 use axum::Json;
 use axum::Router;
@@ -29,6 +30,9 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
 
     Router::new()
         .route("/health", get(health))
+        // The two pages a browser visits that are not the SPA's own routes.
+        .route("/login", get(web::login))
+        .route("/logout", get(web::logout))
         .merge(api)
         // Everything nothing else claimed is a client-side route, so the SPA is
         // handed its own index and left to route it.

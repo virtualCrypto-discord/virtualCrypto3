@@ -21,6 +21,8 @@ use vc_core::claim::Transition;
 use vc_core::notification::{NoopNotifier, Notifier};
 
 pub const JWT_SECRET: &str = "test-secret";
+/// The session cookie's own secret, which a test needs to read one back.
+pub const SESSION_SECRET: &str = "test-session-secret";
 pub const REFRESHED_TOKEN: &str = "refreshed-token";
 pub const REFRESHED_REFRESH_TOKEN: &str = "refreshed-refresh-token";
 /// Distinct from the refresh pair so a test can tell which path ran.
@@ -204,7 +206,7 @@ pub fn state_with_limiter(
 ) -> AppState {
     AppState::new(
         pool,
-        JWT_SECRET,
+        vc_api::state::Signing::new(JWT_SECRET, SESSION_SECRET, false),
         discord_public_key(),
         links(),
         discord,
@@ -222,7 +224,7 @@ pub fn state_with_notifier(
 ) -> AppState {
     AppState::new(
         pool,
-        JWT_SECRET,
+        vc_api::state::Signing::new(JWT_SECRET, SESSION_SECRET, false),
         discord_public_key(),
         links(),
         discord,

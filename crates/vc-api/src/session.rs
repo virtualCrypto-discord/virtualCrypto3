@@ -52,6 +52,18 @@ impl Session {
         Self::default()
     }
 
+    /// A session that has just sent a browser to Discord and is waiting for the
+    /// answer.
+    ///
+    /// The `typ` field is private so that only this module can decide what a
+    /// session is, which is why a constructor is needed at all.
+    pub fn awaiting_discord(attempt: LoginAttempt) -> Self {
+        Self {
+            discord_oauth2: Some(attempt),
+            ..Self::default()
+        }
+    }
+
     pub fn sign(&self, secret: &[u8]) -> Result<String, jsonwebtoken::errors::Error> {
         encode(
             &Header::new(Algorithm::HS256),

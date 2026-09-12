@@ -22,10 +22,31 @@ impl Links {
     }
 }
 
+/// What the service signs with: the API's bearer tokens, and the browser's
+/// session. Held together because they are the same kind of decision, and kept
+/// as two *separate* secrets because both are JWTs — signing them with one
+/// secret is what would let a session cookie be replayed as an API token.
+#[derive(Clone)]
+pub struct Signing {
+    jwt: Arc<Vec<u8>>,
+    session: Arc<Vec<u8>>,
+    secure_session: bool,
+}
+
+impl Signing {
+    pub fn new(jwt: impl Into<Vec<u8>>, session: impl Into<Vec<u8>>, secure_session: bool) -> Self {
+        Self {
+            jwt: Arc::new(jwt.into()),
+            session: Arc::new(session.into()),
+            secure_session,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pool: PgPool,
-    jwt_secret: Arc<Vec<u8>>,
+    signing: Signing,
     discord_public_key: Arc<[u8; 32]>,
     links: Arc<Links>,
     discord: Arc<dyn DiscordApi>,
@@ -36,7 +57,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(
         pool: PgPool,
-        jwt_secret: impl Into<Vec<u8>>,
+        signing: Signing,
         discord_public_key: [u8; 32],
         links: Links,
         discord: Arc<dyn DiscordApi>,
@@ -45,7 +66,7 @@ impl AppState {
     ) -> Self {
         Self {
             pool,
-            jwt_secret: Arc::new(jwt_secret.into()),
+            signing,
             discord_public_key: Arc::new(discord_public_key),
             links: Arc::new(links),
             discord,
@@ -56,6 +77,19 @@ impl AppState {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// What the browser's session cookie is signed with. Deliberately not the
+    /// one above: a session cookie and an API token are both JWTs, and they must
+    /// not be interchangeable.
+    pub fn session_secret(&self) -> &[u8] {
+        &self.signing.session
+    }
+
+    /// Whether the session cookie is marked `Secure`. Production wants it; a
+    /// development server on plain HTTP can never be sent one.
+    pub fn secure_cookies(&self) -> bool {
+        self.signing.secure_session
     }
 
     pub fn discord(&self) -> &Arc<dyn DiscordApi> {
@@ -90,6 +124,6 @@ impl AuthState for AppState {
     }
 
     fn jwt_secret(&self) -> &[u8] {
-        &self.jwt_secret
+        &self.signing.jwt
     }
 }

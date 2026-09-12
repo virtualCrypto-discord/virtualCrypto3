@@ -43,10 +43,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     };
 
+    // A session that cannot be signed is not a session, so this secret is
+    // required rather than defaulted to something convenient.
+    let session_secret = require_env("SESSION_SECRET")?;
+    // Secure unless switched off, because the alternative fails quietly: a
+    // missing flag would send session cookies in the clear.
+    let secure_cookies = optional_env("SECURE_COOKIES", "true") != "false";
+
     let pool = vc_core::db::connect(&database_url, 10).await?;
     let state = AppState::new(
         pool,
-        jwt_secret,
+        vc_api::state::Signing::new(jwt_secret, session_secret, secure_cookies),
         discord_public_key,
         links,
         // `Discord.Api.Cached`: the same lookups, remembered for fifteen

@@ -185,3 +185,14 @@ One deviation: a command name that no `Command.handle/4` clause matches answers
 400 `Type Not Found`, where Elixir has no clause either and so raises, producing
 a 500. Discord only sends registered command names, so this is unreachable in
 practice; it is recorded because it is not a faithful reproduction.
+
+## Deliberate differences
+
+### The login redirect is 303 where Phoenix sent 302
+
+`Redirect::to` in axum is `303 See Other`; `Phoenix.Controller.redirect/2` sends
+`302 Found`. For a browser navigating a `GET` the two behave identically, which
+is why this was accepted rather than hand-building a 302 — and for the consent
+screen's `POST`, which is the case that follows, 303 is the correct answer rather
+than merely an acceptable one.
+
