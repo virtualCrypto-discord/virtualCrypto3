@@ -408,3 +408,38 @@ pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Res
 
     Ok(found)
 }
+
+/// `revoke_access_token/1`: forget an access token.
+///
+/// `true` when a row went, which is the difference between revoking a token and
+/// being told about one that was never there. RFC 7009 has the endpoint answer
+/// `200` either way, so a client may ignore it; a test may not.
+///
+/// This is one of the two functions the Elixir has and its controller never
+/// calls — the revocation endpoint only knew how to revoke a JWT. See
+/// docs/oauth2.md.
+pub async fn revoke_access_token(pool: &PgPool, token: &str) -> Result<bool> {
+    let Ok(token_id) = Uuid::parse_str(token) else {
+        return Ok(false);
+    };
+
+    let deleted = sqlx::query!("DELETE FROM access_tokens WHERE token_id = $1", token_id)
+        .execute(pool)
+        .await?;
+
+    Ok(deleted.rows_affected() > 0)
+}
+
+/// `revoke_refresh_token/1`: forget a refresh token, which ends the ability to
+/// refresh but leaves the access tokens already issued from that grant alone.
+pub async fn revoke_refresh_token(pool: &PgPool, token: &str) -> Result<bool> {
+    let Ok(token_id) = Uuid::parse_str(token) else {
+        return Ok(false);
+    };
+
+    let deleted = sqlx::query!("DELETE FROM refresh_tokens WHERE token_id = $1", token_id)
+        .execute(pool)
+        .await?;
+
+    Ok(deleted.rows_affected() > 0)
+}

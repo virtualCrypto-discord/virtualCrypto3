@@ -10,7 +10,7 @@ use vc_core::application::{authorize, take_code};
 use vc_core::grant::{
     EXPIRES_IN, ExchangeError, REFRESH_TOKEN_TTL, create_access_token, create_grant_scopes,
     create_refresh_token, exchange_code, exchange_refresh_token, grant_for_code,
-    replace_refresh_token,
+    replace_refresh_token, revoke_access_token, revoke_refresh_token,
 };
 
 async fn application(pool: &PgPool) -> i64 {
@@ -450,4 +450,62 @@ async fn a_refresh_token_that_is_not_a_uuid_is_not_a_token(pool: PgPool) {
     let refreshed = exchange_refresh_token(&pool, "not-a-uuid", OffsetDateTime::now_utc()).await;
 
     assert_eq!(refreshed, Err(ExchangeError::InvalidRefreshToken));
+}
+
+/// Revoking an access token is deleting its row, which is what makes the opaque
+/// tokens revocable and a JWT not — the JWT is valid until it expires unless its
+/// `jti` row goes.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn revoking_an_access_token_empties_its_row(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let token = create_access_token(&pool, grant_id, now)
+        .await
+        .expect("a token");
+
+    assert!(revoke_access_token(&pool, &token).await.expect("revoked"));
+    // A second time is not a revocation of anything.
+    assert!(!revoke_access_token(&pool, &token).await.expect("an answer"));
+
+    let left = sqlx::query!("SELECT COUNT(*) AS count FROM access_tokens")
+        .fetch_one(&pool)
+        .await
+        .expect("count them");
+
+    assert_eq!(left.count, Some(0));
+}
+
+/// Revoking a refresh token ends the ability to refresh. The access tokens
+/// already issued from that grant are not its business.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn revoking_a_refresh_token_stops_it_refreshing(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+
+    let token = create_refresh_token(&pool, grant_id, now)
+        .await
+        .expect("a refresh token");
+
+    assert!(revoke_refresh_token(&pool, &token).await.expect("revoked"));
+
+    let refreshed = exchange_refresh_token(&pool, &token, now).await;
+
+    assert_eq!(refreshed, Err(ExchangeError::InvalidRefreshToken));
+}
+
+/// Anything that is not a token is not a revocation, rather than a database
+/// error.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn something_that_is_not_a_token_revokes_nothing(pool: PgPool) {
+    assert!(
+        !revoke_access_token(&pool, "not-a-uuid")
+            .await
+            .expect("an answer")
+    );
+    assert!(
+        !revoke_refresh_token(&pool, "not-a-uuid")
+            .await
+            .expect("an answer")
+    );
 }
