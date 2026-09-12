@@ -18,10 +18,12 @@ coverage can still be read off at a glance.
 
 Total: 103 Elixir cases, all ported.
 
-One implementation note: the bulk path pays entry by entry inside a single
-transaction rather than using Elixir's `transfer_bulk/3`. The state and the
-errors are the same — an over-committed balance fails on the entry that cannot be
-covered and everything rolls back — but the batching is not reproduced.
+The bulk path reproduces `transfer_bulk/3`'s batching rather than transferring
+entry by entry: the units and the receivers are each resolved in one statement,
+the sender's rows are locked once, and the receiver upsert, the sender decrement
+and the history insert are one statement each. A batch therefore costs a fixed
+number of round trips instead of one per entry, and the per-currency totals are
+checked against the locked balances before anything is written.
 
 ## Endpoints with no Elixir test
 
