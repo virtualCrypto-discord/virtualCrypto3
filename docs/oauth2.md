@@ -218,9 +218,37 @@ is not one answers `invalid_grant`, `invalid_refresh_token`, and there is a
 ### `token_client_credentials/3`
 
 Verifies the secret, finds the grant for (application, guild), and issues an
-access token — plus a refresh token if the application lists that grant type.
-**Not read past that point**: the tail of the function is where the guild-scoped
-answer's own fields are decided, and it is the next thing to look at.
+access token. If the application lists `refresh_token`, it then finds the grant's
+refresh token, creates one if there is none and **replaces** it if there is — a
+rotating refresh token, so a client cannot keep a stale one alive.
+
+Its answer computes `expires_in` by subtracting the clock from the row's expiry,
+where the code exchange writes the literal `3600`. Two ways of saying an hour in
+one file, and worth reproducing as they are rather than harmonising: a client
+that reads one and not the other is not a client we get to choose.
+
+A `retry_limit` from the refresh token's machinery raises `"UNEXPECTED!"` here.
+That is a crash where the same error is handled properly on the refresh path, and
+there is no reason to reproduce it — a refusal is available and the branch exists
+only to avoid using it.
+
+### `AccessToken.create_access_token/2`
+
+A row in `access_tokens`: a random `token_id`, an `expires` an hour out truncated
+to the second, and the grant it belongs to. The token the client receives **is**
+that `token_id` — a UUID, not a JWT, and revocable by deleting a row.
+
+**It has a retry that cannot run, and is not worth porting.** Five attempts are
+made for "an insert that comes back without an id", and the retry is:
+
+```elixir
+case Repo.get(Auth.AccessToken, grant_id: grant_id) do
+```
+
+`Repo.get/2` takes a primary key, not a keyword list — `Repo.get_by/2` is the one
+that does that — so the single path that reaches this branch raises. An insert
+that fails is not retried by wrapping it in a branch that also fails, so the
+port is the insert and nothing else.
 
 ## What implementing the token endpoint needs
 
@@ -230,4 +258,6 @@ the three pieces of machinery that write to them: creating a grant for an
 tokens. None of that exists here yet, and none of it is in `vc_core` either —
 the browser flow's `/token` issues a *user* access token, which is a different
 table and a different question.
+
+The first piece is `create_access_token`, which is one insert.
 
