@@ -52,6 +52,14 @@ impl Session {
         Self::default()
     }
 
+    /// A session with somebody logged in.
+    pub fn logged_in(user_id: i64) -> Self {
+        Self {
+            user_id: Some(user_id),
+            ..Self::default()
+        }
+    }
+
     /// A session that has just sent a browser to Discord and is waiting for the
     /// answer.
     ///

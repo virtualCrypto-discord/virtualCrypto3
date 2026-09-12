@@ -11,7 +11,7 @@ mod support;
 use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
-use axum::http::header::{LOCATION, SET_COOKIE};
+use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use sqlx::PgPool;
 use support::{SESSION_SECRET, fake, state};
 use tower::ServiceExt;
@@ -115,4 +115,104 @@ async fn logging_out_expires_the_cookie(pool: PgPool) {
     assert_eq!(status, 303);
     assert_eq!(to, "/");
     assert!(cookie.contains("Max-Age=0"), "{cookie}");
+}
+
+/// The login in full: the state `/login` sent, then Discord's answer to it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_callback_logs_the_account_in(pool: PgPool) {
+    let app = vc_api::router(state(pool.clone(), fake()));
+
+    let (_, location, cookie) = visit(app.clone(), "/login?continue=/me").await;
+    let sent = location
+        .split("state=")
+        .nth(1)
+        .expect("a state in the redirect")
+        .to_owned();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/callback/discord?state={sent}&code=the-code"))
+                .header(COOKIE, cookie.split(';').next().expect("the cookie"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 303);
+    assert_eq!(
+        response
+            .headers()
+            .get(LOCATION)
+            .expect("a location")
+            .to_str()
+            .expect("a header"),
+        "/me"
+    );
+
+    let value = response
+        .headers()
+        .get(SET_COOKIE)
+        .expect("a cookie")
+        .to_str()
+        .expect("a header")
+        .split(';')
+        .next()
+        .expect("the cookie itself")
+        .strip_prefix(&format!("{COOKIE_NAME}="))
+        .expect("the session cookie")
+        .to_owned();
+
+    let session = Session::parse(&value, SESSION_SECRET.as_bytes()).expect("a session");
+
+    assert!(session.user_id.is_some(), "somebody is logged in");
+    assert!(
+        session.discord_oauth2.is_none(),
+        "the login is no longer in flight"
+    );
+
+    let stored = sqlx::query!("SELECT COUNT(*) AS count FROM discord_users")
+        .fetch_one(&pool)
+        .await
+        .expect("count the authorizations");
+
+    assert_eq!(stored.count, Some(1), "the authorization was recorded");
+}
+
+/// An answer to a login this browser never started is not an answer.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_callback_whose_state_does_not_match_is_refused(pool: PgPool) {
+    let app = vc_api::router(state(pool.clone(), fake()));
+
+    let (_, _, cookie) = visit(app.clone(), "/login").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/callback/discord?state=not-the-one-we-sent&code=the-code")
+                .header(COOKIE, cookie.split(';').next().expect("the cookie"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 303);
+    assert_eq!(
+        response
+            .headers()
+            .get(LOCATION)
+            .expect("a location")
+            .to_str()
+            .expect("a header"),
+        "/"
+    );
+
+    let stored = sqlx::query!("SELECT COUNT(*) AS count FROM discord_users")
+        .fetch_one(&pool)
+        .await
+        .expect("count the authorizations");
+
+    assert_eq!(stored.count, Some(0), "nothing was recorded");
 }

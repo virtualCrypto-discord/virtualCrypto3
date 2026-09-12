@@ -33,6 +33,7 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         // The two pages a browser visits that are not the SPA's own routes.
         .route("/login", get(web::login))
         .route("/logout", get(web::logout))
+        .route("/callback/discord", get(web::discord_callback))
         .merge(api)
         // Everything nothing else claimed is a client-side route, so the SPA is
         // handed its own index and left to route it.
