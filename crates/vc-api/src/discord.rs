@@ -39,6 +39,14 @@ pub struct RefreshedToken {
 pub trait DiscordApi: Send + Sync {
     async fn get_user_info(&self, token: &str) -> Result<Map<String, Value>, DiscordError>;
 
+    /// `Discord.Api.Cached.get_user/2`, used to decorate claims with the claimant
+    /// and payer. `None` stands for the `:not_found` the Elixir cache stores,
+    /// which the serializer then fails on.
+    async fn get_user(
+        &self,
+        discord_user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError>;
+
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError>;
 }
 
@@ -46,14 +54,20 @@ pub struct HttpDiscordApi {
     http: reqwest::Client,
     client_id: String,
     client_secret: String,
+    bot_token: String,
 }
 
 impl HttpDiscordApi {
-    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
+    pub fn new(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        bot_token: impl Into<String>,
+    ) -> Self {
         Self {
             http: reqwest::Client::new(),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
+            bot_token: bot_token.into(),
         }
     }
 }
@@ -76,6 +90,40 @@ impl DiscordApi for HttpDiscordApi {
 
         match body {
             Value::Object(map) => Ok(map),
+            other => Err(DiscordError::Request(format!(
+                "expected a JSON object, got {other}"
+            ))),
+        }
+    }
+
+    async fn get_user(
+        &self,
+        discord_user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        let response = self
+            .http
+            .get(format!("https://discord.com/api/users/{discord_user_id}"))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        // `Discord.Api.Raw` reports 404s as `:not_found`, which the user cache
+        // stores and the claim serializer then fails on.
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        match body {
+            Value::Object(map) => Ok(Some(map)),
             other => Err(DiscordError::Request(format!(
                 "expected a JSON object, got {other}"
             ))),

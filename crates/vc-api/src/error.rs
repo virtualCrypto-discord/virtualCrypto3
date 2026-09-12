@@ -19,11 +19,40 @@ pub enum ApiError {
     /// which Phoenix turns into a 500. Keep that mapping.
     #[error("inconsistent state: {0}")]
     Internal(String),
+
+    /// 403 `invalid_token` / `permission_denied`, what Guardian's scope checks
+    /// produce inside the claim controller.
+    #[error("permission denied")]
+    PermissionDenied,
+
+    /// 403 `forbidden` with a description such as `not_related_user` or
+    /// `invalid_operator`.
+    #[error("forbidden: {0}")]
+    Forbidden(&'static str),
+
+    /// 404 `not_found`.
+    #[error("not found")]
+    NotFound,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
+            ApiError::PermissionDenied => (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "invalid_token", "error_description": "permission_denied" })),
+            )
+                .into_response(),
+            ApiError::Forbidden(description) => (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "forbidden", "error_description": description })),
+            )
+                .into_response(),
+            ApiError::NotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "not_found", "error_description": "not_found" })),
+            )
+                .into_response(),
             ApiError::Core(vc_core::Error::UserNotFound(_))
             | ApiError::Core(vc_core::Error::DiscordAuthNotFound(_))
             | ApiError::Internal(_)

@@ -69,6 +69,18 @@ impl DiscordApi for FakeDiscord {
             refresh_token: Some(REFRESHED_REFRESH_TOKEN.to_string()),
         })
     }
+
+    /// Discord returns ids as strings; the Elixir test fake happened to echo the
+    /// integer it was given, but production always sees a string.
+    async fn get_user(
+        &self,
+        discord_user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        let mut user = Map::new();
+        user.insert("id".to_string(), Value::String(discord_user_id.to_string()));
+
+        Ok(Some(user))
+    }
 }
 
 fn golden_discord_payload() -> Map<String, Value> {
@@ -335,4 +347,57 @@ pub async fn insert_asset(pool: &PgPool, user_id: i32, currency_id: i64, amount:
     .execute(pool)
     .await
     .expect("insert asset");
+}
+
+/// Fixed so serialized timestamps are deterministic.
+pub const CLAIM_AT: PrimitiveDateTime = time::macros::datetime!(2020-01-02 03:04:05);
+pub const CLAIM_AT_RFC3339: &str = "2020-01-02T03:04:05Z";
+
+pub async fn insert_claim(
+    pool: &PgPool,
+    id: i64,
+    amount: i64,
+    status: &str,
+    claimant_user_id: i32,
+    payer_user_id: i32,
+    currency_id: i64,
+) -> i64 {
+    sqlx::query_scalar!(
+        "INSERT INTO claims (id, amount, status, claimant_user_id, payer_user_id, currency_id,
+                             inserted_at, updated_at)
+         VALUES ($1, $2, $3::text::virtual_crypto_claim_status, $4, $5, $6, $7, $7)
+         RETURNING id",
+        id,
+        amount,
+        status,
+        i64::from(claimant_user_id),
+        i64::from(payer_user_id),
+        currency_id,
+        CLAIM_AT
+    )
+    .fetch_one(pool)
+    .await
+    .expect("insert claim")
+}
+
+pub async fn insert_claim_metadata(
+    pool: &PgPool,
+    claim_id: i64,
+    claimant_user_id: i32,
+    payer_user_id: i32,
+    owner_user_id: i32,
+    metadata: Value,
+) {
+    sqlx::query!(
+        "INSERT INTO claim_metadata (claim_id, claimant_user_id, payer_user_id, owner_user_id, metadata)
+         VALUES ($1, $2, $3, $4, $5)",
+        claim_id,
+        i64::from(claimant_user_id),
+        i64::from(payer_user_id),
+        i64::from(owner_user_id),
+        metadata
+    )
+    .execute(pool)
+    .await
+    .expect("insert claim metadata");
 }

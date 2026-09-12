@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jwt_secret = require_env("GUARDIAN_SECRET_KEY")?;
     let discord_client_id = require_env("DISCORD_CLIENT_ID")?;
     let discord_client_secret = require_env("DISCORD_CLIENT_SECRET")?;
+    let discord_bot_token = require_env("DISCORD_BOT_TOKEN")?;
     let port = std::env::var("PORT")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -30,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(HttpDiscordApi::new(
             discord_client_id,
             discord_client_secret,
+            discord_bot_token,
         )),
     );
 
