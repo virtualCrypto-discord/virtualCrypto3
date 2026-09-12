@@ -104,3 +104,142 @@ pub async fn info(pool: &PgPool, selector: CurrencySelector<'_>) -> Result<Optio
 
     Ok(row)
 }
+
+/// `Money.create/1`'s guard on the creator's grant.
+pub const MAX_CREATOR_AMOUNT: i64 = 4_294_967_295;
+
+#[derive(Debug)]
+pub enum CreateError {
+    /// The guild already has a currency.
+    Guild,
+    /// The unit is taken, in any guild.
+    Unit,
+    /// The name is taken, in any guild.
+    Name,
+    InvalidAmount,
+    Database(sqlx::Error),
+}
+
+/// `Money.create/1` through `Query.Currency.create/6`.
+///
+/// The pool is a two-hundredth of the creator's grant, rounded up, with a floor
+/// of five. The three uniqueness checks run in the order the Elixir `with` runs
+/// them — guild, then unit, then name — so the first conflict decides the error,
+/// and the creator is resolved (creating their account if needed) only once all
+/// three have passed.
+///
+/// Elixir wraps the insert in a retry loop, which covers a concurrent insert
+/// slipping past those checks. That is not reproduced, so such a race would
+/// surface as a database error instead.
+pub async fn create(
+    pool: &PgPool,
+    guild_id: i64,
+    name: &str,
+    unit: &str,
+    creator_discord_id: i64,
+    creator_amount: i64,
+) -> std::result::Result<(), CreateError> {
+    if !(0..=MAX_CREATOR_AMOUNT).contains(&creator_amount) {
+        return Err(CreateError::InvalidAmount);
+    }
+
+    let pool_amount = ((creator_amount + 199) / 200).max(5);
+    let mut tx = pool.begin().await.map_err(CreateError::Database)?;
+
+    let taken = sqlx::query_scalar!("SELECT id FROM currencies WHERE guild_id = $1", guild_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(CreateError::Database)?;
+    if taken.is_some() {
+        return Err(CreateError::Guild);
+    }
+
+    let taken = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(CreateError::Database)?;
+    if taken.is_some() {
+        return Err(CreateError::Unit);
+    }
+
+    let taken = sqlx::query_scalar!("SELECT id FROM currencies WHERE name = $1", name)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(CreateError::Database)?;
+    if taken.is_some() {
+        return Err(CreateError::Name);
+    }
+
+    let creator = crate::user::insert_if_not_exists(&mut tx, creator_discord_id)
+        .await
+        .map_err(CreateError::Database)?;
+
+    let now = crate::model::utc_now();
+
+    let currency_id = sqlx::query_scalar!(
+        "INSERT INTO currencies (guild_id, pool_amount, name, unit, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $5)
+         RETURNING id",
+        guild_id,
+        pool_amount,
+        name,
+        unit,
+        now
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(CreateError::Database)?;
+
+    sqlx::query!(
+        "INSERT INTO assets (amount, user_id, currency_id, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $4)",
+        creator_amount,
+        i64::from(creator.id),
+        currency_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(CreateError::Database)?;
+
+    tx.commit().await.map_err(CreateError::Database)?;
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeleteCheck {
+    /// The currency is inside its deletion window.
+    Deletable { unit: String },
+    /// The guild has no currency at all.
+    NotExist,
+    /// The window has closed.
+    OutOfTerm,
+}
+
+/// `Money.delete/2` with `dry_run: true`, which is what `/delete` asks for: the
+/// caller only needs to know whether to show the confirmation modal.
+pub async fn deletable(
+    pool: &PgPool,
+    guild_id: i64,
+    now: PrimitiveDateTime,
+) -> std::result::Result<DeleteCheck, sqlx::Error> {
+    let row = sqlx::query!(
+        "SELECT unit, inserted_at FROM currencies WHERE guild_id = $1 FOR UPDATE",
+        guild_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(DeleteCheck::NotExist);
+    };
+
+    if (now - row.inserted_at).whole_seconds() <= DELETABLE_WINDOW {
+        Ok(DeleteCheck::Deletable {
+            unit: row.unit.unwrap_or_default(),
+        })
+    } else {
+        Ok(DeleteCheck::OutOfTerm)
+    }
+}

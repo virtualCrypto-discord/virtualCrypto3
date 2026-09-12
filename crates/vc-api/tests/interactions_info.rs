@@ -7,8 +7,8 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    DEFAULT_GUILD, DEFAULT_PERMISSIONS, Response, execute_from_dm, fake, fake_with_guild,
-    interaction, setup_money, state,
+    DEFAULT_PERMISSIONS, Response, execute_from_dm, fake, fake_with_guild, interaction,
+    setup_money, state,
 };
 
 const COLOR_BRAND: i64 = 0x0062_21ED;
@@ -239,7 +239,8 @@ async fn a_guild_icon_url_is_webp(pool: PgPool) {
         json!({
             "name": "TestGuild",
             "icon_url": format!(
-                "https://cdn.discordapp.com/icons/{DEFAULT_GUILD}/981b65442cb7cffa5a60b6b94a10d263.webp"
+                "https://cdn.discordapp.com/icons/{}/981b65442cb7cffa5a60b6b94a10d263.webp",
+                money.guild
             ),
         })
     );
@@ -268,7 +269,8 @@ async fn an_animated_guild_icon_url_is_gif(pool: PgPool) {
         json!({
             "name": "TestGuild",
             "icon_url": format!(
-                "https://cdn.discordapp.com/icons/{DEFAULT_GUILD}/a_981b65442cb7cffa5a60b6b94a10d263.gif"
+                "https://cdn.discordapp.com/icons/{}/a_981b65442cb7cffa5a60b6b94a10d263.gif",
+                money.guild
             ),
         })
     );

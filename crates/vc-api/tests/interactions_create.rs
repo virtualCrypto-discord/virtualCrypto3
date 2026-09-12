@@ -1,0 +1,296 @@
+//! The `create` command, ported from
+//! `test/virtualCrypto_web/controllers/api/interactions/create_test.exs`.
+
+mod support;
+
+use axum::Router;
+use serde_json::{Value, json};
+use sqlx::PgPool;
+use support::{
+    DEFAULT_PERMISSIONS, Response, currency_by_unit, execute_from_guild, fake_with_guild,
+    get_amount, interaction, setup_money, state,
+};
+
+const COLOR_OK: i64 = 0x0038_EA42;
+const COLOR_ERROR: i64 = 0x00EA_3875;
+/// The guild the create tests use when they need one with no currency, which is
+/// neither the interaction default nor either `setup_money` guild.
+const FREE_GUILD: i64 = 494_780_225_280_802_818;
+const GUILD_PERMISSIONS_V2: &str = "APPLICATION_COMMAND_PERMISSIONS_V2";
+
+/// The Elixir tests inject a Discord service whose guild reports `features`;
+/// `create` only reads them for the permission check.
+fn router(pool: PgPool, features: Value) -> Router {
+    vc_api::router(state(
+        pool,
+        fake_with_guild(json!({ "name": "TestGuild", "features": features })),
+    ))
+}
+
+fn plain_router(pool: PgPool) -> Router {
+    router(pool, json!([]))
+}
+
+/// `InteractionsControllerTest.Create.Helper.create_data/1`.
+fn create_data(amount: Value, unit: &str, name: &str) -> Value {
+    json!({
+        "name": "create",
+        "options": [
+            { "name": "amount", "value": amount },
+            { "name": "unit", "value": unit },
+            { "name": "name", "value": name },
+        ],
+    })
+}
+
+fn from_guild(amount: Value, unit: &str, name: &str, sender: i64) -> Value {
+    execute_from_guild(create_data(amount, unit, name), sender)
+}
+
+fn from_guild_in(
+    amount: Value,
+    unit: &str,
+    name: &str,
+    sender: i64,
+    guild_id: i64,
+    permissions: &str,
+) -> Value {
+    support::from_guild(
+        create_data(amount, unit, name),
+        sender,
+        guild_id,
+        permissions,
+    )
+}
+
+/// `Interactions.Create.render/3` for `{:ok, :ok, options}`.
+fn assert_ok(response: &Response, unit: &str) {
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        json!({
+            "type": 4,
+            "data": {
+                "embeds": [{
+                    "description": format!(
+                        "✅ 通貨の作成に成功しました！ `/info unit: {unit}`コマンドで通貨の情報をご覧ください。\n\
+                         削除したい場合は、72時間以内に`/delete`コマンドを実行してください。"
+                    ),
+                    "color": COLOR_OK,
+                }],
+                "allowed_mentions": { "parse": [] },
+            },
+        })
+    );
+}
+
+/// `Interactions.Create.render/3` for `{:error, reason, options}`.
+fn assert_error(response: &Response, description: &str) {
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        json!({
+            "type": 4,
+            "data": {
+                "flags": 64,
+                "embeds": [{
+                    "title": "エラー",
+                    "description": description,
+                    "color": COLOR_ERROR,
+                }],
+                "allowed_mentions": { "parse": [] },
+            },
+        })
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
+    setup_money(&pool).await;
+    let sender = 100_000_000_000_000_101;
+
+    let response = interaction(
+        plain_router(pool.clone()),
+        from_guild(json!(10000), "u1", "funyu1", sender),
+    )
+    .await;
+
+    assert_ok(&response, "u1");
+
+    let currency = currency_by_unit(&pool, "u1").await.expect("the currency");
+    assert_eq!(currency.name.as_deref(), Some("funyu1"));
+    // The pool is a two-hundredth of the grant, rounded up.
+    assert_eq!(currency.pool_amount, Some((10000 + 199) / 200));
+    assert_eq!(get_amount(&pool, sender, currency.id).await, 10000);
+}
+
+/// A guild that has not moved to application-command permissions lets any
+/// member create a currency, even without the administrator bit.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_is_allowed_without_the_administrator_bit(pool: PgPool) {
+    setup_money(&pool).await;
+    let sender = 100_000_000_000_000_102;
+
+    let response = interaction(
+        plain_router(pool.clone()),
+        from_guild_in(json!(10000), "u2", "funyu2", sender, FREE_GUILD, "0"),
+    )
+    .await;
+
+    assert_ok(&response, "u2");
+
+    let currency = currency_by_unit(&pool, "u2").await.expect("the currency");
+    assert_eq!(currency.pool_amount, Some((10000 + 199) / 200));
+    assert_eq!(get_amount(&pool, sender, currency.id).await, 10000);
+}
+
+/// Names are checked across guilds, so the name of another guild's currency is
+/// already taken.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_currency_name_that_is_taken(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    let response = interaction(
+        plain_router(pool),
+        from_guild_in(
+            json!(10000),
+            "u3",
+            &money.name,
+            100_000_000_000_000_103,
+            FREE_GUILD,
+            DEFAULT_PERMISSIONS,
+        ),
+    )
+    .await;
+
+    assert_error(
+        &response,
+        &format!(
+            "`{}`という名前の通貨は存在しています。別の名前を使用してください。",
+            money.name
+        ),
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_currency_unit_that_is_taken(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    let response = interaction(
+        plain_router(pool),
+        from_guild_in(
+            json!(10000),
+            &money.unit,
+            "funyu4",
+            100_000_000_000_000_104,
+            FREE_GUILD,
+            DEFAULT_PERMISSIONS,
+        ),
+    )
+    .await;
+
+    assert_error(
+        &response,
+        &format!(
+            "`{}`という単位の通貨は存在しています。別の単位を使用してください。",
+            money.unit
+        ),
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
+    setup_money(&pool).await;
+
+    let response = interaction(
+        plain_router(pool),
+        from_guild_in(
+            json!("9007199254740992"),
+            "u5",
+            "funyu5",
+            100_000_000_000_000_105,
+            FREE_GUILD,
+            DEFAULT_PERMISSIONS,
+        ),
+    )
+    .await;
+
+    assert_error(
+        &response,
+        "不正な金額です。1以上4294967295以下である必要があります。",
+    );
+}
+
+/// Once a guild reports `APPLICATION_COMMAND_PERMISSIONS_V2`, the caller needs
+/// the administrator bit.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_needs_the_administrator_bit_under_v2_permissions(pool: PgPool) {
+    setup_money(&pool).await;
+
+    let response = interaction(
+        router(pool, json!([GUILD_PERMISSIONS_V2])),
+        from_guild_in(
+            json!(10000),
+            "u6",
+            "funyu6",
+            100_000_000_000_000_106,
+            1_234_567_890_123_456_789,
+            "0",
+        ),
+    )
+    .await;
+
+    assert_error(&response, "実行には管理者権限が必要です。");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    let response = interaction(
+        plain_router(pool),
+        from_guild_in(
+            json!(10000),
+            "u7",
+            "funyu7",
+            100_000_000_000_000_107,
+            money.guild,
+            DEFAULT_PERMISSIONS,
+        ),
+    )
+    .await;
+
+    assert_error(&response, "このギルドではすでに通貨が作成されています。");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_unit_that_is_not_lowercase(pool: PgPool) {
+    setup_money(&pool).await;
+
+    let response = interaction(
+        plain_router(pool),
+        from_guild(json!(10000), "AA", "funyu8", 100_000_000_000_000_108),
+    )
+    .await;
+
+    assert_error(
+        &response,
+        "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_name_without_enough_alphanumerics(pool: PgPool) {
+    setup_money(&pool).await;
+
+    let response = interaction(
+        plain_router(pool),
+        from_guild(json!(10000), "a", " ", 100_000_000_000_000_109),
+    )
+    .await;
+
+    assert_error(
+        &response,
+        "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+    );
+}

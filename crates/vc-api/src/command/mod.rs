@@ -7,6 +7,8 @@
 //! `InteractionsJSON`.
 
 pub mod bal;
+pub mod create;
+pub mod delete;
 pub mod info;
 pub mod pay;
 
@@ -19,6 +21,7 @@ use crate::state::AppState;
 pub const PONG: i64 = 1;
 pub const CHANNEL_MESSAGE_WITH_SOURCE: i64 = 4;
 pub const UPDATE_MESSAGE: i64 = 7;
+pub const MODAL: i64 = 9;
 pub const EPHEMERAL: i64 = 64;
 pub const COLOR_OK: i64 = 0x38EA42;
 pub const COLOR_ERROR: i64 = 0xEA3875;
@@ -85,6 +88,16 @@ pub fn as_int(value: &Value) -> Option<i64> {
     match value {
         Value::String(text) => text.parse().ok(),
         Value::Number(number) => number.as_i64(),
+        _ => None,
+    }
+}
+
+/// Discord sends a permission bit set as a decimal string, and it needs all 64
+/// bits: the fixtures use `0xFFFFFFFFFFFFFFFF`, which no `i64` holds.
+pub fn as_permissions(value: &Value) -> Option<u64> {
+    match value {
+        Value::String(text) => text.parse().ok(),
+        Value::Number(number) => number.as_u64(),
         _ => None,
     }
 }
@@ -163,6 +176,8 @@ pub async fn handle(
         "help" => Ok(help(state)),
         "invite" => Ok(invite(state)),
         "bal" => bal::handle(state, payload).await,
+        "create" => create::handle(state, options, payload).await,
+        "delete" => delete::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),

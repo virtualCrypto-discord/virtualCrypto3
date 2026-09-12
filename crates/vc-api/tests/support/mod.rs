@@ -618,7 +618,11 @@ pub struct Money {
 
 pub const MONEY_USER1: i64 = 100_000_000_000_000_001;
 pub const MONEY_USER2: i64 = 100_000_000_000_000_002;
-pub const MONEY_GUILD2: i64 = 494_780_225_280_802_818;
+/// The guilds `setup_money/1` puts its currencies in. They are deliberately not
+/// [`DEFAULT_GUILD`], which is what lets a `create` test create a currency in
+/// the guild the interaction builders use.
+pub const MONEY_GUILD: i64 = 494_780_225_280_802_819;
+pub const MONEY_GUILD2: i64 = 494_780_225_280_802_820;
 
 /// `setup_money/1`, as the rows it ends up with: each user created a currency
 /// worth 200000 in their own guild, the first user paid the second 500, and the
@@ -631,7 +635,7 @@ pub async fn setup_money(pool: &PgPool) -> Money {
 
     insert_user(pool, 1, MONEY_USER1).await;
     insert_user(pool, 2, MONEY_USER2).await;
-    insert_currency(pool, 1, &name, &unit, DEFAULT_GUILD, 500).await;
+    insert_currency(pool, 1, &name, &unit, MONEY_GUILD, 500).await;
     insert_currency(pool, 2, &name2, &unit2, MONEY_GUILD2, 1000).await;
     insert_asset(pool, 1, 1, 199_500).await;
     insert_asset(pool, 2, 1, 1_000).await;
@@ -640,7 +644,7 @@ pub async fn setup_money(pool: &PgPool) -> Money {
     Money {
         user1: MONEY_USER1,
         user2: MONEY_USER2,
-        guild: DEFAULT_GUILD,
+        guild: MONEY_GUILD,
         guild2: MONEY_GUILD2,
         name,
         name2,
@@ -666,4 +670,45 @@ pub async fn get_amount(pool: &PgPool, discord_user_id: i64, currency_id: i64) -
     .expect("read balance");
 
     amount.flatten().unwrap_or(0)
+}
+
+/// Move a currency's creation time, which is how the deletion window is reached:
+/// Elixir injects `:test_delete_now` through the process dictionary instead.
+pub async fn set_currency_inserted_at(
+    pool: &PgPool,
+    currency_id: i64,
+    inserted_at: PrimitiveDateTime,
+) {
+    sqlx::query!(
+        "UPDATE currencies SET inserted_at = $1 WHERE id = $2",
+        inserted_at,
+        currency_id
+    )
+    .execute(pool)
+    .await
+    .expect("age currency");
+}
+
+pub struct CurrencyRow {
+    pub id: i64,
+    pub name: Option<String>,
+    pub pool_amount: Option<i64>,
+}
+
+/// The currency with this unit, which is how a `create` test finds the row it
+/// just made.
+pub async fn currency_by_unit(pool: &PgPool, unit: &str) -> Option<CurrencyRow> {
+    let row = sqlx::query!(
+        "SELECT id, name, pool_amount FROM currencies WHERE unit = $1",
+        unit
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("read currency");
+
+    row.map(|row| CurrencyRow {
+        id: row.id,
+        name: row.name,
+        pool_amount: row.pool_amount,
+    })
 }
