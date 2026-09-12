@@ -62,18 +62,28 @@ OAuth2/application side of the domain, which does not exist here yet:
 Because it is entangled with the OAuth2 provider milestone, it is scheduled
 there rather than in the claim endpoints.
 
-## Discord lookups are not cached
+## Discord lookups are cached in the process
 
-Elixir wraps `Discord.Api.Raw` in `Discord.Api.Cached`, backed by `Cachex` with a
-15 minute TTL, so repeated claim serialization does not re-query Discord. The
-Rust `DiscordApi` calls Discord on every lookup — both `get_user`, which decorates
-claims, and `get_guild`, which decorates the `info` embed. Responses are
-identical; only Discord API traffic and latency differ.
+`Discord.Api.Cached` wraps the raw API and remembers `get_user` and `get_guild`
+for fifteen minutes, a 404 included — the same shape as the Elixir `Cachex`
+tables, and what keeps a page of claims from asking about the same missing user
+once per row.
 
-## No rate limiting
+Two differences from Elixir's, both deliberate: the table is bounded (ten
+thousand entries, expired ones swept first) so a long-lived server cannot grow
+without limit, and it lives in this process, so every Fly machine keeps its own.
+Neither changes what a caller sees.
 
-`Hammer` is only used for webhook verification in Elixir, so nothing is missing
-yet. It becomes relevant together with notifications.
+## Rate limiting is loose, and only on the interactions endpoint
+
+Requests are counted per identity rather than per address, because an address
+says nothing once authentication has decided who is calling: `RATE_LIMIT_PER_MINUTE`
+(default 120, zero disables it) applies to the Discord user behind an
+interaction, established by the signature check that runs before it.
+
+The v2 REST API is not covered yet. Its identity is the token's subject, which
+the `AuthUser` extractor already resolves, so the limiter needs to be held there
+the same way.
 
 ## Not yet verified against captures
 

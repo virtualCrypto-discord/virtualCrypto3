@@ -7,7 +7,11 @@ mod support;
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{execute_from_guild, fake, interaction, state};
+use std::sync::Arc;
+use std::time::Duration;
+
+use support::{execute_from_guild, fake, interaction, state, state_with_limiter};
+use vc_api::rate_limit::RateLimiter;
 
 const SITE_URL: &str = "https://vcrypto.sumidora.com";
 const BOT_INVITE_URL: &str = "https://discord.com/api/oauth2/authorize?client_id=791984306632654869&permissions=0&scope=applications.commands%20bot";
@@ -106,4 +110,30 @@ async fn an_unknown_command_is_400(pool: PgPool) {
 
     assert_eq!(response.status, 400);
     assert_eq!(response.body, Value::String("Type Not Found".into()));
+}
+
+/// The endpoint holds each Discord user to their own allowance, and the limit is
+/// held against them rather than against the address they came from.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_user_is_held_to_their_allowance(pool: PgPool) {
+    let api = fake();
+    let limiter = Arc::new(RateLimiter::new(1, Duration::from_secs(60)));
+
+    let app = || {
+        vc_api::router(state_with_limiter(
+            pool.clone(),
+            api.clone(),
+            limiter.clone(),
+        ))
+    };
+
+    let first = interaction(app(), execute_from_guild(json!({ "name": "help" }), 12)).await;
+    assert_eq!(first.status, 200, "body: {}", first.body);
+
+    let second = interaction(app(), execute_from_guild(json!({ "name": "help" }), 12)).await;
+    assert_eq!(second.status, 429, "body: {}", second.body);
+
+    // Another user brings their own allowance.
+    let other = interaction(app(), execute_from_guild(json!({ "name": "help" }), 13)).await;
+    assert_eq!(other.status, 200, "body: {}", other.body);
 }

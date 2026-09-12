@@ -15,6 +15,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use vc_api::AppState;
 use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
+use vc_api::rate_limit::RateLimiter;
 use vc_api::state::Links;
 use vc_auth::claims::{AUDIENCE, Claims, ISSUER};
 use vc_core::claim::Transition;
@@ -164,6 +165,24 @@ pub fn state(pool: PgPool, discord: Arc<FakeDiscord>) -> AppState {
     state_with_notifier(pool, discord, Arc::new(NoopNotifier))
 }
 
+/// A state whose requests are held to `limiter`, which is how the rate limit is
+/// exercised without making a hundred requests.
+pub fn state_with_limiter(
+    pool: PgPool,
+    discord: Arc<FakeDiscord>,
+    limiter: Arc<RateLimiter>,
+) -> AppState {
+    AppState::new(
+        pool,
+        JWT_SECRET,
+        discord_public_key(),
+        links(),
+        discord,
+        Arc::new(NoopNotifier),
+        limiter,
+    )
+}
+
 /// A state whose claim transitions report to `notifier`, which is how the
 /// notification tests watch what would be delivered.
 pub fn state_with_notifier(
@@ -178,6 +197,8 @@ pub fn state_with_notifier(
         links(),
         discord,
         notifier,
+        // Unlimited by default, so the other tests are not held to it.
+        Arc::new(RateLimiter::new(0, vc_api::rate_limit::DEFAULT_WINDOW)),
     )
 }
 

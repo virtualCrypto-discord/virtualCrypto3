@@ -32,6 +32,15 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         return text(StatusCode::BAD_REQUEST, "Type Not Found");
     };
 
+    // A loose per-user allowance, held against the Discord user the signature
+    // has just established. Discord retries an interaction it thinks failed, so
+    // this is what keeps a retry storm from becoming one of ours.
+    if let Some(user) = crate::command::get_user(&payload)
+        && !state.limiter().allow(&format!("discord:{user}"))
+    {
+        return text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
+    }
+
     match payload.get("type").and_then(Value::as_i64) {
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),

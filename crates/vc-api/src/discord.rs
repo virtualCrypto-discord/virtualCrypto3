@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,122 @@ pub trait DiscordApi: Send + Sync {
     ) -> Result<(), DiscordError>;
 
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError>;
+}
+
+/// How long a Discord lookup is remembered, matching the Elixir cache's TTL.
+pub const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// A ceiling on the cache. Elixir's `Cachex` is the same shape — a table in the
+/// process — but this one is bounded, so a long-lived server cannot grow
+/// without limit on a busy guild.
+pub const CACHE_LIMIT: usize = 10_000;
+
+/// A TTL map whose value is itself an `Option`: `Some(None)` is a remembered
+/// "not found", which `Cachex` stores as `:not_found` and answers from.
+struct Entries<T> {
+    entries: std::sync::Mutex<std::collections::HashMap<i64, (std::time::Instant, Option<T>)>>,
+}
+
+impl<T: Clone> Entries<T> {
+    fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// `Some(value)` is a hit, including a remembered miss; `None` means the
+    /// lookup has to be made.
+    fn get(&self, key: i64) -> Option<Option<T>> {
+        let entries = self.entries.lock().expect("the cache is not poisoned");
+
+        match entries.get(&key) {
+            Some((at, value)) if at.elapsed() < CACHE_TTL => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    fn put(&self, key: i64, value: Option<T>) {
+        let mut entries = self.entries.lock().expect("the cache is not poisoned");
+
+        if entries.len() >= CACHE_LIMIT {
+            // Drop what has expired first, and only then make room.
+            entries.retain(|_, (at, _)| at.elapsed() < CACHE_TTL);
+            if entries.len() >= CACHE_LIMIT && !entries.contains_key(&key) {
+                entries.clear();
+            }
+        }
+
+        entries.insert(key, (std::time::Instant::now(), value));
+    }
+}
+
+/// `Discord.Api.Cached`: the same lookups as the wrapped API, remembered.
+///
+/// A 404 is remembered too, which is what keeps a page of claims from asking
+/// Discord about the same missing user once per row.
+pub struct CachedDiscord {
+    inner: Arc<dyn DiscordApi>,
+    users: Entries<Map<String, Value>>,
+    guilds: Entries<Map<String, Value>>,
+}
+
+impl CachedDiscord {
+    pub fn new(inner: Arc<dyn DiscordApi>) -> Self {
+        Self {
+            inner,
+            users: Entries::new(),
+            guilds: Entries::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl DiscordApi for CachedDiscord {
+    /// Not cached: the Elixir cache wraps `get_user` and `get_guild` only, and a
+    /// token is looked up once per request.
+    async fn get_user_info(&self, token: &str) -> Result<Map<String, Value>, DiscordError> {
+        self.inner.get_user_info(token).await
+    }
+
+    async fn get_user(
+        &self,
+        discord_user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        if let Some(cached) = self.users.get(discord_user_id) {
+            return Ok(cached);
+        }
+
+        let user = self.inner.get_user(discord_user_id).await?;
+        self.users.put(discord_user_id, user.clone());
+
+        Ok(user)
+    }
+
+    async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
+        if let Some(cached) = self.guilds.get(guild_id) {
+            return Ok(cached);
+        }
+
+        let guild = self.inner.get_guild(guild_id).await?;
+        self.guilds.put(guild_id, guild.clone());
+
+        Ok(guild)
+    }
+
+    async fn post_webhook_message(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.inner
+            .post_webhook_message(application_id, token, body)
+            .await
+    }
+
+    async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError> {
+        self.inner.refresh_token(refresh_token).await
+    }
 }
 
 pub struct HttpDiscordApi {

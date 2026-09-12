@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 use vc_api::AppState;
-use vc_api::discord::HttpDiscordApi;
+use vc_api::discord::{CachedDiscord, HttpDiscordApi};
 use vc_api::state::Links;
 
 #[tokio::main]
@@ -49,13 +49,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         jwt_secret,
         discord_public_key,
         links,
-        Arc::new(HttpDiscordApi::new(
+        // `Discord.Api.Cached`: the same lookups, remembered for fifteen
+        // minutes, a 404 included.
+        Arc::new(CachedDiscord::new(Arc::new(HttpDiscordApi::new(
             discord_client_id,
             discord_client_secret,
             discord_bot_token,
-        )),
+        )))),
         // The webhook transport is not implemented; see docs/known-gaps.md.
         Arc::new(vc_core::notification::NoopNotifier),
+        // A loose per-user allowance; `RATE_LIMIT_PER_MINUTE=0` turns it off.
+        Arc::new(vc_api::rate_limit::RateLimiter::new(
+            std::env::var("RATE_LIMIT_PER_MINUTE")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(vc_api::rate_limit::DEFAULT_LIMIT),
+            vc_api::rate_limit::DEFAULT_WINDOW,
+        )),
     );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

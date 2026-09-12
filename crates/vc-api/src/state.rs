@@ -5,6 +5,7 @@ use vc_auth::AuthState;
 use vc_core::notification::Notifier;
 
 use crate::discord::DiscordApi;
+use crate::rate_limit::RateLimiter;
 
 /// The public URLs the command responses link to, plus the logo their embeds show.
 #[derive(Clone, Debug)]
@@ -29,6 +30,7 @@ pub struct AppState {
     links: Arc<Links>,
     discord: Arc<dyn DiscordApi>,
     notifier: Arc<dyn Notifier>,
+    limiter: Arc<RateLimiter>,
 }
 
 impl AppState {
@@ -39,6 +41,7 @@ impl AppState {
         links: Links,
         discord: Arc<dyn DiscordApi>,
         notifier: Arc<dyn Notifier>,
+        limiter: Arc<RateLimiter>,
     ) -> Self {
         Self {
             pool,
@@ -47,6 +50,7 @@ impl AppState {
             links: Arc::new(links),
             discord,
             notifier,
+            limiter,
         }
     }
 
@@ -56,6 +60,12 @@ impl AppState {
 
     pub fn discord(&self) -> &Arc<dyn DiscordApi> {
         &self.discord
+    }
+
+    /// The per-user request allowance, held against whoever the request
+    /// proved to be.
+    pub fn limiter(&self) -> &RateLimiter {
+        &self.limiter
     }
 
     /// The claim-update dispatcher, which a test replaces with its own sink.
