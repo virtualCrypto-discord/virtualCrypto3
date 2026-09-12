@@ -384,6 +384,177 @@ pub async fn webhook_data(
     Ok(found)
 }
 
+/// Why a piece of client metadata was refused, in the API's own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataError {
+    ResponseTypes,
+    GrantTypes,
+    ClientUri,
+    WebhookUrl,
+    /// `logo_uri_mime_type_must_be_image`.
+    LogoMediaType,
+    /// `logo_uri_must_not_bigger_than_2048_bytes`.
+    LogoSize,
+    /// `logo_uri_scheme_must_be_data_or_https`.
+    LogoScheme,
+    Slug,
+    ApplicationType,
+}
+
+impl MetadataError {
+    /// The description a client is given, which is the field's name and its rule
+    /// run together — the Elixir's wording, kept as it is because a client may be
+    /// matching on it.
+    pub fn description(self) -> &'static str {
+        match self {
+            MetadataError::ResponseTypes => "response_types_must_constructed_from_code",
+            MetadataError::GrantTypes => {
+                "grant_types_must_constructed_from_authorization_code_or_refresh_token"
+            }
+            MetadataError::ClientUri => "client_uri_scheme_must_be_http_or_https",
+            MetadataError::WebhookUrl => "webhook_url_scheme_must_be_http_or_https",
+            MetadataError::LogoMediaType => "logo_uri_mime_type_must_be_image",
+            MetadataError::LogoSize => "logo_uri_must_not_bigger_than_2048_bytes",
+            MetadataError::LogoScheme => "logo_uri_scheme_must_be_data_or_https",
+            MetadataError::Slug => {
+                "discord_support_server_invite_slug_must_construct_from_half_width_alphanumeric"
+            }
+            MetadataError::ApplicationType => "application_type_must_be_web_or_native",
+        }
+    }
+}
+
+/// The mediatypes a `data:` logo may carry.
+///
+/// A closed list, so a `data:text/html` logo is refused however right everything
+/// else about it is.
+pub const LOGO_MEDIA_TYPES: &[&str] = &[
+    "image/bmp",
+    "image/vnd.microsoft.icon",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/svg+xml",
+    "image/tiff",
+    "image/webp",
+];
+
+/// The largest `data:` logo, **as the URI is written** rather than as the bytes
+/// it decodes to.
+pub const LOGO_LIMIT: usize = 2048;
+
+/// `validate_response_types/1`: a subset of `["code"]`, as a set.
+///
+/// The Elixir returns `MapSet.to_list/1` of the validated value, so naming `code`
+/// twice stores it once — and it is the validated value that reaches the row, not
+/// the request.
+pub fn check_response_types(types: &[String]) -> Result<Vec<String>, MetadataError> {
+    if types.iter().any(|kind| kind != "code") {
+        return Err(MetadataError::ResponseTypes);
+    }
+
+    Ok(deduplicated(types))
+}
+
+/// `validate_grant_types/1`: a subset of `["authorization_code",
+/// "refresh_token"]`, as a set.
+pub fn check_grant_types(types: &[String]) -> Result<Vec<String>, MetadataError> {
+    if types
+        .iter()
+        .any(|kind| kind != "authorization_code" && kind != "refresh_token")
+    {
+        return Err(MetadataError::GrantTypes);
+    }
+
+    Ok(deduplicated(types))
+}
+
+/// The order a set comes back in is not specified by `MapSet.to_list/1`, and for
+/// these two fields it cannot matter: one allows a single value and the other
+/// two, and what is stored is the set. Keeping the caller's order makes the
+/// result a function of the request rather than of a hash, which is the only
+/// difference here.
+fn deduplicated(values: &[String]) -> Vec<String> {
+    let mut seen = Vec::new();
+
+    for value in values {
+        if !seen.contains(value) {
+            seen.push(value.clone());
+        }
+    }
+
+    seen
+}
+
+/// `validate_client_uri/1`, and `validate_webhook_url/1` with it: `http` or
+/// `https`, and nothing else.
+pub fn check_url(url: &str, error: MetadataError) -> Result<(), MetadataError> {
+    if matches!(scheme(url).as_deref(), Some("http" | "https")) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+/// `validate_logo_uri/1`: `https`, or a `data:` URI of an image no longer than
+/// [`LOGO_LIMIT`].
+///
+/// The mediatype is checked before the size, which is the Elixir's order and the
+/// reason a logo with both problems is refused for the first.
+pub fn check_logo_uri(uri: &str) -> Result<(), MetadataError> {
+    match scheme(uri).as_deref() {
+        Some("https") => Ok(()),
+        Some("data") => {
+            let mediatype = uri
+                .strip_prefix("data:")
+                .and_then(|rest| rest.split([';', ',']).next())
+                .unwrap_or_default();
+
+            if !LOGO_MEDIA_TYPES.contains(&mediatype) {
+                return Err(MetadataError::LogoMediaType);
+            }
+
+            if uri.len() > LOGO_LIMIT {
+                return Err(MetadataError::LogoSize);
+            }
+
+            Ok(())
+        }
+        _ => Err(MetadataError::LogoScheme),
+    }
+}
+
+/// `validate_discord_support_server_invite_slug/1`: **at least one** alphanumeric
+/// character.
+///
+/// Not anchored, faithfully: the Elixir asks `Regex.match?(~r/[0-9a-zA-Z]+/, slug)`,
+/// which is a search, so `"!!!abc!!!"` passes. The description says the slug must
+/// be built from half-width alphanumerics, which is what it meant to say — and
+/// the value is stored as it was sent, so closing the gap here would refuse
+/// something already accepted.
+pub fn check_slug(slug: &str) -> Result<(), MetadataError> {
+    if slug
+        .chars()
+        .any(|character| character.is_ascii_alphanumeric())
+    {
+        Ok(())
+    } else {
+        Err(MetadataError::Slug)
+    }
+}
+
+/// `validate_application_type/1`: `web` or `native`.
+///
+/// The one field with no `nil` clause in the Elixir, so "not given" cannot be
+/// said of it; the column has a default, so it is never absent in practice.
+pub fn check_application_type(kind: &str) -> Result<(), MetadataError> {
+    if kind == "web" || kind == "native" {
+        Ok(())
+    } else {
+        Err(MetadataError::ApplicationType)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,5 +663,113 @@ mod tests {
     #[test]
     fn a_repeated_scope_is_refused() {
         assert_eq!(scopes(&["openid", "openid"]), Err(ScopeError::Invalid));
+    }
+
+    fn list(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn the_list_fields_are_stored_as_sets() {
+        assert_eq!(check_response_types(&list(&["code"])), Ok(list(&["code"])));
+        assert_eq!(
+            check_response_types(&list(&["code", "code"])),
+            Ok(list(&["code"])),
+            "named twice, stored once"
+        );
+
+        assert_eq!(
+            check_grant_types(&list(&["authorization_code", "refresh_token"])),
+            Ok(list(&["authorization_code", "refresh_token"]))
+        );
+        assert_eq!(
+            check_grant_types(&list(&["refresh_token", "refresh_token"])),
+            Ok(list(&["refresh_token"]))
+        );
+    }
+
+    #[test]
+    fn a_list_field_outside_its_set_is_refused() {
+        assert_eq!(
+            check_response_types(&list(&["token"])),
+            Err(MetadataError::ResponseTypes)
+        );
+        assert_eq!(
+            check_grant_types(&list(&["password"])),
+            Err(MetadataError::GrantTypes)
+        );
+    }
+
+    #[test]
+    fn the_urls_must_be_http_or_https() {
+        assert_eq!(
+            check_url("https://a.example", MetadataError::ClientUri),
+            Ok(())
+        );
+        assert_eq!(
+            check_url("http://a.example", MetadataError::WebhookUrl),
+            Ok(())
+        );
+        assert_eq!(
+            check_url("ftp://a.example", MetadataError::ClientUri),
+            Err(MetadataError::ClientUri)
+        );
+        assert_eq!(
+            check_url("/relative", MetadataError::WebhookUrl),
+            Err(MetadataError::WebhookUrl)
+        );
+    }
+
+    #[test]
+    fn a_logo_is_https_or_an_image_data_uri() {
+        assert_eq!(check_logo_uri("https://a.example/logo.png"), Ok(()));
+        assert_eq!(check_logo_uri("data:image/png;base64,AAAA"), Ok(()));
+
+        // The mediatype is a closed list.
+        assert_eq!(
+            check_logo_uri("data:text/html,<script>"),
+            Err(MetadataError::LogoMediaType)
+        );
+        assert_eq!(
+            check_logo_uri("ftp://a.example/logo.png"),
+            Err(MetadataError::LogoScheme)
+        );
+    }
+
+    /// Both problems, and the mediatype is the one it is refused for — the
+    /// Elixir's order.
+    #[test]
+    fn a_logo_with_two_problems_is_refused_for_the_first() {
+        let huge = format!("data:text/html;base64,{}", "A".repeat(LOGO_LIMIT));
+
+        assert_eq!(check_logo_uri(&huge), Err(MetadataError::LogoMediaType));
+    }
+
+    #[test]
+    fn a_logo_over_the_limit_is_refused_for_its_size() {
+        let huge = format!("data:image/png;base64,{}", "A".repeat(LOGO_LIMIT));
+
+        assert_eq!(check_logo_uri(&huge), Err(MetadataError::LogoSize));
+    }
+
+    /// Faithfully unanchored: a search for one alphanumeric character, so a slug
+    /// full of punctuation passes as long as something in it is not.
+    #[test]
+    fn a_slug_needs_one_alphanumeric_character_anywhere() {
+        assert_eq!(check_slug("abc"), Ok(()));
+        assert_eq!(check_slug("!!!abc!!!"), Ok(()));
+        assert_eq!(check_slug("a"), Ok(()));
+        assert_eq!(check_slug("!!!"), Err(MetadataError::Slug));
+        assert_eq!(check_slug(""), Err(MetadataError::Slug));
+    }
+
+    #[test]
+    fn an_application_is_web_or_native() {
+        assert_eq!(check_application_type("web"), Ok(()));
+        assert_eq!(check_application_type("native"), Ok(()));
+        assert_eq!(
+            check_application_type("service"),
+            Err(MetadataError::ApplicationType)
+        );
     }
 }
