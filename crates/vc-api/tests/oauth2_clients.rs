@@ -102,3 +102,110 @@ async fn an_application_that_is_not_there_is_not_an_error(pool: PgPool) {
 
     assert_eq!(found, None);
 }
+
+/// An edit writes what it was given and leaves the rest. The two-level option is
+/// what makes "not in the request" and "explicitly null" different operations.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_edit_writes_what_it_was_given(pool: PgPool) {
+    let (application_id, _) = application(&pool).await;
+
+    vc_core::application::patch(
+        &pool,
+        application_id,
+        &vc_core::application::Changes {
+            client_name: Some(Some("Renamed".to_owned())),
+            logo_uri: Some(None),
+            redirect_uris: Some(vec!["https://app.example/one".to_owned()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("an edit");
+
+    let after = details(&pool, application_id)
+        .await
+        .expect("an answer")
+        .expect("the application");
+
+    assert_eq!(after.client_name.as_deref(), Some("Renamed"));
+    assert_eq!(
+        after.logo_uri, None,
+        "cleared, because the request said null"
+    );
+    assert_eq!(
+        after.client_uri.as_deref(),
+        Some("https://app.example"),
+        "untouched, because the request did not mention it"
+    );
+    assert_eq!(after.redirect_uris, ["https://app.example/one"]);
+}
+
+/// The redirect URIs are replaced rather than added to, so an edit that sends one
+/// URI leaves one.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn redirect_uris_are_replaced_wholesale(pool: PgPool) {
+    let (application_id, _) = application(&pool).await;
+
+    vc_core::application::patch(
+        &pool,
+        application_id,
+        &vc_core::application::Changes {
+            redirect_uris: Some(vec![
+                "https://app.example/a".to_owned(),
+                "https://app.example/b".to_owned(),
+            ]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("an edit");
+
+    let after = details(&pool, application_id)
+        .await
+        .expect("an answer")
+        .expect("the application");
+
+    assert_eq!(
+        after.redirect_uris.len(),
+        2,
+        "two, and not the one that was there before them"
+    );
+}
+
+/// `Repo.update_all/2` applies no changeset and therefore no timestamp, so an edit
+/// leaves `updated_at` where it was. Observable, and reproduced.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_edit_does_not_touch_updated_at(pool: PgPool) {
+    let (application_id, _) = application(&pool).await;
+
+    let before = sqlx::query!(
+        "SELECT updated_at FROM applications WHERE id = $1",
+        application_id
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the row")
+    .updated_at;
+
+    vc_core::application::patch(
+        &pool,
+        application_id,
+        &vc_core::application::Changes {
+            client_name: Some(Some("Renamed".to_owned())),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("an edit");
+
+    let after = sqlx::query!(
+        "SELECT updated_at FROM applications WHERE id = $1",
+        application_id
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the row")
+    .updated_at;
+
+    assert_eq!(after, before);
+}

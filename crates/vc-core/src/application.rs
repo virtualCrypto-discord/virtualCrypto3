@@ -679,6 +679,125 @@ fn new_secret() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// An edit's changes, field by field.
+///
+/// `None` is "not in this request" and `Some(None)` is "explicitly null", which
+/// are different operations: the Elixir's setters ask whether the parameter is
+/// there, so a request that sends `logo_uri: null` clears it and one that does not
+/// mention it leaves it alone. A `COALESCE` cannot tell those apart, which is why
+/// this is a two-level option and why the write reads first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Changes {
+    pub client_name: Option<Option<String>>,
+    pub client_uri: Option<Option<String>>,
+    pub logo_uri: Option<Option<String>>,
+    pub webhook_url: Option<Option<String>>,
+    pub discord_support_server_invite_slug: Option<Option<String>>,
+    pub application_type: Option<String>,
+    pub grant_types: Option<Vec<String>>,
+    pub response_types: Option<Vec<String>>,
+    /// Replaces the set wholesale when given.
+    pub redirect_uris: Option<Vec<String>>,
+}
+
+/// `PatchQuery.patch/3`: write the fields that were given, and nothing else.
+///
+/// Read, apply, write, rather than a statement per field, for two reasons: the
+/// two-level options above, and `updated_at`. The Elixir updates the row with
+/// `Repo.update_all/2`, which applies no changeset and therefore no timestamp, so
+/// an edit leaves it where it was — and a `SET updated_at = now()` would be an
+/// observable difference nobody asked for.
+///
+/// `redirect_uris` is replaced wholesale when given: deleted and reinserted, so a
+/// request that sends one URI leaves one rather than two.
+pub async fn patch(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+    changes: &Changes,
+) -> crate::error::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    let current = sqlx::query!(
+        r#"SELECT client_name, client_uri, logo_uri, webhook_url,
+                  discord_support_server_invite_slug,
+                  application_type::text AS "application_type!",
+                  grant_types::text[] AS "grant_types!",
+                  response_types::text[] AS "response_types!"
+             FROM applications WHERE id = $1"#,
+        application_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(current) = current else {
+        return Ok(());
+    };
+
+    // `Some` replaces — with a value or with a null — and `None` keeps what was
+    // there.
+    fn applied(given: &Option<Option<String>>, was: &Option<String>) -> Option<String> {
+        match given {
+            Some(value) => value.clone(),
+            None => was.clone(),
+        }
+    }
+
+    sqlx::query!(
+        "UPDATE applications
+            SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5,
+                discord_support_server_invite_slug = $6,
+                application_type = $7::text::openid_connect_application_type,
+                grant_types = $8::text[]::openid_connect_grant_types[],
+                response_types = $9::text[]::openid_connect_response_types[]
+          WHERE id = $1",
+        application_id,
+        applied(&changes.client_name, &current.client_name),
+        applied(&changes.client_uri, &current.client_uri),
+        applied(&changes.logo_uri, &current.logo_uri),
+        applied(&changes.webhook_url, &current.webhook_url),
+        applied(
+            &changes.discord_support_server_invite_slug,
+            &current.discord_support_server_invite_slug
+        ),
+        changes
+            .application_type
+            .clone()
+            .unwrap_or(current.application_type),
+        &changes.grant_types.clone().unwrap_or(current.grant_types),
+        &changes
+            .response_types
+            .clone()
+            .unwrap_or(current.response_types)
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    if let Some(redirect_uris) = &changes.redirect_uris {
+        sqlx::query!(
+            "DELETE FROM redirect_uris WHERE application_id = $1",
+            application_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        for redirect_uri in redirect_uris {
+            sqlx::query!(
+                "INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at)
+                 VALUES ($1, $2, $3, $3)",
+                application_id,
+                redirect_uri,
+                crate::model::utc_now()
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
