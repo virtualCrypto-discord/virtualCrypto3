@@ -1,3 +1,4 @@
+pub mod interactions;
 pub mod v2;
 
 use axum::Json;
@@ -7,15 +8,23 @@ use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde_json::json;
 
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/health", get(health))
-        .merge(v2::router().layer(middleware::from_fn(require_json_accept)))
+    // Everything under `/api` shares the `plug :accepts, ["json"]` pipeline, and
+    // the Discord interactions endpoint lives in that scope too.
+    let api = Router::new()
+        .route(
+            "/api/integrations/discord/interactions",
+            post(interactions::index),
+        )
+        .merge(v2::router())
+        .layer(middleware::from_fn(require_json_accept));
+
+    Router::new().route("/health", get(health)).merge(api)
 }
 
 async fn health() -> Json<serde_json::Value> {

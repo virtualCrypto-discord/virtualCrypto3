@@ -9,14 +9,21 @@ use crate::discord::DiscordApi;
 pub struct AppState {
     pool: PgPool,
     jwt_secret: Arc<Vec<u8>>,
+    discord_public_key: Arc<[u8; 32]>,
     discord: Arc<dyn DiscordApi>,
 }
 
 impl AppState {
-    pub fn new(pool: PgPool, jwt_secret: impl Into<Vec<u8>>, discord: Arc<dyn DiscordApi>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        jwt_secret: impl Into<Vec<u8>>,
+        discord_public_key: [u8; 32],
+        discord: Arc<dyn DiscordApi>,
+    ) -> Self {
         Self {
             pool,
             jwt_secret: Arc::new(jwt_secret.into()),
+            discord_public_key: Arc::new(discord_public_key),
             discord,
         }
     }
@@ -27,6 +34,12 @@ impl AppState {
 
     pub fn discord(&self) -> &Arc<dyn DiscordApi> {
         &self.discord
+    }
+
+    /// The Discord application's Ed25519 public key, used to verify that an
+    /// interaction request really came from Discord.
+    pub fn discord_public_key(&self) -> &[u8; 32] {
+        &self.discord_public_key
     }
 }
 

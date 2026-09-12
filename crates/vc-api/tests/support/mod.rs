@@ -108,7 +108,36 @@ pub fn fake() -> Arc<FakeDiscord> {
 }
 
 pub fn state(pool: PgPool, discord: Arc<FakeDiscord>) -> AppState {
-    AppState::new(pool, JWT_SECRET, discord)
+    AppState::new(pool, JWT_SECRET, discord_public_key(), discord)
+}
+
+/// The Ed25519 seed the Elixir test config uses for the Discord interaction
+/// handshake. The public key is derived from it, so the pair cannot drift.
+pub const DISCORD_KEY_SEED: [u8; 32] = [
+    39, 17, 61, 144, 80, 58, 130, 10, 180, 113, 133, 86, 163, 239, 126, 99, 222, 218, 21, 76, 55,
+    75, 56, 158, 183, 252, 253, 147, 84, 164, 94, 253,
+];
+
+pub fn discord_signing_key() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&DISCORD_KEY_SEED)
+}
+
+pub fn discord_public_key() -> [u8; 32] {
+    discord_signing_key().verifying_key().to_bytes()
+}
+
+/// Sign an interaction body the way Discord does: Ed25519 over
+/// `timestamp <> body`, with the signature hex-encoded.
+pub fn sign_interaction(body: &[u8]) -> (String, String) {
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
+
+    let mut message = Vec::with_capacity(timestamp.len() + body.len());
+    message.extend_from_slice(timestamp.as_bytes());
+    message.extend_from_slice(body);
+
+    let signature = ed25519_dalek::Signer::sign(&discord_signing_key(), &message);
+
+    (timestamp, hex::encode(signature.to_bytes()))
 }
 
 pub async fn insert_user(pool: &PgPool, id: i32, discord_id: i64) {

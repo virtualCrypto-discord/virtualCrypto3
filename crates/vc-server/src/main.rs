@@ -19,6 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let discord_client_id = require_env("DISCORD_CLIENT_ID")?;
     let discord_client_secret = require_env("DISCORD_CLIENT_SECRET")?;
     let discord_bot_token = require_env("DISCORD_BOT_TOKEN")?;
+    let discord_public_key = vc_api::discord::parse_public_key(&require_env("DISCORD_PUBLIC_KEY")?)
+        .ok_or_else(|| "DISCORD_PUBLIC_KEY must be 32 hex-encoded bytes".to_string())?;
     let port = std::env::var("PORT")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -28,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(
         pool,
         jwt_secret,
+        discord_public_key,
         Arc::new(HttpDiscordApi::new(
             discord_client_id,
             discord_client_secret,

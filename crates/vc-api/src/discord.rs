@@ -173,3 +173,34 @@ pub fn filter_profile(payload: Map<String, Value>) -> BTreeMap<String, Value> {
         })
         .collect()
 }
+
+/// The Discord interaction handshake, as `InteractionsController.verify/1`
+/// implements it: the signature is lowercase hex over `timestamp <> body`, and
+/// the application's Ed25519 public key is configured in hex.
+pub fn verify_signature(
+    public_key: &[u8; 32],
+    signature_hex: &str,
+    timestamp: &str,
+    body: &[u8],
+) -> bool {
+    let Ok(signature) = hex::decode(signature_hex) else {
+        return false;
+    };
+    let Ok(signature) = ed25519_dalek::Signature::from_slice(&signature) else {
+        return false;
+    };
+    let Ok(public_key) = ed25519_dalek::VerifyingKey::from_bytes(public_key) else {
+        return false;
+    };
+
+    let mut message = Vec::with_capacity(timestamp.len() + body.len());
+    message.extend_from_slice(timestamp.as_bytes());
+    message.extend_from_slice(body);
+
+    public_key.verify_strict(&message, &signature).is_ok()
+}
+
+/// Parse the configured hex-encoded Ed25519 public key.
+pub fn parse_public_key(value: &str) -> Option<[u8; 32]> {
+    hex::decode(value).ok()?.try_into().ok()
+}
