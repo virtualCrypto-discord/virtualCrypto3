@@ -11,8 +11,16 @@
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use vc_auth::AuthUser;
+
+use vc_core::application::{
+    MetadataError, NewApplication, check_application_type, check_grant_types, check_logo_uri,
+    check_response_types, check_slug, check_url,
+};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -182,6 +190,229 @@ pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Json<
         },
         vc_auth::Kind::User => Value::Array(found.iter().map(render).collect()),
     }))
+}
+
+/// A registration request, with nothing required: the Elixir answers a malformed
+/// one with an OAuth error rather than a 422, so absence has to reach the checks
+/// instead of being rejected on the way in.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Registration {
+    pub response_types: Option<Vec<String>>,
+    pub grant_types: Option<Vec<String>>,
+    pub application_type: Option<String>,
+    pub client_name: Option<String>,
+    pub client_uri: Option<String>,
+    pub logo_uri: Option<String>,
+    pub webhook_url: Option<String>,
+    pub discord_support_server_invite_slug: Option<String>,
+    pub redirect_uris: Option<Vec<String>>,
+    /// The caller's Discord id, which the handler obtained by asking Discord about
+    /// them — it is not taken from the request, and this is here to say so.
+    #[serde(skip)]
+    pub owner_discord_id: Option<i64>,
+}
+
+/// An OAuth error, which is the shape every endpoint around this one answers with.
+fn refused(status: StatusCode, error: &str, description: &str) -> Response {
+    (
+        status,
+        Json(json!({ "error": error, "error_description": description })),
+    )
+        .into_response()
+}
+
+/// A metadata refusal, which is always `invalid_client_metadata` and the rule's
+/// own description.
+fn metadata(error: MetadataError) -> Box<Response> {
+    Box::new(refused(
+        StatusCode::BAD_REQUEST,
+        "invalid_client_metadata",
+        error.description(),
+    ))
+}
+
+/// The checks that come before anything is asked of Discord: who is asking,
+/// whether they may, and whether what they asked for makes sense.
+///
+/// The order is the Elixir's and is observable, because the first failure is the
+/// one reported. The two defaults are the Elixir's too: an absent
+/// `application_type` is `web`, and absent `grant_types` is an **empty list** —
+/// not the column's default — so a registration that asks for nothing gets an
+/// application that can do nothing.
+pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Box<Response>> {
+    if user.kind != vc_auth::Kind::User {
+        return Err(Box::new(refused(
+            StatusCode::UNAUTHORIZED,
+            "invalid_kind",
+            "a user token is required",
+        )));
+    }
+
+    if !user.scopes.oauth2_register {
+        return Err(Box::new(refused(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "oauth2.register is required",
+        )));
+    }
+
+    check_response_types(&body.response_types.unwrap_or_default()).map_err(metadata)?;
+    let grant_types = check_grant_types(&body.grant_types.unwrap_or_default()).map_err(metadata)?;
+
+    let application_type = body.application_type.unwrap_or_else(|| "web".to_owned());
+    check_application_type(&application_type).map_err(metadata)?;
+
+    // `client_name` is taken as it comes: the Elixir's validator for it is
+    // `&{:ok, &1}`, which is to say there is none.
+    if let Some(client_uri) = body.client_uri.as_deref() {
+        check_url(client_uri, MetadataError::ClientUri).map_err(metadata)?;
+    }
+
+    if let Some(logo_uri) = body.logo_uri.as_deref() {
+        check_logo_uri(logo_uri).map_err(metadata)?;
+    }
+
+    if let Some(webhook_url) = body.webhook_url.as_deref() {
+        check_url(webhook_url, MetadataError::WebhookUrl).map_err(metadata)?;
+    }
+
+    if let Some(slug) = body.discord_support_server_invite_slug.as_deref() {
+        check_slug(slug).map_err(metadata)?;
+    }
+
+    let Some(redirect_uris) = body.redirect_uris else {
+        return Err(Box::new(refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            "redirect_uris_must_be_array",
+        )));
+    };
+
+    // Not `check_url`'s error: a redirect URI's refusal names the redirect URI
+    // rather than the metadata, which is the pair the clients controller answers
+    // with.
+    for redirect_uri in &redirect_uris {
+        if check_url(redirect_uri, MetadataError::ClientUri).is_err() {
+            return Err(Box::new(refused(
+                StatusCode::BAD_REQUEST,
+                "invalid_redirect_uri",
+                "redirect_uri_scheme_must_be_http_or_https",
+            )));
+        }
+    }
+
+    Ok(NewApplication {
+        grant_types,
+        application_type,
+        client_name: body.client_name,
+        client_uri: body.client_uri,
+        logo_uri: body.logo_uri,
+        webhook_url: body.webhook_url,
+        discord_support_server_invite_slug: body.discord_support_server_invite_slug,
+        owner_discord_id: body.owner_discord_id,
+        redirect_uris,
+    })
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use vc_auth::Scopes;
+
+    fn user(kind: vc_auth::Kind, oauth2_register: bool) -> AuthUser {
+        AuthUser {
+            subject: 7,
+            kind,
+            scopes: Scopes {
+                oauth2_register,
+                ..Scopes::default()
+            },
+            jti: String::new(),
+        }
+    }
+
+    fn body() -> Registration {
+        Registration {
+            grant_types: Some(vec!["authorization_code".to_owned()]),
+            redirect_uris: Some(vec!["https://app.example/callback".to_owned()]),
+            ..Registration::default()
+        }
+    }
+
+    fn status(response: &Response) -> u16 {
+        response.status().as_u16()
+    }
+
+    #[test]
+    fn a_user_with_the_scope_is_let_through() {
+        let checked = checked(&user(vc_auth::Kind::User, true), body());
+
+        assert!(checked.is_ok(), "{:?}", checked.err().map(|r| r.status()));
+    }
+
+    /// A user token is what registration is for; an application cannot register
+    /// another.
+    #[test]
+    fn an_application_token_is_refused() {
+        let response = checked(&user(vc_auth::Kind::App, true), body()).expect_err("a refusal");
+
+        assert_eq!(status(&response), 401);
+    }
+
+    #[test]
+    fn a_user_without_the_scope_is_refused() {
+        let response = checked(&user(vc_auth::Kind::User, false), body()).expect_err("a refusal");
+
+        assert_eq!(status(&response), 403);
+    }
+
+    /// The two defaults, and the second is the one that bites: asking for no grant
+    /// types gives an application that can do nothing.
+    #[test]
+    fn absent_fields_take_the_elixirs_defaults() {
+        let checked = checked(
+            &user(vc_auth::Kind::User, true),
+            Registration {
+                redirect_uris: Some(vec!["https://app.example/callback".to_owned()]),
+                ..Registration::default()
+            },
+        )
+        .expect("a registration");
+
+        assert_eq!(checked.application_type, "web");
+        assert!(checked.grant_types.is_empty(), "{:?}", checked.grant_types);
+    }
+
+    #[test]
+    fn a_redirect_uri_that_is_not_http_is_refused_by_name() {
+        let response = checked(
+            &user(vc_auth::Kind::User, true),
+            Registration {
+                redirect_uris: Some(vec!["ftp://app.example".to_owned()]),
+                ..body()
+            },
+        )
+        .expect_err("a refusal");
+
+        assert_eq!(status(&response), 400);
+    }
+
+    /// The order is the contract: this request is wrong about two things and is
+    /// refused for the metadata rather than for the redirect URI.
+    #[test]
+    fn the_first_failure_is_the_one_reported() {
+        let response = checked(
+            &user(vc_auth::Kind::User, true),
+            Registration {
+                application_type: Some("service".to_owned()),
+                redirect_uris: Some(vec!["ftp://app.example".to_owned()]),
+                ..Registration::default()
+            },
+        )
+        .expect_err("a refusal");
+
+        assert_eq!(status(&response), 400);
+    }
 }
 
 #[cfg(test)]
