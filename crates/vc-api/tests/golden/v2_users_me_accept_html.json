@@ -1,0 +1,16 @@
+{
+  "body": {
+    "errors": {
+      "detail": "Not Acceptable"
+    }
+  },
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me"
+  },
+  "status": 406
+}

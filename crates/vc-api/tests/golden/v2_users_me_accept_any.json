@@ -1,0 +1,26 @@
+{
+  "body": {
+    "discord": {
+      "avatar": null,
+      "bot": false,
+      "discriminator": "0001",
+      "id": "100000000000000001",
+      "mfa_enabled": true,
+      "premium_type": 2,
+      "public_flags": 0,
+      "system": false,
+      "username": "tester"
+    },
+    "id": "1"
+  },
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "content-type": "application/json; charset=utf-8",
+    "x-request-id": "GNRsQBA4-nU3WsYAAAAL"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me"
+  },
+  "status": 200
+}

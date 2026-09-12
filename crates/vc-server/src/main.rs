@@ -1,7 +1,10 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
+use vc_api::AppState;
+use vc_api::discord::HttpDiscordApi;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,12 +14,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let database_url = require_env("DATABASE_URL")?;
+    let jwt_secret = require_env("GUARDIAN_SECRET_KEY")?;
+    let discord_client_id = require_env("DISCORD_CLIENT_ID")?;
+    let discord_client_secret = require_env("DISCORD_CLIENT_SECRET")?;
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8080);
+
+    let pool = vc_core::db::connect(&database_url, 10).await?;
+    let state = AppState::new(
+        pool,
+        jwt_secret,
+        Arc::new(HttpDiscordApi::new(
+            discord_client_id,
+            discord_client_secret,
+        )),
+    );
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
     tracing::info!(%addr, "virtualCrypto server listening");
 
-    axum::serve(listener, vc_api::router()).await?;
+    axum::serve(listener, vc_api::router(state)).await?;
 
     Ok(())
+}
+
+fn require_env(key: &str) -> Result<String, Box<dyn std::error::Error>> {
+    std::env::var(key).map_err(|_| format!("environment variable {key} is required").into())
 }

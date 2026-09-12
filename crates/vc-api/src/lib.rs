@@ -1,13 +1,16 @@
 //! axum routers implementing the virtualCrypto HTTP API.
 
-use axum::{Json, Router, routing::get};
-use serde_json::{Value, json};
+pub mod discord;
+pub mod error;
+pub mod routes;
+pub mod state;
 
-/// Root router. The `/api/v2` surface is mounted here as it is implemented.
-pub fn router() -> Router {
-    Router::new().route("/health", get(health))
-}
+use axum::Router;
 
-async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "version": vc_core::version() }))
+pub use error::ApiError;
+pub use state::AppState;
+
+/// Build the application router.
+pub fn router(state: AppState) -> Router {
+    routes::router().with_state(state)
 }

@@ -1,0 +1,66 @@
+pub mod v2;
+
+use axum::Json;
+use axum::Router;
+use axum::extract::Request;
+use axum::http::header::ACCEPT;
+use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use serde_json::json;
+
+use crate::state::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/health", get(health))
+        .merge(v2::router().layer(middleware::from_fn(require_json_accept)))
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "ok",
+        "version": vc_core::version(),
+    }))
+}
+
+/// Mirrors Phoenix's `plug :accepts, ["json"]`, which the router applies to the
+/// whole `/api` scope. A request whose `Accept` header cannot be satisfied with
+/// JSON is refused with 406 before reaching any handler.
+async fn require_json_accept(request: Request, next: Next) -> Response {
+    if accepts_json(request.headers()) {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::NOT_ACCEPTABLE,
+            Json(json!({ "errors": { "detail": "Not Acceptable" } })),
+        )
+            .into_response()
+    }
+}
+
+/// A missing `Accept` header is treated as `*/*`, which Phoenix does too. Media
+/// type parameters are ignored, so a `q=0` exclusion is not honoured.
+fn accepts_json(headers: &HeaderMap) -> bool {
+    let Some(value) = headers.get(ACCEPT) else {
+        return true;
+    };
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    if value.trim().is_empty() {
+        return true;
+    }
+
+    value.split(',').any(|entry| {
+        let media = entry
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+
+        matches!(media.as_str(), "*/*" | "application/*" | "application/json")
+    })
+}

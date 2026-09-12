@@ -1,0 +1,40 @@
+{
+  "body": {
+    "discord": {
+      "avatar": null,
+      "bot": false,
+      "discriminator": "0001",
+      "id": "100000000000000001",
+      "mfa_enabled": true,
+      "premium_type": 2,
+      "public_flags": 0,
+      "system": false,
+      "username": "tester"
+    },
+    "id": "1"
+  },
+  "extra": {
+    "discord_users_after": {
+      "expires": "2026-09-12T01:46:14",
+      "refresh_token": "refreshed-refresh-token",
+      "token": "refreshed-token",
+      "updated_at": "2026-09-05T00:46:14"
+    },
+    "discord_users_before": {
+      "expires": "2026-09-12T01:34:04",
+      "refresh_token": "stub-refresh-token",
+      "token": "stub-token",
+      "updated_at": "2026-09-05T00:46:14"
+    }
+  },
+  "headers": {
+    "cache-control": "max-age=0, private, must-revalidate",
+    "content-type": "application/json; charset=utf-8",
+    "x-request-id": "GNRsQBFW8gk3WsYAAAEK"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/users/@me"
+  },
+  "status": 200
+}
