@@ -3,12 +3,14 @@
 //! These are the two ends of a Discord login: sending the browser to Discord
 //! with a state to check the answer against, and ending the session afterwards.
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
 use axum::http::header::SET_COOKIE;
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
@@ -150,4 +152,47 @@ pub async fn discord_callback(
         Ok(cookie) => ([(SET_COOKIE, cookie)], Redirect::to(&attempt.continue_to)).into_response(),
         Err(_) => refuse(&state, "the session could not be signed"),
     }
+}
+
+/// The scopes a browser session is issued. The old app's three, unchanged.
+const BROWSER_SCOPES: &[&str] = &["oauth2.register", "vc.pay", "vc.claim"];
+
+/// The old site's `/token`: the session's account, and a token for it.
+///
+/// A request with no session answers 401. The Elixir returned *nothing* from its
+/// controller in that case, which renders as a crash — nothing depended on that,
+/// and a status is something the caller can act on.
+pub async fn token(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(session) = session::from_headers(&headers, state.session_secret()) else {
+        return unauthorized();
+    };
+
+    let Some(user_id) = session.user_id else {
+        return unauthorized();
+    };
+
+    match vc_auth::issue::user_token(
+        state.pool(),
+        state.jwt_secret(),
+        user_id,
+        BROWSER_SCOPES,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    {
+        Ok(token) => Json(json!({
+            "access_token": token,
+            "expires_in": vc_auth::issue::TTL.whole_seconds(),
+        }))
+        .into_response(),
+        Err(_) => unauthorized(),
+    }
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "invalid_token" })),
+    )
+        .into_response()
 }

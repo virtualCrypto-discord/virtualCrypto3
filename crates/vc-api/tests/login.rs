@@ -13,7 +13,7 @@ use axum::body::Body;
 use axum::http::Request;
 use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use sqlx::PgPool;
-use support::{SESSION_SECRET, fake, state};
+use support::{JWT_SECRET, SESSION_SECRET, fake, state};
 use tower::ServiceExt;
 use vc_api::session::{COOKIE_NAME, Session};
 
@@ -215,4 +215,101 @@ async fn a_callback_whose_state_does_not_match_is_refused(pool: PgPool) {
         .expect("count the authorizations");
 
     assert_eq!(stored.count, Some(0), "nothing was recorded");
+}
+
+/// Walk a browser through the whole login and hand back the cookie it ends with.
+async fn logged_in(app: Router, pool: &PgPool) -> String {
+    let _ = pool;
+
+    let (_, location, cookie) = visit(app.clone(), "/login?continue=/me").await;
+    let sent = location
+        .split("state=")
+        .nth(1)
+        .expect("a state in the redirect")
+        .to_owned();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/callback/discord?state={sent}&code=the-code"))
+                .header(COOKIE, cookie.split(';').next().expect("the cookie"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    response
+        .headers()
+        .get(SET_COOKIE)
+        .expect("a cookie")
+        .to_str()
+        .expect("a header")
+        .split(';')
+        .next()
+        .expect("the cookie itself")
+        .to_owned()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_session_can_get_a_token(pool: PgPool) {
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let cookie = logged_in(app.clone(), &pool).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header(COOKIE, cookie)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 200);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let token: serde_json::Value = serde_json::from_slice(&body).expect("json");
+
+    assert_eq!(token["expires_in"], 3600);
+
+    let claims = vc_auth::jwt::verify(
+        token["access_token"].as_str().expect("a token"),
+        JWT_SECRET.as_bytes(),
+    )
+    .expect("a token the API would accept");
+
+    assert_eq!(claims.kind, "user");
+    assert_eq!(claims.scopes, ["oauth2.register", "vc.pay", "vc.claim"]);
+
+    // The row is the point of issuing it here rather than by hand: a token whose
+    // id is not recorded cannot be revoked.
+    let recorded = sqlx::query!("SELECT COUNT(*) AS count FROM user_access_tokens")
+        .fetch_one(&pool)
+        .await
+        .expect("count the tokens");
+
+    assert_eq!(recorded.count, Some(1));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn without_a_session_there_is_no_token(pool: PgPool) {
+    let app = vc_api::router(state(pool, fake()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 401);
 }

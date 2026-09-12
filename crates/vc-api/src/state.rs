@@ -79,6 +79,11 @@ impl AppState {
         &self.pool
     }
 
+    /// What the API's own bearer tokens are signed with.
+    pub fn jwt_secret(&self) -> &[u8] {
+        &self.signing.jwt
+    }
+
     /// What the browser's session cookie is signed with. Deliberately not the
     /// one above: a session cookie and an API token are both JWTs, and they must
     /// not be interchangeable.

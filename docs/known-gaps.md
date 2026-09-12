@@ -196,3 +196,11 @@ is why this was accepted rather than hand-building a 302 — and for the consent
 screen's `POST`, which is the case that follows, 303 is the correct answer rather
 than merely an acceptable one.
 
+### `POST /token` without a session answers 401
+
+The Elixir controller's `token/2` returned `nil` when the session had no user,
+which in Phoenix is not a response at all — the request fails rather than being
+answered. Nothing depended on that, and a status is something a caller can act
+on, so this answers `401` with the same `invalid_token` body the rest of the API
+uses.
+
