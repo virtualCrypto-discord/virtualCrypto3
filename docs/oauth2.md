@@ -336,3 +336,46 @@ and accept that the issued tokens are not revocable. The tables are built for
 the former, and a client that cannot revoke a token it has leaked is the reason
 the endpoint exists.
 
+## The metadata validator, rule by rule
+
+`Application.Metadata.Validator` is where registration decides what it will
+accept. Every field except `application_type` accepts `nil` and means "not
+given", and every refusal is an `invalid_client_metadata` with a description that
+is the field's name and the rule, spelled out:
+
+| Field | Rule | Refusal |
+| --- | --- | --- |
+| `response_types` | a subset of `["code"]` | `response_types_must_constructed_from_code` |
+| `grant_types` | a subset of `["authorization_code", "refresh_token"]` | `grant_types_must_constructed_from_authorization_code_or_refresh_token` |
+| `client_uri` | `http` or `https` | `client_uri_scheme_must_be_http_or_https` |
+| `webhook_url` | `http` or `https` | `webhook_url_scheme_must_be_http_or_https` |
+| `logo_uri` | `https`, or `data:` with an image mediatype and at most 2048 bytes | three, below |
+| `discord_support_server_invite_slug` | at least one `[0-9a-zA-Z]` | `..._must_construct_from_half_width_alphanumeric` |
+| `application_type` | `web` or `native` | `application_type_must_be_web_or_native` |
+
+Four things in that table are worth more than the table.
+
+**The two list fields are returned as sets.** `response_types` and `grant_types`
+go through `MapSet.new/1` and come back from `MapSet.to_list/1`, so a request that
+names `code` twice is stored once. The deduplication is not a side effect; the
+validated value is what the row gets.
+
+**`logo_uri` has three refusals and their order matters.** A `data:` URI is
+checked for its mediatype first (`logo_uri_mime_type_must_be_image`) and its size
+second (`logo_uri_must_not_bigger_than_2048_bytes`), and the size is that of the
+**rebuilt** URI rather than the string that arrived. The allowed mediatypes are
+bmp, `vnd.microsoft.icon`, gif, jpeg, png, `svg+xml`, tiff and webp — no others,
+so a `data:text/html` logo is refused whatever else is right about it. Anything
+that is neither `https` nor `data` is `logo_uri_scheme_must_be_data_or_https`.
+
+**The slug rule is not anchored.** `Regex.match?(~r/[0-9a-zA-Z]+/, slug)` is a
+search, not a match of the whole string, so `"!!!abc!!!"` passes and so does
+anything else containing one alphanumeric character. The description says "must
+construct from half-width alphanumeric", which is what it was meant to say; this
+is the difference between what a rule says and what it does, and it is recorded
+rather than quietly tightened, since a client's slug is stored as it was sent.
+
+**`application_type` is the one field with no `nil` clause**, so the others'
+"not given" cannot be said of it. The column has a default of `web`, so it is
+never absent in practice.
+
