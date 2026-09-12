@@ -53,6 +53,22 @@ pub trait DiscordApi: Send + Sync {
     /// stores after a 404.
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError>;
 
+    /// `Discord.Api.Raw.get_guild_member_with_status_code/2`, which the consent
+    /// screen uses to ask whether the logged-in user may act for a guild. A 404
+    /// is `None`, since "not a member" is an answer rather than a failure.
+    ///
+    /// Deliberately not cached, like the rest of `Raw`: a permission question
+    /// answered from fifteen minutes ago is a permission question answered wrongly.
+    async fn get_guild_member(
+        &self,
+        guild_id: i64,
+        user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError>;
+
+    /// `Discord.Api.Raw.get_roles/1`: the guild's roles, whose permissions are
+    /// what a member's own permissions are ORed together from.
+    async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError>;
+
     /// `post_webhook_message/3`: the follow-up a component answers with, which
     /// is where a button's result is shown. The Elixir tests swap the service
     /// for one that records the body instead of sending it.
@@ -227,6 +243,18 @@ impl DiscordApi for CachedDiscord {
             .await
     }
 
+    async fn get_guild_member(
+        &self,
+        guild_id: i64,
+        user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        self.inner.get_guild_member(guild_id, user_id).await
+    }
+
+    async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        self.inner.get_roles(guild_id).await
+    }
+
     async fn post_webhook_message(
         &self,
         application_id: &str,
@@ -334,6 +362,67 @@ impl DiscordApi for HttpDiscordApi {
                 "expected a JSON object, got {other}"
             ))),
         }
+    }
+
+    async fn get_guild_member(
+        &self,
+        guild_id: i64,
+        user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        let response = self
+            .http
+            .get(format!(
+                "https://discord.com/api/guilds/{guild_id}/members/{user_id}"
+            ))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        match body {
+            Value::Object(member) => Ok(Some(member)),
+            _ => Err(DiscordError::Request("member is not an object".into())),
+        }
+    }
+
+    async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        let response = self
+            .http
+            .get(format!("https://discord.com/api/guilds/{guild_id}/roles"))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        Ok(body
+            .as_array()
+            .map(|roles| {
+                roles
+                    .iter()
+                    .filter_map(|role| role.as_object().cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {

@@ -42,6 +42,10 @@ pub fn utc_now() -> PrimitiveDateTime {
 pub struct FakeDiscord {
     payload: Map<String, Value>,
     guild: Map<String, Value>,
+    /// What `get_guild_member` reports, and the guild's roles. Only the consent
+    /// screen asks for either, so they are empty unless a test sets them.
+    member: Map<String, Value>,
+    roles: Vec<Map<String, Value>>,
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
     webhooks: Mutex<Vec<Value>>,
@@ -50,6 +54,30 @@ pub struct FakeDiscord {
 impl FakeDiscord {
     pub fn new() -> Self {
         Self::with_guild(json!({ "name": "TestGuild" }))
+    }
+
+    /// The member `get_guild_member` reports and the guild's roles. A member's
+    /// permissions are ORed from the roles they carry, so a test says which
+    /// roles the member has and what each role grants — the permissions being
+    /// decimal strings, as Discord sends them.
+    pub fn with_member(member_roles: &[&str], roles: &[(i64, u64)]) -> Self {
+        let mut fake = Self::new();
+
+        fake.member = json!({ "roles": member_roles })
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        fake.roles = roles
+            .iter()
+            .map(|(id, permissions)| {
+                json!({ "id": id.to_string(), "permissions": permissions.to_string() })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        fake
     }
 
     /// The guild `get_guild` reports. The interaction tests vary it to cover the
@@ -62,6 +90,8 @@ impl FakeDiscord {
         Self {
             payload: golden_discord_payload(),
             guild,
+            member: Map::new(),
+            roles: Vec::new(),
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             webhooks: Mutex::new(Vec::new()),
@@ -98,6 +128,18 @@ impl Default for FakeDiscord {
 impl DiscordApi for FakeDiscord {
     async fn get_user_info(&self, _token: &str) -> Result<Map<String, Value>, DiscordError> {
         Ok(self.payload.clone())
+    }
+
+    async fn get_guild_member(
+        &self,
+        _guild_id: i64,
+        _user_id: i64,
+    ) -> Result<Option<Map<String, Value>>, DiscordError> {
+        Ok(Some(self.member.clone()))
+    }
+
+    async fn get_roles(&self, _guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        Ok(self.roles.clone())
     }
 
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
