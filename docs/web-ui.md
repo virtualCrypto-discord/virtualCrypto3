@@ -389,6 +389,20 @@ members and roles (`get_guild_member`, `get_roles`) and no integrations call.
 
 ## The contract flow is a sketch, not a flow
 
+### Read, and still a sketch: `/contract/:id` in the tip
+
+`live/contract/approve_application.ex` is eight lines and its `mount` returns
+`{:ok, socket}` with **no assigns at all**; the 99-line `.heex` beside it is therefore
+static sample data — `@sizumita`, `@tignear`, `100v`, two hard-coded avatar URLs and a
+placeholder that is not even this site's — with 未承認/承認済み badges and a キャンセル /
+承認する pair of buttons.
+
+So the *shape* is readable even though the flow is not, and the shape is this: a contract
+names the users whose consent it needs, the currencies it would let VirtualCrypto move
+for them (`100v from @sizumita`, `pay to @tignear`), and the two answers. What it does
+when 承認する is pressed is not in the tip, and this is the same trap the connect flow was
+read out of — so the next step is `git log -S` for the LiveView, not this file.
+
 `/contract/:id` is routed (`router.ex` l.74) to
 `live/contract/approve_application.ex`, and that module is eight lines: it aliases
 `VirtualCrypto.Auth`, and its `mount` ignores both `params` and `session` and
