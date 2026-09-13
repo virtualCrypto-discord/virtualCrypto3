@@ -503,14 +503,16 @@ parameter that only ever had one valid value, and neither path is free to mean b
 
 The list's own tests moved with it (`oauth2_clients_mine.rs`), and the round trip test
 that reads the list and connects with what it answered caught the move immediately, which
-is the second time that test has earned its place. `oauth2_clients_me.rs` covers the read.
+is the second time that test has earned its place. `oauth2_clients_me.rs` covers the read,
+and its last test registers and then follows `registration_client_uri` with the token the
+registration answered with.
 
-What is still not covered: registering and then reading the application back with the
-token registration answered. Driving `POST /oauth2/clients` needs the caller to have a
-stored Discord authorization — it is verified against Discord, as the Elixir's was — and
-the test support has no fixture for one. The test was written, refused a 500 at that
-check, and taken back out rather than worked around, so `registration_client_uri` is
-asserted by nothing.
+That last test was first written off as untestable, on the claim that there was no
+fixture for a stored Discord authorization. There is, and has been:
+`support::insert_discord_auth`, with `set_discord_updated_at` and `discord_auth_row`
+beside it. The claim came from not looking at `support`, which is how three of the
+corrections in this document came about — so it is written down rather than quietly
+fixed.
 
 ```
 client_id, client_secret (null), client_secret_expires_at (0),

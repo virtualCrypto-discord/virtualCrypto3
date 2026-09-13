@@ -10,17 +10,21 @@
 //! answered `/@me` until this was corrected — the list had the path, and the read had
 //! been promised it by the registration it comes from.
 //!
-//! **What is not covered**: registering and then reading the application back with the
-//! token registration answered. Driving `POST /oauth2/clients` needs the caller to have
-//! a stored Discord authorization — it is verified against Discord as the Elixir did —
-//! and the test support has no fixture for one, so the test was tried, refused a 500 at
-//! that check, and taken back out rather than worked around. `registration_client_uri`
-//! is asserted by nothing, for the same reason.
+//! The last test registers, because the address this path is, is the one registration
+//! answers — so it is the registration's own answer that is taken apart and followed.
+//!
+//! It was first written off as untestable, on the claim that the test support had no
+//! fixture for a stored Discord authorization. It does: `support::insert_discord_auth`,
+//! and `set_discord_updated_at` and `discord_auth_row` beside it. That claim was made
+//! without looking, in the same way as the ones this file's neighbours were written to
+//! correct.
 
 mod support;
 
+use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{fake, get, insert_user, mint, mint_app, state};
+use support::{fake, get, insert_discord_auth, insert_user, mint, mint_app, state};
+use tower::ServiceExt;
 
 const URI: &str = "/oauth2/clients/@me";
 const OWNER: i32 = 1;
@@ -103,4 +107,64 @@ async fn without_the_scope_is_403(pool: PgPool) {
 
     assert_eq!(response.status, 403, "{:?}", response.body);
     assert_eq!(response.body["error"], "insufficient_scope");
+}
+
+/// The whole reason the read was missing: registration answers an address, and a client
+/// that goes to it has to be answered. This registers, takes the URI and the token out
+/// of that answer, and reads the application back with them.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_address_registration_hands_out_is_readable(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    insert_discord_auth(&pool, OWNER_DISCORD_ID, "a-discord-token").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/oauth2/clients")
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({
+                "client_name": "one",
+                "redirect_uris": ["https://example.test/callback"],
+            }))
+            .expect("encode body"),
+        ))
+        .expect("request");
+
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(request)
+        .await
+        .expect("router response");
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let registered: Value = serde_json::from_slice(&bytes).expect("json body");
+
+    assert_eq!(status, 201, "{registered:?}");
+
+    let uri = registered["registration_client_uri"]
+        .as_str()
+        .expect("a registration_client_uri");
+
+    assert!(
+        uri.ends_with("/oauth2/clients/@me"),
+        "the address it hands out is this one: {uri}"
+    );
+
+    let registration_token = registered["registration_access_token"]
+        .as_str()
+        .expect("a registration_access_token");
+
+    let read = get(
+        vc_api::router(state(pool, fake())),
+        "/oauth2/clients/@me",
+        Some(registration_token),
+    )
+    .await;
+
+    assert_eq!(read.status, 200, "{:?}", read.body);
+    assert_eq!(read.body["client_id"], registered["client_id"]);
 }
