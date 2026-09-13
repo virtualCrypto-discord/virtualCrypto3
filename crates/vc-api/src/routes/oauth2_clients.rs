@@ -6,8 +6,7 @@
 //! registration uses for "never". None of that can be inferred from the columns,
 //! which is why it is written once and tested.
 //!
-//! The endpoints themselves are not here yet: they need the read that fills this
-//! in, and the registration that issues a client secret.
+//! The endpoints are here too: the read, the list, the registration and the edit.
 
 use axum::Json;
 use axum::extract::State;
@@ -96,8 +95,15 @@ pub fn render(details: &Details) -> Value {
 /// The read that fills [`Details`] in: the application, the account that owns it,
 /// and its redirect URIs.
 ///
-/// Three places in two queries. The join is on `users.application_id`, which is
-/// the only link between an application and the account that registered it.
+/// Three places in two queries. The join is on `users.application_id`, which links an
+/// application to **the account created for it** — the one with no `discord_id`, made
+/// by registration — and **not** to the person who registered it. The person is
+/// `applications.owner_discord_id`, a Discord id rather than an account id, and
+/// [`vc_core::application::owned_by`] is the read that goes through it.
+///
+/// This distinction is written out because it has already been got wrong once: the
+/// list endpoint read this join as ownership and answered an empty list to somebody
+/// who owned an application.
 pub async fn details(
     pool: &sqlx::PgPool,
     application_id: i64,
