@@ -428,14 +428,14 @@ mod tests {
         for command in commands() {
             let name = command["name"].as_str().unwrap_or("?").to_owned();
 
-            // `twilight_model`'s `Command` is the shape Discord *answers* with, so it has
-            // fields a request never sends. They are filled with what Discord would put
-            // there, and nothing else is touched: what the rules below see is this
+            // `twilight_model`'s `Command` is the type both halves of Twilight use —
+            // `twilight_util::builder::command::CommandBuilder` produces it, and Discord
+            // answers with it — and `version` is the one field it requires that a request
+            // does not carry. It is a non-zero number, so a builder fills it with 1 and so
+            // does this; nothing else is added, and what the rules below see is this
             // payload's name, description, options, types, limits and flags, which is the
             // whole of what it says.
             let mut payload = command;
-            payload["id"] = json!("1");
-            payload["application_id"] = json!("1");
             payload["version"] = json!("1");
 
             let parsed: twilight_model::application::command::Command =
