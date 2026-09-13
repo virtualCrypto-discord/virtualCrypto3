@@ -225,24 +225,22 @@ async fn owned(
 /// integrations and insists one of them is this bot and says so in its description. Nothing
 /// here can assert ownership, which is why this is the same `connect_application` the route
 /// calls, with the guild the interaction already carries instead of one somebody pasted.
-async fn connect(
+/// Connecting a bot, once it is known which bot.
+///
+/// Where that came from is the caller's business — the option a subcommand was given, or the
+/// picker on the application's screen — and everything after it is the same flow, which is the
+/// point. The guild is always the interaction's: connecting from a DM would mean asking for a
+/// guild id to be typed, and that typing is what the web page's form did badly.
+async fn connect_bot(
     state: &AppState,
-    sub_options: Option<&Value>,
+    client_id: &str,
+    bot: &str,
     payload: &Value,
 ) -> Result<Value, CommandError> {
-    let client_id = client_id_of(sub_options)?;
-
     let Some(guild) = payload.get("guild_id").and_then(Value::as_str) else {
-        return Ok(message(ephemeral(vec![developer::plain(
+        return Ok(developer::plain(
             "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application connect` を実行してください。",
-        )])));
-    };
-
-    let bot = match sub_options.and_then(Value::as_object) {
-        Some(options) => option_text(options, "bot")?,
-        // The option is required and its picker only answers with users, so either of these
-        // is this side's assumption failing rather than something a caller did.
-        None => return Err(CommandError::missing("connect was given no bot")),
+        ));
     };
 
     // Discord sends every id as text and this is the same single parse the route makes. The
@@ -254,32 +252,38 @@ async fn connect(
     };
 
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(message(ephemeral(vec![developer::plain(
-            "そのアプリケーションはありません。",
-        )])));
+        return Ok(developer::plain("そのアプリケーションはありません。"));
     };
 
-    match crate::routes::connect::connect_application(state, &found, &bot, bot_id, guild_id).await {
-        Ok(()) => Ok(message(ephemeral(vec![developer::connect_result(
-            &found.client_id,
-            None,
-        )]))),
-        Err(refusal) => Ok(message(ephemeral(vec![
-            match refusal.description.as_deref() {
-                Some(description) => developer::connect_result(&found.client_id, Some(description)),
-                // A failure with no description is this service's, and `connect_result` cannot
-                // say that: its `None` is the success this just was not.
-                None => developer::refusal(
-                    "接続",
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::List,
-                    ),
-                    "アプリケーション",
-                    None,
-                ),
-            },
-        ]))),
+    match crate::routes::connect::connect_application(state, &found, bot, bot_id, guild_id).await {
+        Ok(()) => Ok(developer::connect_result(&found.client_id, None)),
+        Err(refusal) => Ok(match refusal.description.as_deref() {
+            Some(description) => developer::connect_result(&found.client_id, Some(description)),
+            // A failure with no description is this service's, and `connect_result` cannot say
+            // that: its `None` is the success this just was not.
+            None => developer::refusal("接続", None),
+        }),
     }
+}
+
+/// `/application connect`, whose bot is one of its options.
+async fn connect(
+    state: &AppState,
+    sub_options: Option<&Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let client_id = client_id_of(sub_options)?;
+
+    let bot = match sub_options.and_then(Value::as_object) {
+        Some(options) => option_text(options, "bot")?,
+        // The option is required and its picker only answers with users, so this is this side's
+        // assumption failing rather than something a caller did.
+        None => return Err(CommandError::missing("connect was given no bot")),
+    };
+
+    Ok(message(ephemeral(vec![
+        connect_bot(state, client_id, &bot, payload).await?,
+    ])))
 }
 
 /// One application, with its secret on the screen.
@@ -399,14 +403,7 @@ async fn registration(
     // Built by `body` out of what the modal asked for, so a body that will not read is this
     // side's bug rather than the caller's, and it is answered the way an internal refusal is.
     let Ok(registration) = serde_json::from_value::<Registration>(Value::Object(body)) else {
-        return Ok(registered(developer::refusal(
-            "登録",
-            &crate::custom_id::ui::developer::custom_id(
-                crate::custom_id::ui::developer::Screen::Register,
-            ),
-            "もう一度",
-            None,
-        )));
+        return Ok(registered(developer::refusal("登録", None)));
     };
 
     let new = match validated(registration) {
@@ -414,10 +411,6 @@ async fn registration(
         Err(refusal) => {
             return Ok(registered(developer::refusal(
                 "登録",
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::Register,
-                ),
-                "もう一度",
                 refusal.description.as_deref(),
             )));
         }
@@ -440,10 +433,6 @@ async fn registration(
         ))),
         Err(refusal) => Ok(registered(developer::refusal(
             "登録",
-            &crate::custom_id::ui::developer::custom_id(
-                crate::custom_id::ui::developer::Screen::Register,
-            ),
-            "もう一度",
             refusal.description.as_deref(),
         ))),
     }
@@ -465,10 +454,6 @@ async fn edit_form(
     let Some((application_id, found)) = owned(state, client_id, payload).await? else {
         return Ok(registered(developer::refusal(
             "変更",
-            &crate::custom_id::ui::developer::custom_id(
-                crate::custom_id::ui::developer::Screen::List,
-            ),
-            "アプリケーション",
             Some("そのアプリケーションはありません。"),
         )));
     };
@@ -478,11 +463,6 @@ async fn edit_form(
         Err(refusal) => {
             return Ok(registered(developer::refusal(
                 "変更",
-                &crate::custom_id::ui::developer::custom_id_for(
-                    crate::custom_id::ui::developer::Screen::Edit,
-                    client_id,
-                ),
-                "もう一度",
                 refusal.description.as_deref(),
             )));
         }
@@ -501,23 +481,10 @@ async fn edit_form(
                 now.logo_uri.as_deref(),
                 now.client_secret.as_deref(),
             ))),
-            _ => Ok(registered(developer::refusal(
-                "変更",
-                &crate::custom_id::ui::developer::custom_id_for(
-                    crate::custom_id::ui::developer::Screen::Edit,
-                    client_id,
-                ),
-                "もう一度",
-                None,
-            ))),
+            _ => Ok(registered(developer::refusal("変更", None))),
         },
         Err(refusal) => Ok(registered(developer::refusal(
             "変更",
-            &crate::custom_id::ui::developer::custom_id_for(
-                crate::custom_id::ui::developer::Screen::Edit,
-                client_id,
-            ),
-            "もう一度",
             refusal.description.as_deref(),
         ))),
     }
@@ -551,23 +518,33 @@ pub async fn component(
         .and_then(Value::as_i64);
 
     match (component_type, screen) {
-        // The menu. Its id says which screen the menu is on rather than what choosing does,
-        // so the value that came back is the thing to act on, and it is a `client_id`.
-        (Some(3), _) => {
-            let chosen = data
-                .and_then(|data| data.get("values"))
-                .and_then(Value::as_array)
-                .and_then(|values| values.first())
-                .and_then(Value::as_str)
-                .ok_or(CommandError::Unknown)?;
+        // The list's menu. Its id says which screen the menu is on rather than what choosing
+        // does, so the value that came back is the thing to act on, and it is a `client_id`.
+        (Some(3), _) => Ok(update(show(state, chosen(data)?, payload).await?)),
+        // The bot picker on an application's screen, whose value is the bot that was chosen.
+        (Some(5), Screen::Connect) => {
+            let bot = chosen(data)?;
 
-            Ok(update(show(state, chosen, payload).await?))
+            Ok(update(ephemeral(vec![
+                connect_bot(state, &client_id, bot, payload).await?,
+            ])))
         }
+        // The list, from a screen that is not it: the one button left that goes anywhere.
         (Some(2), Screen::List | Screen::Back) => Ok(update(list(state, payload).await?)),
-        (Some(2), Screen::Register) => Ok(register()),
-        (Some(2), Screen::Edit) => edit(state, &client_id, payload).await,
         _ => Err(CommandError::Unknown),
     }
+}
+
+/// The one value a menu came back with.
+///
+/// Every menu here is a single choice — one application to look at, one bot to connect — so the
+/// first value is the answer, and more than one would be a component this module did not build.
+fn chosen(data: Option<&Value>) -> Result<&str, CommandError> {
+    data.and_then(|data| data.get("values"))
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .and_then(Value::as_str)
+        .ok_or(CommandError::Unknown)
 }
 
 /// A screen as a change to the message that was already there.

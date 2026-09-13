@@ -9,6 +9,12 @@
 //!
 //! - Every screen is one [`container`], because that is what groups a message and gives it
 //!   an accent, and the accent is where the state shows.
+//! - A screen's buttons move or choose; they do not open forms. A form belongs to a
+//!   subcommand — `/application register`, `/application edit` — where its fields are in the
+//!   command list and autocomplete fills the ones that name something, and where Discord's own
+//!   menus do the picking a form would otherwise ask for by hand.
+//! - A button that goes nowhere is not on a screen. 戻る named `Home`, which nothing renders
+//!   and nothing dispatches, so pressing it failed.
 //! - One Primary button per row; everything else Secondary.
 //! - A refusal prints `error_description` **verbatim**. The service answers one sentence
 //!   about one state of the world — the bot is not in that server, the integration does
@@ -21,7 +27,7 @@ use serde_json::Value;
 
 use crate::components::{
     ButtonStyle, action_row, button, container, link_button, section, select, select_option,
-    separator, text, thumbnail,
+    separator, text, thumbnail, user_select,
 };
 
 /// The accent each state carries, since the colour is the fastest thing a person reads.
@@ -67,25 +73,9 @@ pub fn applications(applications: &[Value]) -> Value {
     if applications.is_empty() {
         return container(
             Some(WORKING),
-            vec![
-                text("まだアプリケーションを登録していません。"),
-                action_row(vec![
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Register,
-                        ),
-                        "登録する",
-                        ButtonStyle::Primary,
-                    ),
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Home,
-                        ),
-                        "戻る",
-                        ButtonStyle::Secondary,
-                    ),
-                ]),
-            ],
+            vec![text(
+                "まだアプリケーションを登録していません。`/application register` で登録できます。",
+            )],
         );
     }
 
@@ -117,22 +107,6 @@ pub fn applications(applications: &[Value]) -> Value {
                 "アプリケーションを選ぶ",
                 options,
             )]),
-            action_row(vec![
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Register,
-                    ),
-                    "登録する",
-                    ButtonStyle::Secondary,
-                ),
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Home,
-                    ),
-                    "戻る",
-                    ButtonStyle::Secondary,
-                ),
-            ]),
         ],
     )
 }
@@ -152,20 +126,17 @@ pub fn application(
         "Bot はまだ接続されていません。"
     };
 
-    let heading = section(
-        vec![text(format!("**{name}**\n{state}\n`{client_id}`"))],
-        match logo_uri {
-            Some(url) if !url.is_empty() => thumbnail(url),
-            _ => button(
-                &crate::custom_id::ui::developer::custom_id_for(
-                    crate::custom_id::ui::developer::Screen::Connect,
-                    client_id,
-                ),
-                "接続",
-                ButtonStyle::Primary,
-            ),
-        },
-    );
+    let heading = match logo_uri {
+        Some(url) if !url.is_empty() => section(
+            vec![text(format!("**{name}**\n{state}\n`{client_id}`"))],
+            thumbnail(url),
+        ),
+        // Without a logo a section has nothing for its accessory, and the button that was there
+        // went to the connect screen with no bot to connect with.
+        _ => text(format!(
+            "**{name}**\n{state}\n`{client_id}`\n`/application edit` で変更できます。"
+        )),
+    };
 
     container(
         Some(if connected { WORKING } else { REFUSED }),
@@ -176,33 +147,15 @@ pub fn application(
             // button was mine, not the page's: every response here is ephemeral, so
             // revealing it on request shows it to the person already reading.
             secret_block(secret),
-            action_row(vec![
-                // 設定を変更 opens the edit form, which is the whole way to change anything:
-                // it was pointing at the connect screen, and a screen that lies about where
-                // its button goes is worse than one with no button.
-                button(
-                    &crate::custom_id::ui::developer::custom_id_for(
-                        crate::custom_id::ui::developer::Screen::Edit,
-                        client_id,
-                    ),
-                    "設定を変更",
-                    ButtonStyle::Primary,
+            // A row holds either buttons or one select, so the picker is on its own. It is a
+            // picker rather than a button because a button has no bot to connect with, and a bot
+            // is a user — Discord has the menu for that, so nobody types a snowflake.
+            action_row(vec![user_select(
+                &crate::custom_id::ui::developer::custom_id_for(
+                    crate::custom_id::ui::developer::Screen::Connect,
+                    client_id,
                 ),
-                button(
-                    &crate::custom_id::ui::developer::custom_id_for(
-                        crate::custom_id::ui::developer::Screen::Connect,
-                        client_id,
-                    ),
-                    "Bot を接続",
-                    ButtonStyle::Secondary,
-                ),
-            ]),
-            action_row(vec![button(
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::List,
-                ),
-                "戻る",
-                ButtonStyle::Secondary,
+                "接続する Bot を選ぶ",
             )]),
         ],
     )
@@ -229,7 +182,7 @@ fn secret_block(secret: Option<&str>) -> Value {
 /// to fix, and a friendlier sentence would throw that away. It is absent when the failure is
 /// this service's — the endpoint logs the reason and tells the caller nothing, and the
 /// honest screen says the same.
-pub fn refusal(action: &str, again: &str, again_label: &str, description: Option<&str>) -> Value {
+pub fn refusal(action: &str, description: Option<&str>) -> Value {
     let why = match description {
         Some(description) => description.to_owned(),
         None => "このサービス側の問題です。時間をおいてもう一度試してください。".to_owned(),
@@ -239,16 +192,13 @@ pub fn refusal(action: &str, again: &str, again_label: &str, description: Option
         Some(REFUSED),
         vec![
             text(format!("**{action}できませんでした**\n{why}")),
-            action_row(vec![
-                button(again, again_label, ButtonStyle::Primary),
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::List,
-                    ),
-                    "アプリケーション",
-                    ButtonStyle::Secondary,
+            action_row(vec![button(
+                &crate::custom_id::ui::developer::custom_id(
+                    crate::custom_id::ui::developer::Screen::List,
                 ),
-            ]),
+                "アプリケーション",
+                ButtonStyle::Primary,
+            )]),
         ],
     )
 }
@@ -276,46 +226,29 @@ pub fn connect_result(client_id: &str, refusal: Option<&str>) -> Value {
                 text(
                     "Bot を接続しました。このアプリケーションのアカウントに、Bot の Discord ID が入りました。",
                 ),
-                action_row(vec![
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::List,
-                        ),
-                        "アプリケーション",
-                        ButtonStyle::Primary,
+                action_row(vec![button(
+                    &crate::custom_id::ui::developer::custom_id(
+                        crate::custom_id::ui::developer::Screen::List,
                     ),
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Home,
-                        ),
-                        "戻る",
-                        ButtonStyle::Secondary,
-                    ),
-                ]),
+                    "アプリケーション",
+                    ButtonStyle::Primary,
+                )]),
             ],
         ),
         Some(description) => container(
             Some(REFUSED),
             vec![
                 text(format!("接続できませんでした。\n\n{description}")),
-                // The form again, because every refusal here is something the operator
-                // fixes by entering one of the two ids differently.
-                action_row(vec![
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Connect,
-                        ),
-                        "もう一度",
-                        ButtonStyle::Primary,
+                // No もう一度: the way to try again is the picker on the application's screen,
+                // and a button that reopens a form is the thing this screen is not for. The
+                // service's sentence is what the operator acts on, and it is above.
+                action_row(vec![button(
+                    &crate::custom_id::ui::developer::custom_id(
+                        crate::custom_id::ui::developer::Screen::List,
                     ),
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::List,
-                        ),
-                        "アプリケーション",
-                        ButtonStyle::Secondary,
-                    ),
-                ]),
+                    "アプリケーション",
+                    ButtonStyle::Primary,
+                )]),
                 text(format!("`{client_id}`")),
             ],
         ),
@@ -389,16 +322,9 @@ mod tests {
     fn an_empty_list_teaches_the_space() {
         let screen = applications(&[]);
 
-        assert!(first_text(&screen).contains("まだ"));
-        // Compared against the same function the screen uses, so this asserts which
-        // screen the button opens rather than that a string looks like an id — which is
-        // what let a `Home` button pass for a `Register` one.
-        assert_eq!(
-            screen["components"].as_array().expect("components")[1]["components"][0]["custom_id"],
-            json!(crate::custom_id::ui::developer::custom_id(
-                crate::custom_id::ui::developer::Screen::Register
-            ))
-        );
+        // The command, not a button: a screen's buttons move or choose, and this screen has
+        // nowhere to move to, so what it teaches is the command's name.
+        assert!(first_text(&screen).contains("/application register"));
     }
 
     /// Every button that does something carries an id the dispatcher will recognise, and

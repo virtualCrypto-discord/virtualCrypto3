@@ -78,6 +78,22 @@ pub fn link_button(url: &str, label: &str) -> Value {
     })
 }
 
+/// A picker for a user, which is how a bot is chosen.
+///
+/// A bot is a user, so Discord already has the thing to ask with, and asking somebody to paste
+/// a snowflake is what this screen exists to avoid. Only a message may carry one — a modal
+/// takes text inputs and nothing else — which is why connecting offers a picker here instead of
+/// opening a form.
+pub fn user_select(custom_id: &str, placeholder: &str) -> Value {
+    json!({
+        "type": 5,
+        "custom_id": custom_id,
+        "placeholder": placeholder,
+        "min_values": 1,
+        "max_values": 1,
+    })
+}
+
 /// Up to five buttons, or one select, or a single select menu.
 pub fn action_row(children: Vec<Value>) -> Value {
     json!({ "type": 1, "components": children })

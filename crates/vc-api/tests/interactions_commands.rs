@@ -335,8 +335,8 @@ async fn application_list_offers_the_callers_own(pool: PgPool) {
 
     assert!(rendered.contains("まだ"), "{rendered}");
     assert!(
-        rendered.contains(&support::custom_id_for_register()),
-        "{rendered}"
+        rendered.contains("/application register"),
+        "an empty list teaches the command: {rendered}"
     );
 }
 
@@ -519,14 +519,6 @@ async fn a_submitted_edit_changes_the_application(pool: PgPool) {
     assert!(rendered.contains(&client_id), "{rendered}");
 }
 
-fn pressed_button(custom_id: &str, user: i64) -> Value {
-    json!({
-        "type": 3,
-        "data": { "custom_id": custom_id, "component_type": 2 },
-        "user": { "id": user.to_string() },
-    })
-}
-
 fn chose(custom_id: &str, value: &str, user: i64) -> Value {
     json!({
         "type": 3,
@@ -535,47 +527,17 @@ fn chose(custom_id: &str, value: &str, user: i64) -> Value {
     })
 }
 
-/// The `custom_id` of the button with this label, out of the screen the bot rendered.
-///
-/// Taken from the screen rather than written down here, which is the whole point: a button
-/// labelled 設定を変更 carried the connect screen's id and nothing noticed, because nothing
-/// pressed a button.
-fn button_id(screen: &Value, label: &str) -> String {
-    fn walk(value: &Value, label: &str, found: &mut Option<String>) {
-        match value {
-            Value::Object(map) => {
-                if map.get("label").and_then(Value::as_str) == Some(label) {
-                    *found = map
-                        .get("custom_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-
-                for nested in map.values() {
-                    walk(nested, label, found);
-                }
-            }
-            Value::Array(items) => {
-                for item in items {
-                    walk(item, label, found);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut found = None;
-    walk(screen, label, &mut found);
-
-    found.unwrap_or_else(|| panic!("no button labelled {label} in {screen}"))
-}
-
-/// The `custom_id` of the menu on a screen.
+/// The `custom_id` of the menu on a screen, which is a string select on the list and a user
+/// select on an application.
 fn select_id(screen: &Value) -> String {
     fn walk(value: &Value, found: &mut Option<String>) {
         match value {
             Value::Object(map) => {
-                if map.get("type").and_then(Value::as_i64) == Some(3) {
+                if map
+                    .get("type")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|kind| kind == 3 || kind == 5)
+                {
                     *found = map
                         .get("custom_id")
                         .and_then(Value::as_str)
@@ -636,28 +598,13 @@ async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool)
         chosen.body
     );
 
-    let edit = vc_api::custom_id::ui::developer::custom_id_for(
-        vc_api::custom_id::ui::developer::Screen::Edit,
-        &client_id,
-    );
-
     assert_eq!(
-        button_id(&chosen.body["data"], "設定を変更"),
-        edit,
-        "the button that changes settings opens the form for this application"
-    );
-
-    let pressed = interaction(
-        router(pool),
-        pressed_button(&button_id(&chosen.body["data"], "設定を変更"), DISCORD),
-    )
-    .await;
-
-    assert_eq!(pressed.status, 200, "body: {}", pressed.body);
-    assert_eq!(pressed.body["type"], 9, "a modal");
-    assert_eq!(
-        pressed.body["data"]["custom_id"], edit,
-        "and the form knows what it is editing"
+        select_id(&chosen.body["data"]),
+        vc_api::custom_id::ui::developer::custom_id_for(
+            vc_api::custom_id::ui::developer::Screen::Connect,
+            &client_id,
+        ),
+        "the screen offers the bot picker for this application"
     );
 }
 
