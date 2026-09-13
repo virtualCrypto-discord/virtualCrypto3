@@ -11,18 +11,19 @@
 
   const login = loginUrl("/applications");
 
-  // None or one, and that is the data rather than a display choice: an account owns
-  // at most one application. So this is not a list with an "add" button — a second
-  // application is not something this service does — it is a page about the
-  // application, when there is one.
-  let application = $state<Application | null>(null);
+  // A list, and it may be longer than one: ownership is by Discord id and nothing
+  // makes an owner's applications unique. (An earlier version of this page showed a
+  // single application, which came from reading the Rust endpoint instead of the
+  // Elixir's: the endpoint read the wrong column and answered people an empty list.
+  // Both are fixed.)
+  let owned = $state<Application[]>([]);
   let loading = $state(true);
   let refused = $state<ApiError | null>(null);
 
   onMount(async () => {
     try {
       const token = await exchangeToken();
-      [application] = await applications(token.access_token);
+      owned = await applications(token.access_token);
     } catch (thrown) {
       if (thrown instanceof ApiError) {
         refused = thrown;
@@ -44,49 +45,63 @@
   <p><a href={login}>Discord でログイン</a></p>
 {:else if refused}
   <p>読み込めませんでした（{refused.status}）。</p>
-{:else if application}
-  <dl>
-    <dt>client_id</dt>
-    <dd><code>{application.client_id}</code></dd>
-
-    <dt>名前</dt>
-    <dd>{application.client_name ?? "—"}</dd>
-
-    <dt>リダイレクト URI</dt>
-    <dd>
-      {#if application.redirect_uris.length === 0}
-        —
-      {:else}
-        <ul>
-          {#each application.redirect_uris as uri (uri)}
-            <li><code>{uri}</code></li>
-          {/each}
-        </ul>
-      {/if}
-    </dd>
-
-    <dt>webhook</dt>
-    <dd>{application.webhook_url ?? "—"}</dd>
-
-    <dt>公開鍵</dt>
-    <dd><code>{application.public_key}</code></dd>
-  </dl>
-
-  <!-- The edit form is not here yet: `PATCH /oauth2/clients/@me` exists and reads
-       its body by field presence, and the form that decides presence is the work
-       that is left. Saying so is better than a form that cannot send it. -->
-  <p>編集はまだこの画面からはできません。</p>
-{:else}
+{:else if owned.length === 0}
   <p>まだアプリケーションを登録していません。</p>
-  <!-- Registration exists as `POST /oauth2/clients`, and it is what a form has to
-       send: a name, the redirect URIs, and optionally a webhook. -->
+  <!-- Registration is `POST /oauth2/clients`, and what it needs is a form: a name,
+       the redirect URIs, and optionally a webhook. -->
   <p>登録はまだこの画面からはできません。</p>
+{:else}
+  {#each owned as application (application.client_id)}
+    <section>
+      <h2>{application.client_name ?? "（名前なし）"}</h2>
+
+      <dl>
+        <dt>client_id</dt>
+        <dd><code>{application.client_id}</code></dd>
+
+        <dt>リダイレクト URI</dt>
+        <dd>
+          {#if application.redirect_uris.length === 0}
+            —
+          {:else}
+            <ul>
+              {#each application.redirect_uris as uri (uri)}
+                <li><code>{uri}</code></li>
+              {/each}
+            </ul>
+          {/if}
+        </dd>
+
+        <dt>webhook</dt>
+        <dd>{application.webhook_url ?? "—"}</dd>
+
+        <dt>公開鍵</dt>
+        <dd><code>{application.public_key}</code></dd>
+      </dl>
+    </section>
+  {/each}
+
+  <!-- The edit form is not here yet: `PATCH /oauth2/clients/@me` exists and reads its
+       body by field presence, and the form that decides presence is the work left.
+       Saying so is better than a form that cannot send it. -->
+  <p>編集はまだこの画面からはできません。</p>
 {/if}
 
 <style>
   code {
     font-family: ui-monospace, monospace;
     word-break: break-all;
+  }
+
+  section {
+    border: 1px solid #ddd;
+    border-radius: 0.5rem;
+    padding: 0 1rem 1rem;
+    margin-bottom: 1rem;
+  }
+
+  h2 {
+    font-size: 1.1rem;
   }
 
   dt {
