@@ -6,8 +6,10 @@ correct as this list.
 
 ## What the server requires
 
-Read out of `crates/vc-server/src/main.rs`, which exits with a named error rather
-than starting without them:
+Read out of the code that enforces it, not from memory. The first list is what
+`require_env` refuses to start without, each named in the error it exits with; the
+second is everything else that is read, `WEB_ROOT` from `vc-api` rather than from
+`main.rs`.
 
 - `DATABASE_URL`
 - `DISCORD_BOT_TOKEN`
@@ -30,6 +32,7 @@ than starting without them:
 - `VCRYPTO_WEBHOOK_PROXY_CERT`
 - `VCRYPTO_WEBHOOK_PROXY_KEY`
 - `WEBHOOK_PROXY_URL`
+- `WEB_ROOT`
 
 `WEB_ROOT` is the one that matters to a deployment of the frontend: it is where the
 built SPA is unpacked. Unset, `default_web_root()` decides, and `web/dist` is what
