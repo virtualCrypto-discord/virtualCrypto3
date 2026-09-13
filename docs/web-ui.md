@@ -401,18 +401,15 @@ static sample data — `@sizumita`, `@tignear`, `100v`, two hard-coded avatar UR
 placeholder that is not even this site's — with 未承認/承認済み badges and a キャンセル /
 承認する pair of buttons.
 
-The shape it sketches is now written down — who a contract asks for consent, what it
-would let VirtualCrypto move and for whom.
+**And there is no earlier version to find.** `approve_application.ex` has exactly **one
+blob** in the whole repository — the eight lines read just below — so no version of it
+ever had an assign, and no `git log -S` will produce a flow. The rewrite did not delete
+this page: **the old site never implemented the contract approval**, and what it shipped
+is the mockup described below, down to buttons that carry no `phx-click`.
 
-**And there is no flow to find.** `approve_application.ex` has exactly **one blob** in
-the whole repository, and it is these eight lines: no earlier version had an assign, and
-no `git log -S` will produce one. So this is not the tip being the rewrite — the rewrite
-had nothing to delete. **The old site never implemented the contract approval**; what it
-left is a mockup of a page, with somebody else's placeholder image in it.
-
-`assets/elm/src/Mypage/Claim.elm` is where a real one might be. It has many versions
-rather than one, so it evolved — but whether it is this feature or the mypage's own claim
-screen is not known, and it is the SPA's surface rather than this page's.
+`assets/elm/src/Mypage/Claim.elm` is the one remaining lead, and it is the SPA's surface
+rather than this page's: it has many versions and so evolved, but whether it is this
+feature or the mypage's own claim screen is not known.
 
 `/contract/:id` is routed (`router.ex` l.74) to
 `live/contract/approve_application.ex`, and that module is eight lines: it aliases
