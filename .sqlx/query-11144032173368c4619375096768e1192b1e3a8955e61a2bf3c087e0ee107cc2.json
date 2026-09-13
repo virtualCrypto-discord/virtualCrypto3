@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)\n         ON CONFLICT (user_id, currency_id)\n         DO UPDATE SET amount = assets.amount + EXCLUDED.amount,\n                       updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "11144032173368c4619375096768e1192b1e3a8955e61a2bf3c087e0ee107cc2"
+}

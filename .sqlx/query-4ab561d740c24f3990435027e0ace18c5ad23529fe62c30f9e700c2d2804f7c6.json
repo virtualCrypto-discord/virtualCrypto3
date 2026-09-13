@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sum(assets.amount)::bigint AS \"total_amount!\",\n                        currencies.name, currencies.unit, currencies.guild_id, currencies.pool_amount,\n                        currencies.inserted_at\n                   FROM assets JOIN currencies ON assets.currency_id = currencies.id\n                  WHERE currencies.id = $1\n                  GROUP BY currencies.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_amount!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "pool_amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "pool_amount"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "inserted_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "inserted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "4ab561d740c24f3990435027e0ace18c5ad23529fe62c30f9e700c2d2804f7c6"
+}

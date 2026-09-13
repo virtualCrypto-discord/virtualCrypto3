@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO user_access_tokens (user_id, token_id, expires, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Uuid",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "35ba8ad4829a17e83f72f89954ec371572706f915cde86f30151e7fa98e898ee"
+}

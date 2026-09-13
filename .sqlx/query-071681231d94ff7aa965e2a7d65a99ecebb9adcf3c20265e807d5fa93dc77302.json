@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO claims\n             (amount, status, claimant_user_id, payer_user_id, currency_id, inserted_at, updated_at)\n         VALUES ($1, 'pending'::text::virtual_crypto_claim_status, $2, $3, $4, $5, $5)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "071681231d94ff7aa965e2a7d65a99ecebb9adcf3c20265e807d5fa93dc77302"
+}

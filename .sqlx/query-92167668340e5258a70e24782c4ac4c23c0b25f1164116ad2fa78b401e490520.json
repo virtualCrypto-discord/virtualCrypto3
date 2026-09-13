@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO discord_users\n             (discord_user_id, token, refresh_token, expires, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5, $5)\n         ON CONFLICT (discord_user_id)\n         DO UPDATE SET token = $2, refresh_token = $3, expires = $4,\n                       inserted_at = $5, updated_at = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Varchar",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "92167668340e5258a70e24782c4ac4c23c0b25f1164116ad2fa78b401e490520"
+}

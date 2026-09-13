@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assets\n            SET amount = assets.amount - t.delta, updated_at = $3\n           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(currency_id, delta)\n          WHERE assets.user_id = $4 AND assets.currency_id = t.currency_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Timestamp",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a25f31f3eaa192821ef05d17fece4c450e465f89a7250c47c9ab3ed9daa33a0f"
+}

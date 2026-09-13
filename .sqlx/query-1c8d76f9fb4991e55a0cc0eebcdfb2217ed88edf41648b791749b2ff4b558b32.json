@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.status::text AS status, c.amount, cur.unit AS currency_unit,\n                c.claimant_user_id AS \"claimant_id!\", c.payer_user_id AS \"payer_id!\"\n           FROM claims c\n           JOIN currencies cur ON c.currency_id = cur.id\n          WHERE c.id = ANY($1)\n            FOR UPDATE OF c",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "currency_unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "claimant_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "claimant_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "payer_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "payer_user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "1c8d76f9fb4991e55a0cc0eebcdfb2217ed88edf41648b791749b2ff4b558b32"
+}

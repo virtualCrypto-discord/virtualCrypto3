@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE claims\n            SET status = $2::text::virtual_crypto_claim_status, updated_at = $3\n          WHERE id = ANY($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Text",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "69cf868a4cc45ddf5e8a221988046cd8bcc31342d4278d357e63e1121ff625f0"
+}

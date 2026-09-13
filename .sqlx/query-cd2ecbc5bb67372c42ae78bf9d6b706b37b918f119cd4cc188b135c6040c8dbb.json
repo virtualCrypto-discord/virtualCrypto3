@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(assets.amount, 0) AS \"amount!\",\n                currencies.name, currencies.unit\n           FROM currencies\n           LEFT JOIN assets\n                  ON assets.currency_id = currencies.id AND assets.user_id = $1\n          WHERE currencies.unit ILIKE $2\n          ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,\n                   (COALESCE(assets.amount, 0) != 0) DESC,\n                   char_length(currencies.unit) ASC,\n                   assets.updated_at DESC NULLS LAST\n          LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "cd2ecbc5bb67372c42ae78bf9d6b706b37b918f119cd4cc188b135c6040c8dbb"
+}

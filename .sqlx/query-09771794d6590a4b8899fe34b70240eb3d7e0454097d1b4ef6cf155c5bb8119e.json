@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT assets.amount,\n                currencies.guild_id AS guild,\n                currencies.name,\n                currencies.pool_amount,\n                currencies.unit\n           FROM assets\n           JOIN currencies ON currencies.id = assets.currency_id\n           JOIN users ON users.id = assets.user_id\n          WHERE users.discord_id = $1\n          ORDER BY currencies.unit",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assets",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "guild",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "pool_amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "pool_amount"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "09771794d6590a4b8899fe34b70240eb3d7e0454097d1b4ef6cf155c5bb8119e"
+}

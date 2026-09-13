@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO authorization_codes\n             (code, redirect_uri, application_id, guild_id, scopes, expires,\n              inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5::text[]::virtual_crypto_scope_type[], $6, $7, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int8",
+        "Int8",
+        "TextArray",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fbfc3999d61bcc0a8edf256ab4a1484d0501ef2734041ae228514e07bf2dd555"
+}

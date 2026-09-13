@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO refresh_tokens (grant_id, token_id, expires, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)\n         ON CONFLICT (grant_id) DO UPDATE\n            SET token_id = $2, expires = $3, updated_at = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Uuid",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b8e83708b7dcc44f1a36fd4e8bdf7d3da0b2ffd8ec3001b49c4d010697c708b"
+}

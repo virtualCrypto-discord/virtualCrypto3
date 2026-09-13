@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT unit, inserted_at FROM currencies WHERE guild_id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "inserted_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "inserted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "bb71e4dc8581ef798cd7d7474a1d48c3f78626a6c7d6bb8ac80142527de27f0f"
+}

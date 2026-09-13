@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO grants (application_id, guild_id, latest_code, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)\n         ON CONFLICT (application_id, guild_id) DO UPDATE SET latest_code = $3\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grants",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Varchar",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "09d65f403ac1d38e5be4a9ec097df904190439fc190c7cb0a923071b97ece9ef"
+}

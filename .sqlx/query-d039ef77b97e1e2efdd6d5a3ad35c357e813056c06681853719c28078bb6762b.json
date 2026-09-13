@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO claim_metadata\n                 (claim_id, claimant_user_id, payer_user_id, owner_user_id, metadata)\n             VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d039ef77b97e1e2efdd6d5a3ad35c357e813056c06681853719c28078bb6762b"
+}

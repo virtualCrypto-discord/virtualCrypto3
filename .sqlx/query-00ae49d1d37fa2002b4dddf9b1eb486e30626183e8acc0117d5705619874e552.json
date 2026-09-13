@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO grant_scopes (grant_id, scope, inserted_at, updated_at)\n         SELECT $1, t.scope::text::virtual_crypto_scope_type, $3, $3\n           FROM UNNEST($2::text[]) AS t(scope)\n         ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "00ae49d1d37fa2002b4dddf9b1eb486e30626183e8acc0117d5705619874e552"
+}

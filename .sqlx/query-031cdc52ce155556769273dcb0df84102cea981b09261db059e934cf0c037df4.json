@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT redirect_uri AS \"redirect_uri!\" FROM redirect_uris\n            WHERE application_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "redirect_uri!",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "redirect_uris",
+            "name": "redirect_uri"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "031cdc52ce155556769273dcb0df84102cea981b09261db059e934cf0c037df4"
+}

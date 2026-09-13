@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE payments_idempotency\n            SET body = $3, http_status = $4, updated_at = $5\n          WHERE idempotency_key = $1 AND user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Jsonb",
+        "Int4",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b871f6583e29346ec43e2991e9231233493f3a318074992d4ce7d8200bd4e0ae"
+}

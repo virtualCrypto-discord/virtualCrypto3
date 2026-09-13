@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM grants WHERE latest_code = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2cbe4b8d08d1db0ad85e5aae0b11dc627bcff2c0f1b25aa049b7995541b3e853"
+}

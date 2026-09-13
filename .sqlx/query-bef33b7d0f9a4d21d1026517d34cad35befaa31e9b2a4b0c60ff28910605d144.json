@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE refresh_tokens\n            SET token_id = $1, updated_at = $3\n          WHERE token_id = $2 AND expires >= $3\n        RETURNING grant_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "grant_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "grant_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "bef33b7d0f9a4d21d1026517d34cad35befaa31e9b2a4b0c60ff28910605d144"
+}

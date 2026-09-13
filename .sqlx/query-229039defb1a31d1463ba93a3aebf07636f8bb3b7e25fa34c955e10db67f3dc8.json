@@ -1,0 +1,179 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id AS \"claim_id!\",\n                c.amount AS claim_amount,\n                c.status::text AS claim_status,\n                c.inserted_at AS \"claim_inserted_at!\",\n                c.updated_at AS \"claim_updated_at!\",\n                cur.name AS currency_name,\n                cur.unit AS currency_unit,\n                cur.guild_id AS currency_guild_id,\n                cur.pool_amount AS currency_pool_amount,\n                cl.id AS \"claimant_id!\",\n                cl.discord_id AS claimant_discord_id,\n                py.id AS \"payer_id!\",\n                py.discord_id AS payer_discord_id,\n                '{}'::jsonb AS \"metadata!\"\n           FROM claims c\n           JOIN currencies cur ON c.currency_id = cur.id\n           JOIN users cl ON c.claimant_user_id = cl.id\n           JOIN users py ON c.payer_user_id = py.id\n          WHERE c.status::text = ANY($1)\n            AND ($2 = 'all'\n                 AND (cl.discord_id = $3 OR py.discord_id = $3)\n              OR $2 = 'received' AND py.discord_id = $3\n              OR $2 = 'claimed' AND cl.discord_id = $3)\n            AND c.id::text LIKE $4\n          ORDER BY (cur.guild_id = $5) DESC NULLS LAST, c.id DESC\n          LIMIT $6",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "claim_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "claim_amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "claim_status",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "claim_inserted_at!",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "inserted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "claim_updated_at!",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "currency_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "currency_unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "currency_guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "currency_pool_amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "pool_amount"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "claimant_id!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "claimant_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "payer_id!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "payer_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "metadata!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Text",
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "229039defb1a31d1463ba93a3aebf07636f8bb3b7e25fa34c955e10db67f3dc8"
+}

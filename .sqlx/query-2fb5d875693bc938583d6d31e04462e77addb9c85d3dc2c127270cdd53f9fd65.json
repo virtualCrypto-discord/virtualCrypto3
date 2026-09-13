@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)\n         SELECT t.user_id, t.currency_id, t.amount, $4, $4\n           FROM UNNEST($1::bigint[], $2::bigint[], $3::bigint[])\n             AS t(user_id, currency_id, amount)\n         ON CONFLICT (user_id, currency_id)\n         DO UPDATE SET amount = assets.amount + EXCLUDED.amount,\n                       updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2fb5d875693bc938583d6d31e04462e77addb9c85d3dc2c127270cdd53f9fd65"
+}

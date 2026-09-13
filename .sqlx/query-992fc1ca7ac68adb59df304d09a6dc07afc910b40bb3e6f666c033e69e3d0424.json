@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency_given_histories\n             (amount, currency_id, \"time\", receiver_id, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $3, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamp",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "992fc1ca7ac68adb59df304d09a6dc07afc910b40bb3e6f666c033e69e3d0424"
+}

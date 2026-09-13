@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT http_status, body FROM payments_idempotency\n          WHERE idempotency_key = $1 AND user_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "http_status",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "payments_idempotency",
+            "name": "http_status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "body",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "payments_idempotency",
+            "name": "body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "24fb2032ed7236c17cb9748621fbd3ffba088f5243430bd55ada036660ffa0f7"
+}

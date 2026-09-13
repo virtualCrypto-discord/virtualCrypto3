@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assets\n            SET amount = amount - $1, updated_at = $2\n          WHERE user_id = $3 AND currency_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamp",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "114a7d40d22355f4fed91705cadedf589b4ff579eb3b87e1bfe7da5af3c66b93"
+}

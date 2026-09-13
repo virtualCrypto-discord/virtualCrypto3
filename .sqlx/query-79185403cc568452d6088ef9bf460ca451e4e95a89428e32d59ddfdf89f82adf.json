@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM claim_metadata WHERE claim_id = $1 AND owner_user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "79185403cc568452d6088ef9bf460ca451e4e95a89428e32d59ddfdf89f82adf"
+}

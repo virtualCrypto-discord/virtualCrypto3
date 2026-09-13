@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT webhook_url, public_key, private_key FROM applications WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "webhook_url",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "webhook_url"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "public_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "public_key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "private_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "private_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "f78d8653e0cee191c413f7b493709df6ec0152093f015b9649925dacf3cd07b1"
+}

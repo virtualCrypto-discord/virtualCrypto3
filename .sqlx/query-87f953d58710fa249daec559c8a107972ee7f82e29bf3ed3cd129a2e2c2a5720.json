@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO payments_idempotency\n             (user_id, idempotency_key, expires, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)\n         ON CONFLICT (idempotency_key, user_id) DO NOTHING\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "payments_idempotency",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "87f953d58710fa249daec559c8a107972ee7f82e29bf3ed3cd129a2e2c2a5720"
+}

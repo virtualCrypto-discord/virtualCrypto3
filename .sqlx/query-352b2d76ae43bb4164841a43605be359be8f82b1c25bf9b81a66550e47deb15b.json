@@ -1,0 +1,164 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.client_id::text AS \"client_id!\",\n                  a.client_secret,\n                  a.application_type::text AS \"application_type!\",\n                  a.client_name,\n                  a.client_uri,\n                  a.discord_support_server_invite_slug,\n                  a.grant_types::text[] AS \"grant_types!\",\n                  a.logo_uri,\n                  a.owner_discord_id,\n                  a.response_types::text[] AS \"response_types!\",\n                  a.webhook_url,\n                  a.public_key,\n                  u.id AS user_id,\n                  u.discord_id AS user_discord_id\n             FROM applications a\n             JOIN users u ON u.application_id = a.id\n            WHERE a.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "client_id!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_secret",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_secret"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "application_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "client_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "client_uri",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_support_server_invite_slug",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "discord_support_server_invite_slug"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "grant_types!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_uri",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "logo_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "owner_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "owner_discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "response_types!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "webhook_url",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "webhook_url"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "public_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "public_key"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "user_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "user_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      null,
+      true,
+      true,
+      true,
+      null,
+      true,
+      true,
+      null,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "352b2d76ae43bb4164841a43605be359be8f82b1c25bf9b81a66550e47deb15b"
+}

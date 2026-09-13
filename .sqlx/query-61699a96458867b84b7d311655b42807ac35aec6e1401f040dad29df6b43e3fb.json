@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (discord_id, status, inserted_at, updated_at)\n         SELECT t.discord_id, 0, $2, $2 FROM UNNEST($1::bigint[]) AS t(discord_id)\n         ON CONFLICT (discord_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "61699a96458867b84b7d311655b42807ac35aec6e1401f040dad29df6b43e3fb"
+}

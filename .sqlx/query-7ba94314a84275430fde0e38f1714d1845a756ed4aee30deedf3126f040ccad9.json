@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE discord_users\n            SET token = $1, refresh_token = $2, expires = $3\n          WHERE discord_user_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Timestamp",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7ba94314a84275430fde0e38f1714d1845a756ed4aee30deedf3126f040ccad9"
+}

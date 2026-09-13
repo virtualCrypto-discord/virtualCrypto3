@@ -18,8 +18,8 @@ migrate:
 fmt:
 	cargo fmt --all
 
-# The four gates CI runs, in the order it runs them.
-check: fmt-check lint test baseline-check
+# The gates CI runs, in the order it runs them.
+check: fmt-check lint test sqlx-check baseline-check
 
 fmt-check:
 	cargo fmt --all --check
@@ -32,6 +32,12 @@ build:
 
 test:
 	cargo nextest run --workspace
+
+# The committed offline query data has to match the queries and the schema. A
+# deployment builds with SQLX_OFFLINE, so data that has drifted is a build that
+# succeeds here and fails there — or worse, one that succeeds with the wrong SQL.
+sqlx-check:
+	cargo sqlx prepare --workspace --check
 
 # Verify the sqlx baseline reproduces the Ecto schema and is idempotent.
 baseline-check:
