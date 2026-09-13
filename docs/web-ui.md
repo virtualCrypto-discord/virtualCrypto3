@@ -4,6 +4,17 @@ The requirements below come from the Elixir app's own pages rather than from
 imagination: the router's browser scope, its three LiveViews, and the controllers
 behind them. Where something was not read, it says so.
 
+**Read the old repository's history and its Elm, not its tip.** `74b991d` — "Rewrite as
+phoenix 1.7 way, and remove elm" — deleted the working front end and left stubs in its
+place: the mypage is now `<div>My Page</div>`, `DashboardApplication` is a module with a
+`use` and nothing else, and `live/app/overview.ex` is the `<h1>Content</h1>` in the table
+below. The application list, its links, its routes and everything else a person actually
+used are in `assets/elm/src/` (add `--find-object` to a `git log -S` and they come back)
+and in the commits before the rewrite. Reading the tip for behaviour reads the deletion,
+which is a mistake already made once here: it is where "the old site never linked the
+connect page" came from, on a site whose list linked it as
+`"/applications/" ++ application.client_id`.
+
 ## What the old site is
 
 | Path | What it is | Notes |
@@ -13,18 +24,20 @@ behind them. Where something was not read, it says so.
 | `GET /invite`, `/support` | redirects | to the bot and the support guild |
 | `GET /callback/discord` | the Discord OAuth2 callback | see the session model below |
 | `POST /token` | the session's VC API token | re-issues on demand |
-| `live /app` | **a stub** | its whole body is `<h1>Content</h1>` |
-| `live /me` | the dashboard | the router points at `DashboardApplication` |
+| `live /app` | **a stub at the tip** | `<h1>Content</h1>`; the mypage it replaced is Elm |
+| `live /me` | the router points at `DashboardApplication` | which is empty at the tip |
 | `GET /applications/:id` | one application | renders the JSON *into* an HTML page |
-| `live /applications/:id/connect` | the connect flow | two events: `verify`, `change` |
-| `live /contract/:id` | approving a contract | |
+| `live /applications/:id/connect` | the connect flow | two events: `verify`, `change`; built below |
+| `live /contract/:id` | approving a contract | not read — and see the warning above |
 | `GET /applications/verification` | a readme | |
 | `GET /document/{,,about,commands,api}` | four documents | static prose |
 | `GET/POST /oauth2/authorize` | the consent screen | needs a session |
 
-Two things worth saying plainly: **`/app` is a stub** — whatever the dashboard is
-meant to be, it is not in the old site either; and the documents under
-`/document` are prose, so they belong to the docs site rather than to a rebuild.
+Two things worth saying plainly: **`/app` is a stub in the tree as it stands**, but the
+dashboard is not something the old site lacked — it was Elm, and `assets/elm/src/`, whose
+`Mypage/Route.elm` names `DashboardPage`, `ClaimPage` and `ApplicationsPage`, is where it
+went; and the documents under `/document` are prose, so they belong to the docs site
+rather than to a rebuild.
 
 ## The session, read out of the old app
 
@@ -100,9 +113,11 @@ screen needs — but the token no longer has to travel in headers.
    registration answered with. A page could keep that token and offer the edit, but
    that is a decision about storing an application's credentials in a page, and not
    something to assume from the shape of an endpoint.
-4. **The connect flow** (`/applications/:id/connect`) — `verify` and `change` are
-   events in the LiveView and their requirements are **not yet read**.
-5. **The contract approval** (`/contract/:id`) — likewise not read.
+4. **The connect flow** (`/applications/:id/connect`) — **done**: the service's route,
+   its refusals, the page and the round trip the browser makes (`5805529`), with what the
+   Elm list said about the id recorded below.
+5. **The contract approval** (`/contract/:id`) — not read, still. The Elm has
+   `assets/elm/src/Mypage/Claim.elm`, so this one also starts there.
 6. **The landing page**, which is prose plus a login button.
 7. **The documents** — link them rather than rebuild them; they are static prose
    that already lives in `virtualcrypto-docs`.
