@@ -4,6 +4,7 @@ pub mod claim_list;
 pub mod command;
 pub mod components;
 pub mod custom_id;
+pub mod developer;
 pub mod discord;
 pub mod discord_auth;
 pub mod discord_commands;
