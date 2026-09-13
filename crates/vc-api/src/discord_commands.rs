@@ -359,6 +359,27 @@ pub async fn register(
 
 #[cfg(test)]
 mod tests {
+    //! What these prove and what they do not.
+    //!
+    //! The send test asserts that the body equals `commands()` — the same value it was
+    //! built from. So it catches a wrong URL, a missing bot token and a body that never
+    //! got there, and says nothing about whether Discord would accept the payload. A
+    //! mistyped field name or a wrong option type would pass it, and those are exactly
+    //! the mistakes transcription makes.
+    //!
+    //! There is a spec for the other half, and it was checked rather than assumed:
+    //! **`discord/discord-api-spec`**, `specs/openapi.json`, an OpenAPI 3.1 document for
+    //! API v10. A dev-dependency that validates JSON Schema against it would catch those
+    //! mistakes offline, for the price of vendoring a file Discord itself calls a
+    //! preview.
+    //!
+    //! Read its README before trusting it, because it warns twice: the preview "should
+    //! not be used within production environments", and "if you find discrepancies
+    //! between the spec and our docs, follow the docs, not the spec" — it deliberately
+    //! avoids minimums, maximums and descriptions. A pass would be a shape check, not a
+    //! promise that Discord accepts the list, and it would not know that `give`'s
+    //! description is 62 characters or that a name may not contain an emoji.
+
     use super::*;
 
     #[test]
