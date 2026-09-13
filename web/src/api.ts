@@ -185,3 +185,49 @@ export function loginUrl(continueTo?: string): string {
 }
 
 export const logoutUrl = "/logout";
+
+/// A registration request. Every field is optional except `redirect_uris`, and the
+/// names are the API's — snake_case, as the endpoints that read them use.
+///
+/// `owner_discord_id` is deliberately not here: the handler takes it from the account
+/// the token belongs to, having asked Discord, rather than from the request. A form
+/// that sent one would be sending something nobody reads.
+export interface Registration {
+  client_name?: string;
+  redirect_uris: string[];
+  client_uri?: string;
+  logo_uri?: string;
+  webhook_url?: string;
+  discord_support_server_invite_slug?: string;
+  application_type?: string;
+  grant_types?: string[];
+  response_types?: string[];
+}
+
+/// What a registration answers with, and the one moment the secret is legible.
+///
+/// `registration_access_token` is an application token for what was just created, not
+/// a token for the person who registered it: it is what an OIDC client would use to
+/// read and edit its own registration.
+export interface Registered {
+  client_id: string;
+  client_secret: string;
+  registration_access_token: string;
+  registration_client_uri: string;
+  client_secret_expires_at: number;
+}
+
+/// Registers an application for the token's account.
+///
+/// If `webhook_url` is given, this does not answer until the service has asked that
+/// URL to prove it can answer a signed request: two requests, and a 401 for the one
+/// signed with a key the application has never seen. So a form calling this is a form
+/// that can take a while, and one that fails for reasons on the far side of the
+/// internet.
+export function register(token: string, body: Registration): Promise<Registered> {
+  return request("/oauth2/clients", {
+    method: "POST",
+    headers: { ...authorize(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }) as Promise<Registered>;
+}
