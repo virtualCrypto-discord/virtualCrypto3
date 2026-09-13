@@ -62,6 +62,10 @@ pub async fn handle(
             )
             .await?
         }
+        // Not from the Elixir: neither site had a Discord surface for applications, so
+        // there is no autocomplete to port. The path is the command and its subcommand, so
+        // every `/application` subcommand that takes a `client_id` comes through here.
+        ("client_id", ["application", _]) => applications(state, &query, me).await?,
         // `AutoComplete.handle/5` has no clause for anything else, so it raises.
         _ => {
             return Err(CommandError::missing(
@@ -74,6 +78,54 @@ pub async fn handle(
         "type": super::AUTOCOMPLETE_RESULT,
         "data": { "choices": choices },
     }))
+}
+
+/// The caller's own applications, as choices.
+///
+/// `resolve_discord_id` and `owned_by` are the two reads the client list already uses, and
+/// a person may own several, so the label carries the name and the uuid both: a name is
+/// not unique and the uuid is what every later call is made with.
+async fn applications(state: &AppState, query: &str, me: i64) -> Result<Vec<Value>, CommandError> {
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+
+    let mut choices = Vec::new();
+
+    for application_id in vc_core::application::owned_by(state.pool(), account).await? {
+        let found = crate::routes::oauth2_clients::details(state.pool(), application_id)
+            .await
+            .map_err(vc_core::Error::from)?;
+
+        let Some(found) = found else {
+            continue;
+        };
+
+        let label = format!(
+            "{}（{}）",
+            found.client_name.unwrap_or_default(),
+            found.client_id
+        );
+
+        // Discord filters nothing: it shows what it is given, so the query is applied here.
+        if !query.is_empty() && !label.contains(query) && !found.client_id.starts_with(query) {
+            continue;
+        }
+
+        choices.push(json!({
+            "name": truncate(&label, 100),
+            "value": found.client_id,
+        }));
+
+        if choices.len() as i64 >= LIMIT {
+            break;
+        }
+    }
+
+    Ok(choices)
+}
+
+/// Discord counts a choice's name in characters, and a `client_name` may be Japanese.
+fn truncate(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
 }
 
 /// `CurrencyUnit` and `CurrencyName`, which differ only in the field they match
