@@ -1,6 +1,10 @@
 <script lang="ts">
-  // The shell. The routes land here as the pages they need arrive: the consent
-  // screen first, because OAuth2 cannot be finished without it.
+  // The shell. The pages land here as they arrive, starting with the landing page,
+  // which is where the way in is.
+  //
+  // The consent screen is deliberately not one of them: it is a server-rendered
+  // route, because a client library sends the browser to it and it has to work
+  // without script.
   const title = "VirtualCrypto";
 </script>
 
