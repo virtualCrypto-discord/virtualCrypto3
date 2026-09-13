@@ -284,14 +284,14 @@ export function editApplication(
 
 /// What a connect attempt sends.
 ///
-/// `bot_id` is a string because Discord's ids are: the service compares it to the
-/// `id` inside an integration, which arrives as text. `guild_id` is a number, because
-/// that is what the endpoint takes for its queries — the two ids are carried
-/// differently on the two sides of this call, and that is the API's shape rather than
-/// a preference.
+/// Both ids are strings, and they must be. A Discord id is a snowflake around 10^18,
+/// and JavaScript's number is a double, which counts exactly only to 2^53 — so
+/// `Number(guild_id)` silently sends a *different* guild than the one that was typed.
+/// The digits are carried as text and parsed by the service, which is where an `i64`
+/// is exact.
 export interface Connection {
   bot_id: string;
-  guild_id: number;
+  guild_id: string;
 }
 
 /// Binds an application to the bot that speaks for it.

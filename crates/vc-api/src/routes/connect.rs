@@ -27,13 +27,18 @@ use vc_auth::AuthUser;
 use crate::routes::oauth2_clients::details;
 use crate::state::AppState;
 
-/// What the connect form sends. Both ids are Discord ids, and both are strings here
-/// because that is what JSON carries them as — the comparison against an integration's
-/// `bot.id` is a comparison of strings.
+/// What the connect form sends.
+///
+/// Both ids are strings, and that is not a stylistic choice: a Discord id is a snowflake
+/// in the region of 10^18, and JSON's number is a double, which stops counting exactly
+/// at 2^53. A client that sends one as a number has already lost digits before this
+/// service sees it, so both arrive as text and are parsed here, where an `i64` is exact.
+///
+/// The Elixir took them from a form, which is text for the same reason.
 #[derive(Deserialize)]
 pub struct Connect {
     pub bot_id: String,
-    pub guild_id: i64,
+    pub guild_id: String,
 }
 
 /// An OAuth error, which is the shape every endpoint around this one answers with.
@@ -80,6 +85,18 @@ pub async fn connect(
         return internal("the subject is out of range for an account id");
     };
 
+    // Parsed here, once, and never elsewhere: a Discord id that does not fit an `i64`
+    // is not a Discord id, and turning one into a guild number some other way would
+    // answer about the wrong guild rather than about the request.
+    let (Ok(guild_id), Ok(bot_id)) = (body.guild_id.parse::<i64>(), body.bot_id.parse::<i64>())
+    else {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "both ids must be Discord ids, as strings",
+        );
+    };
+
     // The owner and nobody else, and 404 rather than 403 so that somebody else's
     // application is not confirmed to exist.
     let owned = match vc_core::application::owned_by(state.pool(), subject).await {
@@ -100,7 +117,7 @@ pub async fn connect(
 
     let (status, integrations) = match state
         .discord()
-        .get_guild_integrations_with_status(body.guild_id)
+        .get_guild_integrations_with_status(guild_id)
         .await
     {
         Ok(answer) => answer,
@@ -110,7 +127,7 @@ pub async fn connect(
     // 403 is two different things and the operator acts on them differently, so the
     // guild is read to say which one it is.
     if status == 403 {
-        return match state.discord().get_guild_with_status(body.guild_id).await {
+        return match state.discord().get_guild_with_status(guild_id).await {
             Ok((403, _)) => refused(
                 StatusCode::FORBIDDEN,
                 "not_installed",
@@ -154,13 +171,9 @@ pub async fn connect(
     let Some(integration) = integration else {
         // Why there is no such integration, which needs the id looked up and then the
         // guild, because the answer names it.
-        return match state
-            .discord()
-            .get_user_with_status(parse_id(&body.bot_id))
-            .await
-        {
+        return match state.discord().get_user_with_status(bot_id).await {
             Ok((200, user)) if user.get("bot") == Some(&Value::Bool(true)) => {
-                let guild = state.discord().get_guild_with_status(body.guild_id).await;
+                let guild = state.discord().get_guild_with_status(guild_id).await;
 
                 match guild {
                     Ok((200, guild)) => refused(
@@ -206,7 +219,7 @@ pub async fn connect(
         );
     }
 
-    match vc_core::user::bind_bot(state.pool(), found.user_id, parse_id(&body.bot_id)).await {
+    match vc_core::user::bind_bot(state.pool(), found.user_id, bot_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         // The one failure with a message of its own in the Elixir, because one bot
         // belongs to one application.
@@ -219,10 +232,4 @@ pub async fn connect(
             internal("the bot could not be bound to the application")
         }
     }
-}
-
-/// A Discord id as an integer, for the two calls that take one. The ids that arrive as
-/// text are compared as text; this is only for the lookups.
-fn parse_id(value: &str) -> i64 {
-    value.parse().unwrap_or(0)
 }
