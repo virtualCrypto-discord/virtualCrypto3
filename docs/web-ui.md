@@ -93,12 +93,12 @@ screen needs — but the token no longer has to travel in headers.
 
 ## The requirements, in the order they matter
 
-**What is left, in one place**: the application **detail page** (item 3), the
-**contract flow** (item 5, not read), the **documents** (item 7, another repository's
-prose), and the small pages the old site had that this list never turned into items —
-`/invite` and `/support`, which redirect, and `GET /applications/verification`, a
-readme. The **edit form** is not on this list on purpose: it is a decision about
-holding an application's credentials in a page, recorded under item 3.
+**What is left, in one place**: the **contract flow** (item 5, not read), the
+**documents** (item 7, another repository's prose), and the small pages the old site had
+that this list never turned into items — `/invite` and `/support`, which redirect, and
+`GET /applications/verification`, a readme. The **edit form** is not on this list on
+purpose: it is a decision about holding an application's credentials in a page, recorded
+under item 3.
 
 Each one says which it is — built, or not read — because a list that mixes the two
 without saying which reads as unbuilt, which this one has already been read as once.
@@ -125,11 +125,13 @@ without saying which reads as unbuilt, which this one has already been read as o
    `/applications/<client_id>` (`Applications.elm` l.119), which is the same `:id` the
    connect route takes.
 
-   It is a small page, and it needs a small read beside it. `/oauth2/clients/@me` answers
-   every application the caller owns and there is no `GET /oauth2/clients/:id`, so a
-   detail page either renders from the list it already fetched — fine when the visitor
-   came through the list, useless when they came by link, which is what a detail page is
-   for — or the API grows the read.
+   **Now built**, and it needed no read of its own. The worry above was that a page
+   rendering from the list would only work for visitors who came through the list; that
+   was wrong. The list is the caller's own applications, so fetching it and picking the
+   one whose `client_id` matches is a complete answer for a visitor who typed the URL —
+   and for one who did not. There is no `GET /oauth2/clients/:id` because there does not
+   need to be one: what such a read would be allowed to answer is exactly what the list
+   already does.
 
    **Editing is not a page in this site.** `PATCH /oauth2/clients/@me` requires an
    application token — it answers `invalid_kind` to anything else — and a browser

@@ -55,7 +55,11 @@
 
       <dl>
         <dt>client_id</dt>
-        <dd><code>{application.client_id}</code></dd>
+        <dd>
+          <!-- The old site's list links this, and the same `:id` is what the connect
+               route takes. -->
+          <a href="/applications/{application.client_id}"><code>{application.client_id}</code></a>
+        </dd>
 
         <dt>リダイレクト URI</dt>
         <dd>
