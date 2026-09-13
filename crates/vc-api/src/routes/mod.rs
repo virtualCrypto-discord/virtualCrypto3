@@ -1,3 +1,4 @@
+pub mod connect;
 pub mod interactions;
 pub mod limited;
 pub mod oauth2;
@@ -53,6 +54,9 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
             get(oauth2_clients::mine).patch(oauth2_clients::edit),
         )
         .route("/oauth2/clients", post(oauth2_clients::register))
+        // Not under `/oauth2`: this is a call a page makes about an application it
+        // names, rather than a registration endpoint about the caller.
+        .route("/applications/{id}/connect", post(connect::connect))
         .route("/oauth2/token/revoke", post(oauth2_token::revoke))
         .merge(api)
         // Vite writes every file it builds under `assets/` with a content hash in
