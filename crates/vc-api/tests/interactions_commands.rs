@@ -660,3 +660,136 @@ async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool)
         "and the form knows what it is editing"
     );
 }
+
+/// Connect, which is a guild's: the id is already in the interaction, so nothing is typed,
+/// and the proof is Discord's — the guild's integration for this bot says the client id.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+    const BOT: i64 = 200_000_000_000_000_002;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let discord = Arc::new(support::FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT, &client_id)],
+    ));
+
+    let response = interaction(
+        vc_api::router(support::state(pool.clone(), discord)),
+        connect_payload(&client_id, BOT, DISCORD),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("接続しました"), "{rendered}");
+
+    // The bot's id is on the application's own account, which is what an integration with no
+    // Discord id was missing.
+    let bound = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the account");
+
+    assert_eq!(bound, Some(BOT));
+}
+
+/// A bot whose integration does not name this application, and the answer is the service's
+/// own sentence about it — which is the thing a person has to act on, unchanged.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+    const BOT: i64 = 200_000_000_000_000_002;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let discord = Arc::new(support::FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT, "another application's client id")],
+    ));
+
+    let response = interaction(
+        vc_api::router(support::state(pool.clone(), discord)),
+        connect_payload(&client_id, BOT, DISCORD),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains(
+            "the integration's description does not contain this application's client id"
+        ),
+        "the service's own sentence, not a friendlier one: {rendered}"
+    );
+
+    let bound = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the account");
+
+    assert_eq!(bound, None, "nothing was written");
+}
+
+/// Somebody else's application, which is not confirmed to exist: the answer says there is
+/// nothing there and does not say whether there is.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_show_of_something_else_says_nothing_is_there(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+    const SOMEBODY_ELSE: i64 = 100_000_000_000_000_002;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let theirs = support::insert_application(&pool, SOMEBODY_ELSE, "ひとつ").await;
+    let client_id = support::client_id_of(&pool, theirs).await;
+
+    let response = interaction(
+        router(pool),
+        application_payload("show", &client_id, DISCORD),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains("そのアプリケーションはありません。"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("ひとつ"), "{rendered}");
+}
+
+fn connect_payload(client_id: &str, bot: i64, user: i64) -> Value {
+    execute_from_guild(
+        json!({
+            "name": "application",
+            "options": [{
+                "name": "connect",
+                "type": 1,
+                "options": [
+                    { "name": "client_id", "type": 3, "value": client_id },
+                    { "name": "bot", "type": 6, "value": bot.to_string() },
+                ],
+            }],
+        }),
+        user,
+    )
+}

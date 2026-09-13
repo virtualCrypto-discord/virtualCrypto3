@@ -10,7 +10,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user, option_text};
 use crate::components::ephemeral;
 use crate::developer;
 use crate::routes::oauth2_clients::{
@@ -45,7 +45,7 @@ pub async fn handle(
         )),
         "register" => Ok(register()),
         "edit" => edit(state, client_id_of(sub_options)?, payload).await,
-        "connect" => connect(sub_options, payload),
+        "connect" => connect(state, sub_options, payload).await,
         "help" => Ok(message(help())),
         // The rest are registered and not written yet. Saying so is better than the answer
         // an unknown subcommand gets, because this command exists and a person pressing it
@@ -118,8 +118,8 @@ fn register() -> Value {
 /// for is pre-filled from the application: an edit is a correction, not a retyping.
 async fn edit(state: &AppState, client_id: &str, payload: &Value) -> Result<Value, CommandError> {
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(message(ephemeral(vec![crate::components::text(
-            "そのアプリケーションはありません。".to_string(),
+        return Ok(message(ephemeral(vec![developer::plain(
+            "そのアプリケーションはありません。",
         )])));
     };
 
@@ -221,24 +221,65 @@ async fn owned(
 /// badly. In a guild the id is already in the interaction, so there is nothing to type —
 /// and if this is run in a DM anyway, saying where to run it is better than silence.
 ///
-/// The flow itself is the HTTP route's, `routes/connect.rs`, and it is not extracted yet,
-/// so the guild branch says that rather than pretending.
-fn connect(sub_options: Option<&Value>, payload: &Value) -> Result<Value, CommandError> {
-    let _ = client_id_of(sub_options)?;
+/// The proof the flow needs is Discord's rather than the caller's: it reads the guild's
+/// integrations and insists one of them is this bot and says so in its description. Nothing
+/// here can assert ownership, which is why this is the same `connect_application` the route
+/// calls, with the guild the interaction already carries instead of one somebody pasted.
+async fn connect(
+    state: &AppState,
+    sub_options: Option<&Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let client_id = client_id_of(sub_options)?;
 
-    // Every screen is one container, which is not only for looks: the schema the tests
-    // validate against rejects a bare Text Display at the top level of a message, and it
-    // caught these two doing it.
-    let body = if payload.get("guild_id").and_then(Value::as_str).is_none() {
-        "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application connect` を実行してください。"
-    } else {
-        "接続の処理はまだ実装されていません。"
+    let Some(guild) = payload.get("guild_id").and_then(Value::as_str) else {
+        return Ok(message(ephemeral(vec![developer::plain(
+            "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application connect` を実行してください。",
+        )])));
     };
 
-    Ok(message(ephemeral(vec![crate::components::container(
-        None,
-        vec![crate::components::text(body)],
-    )])))
+    let bot = match sub_options.and_then(Value::as_object) {
+        Some(options) => option_text(options, "bot")?,
+        // The option is required and its picker only answers with users, so either of these
+        // is this side's assumption failing rather than something a caller did.
+        None => return Err(CommandError::missing("connect was given no bot")),
+    };
+
+    // Discord sends every id as text and this is the same single parse the route makes. The
+    // text is kept as well because it is what Discord's own answer is compared against.
+    let (Ok(bot_id), Ok(guild_id)) = (bot.parse::<i64>(), guild.parse::<i64>()) else {
+        return Err(CommandError::missing(
+            "the bot or the guild is not a Discord id",
+        ));
+    };
+
+    let Some((_, found)) = owned(state, client_id, payload).await? else {
+        return Ok(message(ephemeral(vec![developer::plain(
+            "そのアプリケーションはありません。",
+        )])));
+    };
+
+    match crate::routes::connect::connect_application(state, &found, &bot, bot_id, guild_id).await {
+        Ok(()) => Ok(message(ephemeral(vec![developer::connect_result(
+            &found.client_id,
+            None,
+        )]))),
+        Err(refusal) => Ok(message(ephemeral(vec![
+            match refusal.description.as_deref() {
+                Some(description) => developer::connect_result(&found.client_id, Some(description)),
+                // A failure with no description is this service's, and `connect_result` cannot
+                // say that: its `None` is the success this just was not.
+                None => developer::refusal(
+                    "接続",
+                    &crate::custom_id::ui::developer::custom_id(
+                        crate::custom_id::ui::developer::Screen::List,
+                    ),
+                    "アプリケーション",
+                    None,
+                ),
+            },
+        ]))),
+    }
 }
 
 /// One application, with its secret on the screen.
@@ -248,8 +289,8 @@ fn connect(sub_options: Option<&Value>, payload: &Value) -> Result<Value, Comman
 /// uuid first would answer whether an application exists to somebody who owns none.
 async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Value, CommandError> {
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(ephemeral(vec![crate::components::text(
-            "そのアプリケーションはありません。".to_string(),
+        return Ok(ephemeral(vec![developer::plain(
+            "そのアプリケーションはありません。",
         )]));
     };
 
