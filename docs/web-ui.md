@@ -134,10 +134,27 @@ the form.
 `change` (l.146) does nothing but put the two ids into the assigns and set `edit`
 true — the LiveView's live form, which an SPA does not need.
 
-## Still to read
+## The contract flow is a sketch, not a flow
 
-`lib/virtualCrypto_web/live/contract/approve_application.ex`, for the contract
-approval (`/contract/:id`). Its `mount` is the only clause; the rest is unread.
+`/contract/:id` is routed (`router.ex` l.74) to
+`live/contract/approve_application.ex`, and that module is eight lines: it aliases
+`VirtualCrypto.Auth`, and its `mount` ignores both `params` and `session` and
+answers `{:ok, socket}`. No assigns, no `handle_event`, no queries.
+
+Its template is a hard-coded picture of what the page was meant to be: two named
+users (`@sizumita`, `@tignear`), one 承認待ち and one 承認済み, a stock avatar from
+unsplash, `100v from @sizumita` / `pay to @tignear`, and キャンセル and 承認する
+buttons that carry no `phx-click` at all.
+
+Nothing in `lib/` links to it — not the application pages, not the layout, not the
+router beyond the route itself. So it is unreachable, unwired, and not backed by
+anything: **there is no behaviour here to port.**
+
+What it does hold is the shape somebody intended, which is worth keeping in view if
+the feature is ever wanted: a contract proposes a transfer (`100v`, one user to
+another) and the users it names approve or refuse it. That is a design to be made,
+not a LiveView to be translated, and it has no endpoint, no table in this service
+that is used, and no reader.
 
 ## How it is served
 
