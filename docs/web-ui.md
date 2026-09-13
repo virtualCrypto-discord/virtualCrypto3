@@ -401,11 +401,18 @@ static sample data — `@sizumita`, `@tignear`, `100v`, two hard-coded avatar UR
 placeholder that is not even this site's — with 未承認/承認済み badges and a キャンセル /
 承認する pair of buttons.
 
-So the *shape* is readable even though the flow is not, and the shape is this: a contract
-names the users whose consent it needs, the currencies it would let VirtualCrypto move
-for them (`100v from @sizumita`, `pay to @tignear`), and the two answers. What it does
-when 承認する is pressed is not in the tip, and this is the same trap the connect flow was
-read out of — so the next step is `git log -S` for the LiveView, not this file.
+The shape it sketches is now written down — who a contract asks for consent, what it
+would let VirtualCrypto move and for whom.
+
+**And there is no flow to find.** `approve_application.ex` has exactly **one blob** in
+the whole repository, and it is these eight lines: no earlier version had an assign, and
+no `git log -S` will produce one. So this is not the tip being the rewrite — the rewrite
+had nothing to delete. **The old site never implemented the contract approval**; what it
+left is a mockup of a page, with somebody else's placeholder image in it.
+
+`assets/elm/src/Mypage/Claim.elm` is where a real one might be. It has many versions
+rather than one, so it evolved — but whether it is this feature or the mypage's own claim
+screen is not known, and it is the SPA's surface rather than this page's.
 
 `/contract/:id` is routed (`router.ex` l.74) to
 `live/contract/approve_application.ex`, and that module is eight lines: it aliases
