@@ -154,7 +154,7 @@
   <!-- The secret is answered once and never again: neither the read nor the list
        carries it. So this is the only screen that will ever show it, and it is worth
        saying so where it is shown. -->
-  <p>登録できました。次の2つを控えてください。</p>
+  <p>登録できました。次の3つを控えてください。</p>
 
   <dl>
     <dt>client_id</dt>
@@ -162,9 +162,16 @@
 
     <dt>client_secret</dt>
     <dd><code>{registered.client_secret}</code></dd>
+
+    <!-- The token that manages this registration, per RFC 7592. It is an application
+         token and not the one a browser gets from `POST /token`, which is why it is
+         here and nowhere else: `PATCH /oauth2/clients/@me` refuses anything but this
+         kind, so without it the registration cannot be edited by anyone. -->
+    <dt>registration_access_token</dt>
+    <dd><code>{registered.registration_access_token}</code></dd>
   </dl>
 
-  <p class="warning">client_secret はこの画面にしか表示されません。</p>
+  <p class="warning">client_secret と registration_access_token はこの画面にしか表示されません。</p>
 
   <p><a href="/applications">アプリケーション</a></p>
 {/if}

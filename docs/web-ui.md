@@ -92,7 +92,14 @@ screen needs — but the token no longer has to travel in headers.
    state check the old callback already does.
 3. **The application list and detail** — the shapes already exist:
    `GET /oauth2/clients/@me` answers the list, and the detail is the same object.
-   Editing is `PATCH /oauth2/clients/@me`, which the application edit page needs.
+
+   **Editing is not a page in this site.** `PATCH /oauth2/clients/@me` requires an
+   application token — it answers `invalid_kind` to anything else — and a browser
+   holds a user token, because that is what `POST /token` issues. It is RFC 7592: the
+   application manages its own registration with the `registration_access_token`
+   registration answered with. A page could keep that token and offer the edit, but
+   that is a decision about storing an application's credentials in a page, and not
+   something to assume from the shape of an endpoint.
 4. **The connect flow** (`/applications/:id/connect`) — `verify` and `change` are
    events in the LiveView and their requirements are **not yet read**.
 5. **The contract approval** (`/contract/:id`) — likewise not read.

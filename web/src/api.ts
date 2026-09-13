@@ -258,8 +258,14 @@ export interface ApplicationChanges {
   redirect_uris?: string[];
 }
 
-/// Edits the application the token is for, which is why there is no id here: `@me` is
-/// the application the token belongs to.
+/// Edits the application the token is for. **The token has to be an application's**:
+/// the endpoint refuses anything but `kind: app` with `invalid_kind`, because an
+/// application editing itself is what it is for (RFC 7592).
+///
+/// That is not the token a browser holds. `POST /token` answers a user token, so a
+/// page cannot call this with its session — it needs the `registration_access_token`
+/// that registration answered with, which belongs to the application's operator and is
+/// good for as long as they keep it.
 ///
 /// Answers 204 and nothing else — the read is a separate request, and a caller that
 /// wants to show the result has to ask again. Naming a `webhook_url` also runs the
