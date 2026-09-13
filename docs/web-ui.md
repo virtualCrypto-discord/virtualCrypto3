@@ -586,10 +586,15 @@ What is **not** readable again is the `registration_access_token`: it is a token
 column, so registration is the only time it is answered — which is what the page showing
 it says, and what it said wrongly about the secret until this was checked.
 
-Worth a decision rather than an accident: the list is answered to a **user** token, so a
-browser session can read the secrets of the applications it owns. The Elixir answered the
-same way, and its own detail page showed them, so nothing was lost — but whether a list
-should carry secrets is a question the old site never had to answer either.
+That the list carries them is right rather than merely tolerable. It is answered from
+`owned_by` by the caller's **own** subject, so it can only ever be the applications that
+caller already owns — and owning one is what lets you connect its bot, read it and patch
+it. A secret shown to a party that can already rewrite the application is not a leak; it
+is the same party. The RFC 7592 read is narrower still: it takes the application's own
+token, so the application is reading itself.
+
+The Elixir answered the same way and its detail page displayed them, which is where
+"visible at any time" comes from. Reproduced, deliberately, and no longer disclaimed.
 
 Two numbers again travel as strings, `user_id` and `discord_user_id`, which is the
 same rule the balances follow. `client_secret_expires_at` is a number, and is the
