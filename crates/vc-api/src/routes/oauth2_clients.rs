@@ -230,23 +230,53 @@ pub struct Registration {
     pub owner_discord_id: Option<i64>,
 }
 
-/// An OAuth error, which is the shape every endpoint around this one answers with.
-fn refused(status: StatusCode, error: &str, description: &str) -> Response {
-    (
+/// An OAuth error before it is a response.
+///
+/// The endpoint says it as JSON and the command surface reads the description out, so the
+/// flows stop here and each surface talks. `description` is absent for an error that is
+/// this service's fault: the reason goes to the log, and the caller is told it was ours.
+#[derive(Debug, Clone)]
+pub struct Refusal {
+    pub status: StatusCode,
+    pub error: &'static str,
+    pub description: Option<&'static str>,
+}
+
+impl Refusal {
+    /// The JSON every endpoint around this one answers with.
+    pub fn response(&self) -> Response {
+        let mut body = json!({ "error": self.error });
+
+        if let Some(description) = self.description {
+            body["error_description"] = json!(description);
+        }
+
+        (self.status, Json(body)).into_response()
+    }
+}
+
+/// A refusal, for a flow that returns one.
+fn refusal(status: StatusCode, error: &'static str, description: &'static str) -> Box<Refusal> {
+    Box::new(Refusal {
         status,
-        Json(json!({ "error": error, "error_description": description })),
-    )
-        .into_response()
+        error,
+        description: Some(description),
+    })
+}
+
+/// An OAuth error, which is the shape every endpoint around this one answers with.
+fn refused(status: StatusCode, error: &'static str, description: &'static str) -> Response {
+    refusal(status, error, description).response()
 }
 
 /// A metadata refusal, which is always `invalid_client_metadata` and the rule's
 /// own description.
-fn metadata(error: MetadataError) -> Box<Response> {
-    Box::new(refused(
+fn metadata(error: MetadataError) -> Box<Refusal> {
+    refusal(
         StatusCode::BAD_REQUEST,
         "invalid_client_metadata",
         error.description(),
-    ))
+    )
 }
 
 /// The checks that come before anything is asked of Discord: who is asking,
@@ -274,7 +304,7 @@ pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Bo
         )));
     }
 
-    validated(body)
+    validated(body).map_err(|refusal| Box::new(refusal.response()))
 }
 
 /// What was asked for, once it makes sense.
@@ -284,7 +314,7 @@ pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Bo
 /// which account is asking, and a form filled in beside a Discord message, where the
 /// interaction's signature says it and there is no token at all. The auth is each
 /// surface's and stays there.
-pub fn validated(body: Registration) -> Result<NewApplication, Box<Response>> {
+pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
     check_response_types(&body.response_types.unwrap_or_default()).map_err(metadata)?;
     let grant_types = check_grant_types(&body.grant_types.unwrap_or_default()).map_err(metadata)?;
 
@@ -310,11 +340,11 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Response>> {
     }
 
     let Some(redirect_uris) = body.redirect_uris else {
-        return Err(Box::new(refused(
+        return Err(refusal(
             StatusCode::BAD_REQUEST,
             "invalid_redirect_uri",
             "redirect_uris_must_be_array",
-        )));
+        ));
     };
 
     // Not `check_url`'s error: a redirect URI's refusal names the redirect URI
@@ -322,11 +352,11 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Response>> {
     // with.
     for redirect_uri in &redirect_uris {
         if check_url(redirect_uri, MetadataError::ClientUri).is_err() {
-            return Err(Box::new(refused(
+            return Err(refusal(
                 StatusCode::BAD_REQUEST,
                 "invalid_redirect_uri",
                 "redirect_uri_scheme_must_be_http_or_https",
-            )));
+            ));
         }
     }
 
@@ -460,7 +490,7 @@ pub async fn register(
     };
 
     let Some(subject) = i32::try_from(user.subject).ok() else {
-        return internal("the token's subject is not an account id");
+        return internal("the token's subject is not an account id").response();
     };
 
     let Some(account) = vc_core::user::find_by_id(state.pool(), subject)
@@ -468,11 +498,11 @@ pub async fn register(
         .ok()
         .flatten()
     else {
-        return internal("the registering account is gone");
+        return internal("the registering account is gone").response();
     };
 
     let Some(discord_id) = account.discord_id else {
-        return internal("the registering account has no discord id");
+        return internal("the registering account has no discord id").response();
     };
 
     let Some(authorization) = vc_core::user::find_discord_auth(state.pool(), discord_id)
@@ -480,15 +510,15 @@ pub async fn register(
         .ok()
         .flatten()
     else {
-        return internal("the registering account has no authorization");
+        return internal("the registering account has no authorization").response();
     };
 
     let Ok(token) = resolve_token(&state, discord_id, &authorization).await else {
-        return internal("the authorization could not be refreshed");
+        return internal("the authorization could not be refreshed").response();
     };
 
     let Ok(profile) = state.discord().get_user_info(&token).await else {
-        return internal("discord could not be asked about the account");
+        return internal("discord could not be asked about the account").response();
     };
 
     // A bot account may not register: an application registering applications is
@@ -508,7 +538,7 @@ pub async fn register(
 
     let created = match create(&state, subject, &new).await {
         Ok(created) => created,
-        Err(refusal) => return *refusal,
+        Err(refusal) => return refusal.response(),
     };
 
     (
@@ -548,7 +578,7 @@ pub async fn create(
     state: &AppState,
     subject: i32,
     new: &NewApplication,
-) -> Result<Created, Box<Response>> {
+) -> Result<Created, Box<Refusal>> {
     // Both halves, because the row needs both: the private one signs deliveries
     // and the public one is what the application verifies them with.
     let private_key = fresh_keypair();
@@ -575,11 +605,11 @@ pub async fn create(
             .unwrap_or_default();
 
         if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
-            return Err(Box::new(refused(
+            return Err(refusal(
                 StatusCode::BAD_REQUEST,
                 "webhook_verification_failed",
                 "the webhook did not verify",
-            )));
+            ));
         }
     }
 
@@ -618,18 +648,18 @@ pub async fn create(
 /// The three windows answer different questions — a retry storm, somebody
 /// hammering, a day's worth of this service's time — so a client is told which one
 /// it hit rather than only that it hit one.
-fn rate_limited(too_soon: TooSoon) -> Response {
+fn rate_limited(too_soon: TooSoon) -> Refusal {
     let description = match too_soon {
         TooSoon::Seconds3 => "retry_after_3_seconds",
         TooSoon::Hour => "retry_after_1_hour",
         TooSoon::Day => "retry_after_1_day",
     };
 
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(json!({ "error": "rate_limit_exceeded", "error_description": description })),
-    )
-        .into_response()
+    Refusal {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error: "rate_limit_exceeded",
+        description: Some(description),
+    }
 }
 
 /// A refusal that is this service's fault rather than the caller's.
@@ -638,14 +668,14 @@ fn rate_limited(too_soon: TooSoon) -> Response {
 /// will not take the write, or because this service has no proxy — and none of
 /// those is something the caller can act on, so none of them is answered as though
 /// the request were wrong.
-fn internal(why: &str) -> Response {
+fn internal(why: &'static str) -> Refusal {
     tracing::error!(why, "a registration could not be completed");
 
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": "server_error" })),
-    )
-        .into_response()
+    Refusal {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        error: "server_error",
+        description: None,
+    }
 }
 
 /// What a `PATCH` asks to change, with each field's presence intact.
@@ -654,7 +684,7 @@ fn internal(why: &str) -> Response {
 /// in this endpoint they are different operations: sending `logo_uri: null` clears
 /// it, and not mentioning it leaves it alone. So the body is read as a map and each
 /// field is asked for rather than deserialised.
-pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Response>> {
+pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
     /// `None` when the field is not in the request, `Some(None)` when it is null,
     /// and `Some(Some(..))` when it has a value.
     fn text(body: &Map<String, Value>, field: &str) -> Option<Option<String>> {
@@ -731,11 +761,11 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Response>> {
     if let Some(uris) = changes.redirect_uris.as_deref() {
         for redirect_uri in uris {
             if check_url(redirect_uri, MetadataError::ClientUri).is_err() {
-                return Err(Box::new(refused(
+                return Err(refusal(
                     StatusCode::BAD_REQUEST,
                     "invalid_redirect_uri",
                     "redirect_uri_scheme_must_be_http_or_https",
-                )));
+                ));
             }
         }
     }
@@ -774,7 +804,7 @@ pub async fn me(State(state): State<AppState>, user: AuthUser) -> Response {
     }
 
     let Ok(subject) = i32::try_from(user.subject) else {
-        return internal("the token's subject is not an account id");
+        return internal("the token's subject is not an account id").response();
     };
 
     let found = vc_core::user::application_id(state.pool(), subject)
@@ -783,13 +813,13 @@ pub async fn me(State(state): State<AppState>, user: AuthUser) -> Response {
         .flatten();
 
     let Some(application_id) = found else {
-        return internal("the application's account is gone");
+        return internal("the application's account is gone").response();
     };
 
     match details(state.pool(), application_id).await {
         Ok(Some(found)) => Json(render(&found)).into_response(),
         Ok(None) => refused(StatusCode::NOT_FOUND, "not_found", "no such application"),
-        Err(_) => internal("the application could not be read"),
+        Err(_) => internal("the application could not be read").response(),
     }
 }
 
@@ -816,11 +846,11 @@ pub async fn edit(
 
     let changes = match changes(&body) {
         Ok(changes) => changes,
-        Err(refusal) => return *refusal,
+        Err(refusal) => return refusal.response(),
     };
 
     let Ok(subject) = i32::try_from(user.subject) else {
-        return internal("the token's subject is not an account id");
+        return internal("the token's subject is not an account id").response();
     };
 
     let found = vc_core::user::application_id(state.pool(), subject)
@@ -829,7 +859,7 @@ pub async fn edit(
         .flatten();
 
     let Some(application_id) = found else {
-        return internal("the application's account is gone");
+        return internal("the application's account is gone").response();
     };
 
     // A named webhook is verified with the key the application **already** has, not
@@ -837,7 +867,7 @@ pub async fn edit(
     // would be a handshake nobody could answer.
     if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
         let Some(proxy) = state.webhook_proxy() else {
-            return internal("no webhook proxy is configured");
+            return internal("no webhook proxy is configured").response();
         };
 
         let webhook = vc_core::application::webhook_data(state.pool(), application_id)
@@ -846,17 +876,17 @@ pub async fn edit(
             .flatten();
 
         let Some(webhook) = webhook else {
-            return internal("the application has no webhook data");
+            return internal("the application has no webhook data").response();
         };
 
         let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
-            return internal("the application's private key is not 32 bytes");
+            return internal("the application's private key is not 32 bytes").response();
         };
 
         // The handshake is the expensive thing here, and this is what stops one
         // requester spending all of it.
         if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
-            return rate_limited(too_soon);
+            return rate_limited(too_soon).response();
         }
 
         let at = std::time::SystemTime::now()
@@ -877,7 +907,7 @@ pub async fn edit(
         .await
         .is_err()
     {
-        return internal("the application could not be written");
+        return internal("the application could not be written").response();
     }
 
     StatusCode::NO_CONTENT.into_response()
