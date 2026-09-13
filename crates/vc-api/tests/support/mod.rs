@@ -444,6 +444,12 @@ pub async fn insert_user(pool: &PgPool, id: i32, discord_id: i64) {
 /// Both rows are needed by everything that looks an application up: the reads join
 /// through the account, and connecting writes the bot's Discord id onto it. Three test
 /// files had their own copy of this before it lived here.
+/// The `custom_id` the register button carries, which a test asserts the empty list offers
+/// without building one by hand: a test that hardcodes it stops checking the screen.
+pub fn custom_id_for_register() -> String {
+    vc_api::custom_id::ui::developer::custom_id(vc_api::custom_id::ui::developer::Screen::Register)
+}
+
 pub async fn insert_application(pool: &PgPool, owner_discord_id: i64, name: &str) -> i64 {
     let id = sqlx::query_scalar!(
         r#"INSERT INTO applications

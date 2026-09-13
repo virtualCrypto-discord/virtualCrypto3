@@ -290,3 +290,52 @@ async fn application_edit_prefills_what_the_application_has(pool: PgPool) {
     );
     assert_eq!(inputs("redirect_uris")["value"], "");
 }
+
+/// `/application list`: the caller's applications as a menu, keyed by the uuid the service
+/// answers with rather than by the name somebody typed.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_list_offers_the_callers_own(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let response = interaction(
+        router(pool.clone()),
+        execute_from_guild(
+            json!({ "name": "application", "options": [{ "name": "list", "type": 1 }] }),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], 4);
+    assert_eq!(response.body["data"]["flags"], 32832);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains(&client_id), "{rendered}");
+    assert!(rendered.contains("テスト"), "{rendered}");
+
+    // And with nothing to show it says so and offers the form, rather than an empty menu
+    // with nothing to pick: an empty state teaches the space.
+    let empty = interaction(
+        router(pool),
+        execute_from_guild(
+            json!({ "name": "application", "options": [{ "name": "list", "type": 1 }] }),
+            999,
+        ),
+    )
+    .await;
+
+    let rendered = empty.body["data"].to_string();
+
+    assert!(rendered.contains("まだ"), "{rendered}");
+    assert!(
+        rendered.contains(&support::custom_id_for_register()),
+        "{rendered}"
+    );
+}
