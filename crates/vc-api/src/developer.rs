@@ -28,44 +28,13 @@ use serde_json::Value;
 use vc_core::application::{APPLICATION_TYPES, GRANT_TYPES, RESPONSE_TYPES};
 
 use crate::components::{
-    ButtonStyle, action_row, button, container, link_button, section, select, select_many,
-    select_option, separator, text, thumbnail, user_select,
+    ButtonStyle, action_row, button, container, section, select, select_many, select_option,
+    separator, text, thumbnail, user_select,
 };
 
 /// The accent each state carries, since the colour is the fastest thing a person reads.
 const WORKING: u32 = 0x1ABC9C;
 const REFUSED: u32 = 0xED4245;
-
-/// Where a DM starts: what this is, and the two things it is for.
-pub fn home(display_name: &str, verification_url: &str) -> Value {
-    container(
-        Some(WORKING),
-        vec![
-            text(format!(
-                "**VirtualCrypto**\n{display_name} として接続しています。"
-            )),
-            separator(),
-            text("アプリケーションの登録と、そのアプリケーションの Bot の接続ができます。"),
-            action_row(vec![
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::List,
-                    ),
-                    "アプリケーション",
-                    ButtonStyle::Primary,
-                ),
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Connect,
-                    ),
-                    "Bot を接続",
-                    ButtonStyle::Secondary,
-                ),
-            ]),
-            action_row(vec![link_button(verification_url, "この画面について")]),
-        ],
-    )
-}
 
 /// The caller's applications, as a menu.
 ///
@@ -495,7 +464,6 @@ mod tests {
         let mut found = Vec::new();
 
         for screen in [
-            home("name", "https://example.test/verification"),
             applications(&[]),
             application(
                 "id",
@@ -542,7 +510,6 @@ mod tests {
     #[test]
     fn no_screen_carries_content_or_embeds_at_the_top() {
         for screen in [
-            home("name", "https://example.test/verification"),
             applications(&[]),
             application(
                 "id",
