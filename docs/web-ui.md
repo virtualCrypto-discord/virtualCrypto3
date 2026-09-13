@@ -245,25 +245,31 @@ the comment there says, so that a client reading an integer gets one.
 `client_secret` is null wherever the caller should not see it, which is the list and
 the single read; registration answers with it once.
 
-### Which of the two it answers, and the fact underneath it
+### A list, and the Elixir's own answer for each kind
 
-Read out of `mine` (l.168), and the answer is decided by the token's kind, not by a
-query parameter:
+**Corrected.** An earlier version of this section said an account owns at most one
+application and that the page should therefore be about *the* application. That was
+wrong, and it came from reading the Rust `mine` instead of the Elixir:
 
-- a **`user` token** — the subject is a person — is answered with an **array** of
-  none or one (l.196).
-- an **`app` token** — the subject is the application's own account — is answered
-  with that **one application, or `null`** if it is gone (l.189-195).
+`clients_controller.ex::get/2` (l.8-14) requires `kind == "user"` — an **app token is
+answered 401 `invalid_token` / `invalid_kind`** (l.16-22) — and answers
+`Auth.get_user_applications(user_id)`, which is plural. The index that is unique is
+`users_application_id_index`, and what it makes unique is the link between an
+application and *its own account* — the row registration inserts (l.637-642 of
+`application.rs`), the one with no `discord_id`. `applications.owner_discord_id` has a
+plain index (`applications_owner_discord_id_index`), so **a person may own several
+applications**.
 
-Both find it the same way; the difference is the shape of the answer (l.166-167).
+So the page is a list after all, and the Rust `mine` does not match the Elixir on
+either branch:
 
-**None or one is not a display choice, it is the data.** `users.application_id` links
-an account to at most one application (l.162), so an account either has an
-application or does not — there is no second one to list. The application page
-should therefore read as a page about *the* application and offer to register when
-there is none, rather than as a list with an "add" button that could never be used
-twice.
+- `Kind::App` answers the application — or `null` — where the Elixir answers 401.
+- `Kind::User` looks the applications up through `users.application_id`, which is the
+  *application account's* link and is null for a person. A person who owns an
+  application would be answered `[]`. It should be looking through
+  `applications.owner_discord_id`, by the account's `discord_id`.
 
-An app token for an application that no longer exists is answered `null` rather than
-"not found". That is the Elixir's choice, reproduced deliberately (l.192-194).
+Also from `render_application`, which is the shape: `owner_discord_id` goes through
+`to_string` unconditionally, so it is **`""` rather than null** when absent — unlike
+`discord_user_id`, two lines above it, which is checked.
 
