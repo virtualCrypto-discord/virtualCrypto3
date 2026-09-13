@@ -93,6 +93,13 @@ screen needs — but the token no longer has to travel in headers.
 
 ## The requirements, in the order they matter
 
+**What is left, in one place**: the application **detail page** (item 3), the
+**contract flow** (item 5, not read), the **documents** (item 7, another repository's
+prose), and the small pages the old site had that this list never turned into items —
+`/invite` and `/support`, which redirect, and `GET /applications/verification`, a
+readme. The **edit form** is not on this list on purpose: it is a decision about
+holding an application's credentials in a page, recorded under item 3.
+
 Each one says which it is — built, or not read — because a list that mixes the two
 without saying which reads as unbuilt, which this one has already been read as once.
 
@@ -112,8 +119,17 @@ without saying which reads as unbuilt, which this one has already been read as o
    (`:152`). `logout` clears the cookie (`:61`). `tests/login.rs` covers the redirect
    and its state, the callback in full, a state that does not match, and the logout.
    Nothing here was unread: this item was on the list without saying which it was.
-3. **The application list and detail** — **done**: `GET /oauth2/clients/@me` answers the
-   list, the detail is the same object, and `web/` has both pages.
+3. **The application list and detail** — **half done, and this said "done" for a day**.
+   The list is built (`web/src/pages/Application.svelte`) and `GET /oauth2/clients/@me`
+   answers it. The **detail page is not**, and the old site had one: the Elm list links
+   `/applications/<client_id>` (`Applications.elm` l.119), which is the same `:id` the
+   connect route takes.
+
+   It is a small page, and it needs a small read beside it. `/oauth2/clients/@me` answers
+   every application the caller owns and there is no `GET /oauth2/clients/:id`, so a
+   detail page either renders from the list it already fetched — fine when the visitor
+   came through the list, useless when they came by link, which is what a detail page is
+   for — or the API grows the read.
 
    **Editing is not a page in this site.** `PATCH /oauth2/clients/@me` requires an
    application token — it answers `invalid_kind` to anything else — and a browser
