@@ -93,9 +93,9 @@ screen needs — but the token no longer has to travel in headers.
 
 ## The requirements, in the order they matter
 
-**What is left, in one place**: the **documents** (item 7, another repository's prose),
-and the one question the contract flow leaves open — whether the Elm's claim page is that
-feature or the mypage's own.
+**What is left, in one place**: the **claims page** (the item below the contract flow,
+which this list had missed until the Elm was read), and the **documents** (another
+repository's prose). The contract flow is closed: neither site implemented it.
 
 `/invite` and `/support` are built: `web::invite` and `web::support` redirect from
 `Links::invite_url` and `Links::support_guild_invite_url`, which `vc-server` already
@@ -164,11 +164,15 @@ without saying which reads as unbuilt, which this one has already been read as o
 4. **The connect flow** (`/applications/:id/connect`) — **done**: the service's route,
    its refusals, the page and the round trip the browser makes (`5805529`), with what the
    Elm list said about the id recorded below.
-5. **The contract approval** (`/contract/:id`) — **read, and there was never anything to
-   port**: the LiveView is one blob, eight lines, no assigns, and the page beside it is
-   static sample data. The old site shipped a mockup. The Elm's `Mypage/Claim.elm`,
-   which did evolve, is the lead for what a real one looked like — see the section
-   below.
+5. **The contract approval** (`/contract/:id`) — **closed: there was never anything to
+   port**. The LiveView is one blob, eight lines, no assigns, the page beside it is
+   static sample data, and the Elm has no contract route at all. Both sites shipped the
+   same mockup.
+6. **`Mypage/Claim.elm` — the claims page — is not in this list and should be.** It is
+   the Elm's `ClaimPage`: claims sent and claims received, paged, read from
+   `GET /api/v2/users/@me/claims`, which is implemented and tested here (`v2_claims.rs`,
+   `v2_claims_list.rs`) with the goldens the capture gave. `web/` has no page for it, so
+   the API's own answers have nowhere to be seen.
 6. **The landing page**, which is prose plus a login button — **done**.
 7. **The documents** — link them rather than rebuild them; they are static prose
    that already lives in `virtualcrypto-docs`.
@@ -407,9 +411,15 @@ ever had an assign, and no `git log -S` will produce a flow. The rewrite did not
 this page: **the old site never implemented the contract approval**, and what it shipped
 is the mockup described below, down to buttons that carry no `phx-click`.
 
-`assets/elm/src/Mypage/Claim.elm` is the one remaining lead, and it is the SPA's surface
-rather than this page's: it has many versions and so evolved, but whether it is this
-feature or the mypage's own claim screen is not known.
+**And it was never implemented anywhere.** The Elm has no contract page either — its
+routes are `DashboardPage`, `ClaimPage`, `ApplicationsPage` and `ErrorPage` — so
+`/contract/:id` is a mockup in the LiveView and nothing more than a mockup in the site it
+came from.
+
+`Mypage/Claim.elm` is a different page and a real one: **the mypage's own claims**,
+`ClaimType = Sent | Received`, paged, reading `GET /api/v2/users/@me/claims` (290 lines of
+it). That API is implemented here and tested. **The SPA has no page for it**, which is an
+item this list never had and now does — see the requirements below.
 
 `/contract/:id` is routed (`router.ex` l.74) to
 `live/contract/approve_application.ex`, and that module is eight lines: it aliases
