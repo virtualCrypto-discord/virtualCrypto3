@@ -13,8 +13,9 @@ use serde_json::{Map, Value, json};
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, get_user};
 use crate::components::ephemeral;
 use crate::developer;
-use crate::routes::oauth2_clients::{details, render};
+use crate::routes::oauth2_clients::{Registration, create, details, render, validated};
 use crate::state::AppState;
+use vc_core::application::NewApplication;
 
 /// The subcommand that was run, and its own options if it has any.
 ///
@@ -315,45 +316,87 @@ fn help() -> Value {
 /// A submitted form: `dev:register` or `dev:edit`.
 ///
 /// The values arrive as the modal's components, each keyed by the `custom_id` its input was
-/// built with. Reading them is the next piece; the flows behind the two forms are the HTTP
-/// routes' and are not extracted yet, so this says what it is rather than pretending.
+/// built with, and `body` is what the flows take. The edit form's flow is not extracted yet,
+/// so that one still says so rather than pretending.
 pub async fn modal(
-    _state: &AppState,
+    state: &AppState,
     screen: crate::custom_id::ui::developer::Screen,
     client_id: &str,
     payload: &Value,
 ) -> Result<Value, CommandError> {
     let fields = submitted(payload);
+
     match screen {
-        crate::custom_id::ui::developer::Screen::Register
-        | crate::custom_id::ui::developer::Screen::Edit => {
+        crate::custom_id::ui::developer::Screen::Register => {
+            registration(state, body(fields), payload).await
+        }
+        crate::custom_id::ui::developer::Screen::Edit => {
             let target = if client_id.is_empty() {
                 String::new()
             } else {
                 format!(" (`{client_id}`)")
             };
 
-            let body = body(fields);
-
-            // The field names, not the values: one of them is a secret's worth of text and
-            // the answer is a message. What the body holds is what the flows take.
-            let names: Vec<String> = body.keys().map(|name| format!("`{name}`")).collect();
-
             Ok(message(ephemeral(vec![crate::components::container(
                 None,
                 vec![crate::components::text(format!(
-                    "このフォーム{target} の処理はまだ実装されていません。\n\n送る項目: {}",
-                    if names.is_empty() {
-                        "なし".to_string()
-                    } else {
-                        names.join("、")
-                    }
+                    "変更の処理はまだ実装されていません{target}。"
                 ))],
             )])))
         }
         // A screen with no form: reaching here means the id was built wrong.
         _ => Err(CommandError::Unknown),
     }
+}
+
+/// An application registered from a form, which is the one place it happens without a
+/// browser.
+///
+/// The endpoint establishes its caller twice — a token says which account, and Discord is
+/// then asked who that account is. Here the interaction is the caller: Discord signed it, or
+/// this would not be running, so the account is the one this Discord user has and the owner
+/// is the id the interaction carries. Everything after that is `create`, which is the
+/// endpoint's too.
+async fn registration(
+    state: &AppState,
+    body: Map<String, Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+
+    // Built by `body` out of what the modal asked for, so a body that will not read is this
+    // side's bug rather than the caller's, and it is answered the way an internal refusal is.
+    let Ok(registration) = serde_json::from_value::<Registration>(Value::Object(body)) else {
+        return Ok(registered(developer::refusal("登録", None)));
+    };
+
+    let new = match validated(registration) {
+        Ok(new) => new,
+        Err(refusal) => return Ok(registered(developer::refusal("登録", refusal.description))),
+    };
+
+    let new = NewApplication {
+        owner_discord_id: Some(me),
+        ..new
+    };
+
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+
+    match create(state, account, &new).await {
+        Ok(created) => Ok(registered(developer::application(
+            &created.client_id,
+            new.client_name.as_deref(),
+            false,
+            None,
+            Some(&created.client_secret),
+        ))),
+        Err(refusal) => Ok(registered(developer::refusal("登録", refusal.description))),
+    }
+}
+
+/// A screen as the response to a submitted form.
+fn registered(screen: Value) -> Value {
+    message(ephemeral(vec![screen]))
 }
 
 /// The values a modal was submitted with, by the `custom_id` each input was built with.

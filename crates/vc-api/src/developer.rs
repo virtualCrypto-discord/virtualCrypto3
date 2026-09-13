@@ -217,6 +217,42 @@ fn secret_block(secret: Option<&str>) -> Value {
     }
 }
 
+/// A form that was refused, in the service's own words.
+///
+/// `description` is `error_description` and it is printed as it came: it names the one thing
+/// to fix, and a friendlier sentence would throw that away. It is absent when the failure is
+/// this service's — the endpoint logs the reason and tells the caller nothing, and the
+/// honest screen says the same.
+pub fn refusal(action: &str, description: Option<&str>) -> Value {
+    let why = match description {
+        Some(description) => description.to_owned(),
+        None => "このサービス側の問題です。時間をおいてもう一度試してください。".to_owned(),
+    };
+
+    container(
+        Some(REFUSED),
+        vec![
+            text(format!("**{action}できませんでした**\n{why}")),
+            action_row(vec![
+                button(
+                    &crate::custom_id::ui::developer::custom_id(
+                        crate::custom_id::ui::developer::Screen::Register,
+                    ),
+                    "もう一度",
+                    ButtonStyle::Primary,
+                ),
+                button(
+                    &crate::custom_id::ui::developer::custom_id(
+                        crate::custom_id::ui::developer::Screen::List,
+                    ),
+                    "アプリケーション",
+                    ButtonStyle::Secondary,
+                ),
+            ]),
+        ],
+    )
+}
+
 /// What the connect flow answered.
 ///
 /// A refusal carries the service's own sentence through untouched, and the button that
