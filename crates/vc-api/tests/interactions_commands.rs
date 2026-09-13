@@ -344,110 +344,12 @@ fn submitted_form(custom_id: &str, fields: Value, user: i64) -> Value {
     })
 }
 
-fn register_form() -> String {
-    vc_api::custom_id::ui::developer::custom_id(vc_api::custom_id::ui::developer::Screen::Register)
-}
-
 fn field(label: &str, custom_id: &str, value: &str) -> Value {
     json!({
         "type": 18,
         "label": label,
         "component": { "type": 4, "custom_id": custom_id, "value": value },
     })
-}
-
-/// A registration form, submitted — an application created from a DM, and the one moment
-/// its secret is on a screen.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_submitted_registration_creates_the_application(pool: PgPool) {
-    const USER: i32 = 1;
-    const DISCORD: i64 = 100_000_000_000_000_001;
-
-    support::insert_user(&pool, USER, DISCORD).await;
-
-    let response = interaction(
-        router(pool.clone()),
-        submitted_form(
-            &register_form(),
-            json!([
-                field("クライアント名", "client_name", "テスト"),
-                field(
-                    "リダイレクト URI",
-                    "redirect_uris",
-                    "https://example.test/callback"
-                ),
-            ]),
-            DISCORD,
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(response.body["type"], 4);
-    assert_eq!(response.body["data"]["flags"], 32832, "ephemeral");
-
-    let owned = vc_core::application::owned_by(&pool, USER)
-        .await
-        .expect("the caller's applications");
-
-    assert_eq!(owned.len(), 1, "{owned:?}");
-
-    let found = vc_api::routes::oauth2_clients::details(&pool, owned[0])
-        .await
-        .expect("the application could be read")
-        .expect("it exists");
-
-    let rendered = response.body["data"].to_string();
-
-    assert!(rendered.contains(&found.client_id), "{rendered}");
-    assert!(rendered.contains("テスト"), "{rendered}");
-
-    // The secret is written on the screen because this is the only time it is ever the
-    // answer to a question somebody asked.
-    let secret = found.client_secret.as_deref().expect("a secret");
-
-    assert!(rendered.contains(secret), "the secret is shown: {rendered}");
-}
-
-/// A form that cannot become an application says why, in the service's words — and it is
-/// not a message where an application is.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_refused_registration_says_what_is_wrong(pool: PgPool) {
-    const USER: i32 = 1;
-    const DISCORD: i64 = 100_000_000_000_000_001;
-
-    support::insert_user(&pool, USER, DISCORD).await;
-
-    let response = interaction(
-        router(pool.clone()),
-        submitted_form(
-            &register_form(),
-            json!([
-                field("クライアント名", "client_name", "テスト"),
-                // A redirect URI that is not one, which `validated` refuses by name.
-                field("リダイレクト URI", "redirect_uris", "ftp://example.test"),
-            ]),
-            DISCORD,
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-
-    let rendered = response.body["data"].to_string();
-
-    assert!(
-        rendered.contains("redirect_uri_scheme_must_be_http_or_https"),
-        "the service's own sentence, not a friendlier one: {rendered}"
-    );
-
-    assert!(
-        vc_core::application::owned_by(&pool, USER)
-            .await
-            .expect("the caller's applications")
-            .is_empty(),
-        "nothing was created"
-    );
 }
 
 fn edit_form(client_id: &str) -> String {
@@ -858,4 +760,60 @@ async fn a_field_button_opens_its_own_form(pool: PgPool) {
     );
     assert_eq!(now.application_type, before.application_type);
     assert_eq!(now.grant_types, before.grant_types);
+}
+
+/// `/application register` asks nothing: every field has a default, so an application is made
+/// with them and answered with the screen that changes them.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_register_makes_one_with_defaults(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+
+    let response = interaction(
+        router(pool.clone()),
+        execute_from_guild(
+            json!({ "name": "application", "options": [{ "name": "register", "type": 1 }] }),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], 4);
+    assert_eq!(response.body["data"]["flags"], 32832, "ephemeral");
+
+    let owned = vc_core::application::owned_by(&pool, USER)
+        .await
+        .expect("the caller's applications");
+
+    assert_eq!(owned.len(), 1, "{owned:?}");
+
+    let found = vc_api::routes::oauth2_clients::details(&pool, owned[0])
+        .await
+        .expect("the application could be read")
+        .expect("it exists");
+
+    // The defaults, including the two that are choices: a grant type, because none makes an
+    // application that can do nothing, and no webhook, because a value there would handshake
+    // against somebody else's server while the registration runs.
+    assert_eq!(found.application_type, "web");
+    assert_eq!(found.grant_types, vec!["authorization_code".to_owned()]);
+    assert_eq!(found.response_types, vec!["code".to_owned()]);
+    assert!(found.redirect_uris.is_empty());
+    assert!(found.webhook_url.is_none(), "{:?}", found.webhook_url);
+
+    // And the answer is the screen, with the secret on it, because the next thing is setting
+    // what the defaults could not know.
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains(&found.client_id), "{rendered}");
+    assert!(
+        rendered.contains(found.client_secret.as_deref().expect("a secret")),
+        "{rendered}"
+    );
+
+    field_control(&response.body["data"], "client_name");
+    field_control(&response.body["data"], "application_type");
 }

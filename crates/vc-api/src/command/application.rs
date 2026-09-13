@@ -43,7 +43,7 @@ pub async fn handle(
         "show" => Ok(message(
             show(state, client_id_of(sub_options)?, payload).await?,
         )),
-        "register" => Ok(register()),
+        "register" => register(state, payload).await,
         // The screen is the editor: every field an edit can change has a control on it, so this
         // subcommand answers with the screen rather than opening a form of its own.
         "edit" => Ok(message(
@@ -68,52 +68,70 @@ fn message(screen: Value) -> Value {
     })
 }
 
-/// The modal that registers an application.
+/// An application made with defaults, answered with the screen that edits it.
 ///
-/// `register` has nothing to pre-fill and nothing to read: an application is created with
-/// what this asks for.
-fn register() -> Value {
-    crate::components::modal(
-        &crate::custom_id::ui::developer::custom_id(
-            crate::custom_id::ui::developer::Screen::Register,
-        ),
-        "アプリケーションの登録",
-        vec![
-            crate::components::label(
-                "クライアント名",
-                Some("アプリケーションの名前です。"),
-                crate::components::text_input(
-                    "client_name",
-                    crate::components::TextInputStyle::Short,
-                    true,
-                    None,
-                    None,
-                ),
-            ),
-            crate::components::label(
-                "リダイレクト URI",
-                Some("1行に1つ入力してください。"),
-                crate::components::text_input(
-                    "redirect_uris",
-                    crate::components::TextInputStyle::Paragraph,
-                    true,
-                    Some(4000),
-                    None,
-                ),
-            ),
-            crate::components::label(
-                "webhook URL",
-                Some("指定すると、登録時にその URL へ確認のリクエストを送ります。"),
-                crate::components::text_input(
-                    "webhook_url",
-                    crate::components::TextInputStyle::Short,
-                    false,
-                    None,
-                    None,
-                ),
-            ),
-        ],
-    )
+/// The defaults are this command's rather than the endpoint's, and two of them are deliberate:
+/// `grant_types` absent means *none*, which makes an application that can do nothing, so this
+/// asks for the one grant type an authorization code flow needs; and `webhook_url` is absent
+/// because a value there sends a handshake to somebody else's server in the middle of a
+/// registration. Nothing is asked for, so nothing has to be typed — the screen is where the
+/// nine fields are set, and it is the same nine controls whether the application is new or old.
+async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandError> {
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+
+    let registration = Registration {
+        application_type: Some("web".to_owned()),
+        grant_types: Some(vec!["authorization_code".to_owned()]),
+        response_types: Some(vec!["code".to_owned()]),
+        // Present and empty: absent is what the endpoint refuses, and an application with no
+        // redirect URI yet is one that is still being set up.
+        redirect_uris: Some(Vec::new()),
+        ..Registration::default()
+    };
+
+    let new = match validated(registration) {
+        Ok(new) => new,
+        Err(refusal) => {
+            return Ok(message(ephemeral(vec![developer::refusal(
+                "登録",
+                refusal.description.as_deref(),
+            )])));
+        }
+    };
+
+    let new = NewApplication {
+        owner_discord_id: Some(me),
+        ..new
+    };
+
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+
+    match create(state, account, &new).await {
+        Ok(created) => Ok(message(ephemeral(vec![developer::application(
+            &created.client_id,
+            new.client_name.as_deref(),
+            false,
+            None,
+            Some(&created.client_secret),
+            developer::Fields {
+                client_name: new.client_name.as_deref(),
+                redirect_uris: &new.redirect_uris,
+                client_uri: new.client_uri.as_deref(),
+                logo_uri: new.logo_uri.as_deref(),
+                webhook_url: new.webhook_url.as_deref(),
+                discord_support_server_invite_slug: new
+                    .discord_support_server_invite_slug
+                    .as_deref(),
+                application_type: &new.application_type,
+                grant_types: &new.grant_types,
+                response_types: &new.response_types,
+            },
+        )]))),
+        Err(refusal) => Ok(message(ephemeral(vec![developer::refusal(
+            "登録",
+            refusal.description.as_deref(),
+        )]))),
+    }
 }
 
 /// The caller's own application that this `client_id` names, with its id.
@@ -307,9 +325,6 @@ pub async fn modal(
     let fields = submitted(payload);
 
     match screen {
-        crate::custom_id::ui::developer::Screen::Register => {
-            registration(state, body(fields), payload).await
-        }
         crate::custom_id::ui::developer::Screen::Edit => {
             // The id carries the field as well as the application — a form is for one of nine —
             // and the ownership check takes the `client_id` alone. The field is already in the
@@ -319,72 +334,6 @@ pub async fn modal(
         }
         // A screen with no form: reaching here means the id was built wrong.
         _ => Err(CommandError::Unknown),
-    }
-}
-
-/// An application registered from a form, which is the one place it happens without a
-/// browser.
-///
-/// The endpoint establishes its caller twice — a token says which account, and Discord is
-/// then asked who that account is. Here the interaction is the caller: Discord signed it, or
-/// this would not be running, so the account is the one this Discord user has and the owner
-/// is the id the interaction carries. Everything after that is `create`, which is the
-/// endpoint's too.
-async fn registration(
-    state: &AppState,
-    body: Map<String, Value>,
-    payload: &Value,
-) -> Result<Value, CommandError> {
-    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
-
-    // Built by `body` out of what the modal asked for, so a body that will not read is this
-    // side's bug rather than the caller's, and it is answered the way an internal refusal is.
-    let Ok(registration) = serde_json::from_value::<Registration>(Value::Object(body)) else {
-        return Ok(registered(developer::refusal("登録", None)));
-    };
-
-    let new = match validated(registration) {
-        Ok(new) => new,
-        Err(refusal) => {
-            return Ok(registered(developer::refusal(
-                "登録",
-                refusal.description.as_deref(),
-            )));
-        }
-    };
-
-    let new = NewApplication {
-        owner_discord_id: Some(me),
-        ..new
-    };
-
-    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
-
-    match create(state, account, &new).await {
-        Ok(created) => Ok(registered(developer::application(
-            &created.client_id,
-            new.client_name.as_deref(),
-            false,
-            None,
-            Some(&created.client_secret),
-            developer::Fields {
-                client_name: new.client_name.as_deref(),
-                redirect_uris: &new.redirect_uris,
-                client_uri: new.client_uri.as_deref(),
-                logo_uri: new.logo_uri.as_deref(),
-                webhook_url: new.webhook_url.as_deref(),
-                discord_support_server_invite_slug: new
-                    .discord_support_server_invite_slug
-                    .as_deref(),
-                application_type: &new.application_type,
-                grant_types: &new.grant_types,
-                response_types: &new.response_types,
-            },
-        ))),
-        Err(refusal) => Ok(registered(developer::refusal(
-            "登録",
-            refusal.description.as_deref(),
-        ))),
     }
 }
 
