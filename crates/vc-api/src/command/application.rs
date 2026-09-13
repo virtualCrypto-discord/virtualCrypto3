@@ -44,7 +44,11 @@ pub async fn handle(
             show(state, client_id_of(sub_options)?, payload).await?,
         )),
         "register" => Ok(register()),
-        "edit" => edit(state, client_id_of(sub_options)?, payload).await,
+        // The screen is the editor: every field an edit can change has a control on it, so this
+        // subcommand answers with the screen rather than opening a form of its own.
+        "edit" => Ok(message(
+            show(state, client_id_of(sub_options)?, payload).await?,
+        )),
         "connect" => connect(state, sub_options, payload).await,
         "help" => Ok(message(help())),
         // The rest are registered and not written yet. Saying so is better than the answer
@@ -110,88 +114,6 @@ fn register() -> Value {
             ),
         ],
     )
-}
-
-/// The modal that changes one, filled with what it has now.
-///
-/// A field that is not sent back is a field the `PATCH` clears, so every field this asks
-/// for is pre-filled from the application: an edit is a correction, not a retyping.
-async fn edit(state: &AppState, client_id: &str, payload: &Value) -> Result<Value, CommandError> {
-    let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(message(ephemeral(vec![developer::plain(
-            "そのアプリケーションはありません。",
-        )])));
-    };
-
-    let redirect_uris = found.redirect_uris.join("\n");
-
-    Ok(crate::components::modal(
-        // The application is named in the id, because a submission comes back with the id it
-        // was opened with and nothing else — without this the form could not say what it was
-        // editing, and would edit whatever the id happened to name, which was nothing.
-        &crate::custom_id::ui::developer::custom_id_for(
-            crate::custom_id::ui::developer::Screen::Edit,
-            &found.client_id,
-        ),
-        "アプリケーションの設定",
-        vec![
-            crate::components::label(
-                "クライアント名",
-                None,
-                crate::components::text_input(
-                    "client_name",
-                    crate::components::TextInputStyle::Short,
-                    true,
-                    None,
-                    found.client_name.as_deref(),
-                ),
-            ),
-            crate::components::label(
-                "リダイレクト URI",
-                Some("1行に1つ入力してください。"),
-                crate::components::text_input(
-                    "redirect_uris",
-                    crate::components::TextInputStyle::Paragraph,
-                    true,
-                    Some(4000),
-                    Some(&redirect_uris),
-                ),
-            ),
-            crate::components::label(
-                "クライアント URI",
-                None,
-                crate::components::text_input(
-                    "client_uri",
-                    crate::components::TextInputStyle::Short,
-                    false,
-                    None,
-                    found.client_uri.as_deref(),
-                ),
-            ),
-            crate::components::label(
-                "ロゴ URI",
-                None,
-                crate::components::text_input(
-                    "logo_uri",
-                    crate::components::TextInputStyle::Short,
-                    false,
-                    None,
-                    found.logo_uri.as_deref(),
-                ),
-            ),
-            crate::components::label(
-                "webhook URL",
-                None,
-                crate::components::text_input(
-                    "webhook_url",
-                    crate::components::TextInputStyle::Short,
-                    false,
-                    None,
-                    found.webhook_url.as_deref(),
-                ),
-            ),
-        ],
-    ))
 }
 
 /// The caller's own application that this `client_id` names, with its id.
