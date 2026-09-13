@@ -13,7 +13,7 @@
 mod support;
 
 use sqlx::PgPool;
-use support::{fake, get, insert_user, mint, state};
+use support::{fake, get, insert_user, mint, mint_app, state};
 
 const URI: &str = "/oauth2/clients/@me";
 
@@ -102,4 +102,30 @@ async fn another_owners_application_is_not_answered(pool: PgPool) {
 
     assert_eq!(response.status, 200, "{:?}", response.body);
     assert_eq!(response.body, serde_json::json!([]));
+}
+
+/// An application's own token may not ask this. The Elixir refuses it 401
+/// `invalid_token` / `invalid_kind`, and both halves of that spelling are asserted,
+/// because `invalid_token` alone would also be a token that is simply bad.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_application_token_is_refused(pool: PgPool) {
+    insert_user(&pool, OWNER_ID, OWNER_DISCORD_ID).await;
+    let application_id = insert_application(&pool, OWNER_DISCORD_ID, "one").await;
+
+    // The account registration created for the application, which is the subject an
+    // app token carries.
+    let application_user: i32 = sqlx::query_scalar!(
+        "SELECT id FROM users WHERE application_id = $1",
+        application_id
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the application's account");
+
+    let token = mint_app(&pool, application_user, &["oauth2.register"]).await;
+    let response = get(vc_api::router(state(pool, fake())), URI, Some(&token)).await;
+
+    assert_eq!(response.status, 401, "{:?}", response.body);
+    assert_eq!(response.body["error"], "invalid_token");
+    assert_eq!(response.body["error_description"], "invalid_kind");
 }

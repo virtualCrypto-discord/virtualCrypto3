@@ -419,6 +419,21 @@ pub async fn mint(pool: &PgPool, subject: i32, scopes: &[&str]) -> String {
     .expect("issue a token")
 }
 
+/// The same, for an application: the subject is the account created for it, and the
+/// kind is what differs. Both go through the service's issuance, so a test can tell
+/// the two apart for the reason production does.
+pub async fn mint_app(pool: &PgPool, subject: i32, scopes: &[&str]) -> String {
+    vc_auth::issue::app_token(
+        pool,
+        JWT_SECRET.as_bytes(),
+        i64::from(subject),
+        scopes,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("issue an app token")
+}
+
 /// Delete the jti row, exactly like Guardian.revoke/1.
 pub async fn revoke(pool: &PgPool, token: &str) {
     let claims = vc_auth::jwt::verify(token, JWT_SECRET.as_bytes()).expect("verify token");
