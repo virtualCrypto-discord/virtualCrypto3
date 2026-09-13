@@ -750,3 +750,38 @@ async fn application_register_makes_one_with_defaults(pool: PgPool) {
     field_control(&response.body["data"], "client_name");
     field_control(&response.body["data"], "application_type");
 }
+
+/// A DM has no guild to connect to, and the picker says where to go rather than failing.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+    const BOT: i64 = 200_000_000_000_000_002;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    // The same choice, made where there is no guild: `chose_bot` builds the interaction from a
+    // guild, and what a DM lacks is exactly that.
+    let mut payload = chose_bot(&client_id, BOT, DISCORD);
+    payload
+        .as_object_mut()
+        .expect("an object")
+        .remove("guild_id");
+
+    let response = interaction(router(pool), payload).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains("サーバーの中で行います"),
+        "it says where to run it: {rendered}"
+    );
+
+    // And what it names is a subcommand that exists: the one this replaced was deleted with the
+    // rest of the connect command.
+    assert!(rendered.contains("`/application show`"), "{rendered}");
+}

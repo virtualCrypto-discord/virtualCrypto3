@@ -10,9 +10,9 @@
 //! - Every screen is one [`container`], because that is what groups a message and gives it
 //!   an accent, and the accent is where the state shows.
 //! - A screen's buttons move or choose; they do not open forms. A form belongs to a
-//!   subcommand — `/application register`, `/application edit` — where its fields are in the
-//!   command list and autocomplete fills the ones that name something, and where Discord's own
-//!   menus do the picking a form would otherwise ask for by hand.
+//!   subcommand — where the fields that are free text are in the command list and autocomplete
+//!   fills the ones that name something — or it is a control on the screen, which is where the
+//!   enumerated fields are set and where a bot is chosen.
 //! - A button that goes nowhere is not on a screen. 戻る named `Home`, which nothing renders
 //!   and nothing dispatches, so pressing it failed.
 //! - One Primary button per row; everything else Secondary.
@@ -122,7 +122,7 @@ pub fn application(
         // Without a logo a section has nothing for its accessory, and the button that was there
         // went to the connect screen with no bot to connect with.
         _ => text(format!(
-            "**{name}**\n{state}\n`{client_id}`\n`/application edit` で変更できます。"
+            "**{name}**\n{state}\n`{client_id}`\nここから設定を変えられます。"
         )),
     };
 

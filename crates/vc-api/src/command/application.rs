@@ -148,7 +148,7 @@ async fn owned(
         .map_err(CommandError::from)
 }
 
-/// `/application connect`, which is a guild's to run.
+/// Connecting a bot, which a guild's screen is the way to ask for.
 ///
 /// Connecting a bot to a server from a DM means asking somebody to paste a guild id, which
 /// is the most error-prone thing in this feature and exactly what the web page's form does
@@ -173,7 +173,7 @@ async fn connect_bot(
 ) -> Result<Value, CommandError> {
     let Some(guild) = payload.get("guild_id").and_then(Value::as_str) else {
         return Ok(developer::plain(
-            "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application connect` を実行してください。",
+            "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application show` を開き、Bot を選んでください。",
         ));
     };
 
