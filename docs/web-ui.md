@@ -29,7 +29,7 @@ connect page" came from, on a site whose list linked it as
 | `GET /applications/:id` | one application | renders the JSON *into* an HTML page |
 | `live /applications/:id/connect` | the connect flow | two events: `verify`, `change`; built below |
 | `live /contract/:id` | approving a contract | not read — and see the warning above |
-| `GET /applications/verification` | a readme | |
+| `GET /applications/verification` | a warning about this flow | **built**, from blob `616e250f` |
 | `GET /document/{,,about,commands,api}` | four documents | static prose |
 | `GET/POST /oauth2/authorize` | the consent screen | needs a session |
 
@@ -93,9 +93,8 @@ screen needs — but the token no longer has to travel in headers.
 
 ## The requirements, in the order they matter
 
-**What is left, in one place**: the **contract flow** (item 5, not read), the
-**documents** (item 7, another repository's prose), and one small page — `GET
-/applications/verification`, whose body renders `readme.html`.
+**What is left, in one place**: the **contract flow** (item 5, not read) and the
+**documents** (item 7, another repository's prose).
 
 `/invite` and `/support` are built: `web::invite` and `web::support` redirect from
 `Links::invite_url` and `Links::support_guild_invite_url`, which `vc-server` already
@@ -104,11 +103,20 @@ invite and the support guild's address stayed where the command responses read t
 from. 307 rather than the Elixir's 302, because that is what axum has for a move that is
 not permanent and a `GET` cannot tell them apart.
 
-`/applications/verification` is prose, and the prose is in the history the warning at the
+`/applications/verification` is built, from the prose in the history the warning at the
 top is about: `lib/virtualCrypto_web/templates/application/readme.html.eex`, blob
-`616e250f`. It is a page that explains how to prove a bot belongs to an application,
-which is what the connect page's paragraph says in a sentence — so it is worth reading
-before it is rebuilt, and it is not in the tree at the tip. The **edit form** is not on this list on
+`616e250f`, kept word for word — spelling mistakes and all — in
+`web/src/pages/Verification.svelte`.
+
+It turned out to be worth more than a tidy-up. It is **a warning**: this is the token
+page for binding an application to a bot, and anyone who asks you to paste its URL into a
+Discord application's description is doing something to you, because pasting it there is
+what gets an application bound to a bot it does not own. That is the other face of the
+check the connect flow runs, and the connect page now links to it — the page whose
+paragraph asks for a description is where somebody would be asked.
+
+It is also the same shape as the detail page's path, and comes before it in the shell
+for the same reason the old site's router put it first. The **edit form** is not on this list on
 purpose: it is a decision about holding an application's credentials in a page, recorded
 under item 3.
 

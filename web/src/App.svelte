@@ -3,6 +3,7 @@
   import Application from "./pages/Application.svelte";
   import Connect from "./pages/Connect.svelte";
   import ApplicationDetail from "./pages/ApplicationDetail.svelte";
+  import Verification from "./pages/Verification.svelte";
   import Register from "./pages/Register.svelte";
   import Landing from "./pages/Landing.svelte";
 
@@ -43,6 +44,10 @@
     <Application />
   {:else if path === "/applications/register"}
     <Register />
+  {:else if path === "/applications/verification"}
+    <!-- Before the branch below, which is the same shape: the old site's router had
+         these two in this order for the same reason. -->
+    <Verification />
   {:else if connectClientId !== null}
     <Connect clientId={connectClientId} />
   {:else if detailClientId !== null}

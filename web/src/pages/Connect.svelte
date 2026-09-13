@@ -77,6 +77,10 @@
   アプリケーションの client_id が必要です。
 </p>
 
+<p>
+  <a href="/applications/verification">他人に言われて説明を書き換えようとしていませんか?</a>
+</p>
+
 <form onsubmit={submit}>
   <p>
     <label>
