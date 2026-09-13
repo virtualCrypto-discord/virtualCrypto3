@@ -428,13 +428,14 @@ mod tests {
         for command in commands() {
             let name = command["name"].as_str().unwrap_or("?").to_owned();
 
-            // `twilight_model`'s `Command` is the type both halves of Twilight use —
-            // `twilight_util::builder::command::CommandBuilder` produces it, and Discord
-            // answers with it — and `version` is the one field it requires that a request
-            // does not carry. It is a non-zero number, so a builder fills it with 1 and so
-            // does this; nothing else is added, and what the rules below see is this
-            // payload's name, description, options, types, limits and flags, which is the
-            // whole of what it says.
+            // `twilight_model`'s `Command` documents itself as "data sent to Discord to
+            // create a command", which is what this is, and `version` is the one field it
+            // requires that Discord's own request does not describe: an autoincrementing
+            // identifier of the command's definition, which a builder fills with 1 —
+            // `Id` is non-zero — and so does this. `id` and `application_id` are optional
+            // and are not set; what the rules below see is this payload's name,
+            // description, options, types, limits and flags, which is the whole of what
+            // it says.
             let mut payload = command;
             payload["version"] = json!("1");
 
