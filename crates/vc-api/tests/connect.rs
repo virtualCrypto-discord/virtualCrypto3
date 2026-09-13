@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{FakeDiscord, Response, fake, insert_user, mint, mint_app, state};
+use support::{FakeDiscord, Response, fake, get, insert_user, mint, mint_app, state};
 use tower::ServiceExt;
 
 const OWNER: i32 = 1;
@@ -444,4 +444,64 @@ async fn a_guild_that_does_not_exist_is_404(pool: PgPool) {
 
     assert_eq!(response.status, 404, "{:?}", response.body);
     assert_eq!(response.body["error"], "not_found");
+}
+
+/// The whole of it, the way the browser does it: read the list, take the id out of that
+/// answer, post it back, and read the list again to see the application connected.
+///
+/// The id is taken from the response rather than written down here on purpose. If the
+/// route insisted on this service's own numeric id, nothing the list answers could be
+/// used to call it — which is the mistake that was in this route until the Elm list was
+/// read, and the one this test is built to catch.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_id_the_list_hands_out_is_the_id_a_connect_takes(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT_ID, &client_id)],
+    ));
+
+    // What the application list shows, read the way the page reads it: the description
+    // on the connect page has to name this string, so it is the one Discord is asked
+    // about below.
+    let listed = get(
+        vc_api::router(state(pool.clone(), discord.clone())),
+        "/oauth2/clients/@me",
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(listed.status, 200, "{:?}", listed.body);
+    let named = listed.body[0]["client_id"]
+        .as_str()
+        .expect("a client id in the list");
+
+    assert_eq!(named, client_id);
+
+    let response = connect_with(
+        pool.clone(),
+        discord,
+        &token,
+        named,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 204, "{:?}", response.body);
+
+    // And the state changed in the way the operator came to see: the application's own
+    // account now carries the bot's Discord id, which is what connecting means.
+    let after = get(
+        vc_api::router(state(pool, fake())),
+        "/oauth2/clients/@me",
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(after.status, 200, "{:?}", after.body);
+    assert_eq!(after.body[0]["discord_user_id"], BOT_ID.to_string());
 }
