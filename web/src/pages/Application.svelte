@@ -76,6 +76,11 @@
         <dt>公開鍵</dt>
         <dd><code>{application.public_key}</code></dd>
       </dl>
+
+      <!-- The path carries the client id, because that is the id `/applications/:id`
+           means: it is what this list has, and the service's numeric id is not part of
+           any response. -->
+      <p><a href="/applications/{application.client_id}/connect">Bot を接続する</a></p>
     </section>
   {/each}
 

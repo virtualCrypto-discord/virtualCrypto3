@@ -1,6 +1,7 @@
 <script lang="ts">
   import Account from "./pages/Account.svelte";
   import Application from "./pages/Application.svelte";
+  import Connect from "./pages/Connect.svelte";
   import Register from "./pages/Register.svelte";
   import Landing from "./pages/Landing.svelte";
 
@@ -16,6 +17,12 @@
   // document, so these paths are reachable directly.
   let path = $state(window.location.pathname);
 
+  // The connect page is at `/applications/<client_id>/connect`, which is a shape rather
+  // than a path, so it is matched as one. `/applications` and `/applications/register`
+  // are compared as wholes and have no slash after the segment, so the branches cannot
+  // be confused for each other.
+  let connectClientId = $derived(path.match(/^\/applications\/([^/]+)\/connect$/)?.[1] ?? null);
+
   window.addEventListener("popstate", () => {
     path = window.location.pathname;
   });
@@ -30,6 +37,8 @@
     <Application />
   {:else if path === "/applications/register"}
     <Register />
+  {:else if connectClientId !== null}
+    <Connect clientId={connectClientId} />
   {:else}
     <h1>見つかりません</h1>
     <p>このページはまだありません。</p>
