@@ -202,11 +202,54 @@ contract rather than about the page:
   needs no change to the read at all. It parts company with the Elixir's path, though,
   and the route is tested against the numeric id.
 
-What settles it is the old site: its dashboard must link `/applications/<id>/connect`
-for the LiveView to be reachable at all, so **its read can be read to say which id the
-page was given**. That read has not been looked at — the section above already says the
-`verify` and `change` requirements are not yet read, and this is the same omission one
-step out: not what the events do, but what the page is given to do it with.
+**The old site does not settle it, and that is now checked rather than assumed.** There
+is no dashboard that lists applications: `live/app/overview.ex` is the stub this document
+already called a stub, and there is no application *show* LiveView beside
+`connect_application.ex`. So `/applications/:id/connect` was a URL an operator typed,
+with an id they had from `GET /applications/:id`, and the old read answers nothing about
+what a list should hand out — the old `/me` never had to.
+
+What that leaves is this project's own choice, and the old site still says which way to
+lean. Both of its routes are keyed by the **numeric** id: the router's
+`live "/applications/:id/connect"`, and `connect_application.ex` sending the browser to
+`"/applications/" <> params["id"]` when it cannot find one (l.14, l.33). Porting the id
+as a `client_id` would be a departure invented here, not a reading of there.
+
+So `render` gains `"id"`. The cost is that the reads through `render` —
+`GET /oauth2/clients/:id` and `GET /oauth2/clients/@me` — change shape, and if either has
+a golden captured from the Elixir then that golden says what the Elixir answered and has
+to be looked at before this is written, the same way every other golden question in this
+project has been. That check is the first thing to do, not the last.
+
+**And it is answered, which is why none of the above was done.** The old site's list is
+not in the Phoenix code at all: it is Elm, at `assets/elm/src/Mypage/Applications.elm`,
+and the Phoenix mypage that replaced it is `<div>My Page</div>`. That is the state the
+whole repository is in after the 1.7 rewrite — `DashboardApplication` is a module with a
+`use` and nothing else, `live/app/overview.ex` is the stub called a stub above — so
+reading the current tree for how the old site behaved reads the rewrite, not the site.
+
+The line that settles it is l.119 of that file:
+
+```elm
+a [href ("/applications/" ++ application.client_id)] [p [class "title"] [text ...]]
+```
+
+and l.79, which navigates the same way after an application is created. **The `:id` in
+`/applications/:id` is the `client_id`, not the numeric one.** The connect route is the
+same `:id` — the router's `live "/applications/:id/connect"`, and
+`connect_application.ex` sending a browser it cannot satisfy to `"/applications/" <> id`
+— so a connect is asked for by `client_id`, which is the uuid the description check
+already turns on and which the list already has.
+
+`connect.rs` takes `Path<i64>` and matches it against `owned_by`'s numeric ids, and its
+tests pass because they were written against that. Both are wrong together, and the
+frontend problem disappears with them: no field has to be added to `render`, because
+`client_id` is already in it.
+
+What to change: the path parameter and its lookup, and the tests with them. The Elixir
+loads the application by this id in `mount` and still has the struct's own `.id` for
+`set_discord_user_id`, which is the numeric one — the two are not interchangeable, and
+that is the trap here.
 
 Where those calls go, since it is four places and not one: the `DiscordApi` trait in
 `crates/vc-api/src/discord.rs` (l.41-), `HttpDiscordApi` (l.320-), **`CachedDiscord`**
