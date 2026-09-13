@@ -333,17 +333,16 @@ pub async fn modal(
                 format!(" (`{client_id}`)")
             };
 
+            let body = body(fields);
+
             // The field names, not the values: one of them is a secret's worth of text and
-            // the answer is a message. What arrived is what the next piece has to map.
-            let names: Vec<String> = fields
-                .iter()
-                .map(|(name, value)| format!("`{name}`（{} 文字）", value.chars().count()))
-                .collect();
+            // the answer is a message. What the body holds is what the flows take.
+            let names: Vec<String> = body.keys().map(|name| format!("`{name}`")).collect();
 
             Ok(message(ephemeral(vec![crate::components::container(
                 None,
                 vec![crate::components::text(format!(
-                    "このフォーム{target} の処理はまだ実装されていません。\n\n受け取った項目: {}",
+                    "このフォーム{target} の処理はまだ実装されていません。\n\n送る項目: {}",
                     if names.is_empty() {
                         "なし".to_string()
                     } else {
@@ -389,6 +388,33 @@ fn submitted(payload: &Value) -> Vec<(String, String)> {
     walk(payload.get("data").unwrap_or(&Value::Null), &mut found);
 
     found
+}
+
+/// What a form's fields are, as the body the flows take.
+///
+/// Both `/oauth2/clients` and the `PATCH` read their body by which fields are present, so a
+/// field the form did not ask for is simply absent and is left alone. The one conversion is
+/// `redirect_uris`, which is a Paragraph input: one URI per line.
+fn body(fields: Vec<(String, String)>) -> serde_json::Map<String, Value> {
+    let mut body = serde_json::Map::new();
+
+    for (name, value) in fields {
+        if name == "redirect_uris" {
+            let uris: Vec<Value> = value
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| json!(line))
+                .collect();
+
+            body.insert(name, Value::Array(uris));
+            continue;
+        }
+
+        body.insert(name, json!(value));
+    }
+
+    body
 }
 
 #[cfg(test)]
@@ -440,6 +466,33 @@ mod tests {
                     "https://example.test/callback\nhttps://example.test/other".to_owned()
                 ),
             ]
+        );
+    }
+
+    /// The one conversion a form needs, and the absence that `PATCH` reads as "leave it":
+    /// a field the form did not ask for is not in the body at all.
+    #[test]
+    fn a_form_becomes_the_body_the_flows_take() {
+        let body = body(vec![
+            ("client_name".to_owned(), "テスト".to_owned()),
+            (
+                "redirect_uris".to_owned(),
+                "https://example.test/callback\n\n  https://example.test/other  ".to_owned(),
+            ),
+        ]);
+
+        assert_eq!(body["client_name"], "テスト");
+        assert_eq!(
+            body["redirect_uris"],
+            json!([
+                "https://example.test/callback",
+                "https://example.test/other"
+            ]),
+            "blank lines and padding are the form's, not the service's"
+        );
+        assert!(
+            body.get("webhook_url").is_none(),
+            "absent means untouched: {body:?}"
         );
     }
 
