@@ -199,6 +199,27 @@ same reason, under `Raw`, which is also where the integrations call belongs — 
 the three should be cached, since a permission question answered from fifteen minutes
 ago is a permission question answered wrongly.
 
+The three signatures, since the Elixir answers a status and a body rather than folding
+them:
+
+```rust
+async fn get_guild_integrations_with_status(&self, guild_id: i64)
+    -> Result<(u16, Vec<Map<String, Value>>), DiscordError>;
+async fn get_guild_with_status(&self, guild_id: i64)
+    -> Result<(u16, Map<String, Value>), DiscordError>;
+async fn get_user_with_status(&self, user_id: i64)
+    -> Result<(u16, Map<String, Value>), DiscordError>;
+```
+
+The idiom is `get_roles` (l.419-442) and there is nothing else to it: the base is a
+literal `https://discord.com/api`, the bot's calls carry
+`.header(AUTHORIZATION, format!("Bot {}", self.bot_token))` while a user's carry
+`.bearer_auth(token)`, and a failure to send or parse is
+`DiscordError::Request(error.to_string())`. A status is read with
+`response.status().as_u16()` instead of being compared to `NOT_FOUND`, which is the
+whole difference between these and the calls they sit beside.
+
+
 ### The tail, and the constraint it depends on
 
 The remaining branches are all about the two ids being wrong in different ways:
