@@ -321,8 +321,9 @@ pub async fn modal(
     _state: &AppState,
     screen: crate::custom_id::ui::developer::Screen,
     client_id: &str,
-    _payload: &Value,
+    payload: &Value,
 ) -> Result<Value, CommandError> {
+    let fields = submitted(payload);
     match screen {
         crate::custom_id::ui::developer::Screen::Register
         | crate::custom_id::ui::developer::Screen::Edit => {
@@ -332,16 +333,62 @@ pub async fn modal(
                 format!(" (`{client_id}`)")
             };
 
+            // The field names, not the values: one of them is a secret's worth of text and
+            // the answer is a message. What arrived is what the next piece has to map.
+            let names: Vec<String> = fields
+                .iter()
+                .map(|(name, value)| format!("`{name}`（{} 文字）", value.chars().count()))
+                .collect();
+
             Ok(message(ephemeral(vec![crate::components::container(
                 None,
                 vec![crate::components::text(format!(
-                    "このフォーム{target} の処理はまだ実装されていません。"
+                    "このフォーム{target} の処理はまだ実装されていません。\n\n受け取った項目: {}",
+                    if names.is_empty() {
+                        "なし".to_string()
+                    } else {
+                        names.join("、")
+                    }
                 ))],
             )])))
         }
         // A screen with no form: reaching here means the id was built wrong.
         _ => Err(CommandError::Unknown),
     }
+}
+
+/// The values a modal was submitted with, by the `custom_id` each input was built with.
+///
+/// Discord answers a submission with the components it was sent, the inputs one `<label>`
+/// deep, which is the shape `components::label` builds and therefore the shape this reads.
+fn submitted(payload: &Value) -> Vec<(String, String)> {
+    fn walk(value: &Value, found: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(map) => {
+                if let (Some(id), Some(text)) = (
+                    map.get("custom_id").and_then(Value::as_str),
+                    map.get("value").and_then(Value::as_str),
+                ) {
+                    found.push((id.to_owned(), text.to_owned()));
+                }
+
+                for nested in map.values() {
+                    walk(nested, found);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = Vec::new();
+    walk(payload.get("data").unwrap_or(&Value::Null), &mut found);
+
+    found
 }
 
 #[cfg(test)]
@@ -353,6 +400,49 @@ mod tests {
     /// subcommands — the one screen that exists without a database, so it is the one thing
     /// here that can be asserted on its own. The subcommands that read or write are tested
     /// where they are written.
+    /// The shape Discord answers a modal submission with, taken from the component
+    /// reference: the labels and their inputs, and the values on the inputs.
+    #[test]
+    fn the_submitted_values_are_read_by_their_custom_ids() {
+        let payload = json!({
+            "type": 5,
+            "data": {
+                "custom_id": "the-modal",
+                "components": [
+                    {
+                        "type": 18,
+                        "label": "クライアント名",
+                        "component": {
+                            "type": 4,
+                            "custom_id": "client_name",
+                            "value": "テスト",
+                        },
+                    },
+                    {
+                        "type": 18,
+                        "label": "リダイレクト URI",
+                        "component": {
+                            "type": 4,
+                            "custom_id": "redirect_uris",
+                            "value": "https://example.test/callback\nhttps://example.test/other",
+                        },
+                    },
+                ],
+            },
+        });
+
+        assert_eq!(
+            submitted(&payload),
+            vec![
+                ("client_name".to_owned(), "テスト".to_owned()),
+                (
+                    "redirect_uris".to_owned(),
+                    "https://example.test/callback\nhttps://example.test/other".to_owned()
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn help_is_an_ephemeral_component_message_that_names_the_subcommands() {
         let screen = help();
