@@ -11,6 +11,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v2/users/@me", get(users::me))
+        .route("/api/v2/users/@me/balances", get(users::balances))
         .route(
             "/api/v2/users/@me/claims",
             get(claims::index).post(claims::create),
