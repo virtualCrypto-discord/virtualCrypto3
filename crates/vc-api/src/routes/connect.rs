@@ -73,16 +73,21 @@ fn text<'a>(object: &'a Map<String, Value>, key: &str) -> &'a str {
 /// Ownership is decided first and by id, so a client id that belongs to somebody else
 /// is indistinguishable from one that does not exist. That is the whole reason the
 /// answer to both is a 404: this endpoint must not confirm which client ids are real.
+/// The caller's own application that this `client_id` names, with its id.
+///
+/// The id comes back too because two callers want two halves of the same answer: a screen
+/// wants the application, and an edit wants something to write to. Asking twice would be
+/// reading it twice.
 pub(crate) async fn owned_by_client_id(
     pool: &PgPool,
     owned: &[i64],
     client_id: &str,
-) -> Result<Option<Details>, sqlx::Error> {
+) -> Result<Option<(i64, Details)>, sqlx::Error> {
     for id in owned {
         if let Some(found) = details(pool, *id).await?
             && found.client_id == client_id
         {
-            return Ok(Some(found));
+            return Ok(Some((*id, found)));
         }
     }
 
@@ -134,7 +139,7 @@ pub async fn connect(
     // The application's own account, which is what the write at the end gives a
     // Discord id to, and the client id the description must contain.
     let found = match owned_by_client_id(state.pool(), &owned, &client_id).await {
-        Ok(Some(found)) => found,
+        Ok(Some((_, found))) => found,
         Ok(None) => return refused(StatusCode::NOT_FOUND, "not_found", "no such application"),
         Err(_) => return internal("the application could not be read"),
     };

@@ -455,3 +455,66 @@ async fn a_refused_registration_says_what_is_wrong(pool: PgPool) {
         "nothing was created"
     );
 }
+
+fn edit_form(client_id: &str) -> String {
+    vc_api::custom_id::ui::developer::custom_id_for(
+        vc_api::custom_id::ui::developer::Screen::Edit,
+        client_id,
+    )
+}
+
+/// An edit submitted from a form: what the form said is what the application has, and the
+/// answer is the application as it now is.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_submitted_edit_changes_the_application(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "まえ").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let response = interaction(
+        router(pool.clone()),
+        submitted_form(
+            &edit_form(&client_id),
+            json!([
+                field("クライアント名", "client_name", "あと"),
+                field(
+                    "リダイレクト URI",
+                    "redirect_uris",
+                    "https://example.test/after"
+                ),
+                // Left empty, which is what an untouched optional box arrives as.
+                field("webhook URL", "webhook_url", ""),
+            ]),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], 4);
+
+    let now = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .expect("the application could be read")
+        .expect("it exists");
+
+    assert_eq!(now.client_name.as_deref(), Some("あと"));
+    assert_eq!(
+        now.redirect_uris,
+        vec!["https://example.test/after".to_owned()]
+    );
+    assert!(
+        now.webhook_url.is_none(),
+        "an empty box is cleared, not an empty URL: {:?}",
+        now.webhook_url
+    );
+
+    // The answer is the application, so the person sees what the edit left behind.
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("あと"), "{rendered}");
+    assert!(rendered.contains(&client_id), "{rendered}");
+}

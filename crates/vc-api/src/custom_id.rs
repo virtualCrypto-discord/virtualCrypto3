@@ -287,6 +287,15 @@ pub mod ui {
             crate::custom_id::encode(0, &page(screen))
         }
 
+        /// The string a component carries for a screen about one application.
+        ///
+        /// The `client_id` has to be in the id and not somewhere else: a form that changes
+        /// an application is opened from a button on that application's screen, and the
+        /// submission comes back with nothing but the id it was opened with.
+        pub fn custom_id_for(screen: Screen, client_id: &str) -> String {
+            crate::custom_id::encode(0, &application(screen, client_id))
+        }
+
         pub fn parse(source: &[u8]) -> Result<(Screen, String), UiError> {
             let (id, data) = parse_id(source)?;
 

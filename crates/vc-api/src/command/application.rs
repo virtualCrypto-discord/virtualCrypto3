@@ -13,7 +13,9 @@ use serde_json::{Map, Value, json};
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, get_user};
 use crate::components::ephemeral;
 use crate::developer;
-use crate::routes::oauth2_clients::{Registration, create, details, render, validated};
+use crate::routes::oauth2_clients::{
+    Registration, apply, changes, create, details, render, validated,
+};
 use crate::state::AppState;
 use vc_core::application::NewApplication;
 
@@ -38,9 +40,11 @@ pub async fn handle(
     // wrapped in the message one.
     match subcommand {
         "list" => Ok(message(list(state, payload).await?)),
-        "show" => Ok(message(show(state, sub_options, payload).await?)),
+        "show" => Ok(message(
+            show(state, client_id_of(sub_options)?, payload).await?,
+        )),
         "register" => Ok(register()),
-        "edit" => edit(state, sub_options, payload).await,
+        "edit" => edit(state, client_id_of(sub_options)?, payload).await,
         "connect" => connect(sub_options, payload),
         "help" => Ok(message(help())),
         // The rest are registered and not written yet. Saying so is better than the answer
@@ -112,12 +116,8 @@ fn register() -> Value {
 ///
 /// A field that is not sent back is a field the `PATCH` clears, so every field this asks
 /// for is pre-filled from the application: an edit is a correction, not a retyping.
-async fn edit(
-    state: &AppState,
-    sub_options: Option<&Value>,
-    payload: &Value,
-) -> Result<Value, CommandError> {
-    let Some(found) = owned_application(state, sub_options, payload).await? else {
+async fn edit(state: &AppState, client_id: &str, payload: &Value) -> Result<Value, CommandError> {
+    let Some((_, found)) = owned(state, client_id, payload).await? else {
         return Ok(message(ephemeral(vec![crate::components::text(
             "そのアプリケーションはありません。".to_string(),
         )])));
@@ -126,7 +126,13 @@ async fn edit(
     let redirect_uris = found.redirect_uris.join("\n");
 
     Ok(crate::components::modal(
-        &crate::custom_id::ui::developer::custom_id(crate::custom_id::ui::developer::Screen::Edit),
+        // The application is named in the id, because a submission comes back with the id it
+        // was opened with and nothing else — without this the form could not say what it was
+        // editing, and would edit whatever the id happened to name, which was nothing.
+        &crate::custom_id::ui::developer::custom_id_for(
+            crate::custom_id::ui::developer::Screen::Edit,
+            &found.client_id,
+        ),
         "アプリケーションの設定",
         vec![
             crate::components::label(
@@ -188,18 +194,18 @@ async fn edit(
     ))
 }
 
-/// The caller's own application that this interaction names, or nothing.
+/// The caller's own application that this `client_id` names, with its id.
 ///
-/// The ownership check is the connect route's, in the same order, and it is here once for
-/// `show` and `edit` both.
-async fn owned_application(
+/// The ownership check is the connect route's, in the same order, and it is here once for the
+/// three places that look at one application: the screen, the form that changes it, and the
+/// answer to that form.
+async fn owned(
     state: &AppState,
-    sub_options: Option<&Value>,
+    client_id: &str,
     payload: &Value,
-) -> Result<Option<crate::routes::oauth2_clients::Details>, CommandError> {
+) -> Result<Option<(i64, crate::routes::oauth2_clients::Details)>, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
-    let client_id = client_id_of(sub_options)?;
 
     let owned = vc_core::application::owned_by(state.pool(), account).await?;
 
@@ -240,12 +246,8 @@ fn connect(sub_options: Option<&Value>, payload: &Value) -> Result<Value, Comman
 /// The ownership check is the one the connect route makes, and in the same order: the
 /// caller's own ids first, and only then a `client_id` looked for among them. Checking the
 /// uuid first would answer whether an application exists to somebody who owns none.
-async fn show(
-    state: &AppState,
-    sub_options: Option<&Value>,
-    payload: &Value,
-) -> Result<Value, CommandError> {
-    let Some(found) = owned_application(state, sub_options, payload).await? else {
+async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Value, CommandError> {
+    let Some((_, found)) = owned(state, client_id, payload).await? else {
         return Ok(ephemeral(vec![crate::components::text(
             "そのアプリケーションはありません。".to_string(),
         )]));
@@ -331,18 +333,7 @@ pub async fn modal(
             registration(state, body(fields), payload).await
         }
         crate::custom_id::ui::developer::Screen::Edit => {
-            let target = if client_id.is_empty() {
-                String::new()
-            } else {
-                format!(" (`{client_id}`)")
-            };
-
-            Ok(message(ephemeral(vec![crate::components::container(
-                None,
-                vec![crate::components::text(format!(
-                    "変更の処理はまだ実装されていません{target}。"
-                ))],
-            )])))
+            edit_form(state, client_id, body(fields), payload).await
         }
         // A screen with no form: reaching here means the id was built wrong.
         _ => Err(CommandError::Unknown),
@@ -367,12 +358,28 @@ async fn registration(
     // Built by `body` out of what the modal asked for, so a body that will not read is this
     // side's bug rather than the caller's, and it is answered the way an internal refusal is.
     let Ok(registration) = serde_json::from_value::<Registration>(Value::Object(body)) else {
-        return Ok(registered(developer::refusal("登録", None)));
+        return Ok(registered(developer::refusal(
+            "登録",
+            &crate::custom_id::ui::developer::custom_id(
+                crate::custom_id::ui::developer::Screen::Register,
+            ),
+            "もう一度",
+            None,
+        )));
     };
 
     let new = match validated(registration) {
         Ok(new) => new,
-        Err(refusal) => return Ok(registered(developer::refusal("登録", refusal.description))),
+        Err(refusal) => {
+            return Ok(registered(developer::refusal(
+                "登録",
+                &crate::custom_id::ui::developer::custom_id(
+                    crate::custom_id::ui::developer::Screen::Register,
+                ),
+                "もう一度",
+                refusal.description,
+            )));
+        }
     };
 
     let new = NewApplication {
@@ -390,7 +397,88 @@ async fn registration(
             None,
             Some(&created.client_secret),
         ))),
-        Err(refusal) => Ok(registered(developer::refusal("登録", refusal.description))),
+        Err(refusal) => Ok(registered(developer::refusal(
+            "登録",
+            &crate::custom_id::ui::developer::custom_id(
+                crate::custom_id::ui::developer::Screen::Register,
+            ),
+            "もう一度",
+            refusal.description,
+        ))),
+    }
+}
+
+/// A change submitted from a form.
+///
+/// The endpoint insists on an application token carrying `oauth2.register`, because that is
+/// all a `PATCH` has to go on — the token's subject *is* the application being written. Here
+/// the application is the one the `custom_id` names and the interaction says who is asking,
+/// so ownership is what authorizes it. What is left is the same `changes` and `apply` the
+/// endpoint uses, and the same write.
+async fn edit_form(
+    state: &AppState,
+    client_id: &str,
+    body: Map<String, Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let Some((application_id, found)) = owned(state, client_id, payload).await? else {
+        return Ok(registered(developer::refusal(
+            "変更",
+            &crate::custom_id::ui::developer::custom_id(
+                crate::custom_id::ui::developer::Screen::List,
+            ),
+            "アプリケーション",
+            Some("そのアプリケーションはありません。"),
+        )));
+    };
+
+    let changes = match changes(&body) {
+        Ok(changes) => changes,
+        Err(refusal) => {
+            return Ok(registered(developer::refusal(
+                "変更",
+                &crate::custom_id::ui::developer::custom_id_for(
+                    crate::custom_id::ui::developer::Screen::Edit,
+                    client_id,
+                ),
+                "もう一度",
+                refusal.description,
+            )));
+        }
+    };
+
+    // The application's own account, which is what the endpoint's token subject is, so the
+    // handshake budget is the application's either way.
+    let key = found.user_id.to_string();
+
+    match apply(state, application_id, &key, &changes).await {
+        Ok(()) => match details(state.pool(), application_id).await {
+            Ok(Some(now)) => Ok(registered(developer::application(
+                &now.client_id,
+                now.client_name.as_deref(),
+                now.discord_user_id.is_some(),
+                now.logo_uri.as_deref(),
+                now.client_secret.as_deref(),
+            ))),
+            _ => Ok(registered(developer::refusal(
+                "変更",
+                &crate::custom_id::ui::developer::custom_id_for(
+                    crate::custom_id::ui::developer::Screen::Edit,
+                    client_id,
+                ),
+                "もう一度",
+                None,
+            ))),
+        },
+        Err(refusal) => Ok(registered(developer::refusal(
+            "変更",
+            &crate::custom_id::ui::developer::custom_id_for(
+                crate::custom_id::ui::developer::Screen::Edit,
+                client_id,
+            ),
+            "もう一度",
+            refusal.description,
+        ))),
     }
 }
 
@@ -436,8 +524,15 @@ fn submitted(payload: &Value) -> Vec<(String, String)> {
 /// What a form's fields are, as the body the flows take.
 ///
 /// Both `/oauth2/clients` and the `PATCH` read their body by which fields are present, so a
-/// field the form did not ask for is simply absent and is left alone. The one conversion is
-/// `redirect_uris`, which is a Paragraph input: one URI per line.
+/// field the form did not ask for is simply absent and is left alone.
+///
+/// An empty box is not absence. Discord sends `""` for one, and an empty string is a value —
+/// a URL that is not one, a webhook that cannot be verified — so it becomes `null`, which is
+/// what the `PATCH` reads as "clear it" and what somebody who emptied the box meant. The
+/// edit form pre-fills every field it asks for, so a field that still has its value comes
+/// back with it and is written back unchanged.
+///
+/// The other conversion is `redirect_uris`, which is a Paragraph input: one URI per line.
 fn body(fields: Vec<(String, String)>) -> serde_json::Map<String, Value> {
     let mut body = serde_json::Map::new();
 
@@ -451,6 +546,11 @@ fn body(fields: Vec<(String, String)>) -> serde_json::Map<String, Value> {
                 .collect();
 
             body.insert(name, Value::Array(uris));
+            continue;
+        }
+
+        if value.is_empty() {
+            body.insert(name, Value::Null);
             continue;
         }
 
@@ -512,8 +612,9 @@ mod tests {
         );
     }
 
-    /// The one conversion a form needs, and the absence that `PATCH` reads as "leave it":
-    /// a field the form did not ask for is not in the body at all.
+    /// The two conversions a form needs: lines into a list, and an empty box into a null
+    /// rather than an empty string — `PATCH` leaves an absent field alone and clears a null
+    /// one, and an empty string would be a URL that is not one.
     #[test]
     fn a_form_becomes_the_body_the_flows_take() {
         let body = body(vec![
@@ -522,6 +623,7 @@ mod tests {
                 "redirect_uris".to_owned(),
                 "https://example.test/callback\n\n  https://example.test/other  ".to_owned(),
             ),
+            ("webhook_url".to_owned(), String::new()),
         ]);
 
         assert_eq!(body["client_name"], "テスト");
@@ -533,9 +635,14 @@ mod tests {
             ]),
             "blank lines and padding are the form's, not the service's"
         );
+        assert_eq!(
+            body["webhook_url"],
+            Value::Null,
+            "an emptied box is a value somebody meant to remove"
+        );
         assert!(
-            body.get("webhook_url").is_none(),
-            "absent means untouched: {body:?}"
+            body.get("client_uri").is_none(),
+            "a field the form does not ask for is absent, which means untouched: {body:?}"
         );
     }
 

@@ -862,12 +862,30 @@ pub async fn edit(
         return internal("the application's account is gone").response();
     };
 
+    match apply(&state, application_id, &subject.to_string(), &changes).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(refusal) => refusal.response(),
+    }
+}
+
+/// A `PATCH`, from where both surfaces can meet: after the caller is established, the body
+/// has been read, and there is an application to write to.
+///
+/// `key` is the account the handshake's rate limit is charged to. The endpoint passes the
+/// token's subject, which is the application's own account, and so does the command — the
+/// budget belongs to the application rather than to whichever surface asked.
+pub async fn apply(
+    state: &AppState,
+    application_id: i64,
+    key: &str,
+    changes: &Changes,
+) -> Result<(), Box<Refusal>> {
     // A named webhook is verified with the key the application **already** has, not
     // with a fresh pair: the pair is what it verifies deliveries with, so a new one
     // would be a handshake nobody could answer.
     if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
         let Some(proxy) = state.webhook_proxy() else {
-            return internal("no webhook proxy is configured").response();
+            return Err(Box::new(internal("no webhook proxy is configured")));
         };
 
         let webhook = vc_core::application::webhook_data(state.pool(), application_id)
@@ -876,17 +894,19 @@ pub async fn edit(
             .flatten();
 
         let Some(webhook) = webhook else {
-            return internal("the application has no webhook data").response();
+            return Err(Box::new(internal("the application has no webhook data")));
         };
 
         let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
-            return internal("the application's private key is not 32 bytes").response();
+            return Err(Box::new(internal(
+                "the application's private key is not 32 bytes",
+            )));
         };
 
         // The handshake is the expensive thing here, and this is what stops one
         // requester spending all of it.
-        if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
-            return rate_limited(too_soon).response();
+        if let Some(too_soon) = state.handshake_limiter().refuse(key) {
+            return Err(Box::new(rate_limited(too_soon)));
         }
 
         let at = std::time::SystemTime::now()
@@ -895,22 +915,22 @@ pub async fn edit(
             .unwrap_or_default();
 
         if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
-            return refused(
+            return Err(refusal(
                 StatusCode::BAD_REQUEST,
                 "webhook_verification_failed",
                 "the webhook did not verify",
-            );
+            ));
         }
     }
 
-    if vc_core::application::patch(state.pool(), application_id, &changes)
+    if vc_core::application::patch(state.pool(), application_id, changes)
         .await
         .is_err()
     {
-        return internal("the application could not be written").response();
+        return Err(Box::new(internal("the application could not be written")));
     }
 
-    StatusCode::NO_CONTENT.into_response()
+    Ok(())
 }
 
 #[cfg(test)]

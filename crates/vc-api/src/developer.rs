@@ -157,8 +157,9 @@ pub fn application(
         match logo_uri {
             Some(url) if !url.is_empty() => thumbnail(url),
             _ => button(
-                &crate::custom_id::ui::developer::custom_id(
+                &crate::custom_id::ui::developer::custom_id_for(
                     crate::custom_id::ui::developer::Screen::Connect,
+                    client_id,
                 ),
                 "接続",
                 ButtonStyle::Primary,
@@ -176,16 +177,21 @@ pub fn application(
             // revealing it on request shows it to the person already reading.
             secret_block(secret),
             action_row(vec![
+                // 設定を変更 opens the edit form, which is the whole way to change anything:
+                // it was pointing at the connect screen, and a screen that lies about where
+                // its button goes is worse than one with no button.
                 button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Connect,
+                    &crate::custom_id::ui::developer::custom_id_for(
+                        crate::custom_id::ui::developer::Screen::Edit,
+                        client_id,
                     ),
                     "設定を変更",
                     ButtonStyle::Primary,
                 ),
                 button(
-                    &crate::custom_id::ui::developer::custom_id(
+                    &crate::custom_id::ui::developer::custom_id_for(
                         crate::custom_id::ui::developer::Screen::Connect,
+                        client_id,
                     ),
                     "Bot を接続",
                     ButtonStyle::Secondary,
@@ -223,7 +229,7 @@ fn secret_block(secret: Option<&str>) -> Value {
 /// to fix, and a friendlier sentence would throw that away. It is absent when the failure is
 /// this service's — the endpoint logs the reason and tells the caller nothing, and the
 /// honest screen says the same.
-pub fn refusal(action: &str, description: Option<&str>) -> Value {
+pub fn refusal(action: &str, again: &str, again_label: &str, description: Option<&str>) -> Value {
     let why = match description {
         Some(description) => description.to_owned(),
         None => "このサービス側の問題です。時間をおいてもう一度試してください。".to_owned(),
@@ -234,13 +240,7 @@ pub fn refusal(action: &str, description: Option<&str>) -> Value {
         vec![
             text(format!("**{action}できませんでした**\n{why}")),
             action_row(vec![
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Register,
-                    ),
-                    "もう一度",
-                    ButtonStyle::Primary,
-                ),
+                button(again, again_label, ButtonStyle::Primary),
                 button(
                     &crate::custom_id::ui::developer::custom_id(
                         crate::custom_id::ui::developer::Screen::List,
