@@ -377,7 +377,7 @@ async fn registration(
                     crate::custom_id::ui::developer::Screen::Register,
                 ),
                 "もう一度",
-                refusal.description,
+                refusal.description.as_deref(),
             )));
         }
     };
@@ -403,7 +403,7 @@ async fn registration(
                 crate::custom_id::ui::developer::Screen::Register,
             ),
             "もう一度",
-            refusal.description,
+            refusal.description.as_deref(),
         ))),
     }
 }
@@ -442,7 +442,7 @@ async fn edit_form(
                     client_id,
                 ),
                 "もう一度",
-                refusal.description,
+                refusal.description.as_deref(),
             )));
         }
     };
@@ -477,7 +477,7 @@ async fn edit_form(
                 client_id,
             ),
             "もう一度",
-            refusal.description,
+            refusal.description.as_deref(),
         ))),
     }
 }

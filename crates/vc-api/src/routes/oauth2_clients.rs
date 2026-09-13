@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::borrow::Cow;
 use time::OffsetDateTime;
 use vc_auth::AuthUser;
 
@@ -238,17 +239,17 @@ pub struct Registration {
 #[derive(Debug, Clone)]
 pub struct Refusal {
     pub status: StatusCode,
-    pub error: &'static str,
-    pub description: Option<&'static str>,
+    pub error: Cow<'static, str>,
+    pub description: Option<Cow<'static, str>>,
 }
 
 impl Refusal {
     /// The JSON every endpoint around this one answers with.
     pub fn response(&self) -> Response {
-        let mut body = json!({ "error": self.error });
+        let mut body = json!({ "error": self.error.as_ref() });
 
-        if let Some(description) = self.description {
-            body["error_description"] = json!(description);
+        if let Some(description) = &self.description {
+            body["error_description"] = json!(description.as_ref());
         }
 
         (self.status, Json(body)).into_response()
@@ -256,16 +257,27 @@ impl Refusal {
 }
 
 /// A refusal, for a flow that returns one.
-fn refusal(status: StatusCode, error: &'static str, description: &'static str) -> Box<Refusal> {
+///
+/// The sentences are anything a sentence can be made of, because some of them name what the
+/// caller asked about: the bot that is not in the guild, the guild's own name.
+pub(crate) fn refusal(
+    status: StatusCode,
+    error: impl Into<Cow<'static, str>>,
+    description: impl Into<Cow<'static, str>>,
+) -> Box<Refusal> {
     Box::new(Refusal {
         status,
-        error,
-        description: Some(description),
+        error: error.into(),
+        description: Some(description.into()),
     })
 }
 
 /// An OAuth error, which is the shape every endpoint around this one answers with.
-fn refused(status: StatusCode, error: &'static str, description: &'static str) -> Response {
+pub(crate) fn refused(
+    status: StatusCode,
+    error: impl Into<Cow<'static, str>>,
+    description: impl Into<Cow<'static, str>>,
+) -> Response {
     refusal(status, error, description).response()
 }
 
@@ -657,8 +669,8 @@ fn rate_limited(too_soon: TooSoon) -> Refusal {
 
     Refusal {
         status: StatusCode::TOO_MANY_REQUESTS,
-        error: "rate_limit_exceeded",
-        description: Some(description),
+        error: "rate_limit_exceeded".into(),
+        description: Some(description.into()),
     }
 }
 
@@ -668,12 +680,12 @@ fn rate_limited(too_soon: TooSoon) -> Refusal {
 /// will not take the write, or because this service has no proxy — and none of
 /// those is something the caller can act on, so none of them is answered as though
 /// the request were wrong.
-fn internal(why: &'static str) -> Refusal {
+pub(crate) fn internal(why: &'static str) -> Refusal {
     tracing::error!(why, "a registration could not be completed");
 
     Refusal {
         status: StatusCode::INTERNAL_SERVER_ERROR,
-        error: "server_error",
+        error: "server_error".into(),
         description: None,
     }
 }
