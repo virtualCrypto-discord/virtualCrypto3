@@ -10,7 +10,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, get_user};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user};
 use crate::components::ephemeral;
 use crate::developer;
 use crate::routes::oauth2_clients::{
@@ -480,6 +480,61 @@ async fn edit_form(
             refusal.description,
         ))),
     }
+}
+
+/// A component on one of these screens: a button, or the menu's select.
+///
+/// A button that opens a form answers with the form — a modal is its own callback type and
+/// cannot be wrapped in a message. Everything else answers with the screen it goes to, as an
+/// *update*, so pressing 戻る replaces the panel rather than stacking another one in the DM,
+/// which is what a person pressing 戻る means.
+///
+/// The screens that are not here are the ones whose data this does not have: `home` says
+/// 接続しています to a person by name and links to a page, and neither the name nor the page is
+/// in the interaction or in [`crate::state::Links`]; `connect` is the HTTP route's flow, which
+/// is not extracted yet. They answer `Unknown`, which the dispatcher turns into the refusal an
+/// unhandled component already gets, rather than a screen that pretends.
+pub async fn component(
+    state: &AppState,
+    custom_id: &str,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    use crate::custom_id::ui::developer::{Screen, parse};
+
+    let (screen, client_id) =
+        parse(&crate::custom_id::parse(custom_id)).map_err(|_| CommandError::Unknown)?;
+
+    let data = payload.get("data");
+    let component_type = data
+        .and_then(|data| data.get("component_type"))
+        .and_then(Value::as_i64);
+
+    match (component_type, screen) {
+        // The menu. Its id says which screen the menu is on rather than what choosing does,
+        // so the value that came back is the thing to act on, and it is a `client_id`.
+        (Some(3), _) => {
+            let chosen = data
+                .and_then(|data| data.get("values"))
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(Value::as_str)
+                .ok_or(CommandError::Unknown)?;
+
+            Ok(update(show(state, chosen, payload).await?))
+        }
+        (Some(2), Screen::List | Screen::Back) => Ok(update(list(state, payload).await?)),
+        (Some(2), Screen::Register) => Ok(register()),
+        (Some(2), Screen::Edit) => edit(state, &client_id, payload).await,
+        _ => Err(CommandError::Unknown),
+    }
+}
+
+/// A screen as a change to the message that was already there.
+fn update(screen: Value) -> Value {
+    json!({
+        "type": UPDATE_MESSAGE,
+        "data": screen,
+    })
 }
 
 /// A screen as the response to a submitted form.

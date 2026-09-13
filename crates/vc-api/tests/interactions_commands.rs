@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use support::{execute_from_guild, fake, interaction, state, state_with_limiter};
+use support::{execute_from_dm, execute_from_guild, fake, interaction, state, state_with_limiter};
 use vc_api::rate_limit::RateLimiter;
 
 const SITE_URL: &str = "https://vcrypto.sumidora.com";
@@ -517,4 +517,146 @@ async fn a_submitted_edit_changes_the_application(pool: PgPool) {
 
     assert!(rendered.contains("あと"), "{rendered}");
     assert!(rendered.contains(&client_id), "{rendered}");
+}
+
+fn pressed_button(custom_id: &str, user: i64) -> Value {
+    json!({
+        "type": 3,
+        "data": { "custom_id": custom_id, "component_type": 2 },
+        "user": { "id": user.to_string() },
+    })
+}
+
+fn chose(custom_id: &str, value: &str, user: i64) -> Value {
+    json!({
+        "type": 3,
+        "data": { "custom_id": custom_id, "component_type": 3, "values": [value] },
+        "user": { "id": user.to_string() },
+    })
+}
+
+/// The `custom_id` of the button with this label, out of the screen the bot rendered.
+///
+/// Taken from the screen rather than written down here, which is the whole point: a button
+/// labelled 設定を変更 carried the connect screen's id and nothing noticed, because nothing
+/// pressed a button.
+fn button_id(screen: &Value, label: &str) -> String {
+    fn walk(value: &Value, label: &str, found: &mut Option<String>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("label").and_then(Value::as_str) == Some(label) {
+                    *found = map
+                        .get("custom_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
+
+                for nested in map.values() {
+                    walk(nested, label, found);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, label, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = None;
+    walk(screen, label, &mut found);
+
+    found.unwrap_or_else(|| panic!("no button labelled {label} in {screen}"))
+}
+
+/// The `custom_id` of the menu on a screen.
+fn select_id(screen: &Value) -> String {
+    fn walk(value: &Value, found: &mut Option<String>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("type").and_then(Value::as_i64) == Some(3) {
+                    *found = map
+                        .get("custom_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
+
+                for nested in map.values() {
+                    walk(nested, found);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = None;
+    walk(screen, &mut found);
+
+    found.unwrap_or_else(|| panic!("no menu in {screen}"))
+}
+
+/// The whole walk: the list offers a menu, the choice is the application, the application
+/// offers the form, and the form is about that application.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let listed = interaction(
+        router(pool.clone()),
+        execute_from_dm(
+            json!({ "name": "application", "options": [{ "name": "list", "type": 1 }] }),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(listed.status, 200, "body: {}", listed.body);
+
+    let chosen = interaction(
+        router(pool.clone()),
+        chose(&select_id(&listed.body["data"]), &client_id, DISCORD),
+    )
+    .await;
+
+    assert_eq!(chosen.status, 200, "body: {}", chosen.body);
+    assert_eq!(
+        chosen.body["type"], 7,
+        "a change to the message, not another one: {}",
+        chosen.body
+    );
+
+    let edit = vc_api::custom_id::ui::developer::custom_id_for(
+        vc_api::custom_id::ui::developer::Screen::Edit,
+        &client_id,
+    );
+
+    assert_eq!(
+        button_id(&chosen.body["data"], "設定を変更"),
+        edit,
+        "the button that changes settings opens the form for this application"
+    );
+
+    let pressed = interaction(
+        router(pool),
+        pressed_button(&button_id(&chosen.body["data"], "設定を変更"), DISCORD),
+    )
+    .await;
+
+    assert_eq!(pressed.status, 200, "body: {}", pressed.body);
+    assert_eq!(pressed.body["type"], 9, "a modal");
+    assert_eq!(
+        pressed.body["data"]["custom_id"], edit,
+        "and the form knows what it is editing"
+    );
 }
