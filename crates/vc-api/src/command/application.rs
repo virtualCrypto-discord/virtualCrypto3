@@ -389,6 +389,10 @@ pub async fn modal(
             registration(state, body(fields), payload).await
         }
         crate::custom_id::ui::developer::Screen::Edit => {
+            // The id carries the field as well as the application — a form is for one of nine —
+            // and the ownership check takes the `client_id` alone. The field is already in the
+            // body: it is the `custom_id` the input was built with.
+            let (client_id, _) = crate::custom_id::ui::developer::field_of(client_id);
             edit_form(state, client_id, body(fields), payload).await
         }
         // A screen with no form: reaching here means the id was built wrong.

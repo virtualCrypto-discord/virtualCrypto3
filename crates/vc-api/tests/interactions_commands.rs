@@ -740,3 +740,128 @@ fn connect_payload(client_id: &str, bot: i64, user: i64) -> Value {
         user,
     )
 }
+
+fn pressed(custom_id: &str, user: i64) -> Value {
+    json!({
+        "type": 3,
+        "data": { "custom_id": custom_id, "component_type": 2 },
+        "user": { "id": user.to_string() },
+    })
+}
+
+/// The control for one field, out of the screen the bot rendered.
+///
+/// Found by decoding each id and asking which field it names, because all six buttons are
+/// labelled 編集 — the label is the same for every field and the id is what differs, so a test
+/// that looked for a label would take whichever came first and prove nothing about the field.
+fn field_control(screen: &Value, field: &str) -> String {
+    fn walk(value: &Value, field: &str, found: &mut Option<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(id) = map.get("custom_id").and_then(Value::as_str)
+                    && let Ok((_, data)) =
+                        vc_api::custom_id::ui::developer::parse(&vc_api::custom_id::parse(id))
+                    && vc_api::custom_id::ui::developer::field_of(&data).1 == field
+                {
+                    *found = Some(id.to_owned());
+                }
+
+                for nested in map.values() {
+                    walk(nested, field, found);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, field, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = None;
+    walk(screen, field, &mut found);
+
+    found.unwrap_or_else(|| panic!("no control for {field} in {screen}"))
+}
+
+/// 編集 opens a form for the field its button is beside, and that form changes that field and
+/// leaves the other eight alone.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_field_button_opens_its_own_form(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "まえ").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let shown = interaction(
+        router(pool.clone()),
+        application_payload("show", &client_id, DISCORD),
+    )
+    .await;
+
+    assert_eq!(shown.status, 200, "body: {}", shown.body);
+
+    let pressed = interaction(
+        router(pool.clone()),
+        pressed(&field_control(&shown.body["data"], "client_name"), DISCORD),
+    )
+    .await;
+
+    assert_eq!(pressed.status, 200, "body: {}", pressed.body);
+    assert_eq!(pressed.body["type"], 9, "a form");
+
+    let form = pressed.body["data"]["custom_id"]
+        .as_str()
+        .expect("a custom_id")
+        .to_owned();
+
+    // The form is for this application and this field, which is what the id has to carry: a
+    // submission comes back with the id it was opened with and nothing else.
+    let (_, data) = vc_api::custom_id::ui::developer::parse(&vc_api::custom_id::parse(&form))
+        .expect("a developer screen");
+    let (named, which) = vc_api::custom_id::ui::developer::field_of(&data);
+
+    assert_eq!(named, client_id);
+    assert_eq!(which, "client_name");
+
+    // It arrives filled in with what the field holds, so an untouched box is what was there.
+    let rendered = pressed.body["data"].to_string();
+
+    assert!(
+        rendered.contains("まえ"),
+        "the value it has now: {rendered}"
+    );
+
+    let before = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .expect("the application could be read")
+        .expect("it exists");
+
+    let submitted = interaction(
+        router(pool.clone()),
+        submitted_form(
+            &form,
+            json!([field("クライアント名", "client_name", "あと")]),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(submitted.status, 200, "body: {}", submitted.body);
+
+    let now = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .expect("the application could be read")
+        .expect("it exists");
+
+    assert_eq!(now.client_name.as_deref(), Some("あと"));
+    assert_eq!(
+        now.redirect_uris, before.redirect_uris,
+        "a field the form did not ask about is untouched, whatever it held"
+    );
+    assert_eq!(now.application_type, before.application_type);
+    assert_eq!(now.grant_types, before.grant_types);
+}
