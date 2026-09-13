@@ -93,8 +93,9 @@ screen needs — but the token no longer has to travel in headers.
 
 ## The requirements, in the order they matter
 
-**What is left, in one place**: the **contract flow** (item 5, not read) and the
-**documents** (item 7, another repository's prose).
+**What is left, in one place**: the **documents** (item 7, another repository's prose),
+and the one question the contract flow leaves open — whether the Elm's claim page is that
+feature or the mypage's own.
 
 `/invite` and `/support` are built: `web::invite` and `web::support` redirect from
 `Links::invite_url` and `Links::support_guild_invite_url`, which `vc-server` already
@@ -163,8 +164,11 @@ without saying which reads as unbuilt, which this one has already been read as o
 4. **The connect flow** (`/applications/:id/connect`) — **done**: the service's route,
    its refusals, the page and the round trip the browser makes (`5805529`), with what the
    Elm list said about the id recorded below.
-5. **The contract approval** (`/contract/:id`) — not read, still. The Elm has
-   `assets/elm/src/Mypage/Claim.elm`, so this one also starts there.
+5. **The contract approval** (`/contract/:id`) — **read, and there was never anything to
+   port**: the LiveView is one blob, eight lines, no assigns, and the page beside it is
+   static sample data. The old site shipped a mockup. The Elm's `Mypage/Claim.elm`,
+   which did evolve, is the lead for what a real one looked like — see the section
+   below.
 6. **The landing page**, which is prose plus a login button — **done**.
 7. **The documents** — link them rather than rebuild them; they are static prose
    that already lives in `virtualcrypto-docs`.
