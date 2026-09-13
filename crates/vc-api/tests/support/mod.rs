@@ -52,6 +52,12 @@ pub struct FakeDiscord {
     /// and an empty list is a guild with nothing installed rather than a guild that
     /// cannot be read.
     integrations: Vec<Map<String, Value>>,
+    /// What the integrations call and the guild call after it answer. Both 200 unless a
+    /// test says otherwise, which is how the two 403s are told apart: the integrations
+    /// call refuses either way, and the guild call is what says whether the service is
+    /// missing from the server or merely unpermitted in it.
+    integrations_status: u16,
+    guild_status: u16,
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
     webhooks: Mutex<Vec<Value>>,
@@ -99,6 +105,8 @@ impl FakeDiscord {
             member: Map::new(),
             roles: Vec::new(),
             integrations: Vec::new(),
+            integrations_status: 200,
+            guild_status: 200,
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             webhooks: Mutex::new(Vec::new()),
@@ -129,6 +137,18 @@ impl FakeDiscord {
                 .unwrap_or_default()
             })
             .collect();
+
+        fake
+    }
+
+    /// The statuses a refused integrations call and the guild call that follows it
+    /// answer. 403 with 403 is "the service is not in that server"; 403 with 200 is "it
+    /// is there without Manage Server", which is a different thing to go and fix.
+    pub fn with_statuses(integrations_status: u16, guild_status: u16) -> Self {
+        let mut fake = Self::new();
+
+        fake.integrations_status = integrations_status;
+        fake.guild_status = guild_status;
 
         fake
     }
@@ -174,14 +194,14 @@ impl DiscordApi for FakeDiscord {
         &self,
         _guild_id: i64,
     ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError> {
-        Ok((200, self.integrations.clone()))
+        Ok((self.integrations_status, self.integrations.clone()))
     }
 
     async fn get_guild_with_status(
         &self,
         _guild_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
-        Ok((200, self.guild.clone()))
+        Ok((self.guild_status, self.guild.clone()))
     }
 
     async fn get_user_with_status(

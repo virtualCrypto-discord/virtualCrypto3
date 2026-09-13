@@ -365,3 +365,74 @@ async fn a_bot_another_application_holds_is_409(pool: PgPool) {
 
     assert_eq!(still, Some(BOT_ID));
 }
+/// The integrations call is refused and the guild is refused too, which is Discord
+/// saying the bot is not in that server. It is a 403 rather than a 404 because the
+/// caller's own request was well formed: this is an answer about the world.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_guild_the_bot_is_not_in_is_403_not_installed(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let response = connect_with(
+        pool,
+        Arc::new(FakeDiscord::with_statuses(403, 403)),
+        &token,
+        application,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 403, "{:?}", response.body);
+    assert_eq!(response.body["error"], "not_installed");
+}
+
+/// The integrations call is refused and the guild is readable, which is Discord saying
+/// the bot is there but lacks Manage Server. The same refusal from Discord, a different
+/// message, and the guild is named because the operator has to go and change a
+/// permission in it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_guild_without_manage_server_names_the_guild(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let response = connect_with(
+        pool,
+        Arc::new(FakeDiscord::with_statuses(403, 200)),
+        &token,
+        application,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 403, "{:?}", response.body);
+    assert_eq!(response.body["error"], "insufficient_permissions");
+
+    let description = response.body["error_description"]
+        .as_str()
+        .expect("a description");
+
+    assert!(description.contains("TestGuild"), "{description}");
+}
+
+/// A guild that does not exist is 404, and is not the same as a guild the service is not
+/// in: there is nothing to install it into.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_guild_that_does_not_exist_is_404(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let response = connect_with(
+        pool,
+        Arc::new(FakeDiscord::with_statuses(404, 200)),
+        &token,
+        application,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 404, "{:?}", response.body);
+    assert_eq!(response.body["error"], "not_found");
+}
