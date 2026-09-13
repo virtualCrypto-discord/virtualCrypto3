@@ -387,3 +387,28 @@ Also from `render_application`, which is the shape: `owner_discord_id` goes thro
 `to_string` unconditionally, so it is **`""` rather than null** when absent — unlike
 `discord_user_id`, two lines above it, which is checked.
 
+## Before the connect route, one decision
+
+Everything else about it is read: the two conditions, the six failures and the write
+are above. What is not is **who may call it**, because the Elixir did not have to answer
+that — the LiveView knew from the session which application the page was about, and this
+is a JSON endpoint that will be given an id.
+
+The obvious answer is the application's owner, and `vc_core::application::owned_by` is
+already the read for it: the same one `GET /oauth2/clients/@me` uses to answer "the
+applications this account owns". A route that took an application id and checked it
+against that list would be consistent with the read endpoint next to it, and would not
+need a new query.
+
+The other thing to decide is the shape of the answers. The Elixir answers sentences
+because a person is reading them in a page; six messages with numbers in them are not
+what an API should send. The convention next door is `{"error": "...",
+"error_description": "..."}` and a status — which would mean the six cases become a
+smaller number of errors with the distinctions in the description, rather than one
+error per sentence.
+
+Both are decisions rather than readings, so they are here rather than in the code. What
+is not a decision: the write is `bind_bot`, and its `Taken` outcome is
+`すでにそのBotは別のApplicationに紐付けられています` — that one has a message because
+the Elixir has one.
+
