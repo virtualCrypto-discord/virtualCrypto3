@@ -19,26 +19,15 @@
 //! - The option types are Discord's numbers: 1 subcommand, 3 string, 4 integer, 5 boolean,
 //!   6 user.
 //!
-//! ## Two coherent ways to do this, and this file is neither
-//!
-//! That `version` has to be filled in before the rules will look at the payload is the
-//! tell: `twilight_model`'s `Command` is the type Twilight sends, it carries a field a
-//! request does not have, and a hand-written payload therefore has to be doctored before
-//! it fits. Two arrangements do not need that:
-//!
-//! - **Build the payload with `twilight-util`'s `CommandBuilder`** and send what it
-//!   produces. Then `version` is the library's business, the type and the rules agree by
-//!   construction, and nothing is filled in. It costs a third dependency and turns the
-//!   `json!` literals here into builders — a rewrite of this file rather than a patch.
-//! - **Validate the pieces rather than the whole.**
-//!   `twilight_validate::command::option` takes a `CommandOption`, which a request's
-//!   option object maps onto with nothing invented, so the option rules — names,
-//!   descriptions, choices — are available without the command-level ones.
-//!
-//! What is here is neither: literals validated by filling a field the request does not
-//! carry. It works, and it checks real rules, but it is the arrangement that needs a
-//! paragraph of explanation, and an arrangement that needs one is the one to replace.
-
+//! **A validator was tried here and removed.** `twilight-validate` checks these rules in
+//! code, but its entry point takes `twilight_model`'s `Command`, which requires a
+//! `version` that a request does not carry — so validating these meant filling in a field
+//! Discord does not document and never sends. A check that needs the thing being checked
+//! to be doctored is checking the doctoring, and it left two dependencies in the manifest
+//! for the privilege. Either build these with `twilight-util`'s `CommandBuilder` and let
+//! the library own the shape, or check the pieces (`command::option` takes a
+//! `CommandOption`, which maps onto ours with nothing invented). Neither is a patch, so
+//! neither is here.
 use serde_json::{Value, json};
 
 /// Every command, in the order the old file sent them.
@@ -59,13 +48,11 @@ pub fn commands() -> Vec<Value> {
     .collect()
 }
 
-/// A command's `type`, which is 1 for chat input and which Discord defaults when it is
-/// missing — so the old file left it out, and every one of these worked.
+/// A command's `type`, which is 1 for chat input and which Discord documents as defaulting
+/// when it is missing — so the old file left it out, and every one of these worked.
 ///
-/// It is written in here instead, in one place, for two reasons: a command that says what
-/// it is reads better than one relying on a default, and Twilight's `Command`, which the
-/// validation below deserializes into, has the field required. Forgetting it on a new
-/// command is not possible this way.
+/// It is written in here instead, in one place: a command that says what it is reads
+/// better than one relying on a default, and a new command cannot forget it this way.
 fn with_type(mut command: Value) -> Value {
     command["type"] = json!(1);
 
@@ -432,54 +419,6 @@ mod tests {
     //! change to the flake and the lock, and that is a piece of work rather than a line.
 
     use super::*;
-
-    /// The payload as Discord's own model, and Discord's own rules checked against it.
-    ///
-    /// This is the half the send test cannot see. `twilight-model` is the type Discord
-    /// publishes, so a field named wrong does not deserialize into it; and
-    /// `twilight_validate::command::command` is Discord's rules in code —
-    /// `NameLengthInvalid`, `NameCharacterInvalid`, `DescriptionInvalid` and the option
-    /// limits — rather than the OpenAPI preview's looser shapes.
-    ///
-    /// It validates rather than rewrites: the function takes `&Command`, so a pass means
-    /// every one of these would be accepted as it stands.
-    #[test]
-    fn discord_would_accept_the_commands() {
-        for command in commands() {
-            let name = command["name"].as_str().unwrap_or("?").to_owned();
-
-            // `version` is filled here and **not** in `commands()`, and that is checked
-            // against Discord rather than decided: the documented JSON parameters of both
-            // `Create Global Application Command` and `Bulk Overwrite Global Application
-            // Commands` are `id?`, `name`, `description`, `options`,
-            // `default_member_permissions`, `dm_permission`, `integration_types`,
-            // `contexts`, `type`, `nsfw` and `handler` — no `version`. So the payload that
-            // goes on the wire does not carry it, and it is added here only because
-            // `twilight_model`'s `Command`, which the rules are written against, requires
-            // the field: a non-zero `Id`, hence 1.
-            //
-            // What the rules then see is this payload's name, description, options,
-            // types, limits and flags, which is the whole of what it says.
-            //
-            // What Twilight does with the field, read from its source rather than its
-            // docs: `twilight_model`'s `Command` derives `Serialize` with no
-            // `skip_serializing` on `version`, so a `Command` that goes to Discord
-            // carries one — the ecosystem sends it. How `twilight-util`'s
-            // `CommandBuilder::build` fills it is **not read**: that crate is not a
-            // dependency here, so its source is not on this machine, and a grep of a
-            // directory that does not exist is what said otherwise. Ours omits it, which
-            // is what the documented parameters allow.
-            let mut payload = command;
-            payload["version"] = json!("1");
-
-            let parsed: twilight_model::application::command::Command =
-                serde_json::from_value(payload)
-                    .unwrap_or_else(|error| panic!("{name} is not Discord's own Command: {error}"));
-
-            twilight_validate::command::command(&parsed)
-                .unwrap_or_else(|error| panic!("{name} would be refused: {error}"));
-        }
-    }
 
     #[test]
     fn every_command_the_service_answers_is_registered() {
