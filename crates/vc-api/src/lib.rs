@@ -2,6 +2,7 @@
 
 pub mod claim_list;
 pub mod command;
+pub mod components;
 pub mod custom_id;
 pub mod discord;
 pub mod discord_auth;
