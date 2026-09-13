@@ -43,3 +43,38 @@ jobs:
             just migrate
             just check
           '
+
+  # The frontend, as its own job so that a type error and a compile error are both
+  # reported in one run rather than one after the other.
+  #
+  # Through the flake, like the job above, and for the same reason: the toolchain a
+  # laptop uses is the toolchain here, so a difference between them is a difference
+  # in the flake.
+  web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # `npm ci` rather than `npm install`: the lockfile is the input, and an
+      # install that resolves something else is a build that is not the one the
+      # lockfile describes.
+      #
+      # `web/.npmrc` carries `include=dev` because this dev shell sets
+      # `NODE_ENV=production`, which npm reads as a reason to skip every
+      # devDependency — including vite and svelte-check, both of which the two
+      # commands below need. npm reports success either way.
+      - name: Check and build
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            cd web
+            npm ci
+            npm run check
+            npm run build
+          '
+
