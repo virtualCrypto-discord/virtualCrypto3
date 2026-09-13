@@ -379,6 +379,21 @@ mod tests {
     //! avoids minimums, maximums and descriptions. A pass would be a shape check, not a
     //! promise that Discord accepts the list, and it would not know that `give`'s
     //! description is 62 characters or that a name may not contain an emoji.
+    //!
+    //! **`twilight-validate` is the better half of that, and it was checked as well.**
+    //! `twilight_validate::command::command(&Command)` takes `twilight_model`'s own
+    //! command type and enforces Discord's rules in code — `NAME_LENGTH_MAX`,
+    //! `DESCRIPTION_LENGTH_MAX`, `OPTIONS_LIMIT`, `COMMAND_TOTAL_LENGTH`,
+    //! `OPTION_DESCRIPTION_LENGTH_MAX` and the rest, with `command::options` checking the
+    //! count, the order and each option's internal validity too. It is the rules rather
+    //! than the preview's shapes, offline, and without two megabytes of vendored
+    //! document.
+    //!
+    //! Using it means two dev-dependencies (`twilight-model`, `twilight-validate`) and
+    //! deserializing this payload into Twilight's `Command` first — which is a check of
+    //! its own, because a field named wrong will not deserialize into the model Discord
+    //! publishes. Not wired up here: adding a dependency to a flake-pinned build is a
+    //! change to the flake and the lock, and that is a piece of work rather than a line.
 
     use super::*;
 
