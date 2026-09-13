@@ -107,6 +107,37 @@ callback that answers JSON (or redirects and leaves the token to `/token`), and
 `POST /token` for renewals. The cookie session stays — it is what the consent
 screen needs — but the token no longer has to travel in headers.
 
+## Developer features in a Discord DM
+
+Asked for after the SPA was dropped, and answered: **all three** of registering an
+application, listing and reading the caller's own, and connecting a bot — **not by typing
+slash commands**, on the newer Discord surface, with the `client_secret` answered
+**ephemerally** rather than kept back.
+
+What is known, and what has to be checked before it is built:
+
+- **The interaction endpoint already knows the types.** `routes/interactions.rs` dispatches
+  `2` to a command, `3` to a component, `4` to an autocomplete, `5` to a modal, so buttons
+  and modals need no new entry point — only the handlers for what they do.
+- **Ephemeral is only possible from an interaction**, which is consistent with "not
+  pseudocommands": the answers here are interaction responses. The secret can be sent on
+  that basis, and it must be `ephemeral` — a DM the bot can no longer edit is still a
+  message Discord keeps.
+- **Nothing in this repository registers commands.** There is no `contexts`, no
+  `integration_types`, no call that sets application commands — only the invite URL with
+  `scope=applications.commands bot`. Whatever Discord surface is chosen, its registration
+  happens outside this tree and has to be found before the handlers are written.
+- **The commands assume a guild.** `bal`, `pay` and `give` read the guild's currencies, and
+  `interactions.rs` gets the guild from the payload. A DM has none, so anything guild-shaped
+  — connecting a bot above all — has to take the id as an argument or have a DM meaning
+  decided.
+- **Which surface is not settled here.** "A new feature, not slash commands" is not
+  specific enough to code against, and guessing Discord's API is how the connect route came
+  to take the numeric id. It needs to be read, not assumed.
+
+Whoever builds this should start by finding the registration and reading the surface, in
+that order — the same rule as the rest of this document.
+
 ## The requirements, in the order they matter
 
 **What is left, in one place**: the **claims page** (the item below the contract flow,
