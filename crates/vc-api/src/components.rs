@@ -24,6 +24,9 @@ use serde_json::{Value, json};
 /// Only the user who invoked the interaction sees the response.
 pub const EPHEMERAL: u64 = 1 << 6;
 
+/// The interaction callback that opens a modal, which is a response and not a message.
+pub const MODAL: i64 = 9;
+
 /// The message is components and nothing else. Once set on a message, it cannot be
 /// removed.
 pub const IS_COMPONENTS_V2: u64 = 1 << 15;
@@ -107,6 +110,79 @@ pub fn container(accent_color: Option<u32>, children: Vec<Value>) -> Value {
     }
 
     value
+}
+
+/// The response that opens a modal.
+///
+/// A modal is a callback rather than a message, so this is not something to put in
+/// [`ephemeral`]: what opens is a form, and what it submits comes back as its own
+/// interaction.
+pub fn modal(custom_id: &str, title: &str, components: Vec<Value>) -> Value {
+    json!({
+        "type": MODAL,
+        "data": {
+            "custom_id": custom_id,
+            "title": title,
+            "components": components,
+        },
+    })
+}
+
+/// How tall a text input is. Nothing else about it changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputStyle {
+    /// One line: a name, an id, a url.
+    Short = 1,
+    /// Many: a list of redirect uris, one per line.
+    Paragraph = 2,
+}
+
+/// A labelled field.
+///
+/// The label is what a person reads, so it is required and capped at 45 characters, with
+/// an optional description under it at 100. A text input inside an Action Row is the
+/// deprecated form; Discord asks for this one.
+pub fn label(name: &str, description: Option<&str>, component: Value) -> Value {
+    let mut value = json!({
+        "type": 18,
+        "label": truncate(name, 45),
+        "component": component,
+    });
+
+    if let Some(description) = description {
+        value["description"] = json!(truncate(description, 100));
+    }
+
+    value
+}
+
+/// A field's input.
+///
+/// `value` pre-fills it, which is what makes an edit a correction rather than a retyping:
+/// the fields `PATCH /oauth2/clients/@me` leaves alone are the ones sent back unchanged.
+pub fn text_input(
+    custom_id: &str,
+    style: TextInputStyle,
+    required: bool,
+    max_length: Option<u64>,
+    value: Option<&str>,
+) -> Value {
+    let mut input = json!({
+        "type": 4,
+        "custom_id": custom_id,
+        "style": style as u8,
+        "required": required,
+    });
+
+    if let Some(max_length) = max_length {
+        input["max_length"] = json!(max_length);
+    }
+
+    if let Some(value) = value {
+        input["value"] = json!(truncate(value, 4000));
+    }
+
+    input
 }
 
 /// One application in a [`select`].
@@ -203,5 +279,79 @@ mod tests {
 
         assert_eq!(label.chars().count(), 100);
         assert_eq!(option["value"], "3f1c2f4e-9a11-4d2b-8c3e-5f6a7b8c9d0e");
+    }
+}
+
+#[cfg(test)]
+mod modal_tests {
+    use super::*;
+
+    /// A modal is a callback, not a message: no flags, and `data` carries the form.
+    #[test]
+    fn a_modal_is_the_callback_that_opens_it() {
+        let opened = modal(
+            "dev:register",
+            "アプリケーションの登録",
+            vec![label(
+                "クライアント名",
+                None,
+                text_input("client_name", TextInputStyle::Short, true, None, None),
+            )],
+        );
+
+        assert_eq!(opened["type"], json!(9));
+        assert_eq!(opened["data"]["custom_id"], "dev:register");
+        assert!(opened.get("flags").is_none(), "{opened}");
+        assert_eq!(opened["data"]["components"][0]["type"], json!(18));
+        assert_eq!(
+            opened["data"]["components"][0]["component"]["type"],
+            json!(4)
+        );
+    }
+
+    /// Discord caps a label at 45 characters and a description at 100, and counts both in
+    /// characters, so a Japanese label is three bytes each and still fits.
+    #[test]
+    fn a_label_is_cut_to_what_discord_accepts() {
+        let long = "あ".repeat(100);
+        let field = label(
+            &long,
+            Some(&long),
+            text_input("x", TextInputStyle::Short, true, None, None),
+        );
+
+        assert_eq!(field["label"].as_str().expect("label").chars().count(), 45);
+        assert_eq!(
+            field["description"]
+                .as_str()
+                .expect("description")
+                .chars()
+                .count(),
+            100
+        );
+    }
+
+    /// A pre-filled input is what an edit sends back, and it is capped where Discord caps
+    /// it rather than where a database column happens to end.
+    #[test]
+    fn an_input_prefills_and_says_which_style_it_is() {
+        let input = text_input(
+            "redirect_uris",
+            TextInputStyle::Paragraph,
+            true,
+            Some(4000),
+            Some("https://example.test/callback"),
+        );
+
+        assert_eq!(input["style"], 2);
+        assert_eq!(input["max_length"], 4000);
+        assert_eq!(input["value"], "https://example.test/callback");
+        assert_eq!(input["required"], true);
+
+        let short = text_input("client_name", TextInputStyle::Short, false, None, None);
+
+        assert_eq!(short["style"], 1);
+        assert!(short.get("value").is_none(), "{short}");
+        assert!(short.get("max_length").is_none(), "{short}");
     }
 }
