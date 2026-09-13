@@ -222,10 +222,7 @@ pub mod ui {
             Home,
             List,
             Connect,
-            /// The form that creates one. Not `Home`, which is the screen that offers it.
-            Register,
-            /// The form that changes one, as opposed to `Connect`, which is the call.
-            Edit,
+            Secret,
             Back,
         }
 
@@ -234,9 +231,8 @@ pub mod ui {
                 Screen::Home => 1,
                 Screen::List => 2,
                 Screen::Connect => 3,
-                Screen::Register => 4,
-                Screen::Edit => 5,
-                Screen::Back => 6,
+                Screen::Secret => 4,
+                Screen::Back => 5,
             }
         }
 
@@ -257,12 +253,6 @@ pub mod ui {
             out
         }
 
-        /// The string a component carries, packed the way every other id in this service
-        /// is packed, so the dispatcher can read it back with [`parse`].
-        pub fn custom_id(screen: Screen) -> String {
-            crate::custom_id::encode(0, &page(screen))
-        }
-
         pub fn parse(source: &[u8]) -> Result<(Screen, String), UiError> {
             let (id, data) = parse_id(source)?;
 
@@ -270,9 +260,8 @@ pub mod ui {
                 1 => Screen::Home,
                 2 => Screen::List,
                 3 => Screen::Connect,
-                4 => Screen::Register,
-                5 => Screen::Edit,
-                6 => Screen::Back,
+                4 => Screen::Secret,
+                5 => Screen::Back,
                 _ => return Err(UiError::Unknown(id)),
             };
 
