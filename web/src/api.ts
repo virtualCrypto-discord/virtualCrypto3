@@ -281,3 +281,37 @@ export function editApplication(
     body: JSON.stringify(changes),
   }) as Promise<void>;
 }
+
+/// What a connect attempt sends.
+///
+/// `bot_id` is a string because Discord's ids are: the service compares it to the
+/// `id` inside an integration, which arrives as text. `guild_id` is a number, because
+/// that is what the endpoint takes for its queries — the two ids are carried
+/// differently on the two sides of this call, and that is the API's shape rather than
+/// a preference.
+export interface Connection {
+  bot_id: string;
+  guild_id: number;
+}
+
+/// Binds an application to the bot that speaks for it.
+///
+/// The caller must own the application; the service answers 404 to anyone else,
+/// deliberately, rather than saying whether the id it was given exists.
+///
+/// Answers 204 on success and nothing else. Every failure is a sentence in
+/// `error_description` about a specific state of the world — which of "the bot is not
+/// in that server", "the integration does not name this application", "that id is not
+/// a bot" it is — because the point of the check is that the operator has one thing to
+/// fix and is told which.
+export function connect(
+  token: string,
+  applicationId: string,
+  connection: Connection,
+): Promise<void> {
+  return request(`/applications/${encodeURIComponent(applicationId)}/connect`, {
+    method: "POST",
+    headers: { ...authorize(token), "Content-Type": "application/json" },
+    body: JSON.stringify(connection),
+  }) as Promise<void>;
+}
