@@ -182,6 +182,32 @@ So a Rust endpoint doing this needs three Discord calls the seam does not have a
 write to `users.discord_id`. None of it is guessable from the shape of the page, which
 is why it is written here.
 
+### The page needs an id that the read does not hand out
+
+`POST /applications/{id}/connect` takes the **numeric** application id — the same one the
+Elixir's `/applications/:id` takes — and `GET /oauth2/clients/@me` does not return it.
+`render` answers `client_id`, `client_secret`, `user_id`, `discord_id` and the rest of
+RFC 7592's fields with this service's extensions beside them, and no `id` among them.
+
+So the page cannot be built from what the API hands out, and the list has nowhere to
+link to. One of two things has to change, and which one is a decision about the
+contract rather than about the page:
+
+- `render` gains `"id"`. The document is already extended (`owner_discord_id`,
+  `discord_support_server_invite_slug`, `public_key`), so one more field is not a
+  departure from it — and the route's 404-not-403 is exactly what keeps an enumerable
+  id from telling a caller anything, so exposing it is harmless.
+- the route takes the `client_id` instead. That is the application's public identifier
+  and the string the description check already turns on, so an operator has it — and it
+  needs no change to the read at all. It parts company with the Elixir's path, though,
+  and the route is tested against the numeric id.
+
+What settles it is the old site: its dashboard must link `/applications/<id>/connect`
+for the LiveView to be reachable at all, so **its read can be read to say which id the
+page was given**. That read has not been looked at — the section above already says the
+`verify` and `change` requirements are not yet read, and this is the same omission one
+step out: not what the events do, but what the page is given to do it with.
+
 Where those calls go, since it is four places and not one: the `DiscordApi` trait in
 `crates/vc-api/src/discord.rs` (l.41-), `HttpDiscordApi` (l.320-), **`CachedDiscord`**
 (l.230-), and `FakeDiscord` in `crates/vc-api/tests/support/mod.rs` (l.130-). Every
