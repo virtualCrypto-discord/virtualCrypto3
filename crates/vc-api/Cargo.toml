@@ -28,3 +28,7 @@ thiserror.workspace = true
 tracing.workspace = true
 time.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+twilight-model = "0.17.1"
+twilight-validate = "0.17.0"

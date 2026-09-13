@@ -34,6 +34,22 @@ pub fn commands() -> Vec<Value> {
         bal(),
         claim(),
     ]
+    .into_iter()
+    .map(with_type)
+    .collect()
+}
+
+/// A command's `type`, which is 1 for chat input and which Discord defaults when it is
+/// missing — so the old file left it out, and every one of these worked.
+///
+/// It is written in here instead, in one place, for two reasons: a command that says what
+/// it is reads better than one relying on a default, and Twilight's `Command`, which the
+/// validation below deserializes into, has the field required. Forgetting it on a new
+/// command is not possible this way.
+fn with_type(mut command: Value) -> Value {
+    command["type"] = json!(1);
+
+    command
 }
 
 fn help() -> Value {
@@ -396,6 +412,40 @@ mod tests {
     //! change to the flake and the lock, and that is a piece of work rather than a line.
 
     use super::*;
+
+    /// The payload as Discord's own model, and Discord's own rules checked against it.
+    ///
+    /// This is the half the send test cannot see. `twilight-model` is the type Discord
+    /// publishes, so a field named wrong does not deserialize into it; and
+    /// `twilight_validate::command::command` is Discord's rules in code —
+    /// `NameLengthInvalid`, `NameCharacterInvalid`, `DescriptionInvalid` and the option
+    /// limits — rather than the OpenAPI preview's looser shapes.
+    ///
+    /// It validates rather than rewrites: the function takes `&Command`, so a pass means
+    /// every one of these would be accepted as it stands.
+    #[test]
+    fn discord_would_accept_the_commands() {
+        for command in commands() {
+            let name = command["name"].as_str().unwrap_or("?").to_owned();
+
+            // `twilight_model`'s `Command` is the shape Discord *answers* with, so it has
+            // fields a request never sends. They are filled with what Discord would put
+            // there, and nothing else is touched: what the rules below see is this
+            // payload's name, description, options, types, limits and flags, which is the
+            // whole of what it says.
+            let mut payload = command;
+            payload["id"] = json!("1");
+            payload["application_id"] = json!("1");
+            payload["version"] = json!("1");
+
+            let parsed: twilight_model::application::command::Command =
+                serde_json::from_value(payload)
+                    .unwrap_or_else(|error| panic!("{name} is not Discord's own Command: {error}"));
+
+            twilight_validate::command::command(&parsed)
+                .unwrap_or_else(|error| panic!("{name} would be refused: {error}"));
+        }
+    }
 
     #[test]
     fn every_command_the_service_answers_is_registered() {
