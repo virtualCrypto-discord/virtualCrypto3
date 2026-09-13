@@ -158,16 +158,27 @@ pub async fn details(
 
 /// `GET /oauth2/clients/@me`, which is two answers to one path.
 ///
-/// A `user` token's subject is a person, and the answer is the applications that
-/// account owns — an array of none or one, since `users.application_id` links an
-/// account to at most one application. An `app` token's subject is the
-/// application's own account, and the answer is that application alone.
+/// A **user** token's, and the applications whose `owner_discord_id` is that
+/// person's Discord id — none, one, or several, because nothing makes it unique.
 ///
-/// Both find it the same way, so the difference is the shape of the answer rather
-/// than the question.
-pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+/// An `app` token is refused rather than answered: "the applications I own" is not a
+/// question an application can ask about itself, and the Elixir answers it 401
+/// `invalid_token` / `invalid_kind` (`clients_controller.ex` l.16-22).
+///
+/// Ownership is not `users.application_id`. That column is the other direction — it
+/// points from the account created for an application to the application — and
+/// reading it here gave a person with an application an empty list.
+pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Response, ApiError> {
     if !user.scopes.oauth2_register {
         return Err(ApiError::PermissionDenied);
+    }
+
+    if user.kind != vc_auth::Kind::User {
+        return Ok(refused(
+            StatusCode::UNAUTHORIZED,
+            "invalid_token",
+            "invalid_kind",
+        ));
     }
 
     let subject = i32::try_from(user.subject)
@@ -175,26 +186,22 @@ pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Json<
 
     // `ApiError` takes `vc_core::Error`, which is where a database error belongs:
     // the query is the domain's, and this is only the answering of it.
-    let owned = vc_core::user::application_id(state.pool(), subject)
+    let owned = vc_core::application::owned_by(state.pool(), subject)
         .await
         .map_err(vc_core::Error::from)?;
 
-    let found = match owned {
-        Some(application_id) => details(state.pool(), application_id)
-            .await
-            .map_err(vc_core::Error::from)?,
-        None => None,
-    };
+    let mut applications = Vec::with_capacity(owned.len());
 
-    Ok(Json(match user.kind {
-        vc_auth::Kind::App => match &found {
-            Some(found) => render(found),
-            // An application token whose application is gone: nothing to say
-            // about it, and the token is still a token.
-            None => Value::Null,
-        },
-        vc_auth::Kind::User => Value::Array(found.iter().map(render).collect()),
-    }))
+    for application_id in owned {
+        if let Some(found) = details(state.pool(), application_id)
+            .await
+            .map_err(vc_core::Error::from)?
+        {
+            applications.push(render(&found));
+        }
+    }
+
+    Ok(Json(Value::Array(applications)).into_response())
 }
 
 /// A registration request, with nothing required: the Elixir answers a malformed

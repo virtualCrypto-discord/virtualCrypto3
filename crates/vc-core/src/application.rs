@@ -798,6 +798,26 @@ pub async fn patch(
     Ok(())
 }
 
+/// The applications an account owns, by the account's own id.
+///
+/// Ownership is by Discord id: `applications.owner_discord_id` is the person's, and
+/// joining through `users` is what turns a local account into that id. It is also
+/// why an account with no Discord id owns nothing.
+///
+/// This is **not** `users.application_id`, which is the link in the other direction:
+/// that column points from the account created for an application to the
+/// application, and is why that account's `discord_id` is null.
+pub async fn owned_by(pool: &sqlx::PgPool, user_id: i32) -> Result<Vec<i64>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT a.id FROM applications a
+             JOIN users u ON u.id = $1 AND u.discord_id = a.owner_discord_id
+            ORDER BY a.id"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

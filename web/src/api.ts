@@ -120,6 +120,11 @@ export function exchangeToken(): Promise<IssuedToken> {
 /// null so that a client reading an integer gets one, and `expires_in` is the other
 /// such exception.
 ///
+/// `owner_discord_id` is a string even when there is none: `render_application`
+/// puts it through `to_string` unconditionally, so an absent one is `""` — unlike
+/// `discord_user_id`, two lines above it, which is checked. Both spellings are in
+/// the Elixir and this keeps them.
+///
 /// `client_secret` is null wherever the caller should not see it, which is here.
 export interface Application {
   client_id: string;
@@ -134,7 +139,7 @@ export interface Application {
   discord_support_server_invite_slug: string | null;
   grant_types: string[];
   logo_uri: string | null;
-  owner_discord_id: string | null;
+  owner_discord_id: string;
   response_types: string[];
   webhook_url: string | null;
   public_key: string;
@@ -142,10 +147,9 @@ export interface Application {
 
 /// The applications the token's subject owns.
 ///
-/// For a user token — which is the kind a browser holds — this is none or one,
-/// because `users.application_id` links an account to at most one application. For
-/// an app token the endpoint answers the single application instead, or `null`; the
-/// browser never holds that kind.
+/// A user token's, and the endpoint refuses any other kind with 401 `invalid_kind` —
+/// an application cannot ask which applications it owns. The list is by
+/// `owner_discord_id`, so it is none, one, or several.
 export function applications(token: string): Promise<Application[]> {
   return request("/oauth2/clients/@me", {
     headers: authorize(token),
