@@ -231,3 +231,47 @@ export function register(token: string, body: Registration): Promise<Registered>
     body: JSON.stringify(body),
   }) as Promise<Registered>;
 }
+
+/// What a `PATCH` asks to change.
+///
+/// The three states are the endpoint's, and they are not the same operation:
+///
+/// - **absent** — the field is left alone.
+/// - **`null`** — the field is cleared.
+/// - **a value** — the field is set.
+///
+/// That is why this is not `Partial<Registration>`: there, absent and null would be
+/// one thing, and the endpoint treats them as two. A `null` here is `logo_uri: null`
+/// on the wire, which clears it, so a form must omit what it did not touch rather
+/// than send what it read.
+///
+/// `redirect_uris` is the exception: it is a list, and supplying one replaces the set
+/// wholesale — an empty list is how they are all removed. There is no null for it,
+/// because there is no column to null.
+export interface ApplicationChanges {
+  client_name?: string | null;
+  client_uri?: string | null;
+  logo_uri?: string | null;
+  webhook_url?: string | null;
+  discord_support_server_invite_slug?: string | null;
+  application_type?: string | null;
+  redirect_uris?: string[];
+}
+
+/// Edits the application the token is for, which is why there is no id here: `@me` is
+/// the application the token belongs to.
+///
+/// Answers 204 and nothing else — the read is a separate request, and a caller that
+/// wants to show the result has to ask again. Naming a `webhook_url` also runs the
+/// handshake, signed with the key the application already has rather than a new one,
+/// so that what it is asked to verify is what it will be sent.
+export function editApplication(
+  token: string,
+  changes: ApplicationChanges,
+): Promise<void> {
+  return request("/oauth2/clients/@me", {
+    method: "PATCH",
+    headers: { ...authorize(token), "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+  }) as Promise<void>;
+}
