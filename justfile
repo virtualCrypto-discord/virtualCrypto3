@@ -27,6 +27,10 @@ fmt-check:
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
+# Tell Discord about the commands. A guild id makes it that guild's list.
+register-commands:
+	cargo run -p vc-api --bin register-commands
+
 build:
 	cargo build --workspace
 
