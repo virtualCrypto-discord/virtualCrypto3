@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+mod discord_schema;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -245,6 +247,7 @@ impl DiscordApi for FakeDiscord {
         _token: &str,
         body: &Value,
     ) -> Result<(), DiscordError> {
+        discord_schema::Payload::Followup.assert_valid(body);
         self.webhooks
             .lock()
             .expect("the fake is not poisoned")
@@ -821,6 +824,10 @@ pub async fn interaction(app: Router, payload: Value) -> Response {
         serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
     };
+
+    if (200..300).contains(&status) {
+        discord_schema::Payload::InteractionResponse.assert_valid(&body);
+    }
 
     Response {
         status,

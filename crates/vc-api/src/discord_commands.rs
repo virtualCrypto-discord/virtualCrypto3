@@ -382,41 +382,8 @@ pub async fn register(
 
 #[cfg(test)]
 mod tests {
-    //! What these prove and what they do not.
-    //!
-    //! The send test asserts that the body equals `commands()` — the same value it was
-    //! built from. So it catches a wrong URL, a missing bot token and a body that never
-    //! got there, and says nothing about whether Discord would accept the payload. A
-    //! mistyped field name or a wrong option type would pass it, and those are exactly
-    //! the mistakes transcription makes.
-    //!
-    //! There is a spec for the other half, and it was checked rather than assumed:
-    //! **`discord/discord-api-spec`**, `specs/openapi.json`, an OpenAPI 3.1 document for
-    //! API v10. A dev-dependency that validates JSON Schema against it would catch those
-    //! mistakes offline, for the price of vendoring a file Discord itself calls a
-    //! preview.
-    //!
-    //! Read its README before trusting it, because it warns twice: the preview "should
-    //! not be used within production environments", and "if you find discrepancies
-    //! between the spec and our docs, follow the docs, not the spec" — it deliberately
-    //! avoids minimums, maximums and descriptions. A pass would be a shape check, not a
-    //! promise that Discord accepts the list, and it would not know that `give`'s
-    //! description is 62 characters or that a name may not contain an emoji.
-    //!
-    //! **`twilight-validate` is the better half of that, and it was checked as well.**
-    //! `twilight_validate::command::command(&Command)` takes `twilight_model`'s own
-    //! command type and enforces Discord's rules in code — `NAME_LENGTH_MAX`,
-    //! `DESCRIPTION_LENGTH_MAX`, `OPTIONS_LIMIT`, `COMMAND_TOTAL_LENGTH`,
-    //! `OPTION_DESCRIPTION_LENGTH_MAX` and the rest, with `command::options` checking the
-    //! count, the order and each option's internal validity too. It is the rules rather
-    //! than the preview's shapes, offline, and without two megabytes of vendored
-    //! document.
-    //!
-    //! Using it means two dev-dependencies (`twilight-model`, `twilight-validate`) and
-    //! deserializing this payload into Twilight's `Command` first — which is a check of
-    //! its own, because a field named wrong will not deserialize into the model Discord
-    //! publishes. Not wired up here: adding a dependency to a flake-pinned build is a
-    //! change to the flake and the lock, and that is a piece of work rather than a line.
+    //! These tests cover command selection and transport. `tests/discord_schema.rs`
+    //! validates the registration payload against Discord's pinned OpenAPI schema.
 
     use super::*;
 
@@ -449,34 +416,6 @@ mod tests {
             let expected = !["give", "create", "delete"].contains(&name);
 
             assert_eq!(in_dms, expected, "{name}");
-        }
-    }
-
-    /// Every option has a name, a description and one of Discord's types. A typo in a
-    /// description is invisible until somebody reads it in the client, and a wrong type
-    /// makes Discord reject the whole list.
-    #[test]
-    fn every_option_is_shaped_the_way_discord_wants() {
-        fn check(options: &Value) {
-            for option in options.as_array().expect("options is an array") {
-                assert!(option["name"].is_string(), "{option}");
-                assert!(option["description"].is_string(), "{option}");
-
-                let kind = option["type"].as_u64().expect("a type");
-                assert!((1..=6).contains(&kind), "{option}");
-
-                if let Some(nested) = option.get("options") {
-                    check(nested);
-                }
-            }
-        }
-
-        for command in commands() {
-            assert!(command["description"].is_string(), "{command}");
-
-            if let Some(options) = command.get("options") {
-                check(options);
-            }
         }
     }
 
