@@ -220,3 +220,33 @@ Claims {
 The hour is Guardian's, not a choice, and `iat`/`nbf`/`typ` are all set — a
 token missing any of them fails verification, which is how the test support
 learned to build them.
+
+## The application object, as an SPA receives it
+
+One shape, answered by three endpoints — the single read, the list, and the
+registration — and built in one place, `routes/oauth2_clients.rs::render` (l.63), so
+an error in it is an error in three endpoints at once.
+
+```
+client_id, client_secret (null), client_secret_expires_at (0),
+redirect_uris: string[],
+user_id (string), discord_user_id (string|null),
+application_type, client_name, client_uri, discord_support_server_invite_slug,
+grant_types: string[], logo_uri,
+owner_discord_id (string|null), response_types: string[], webhook_url,
+public_key (hex)
+```
+
+Two numbers again travel as strings, `user_id` and `discord_user_id`, which is the
+same rule the balances follow. `client_secret_expires_at` is a number, and is the
+second exception to it in this API, after `expires_in`: a zero rather than a null, as
+the comment there says, so that a client reading an integer gets one.
+
+`client_secret` is null wherever the caller should not see it, which is the list and
+the single read; registration answers with it once.
+
+Still to read before an application page: whether `GET /oauth2/clients/@me` (`mine`,
+l.168) answers an array or something keyed by the token's kind. The note that the
+endpoint is "split by kind" admits both readings, and the difference decides the
+page's first line.
+
