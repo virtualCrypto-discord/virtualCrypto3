@@ -141,6 +141,28 @@ the form.
 `change` (l.146) does nothing but put the two ids into the assigns and set `edit`
 true — the LiveView's live form, which an SPA does not need.
 
+### It cannot be a page alone, which is the thing to know before starting
+
+The LiveView calls Discord itself. It can: the service holds the bot token. A page
+cannot — the token is not the browser's and must not be — so this flow needs endpoints
+in front of it, and the frontend work starts by writing them.
+
+What those endpoints have to do is the part that *is* read here: read the guild's
+integrations from Discord (`get_guild_integrations_with_status_code`, l.46) and find
+one whose `application.description` contains the application's uuid (l.60). That is the
+whole verification — ownership is proved by reading back from Discord what the
+operator wrote into the bot's integration description, not by trusting the form.
+
+What is **not** read, and therefore not to be guessed: what `verify` does with
+`assigns.app_user_id` and `String.to_integer(assigns.bot_id)` (l.65-66) — whether
+anything is persisted, and if so as what — and what the two failure branches (l.73,
+l.97) read the guild and the user for. Those lines are where the next reader should
+start, with the same rule as everywhere else in this work: the Elixir is the
+specification, and this file's description of it is not.
+
+Also to add on the Rust side, before any of it can be called: the Discord seam has
+members and roles (`get_guild_member`, `get_roles`) and no integrations call.
+
 ## The contract flow is a sketch, not a flow
 
 `/contract/:id` is routed (`router.ex` l.74) to
