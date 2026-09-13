@@ -5,7 +5,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::PrimitiveDateTime;
-use vc_auth::AuthUser;
+
+use crate::routes::limited::Limited;
 use vc_core::claim::{ClaimFilter, ClaimView, Cursor, Order, SrFilter};
 
 use crate::discord::filter_profile;
@@ -20,7 +21,7 @@ const STATUSES: [&str; 4] = ["pending", "approved", "denied", "canceled"];
 /// or the claimant may read a claim, and the metadata is the requester's own.
 pub async fn get_by_id(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: Limited,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     if !user.scopes.vc_claim {
@@ -52,7 +53,7 @@ pub async fn get_by_id(
 /// order, and the response carries a `link` header when a full page was returned.
 pub async fn index(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: Limited,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -186,7 +187,7 @@ pub async fn index(
 /// and a non-positive amount before any metadata validation.
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: Limited,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let object = body.as_object();
@@ -311,7 +312,7 @@ fn create_error(error: vc_core::claim::CreateError) -> ApiError {
 /// the database trigger can reject their metadata.
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: Limited,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {

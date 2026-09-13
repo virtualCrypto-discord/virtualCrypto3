@@ -4,6 +4,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use vc_auth::AuthUser;
+
+use crate::routes::limited::Limited;
 use vc_core::idempotency::Slot;
 use vc_core::payment::PayError;
 
@@ -17,7 +19,7 @@ use crate::state::AppState;
 /// token without `vc.pay` is rejected before the body is looked at.
 pub async fn post(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: Limited,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {

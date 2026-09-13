@@ -24,6 +24,17 @@ use crate::state::AppState;
 /// that takes this instead of `AuthUser` cannot forget to be limited.
 pub struct Limited(pub AuthUser);
 
+/// So that switching a handler over is a change to its signature and nothing else:
+/// `user.scopes` and `user.subject` keep working, and only the type says that this
+/// caller has been counted.
+impl std::ops::Deref for Limited {
+    type Target = AuthUser;
+
+    fn deref(&self) -> &AuthUser {
+        &self.0
+    }
+}
+
 impl FromRequestParts<AppState> for Limited {
     type Rejection = Response;
 
