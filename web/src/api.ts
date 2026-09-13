@@ -296,6 +296,11 @@ export interface Connection {
 
 /// Binds an application to the bot that speaks for it.
 ///
+/// The path carries the **client id**, which is what `/applications/:id` means in the
+/// site this replaces: its list links `"/applications/" ++ application.client_id`, and
+/// its connect route is the same `:id`. The application's numeric id is not part of any
+/// response here, so it is not something a caller could name.
+///
 /// The caller must own the application; the service answers 404 to anyone else,
 /// deliberately, rather than saying whether the id it was given exists.
 ///
@@ -306,10 +311,10 @@ export interface Connection {
 /// fix and is told which.
 export function connect(
   token: string,
-  applicationId: string,
+  clientId: string,
   connection: Connection,
 ): Promise<void> {
-  return request(`/applications/${encodeURIComponent(applicationId)}/connect`, {
+  return request(`/applications/${encodeURIComponent(clientId)}/connect`, {
     method: "POST",
     headers: { ...authorize(token), "Content-Type": "application/json" },
     body: JSON.stringify(connection),

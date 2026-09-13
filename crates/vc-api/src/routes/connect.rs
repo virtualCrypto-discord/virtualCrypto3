@@ -21,10 +21,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use sqlx::PgPool;
 
 use vc_auth::AuthUser;
 
-use crate::routes::oauth2_clients::details;
+use crate::routes::oauth2_clients::{Details, details};
 use crate::state::AppState;
 
 /// What the connect form sends.
@@ -67,10 +68,31 @@ fn text<'a>(object: &'a Map<String, Value>, key: &str) -> &'a str {
     object.get(key).and_then(Value::as_str).unwrap_or("unknown")
 }
 
+/// The application the caller owns whose `client_id` this is, or nothing.
+///
+/// Ownership is decided first and by id, so a client id that belongs to somebody else
+/// is indistinguishable from one that does not exist. That is the whole reason the
+/// answer to both is a 404: this endpoint must not confirm which client ids are real.
+async fn owned_by_client_id(
+    pool: &PgPool,
+    owned: &[i64],
+    client_id: &str,
+) -> Result<Option<Details>, sqlx::Error> {
+    for id in owned {
+        if let Some(found) = details(pool, *id).await?
+            && found.client_id == client_id
+        {
+            return Ok(Some(found));
+        }
+    }
+
+    Ok(None)
+}
+
 pub async fn connect(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(application_id): Path<i64>,
+    Path(client_id): Path<String>,
     Json(body): Json<Connect>,
 ) -> Response {
     if user.kind != vc_auth::Kind::User {
@@ -99,20 +121,22 @@ pub async fn connect(
 
     // The owner and nobody else, and 404 rather than 403 so that somebody else's
     // application is not confirmed to exist.
+    //
+    // The path carries the client id, because that is what `/applications/:id` means:
+    // the old site's list links `"/applications/" ++ application.client_id`, and the
+    // connect route is the same `:id`. The numeric id is this service's own, is not
+    // handed out by any read, and so is not something a caller could name.
     let owned = match vc_core::application::owned_by(state.pool(), subject).await {
         Ok(owned) => owned,
         Err(_) => return internal("the applications an account owns could not be read"),
     };
 
-    if !owned.contains(&application_id) {
-        return refused(StatusCode::NOT_FOUND, "not_found", "no such application");
-    }
-
     // The application's own account, which is what the write at the end gives a
     // Discord id to, and the client id the description must contain.
-    let found = match details(state.pool(), application_id).await {
+    let found = match owned_by_client_id(state.pool(), &owned, &client_id).await {
         Ok(Some(found)) => found,
-        _ => return internal("the application could not be read"),
+        Ok(None) => return refused(StatusCode::NOT_FOUND, "not_found", "no such application"),
+        Err(_) => return internal("the application could not be read"),
     };
 
     let (status, integrations) = match state

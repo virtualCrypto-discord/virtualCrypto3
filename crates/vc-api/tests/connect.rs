@@ -29,6 +29,9 @@ const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
 const STRANGER_DISCORD_ID: i64 = 500_000_000_000_000_003;
 
 const BOT_ID: i64 = 500_000_000_000_000_002;
+/// Not any application's. The refusals that happen before the lookup do not read the
+/// path, and this is how a test says it did not have to.
+const A_CLIENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 /// Above 2^53, so a value that survives only as text.
 const A_SNOWFLAKE: i64 = 900_000_000_000_000_001;
 const A_SNOWFLAKE_AS_TEXT: &str = "900000000000000001";
@@ -77,20 +80,20 @@ async fn client_id_of(pool: &PgPool, application: i64) -> String {
     .expect("a client id")
 }
 
-async fn connect(pool: PgPool, token: &str, application_id: i64, body: Value) -> Response {
-    connect_with(pool, fake(), token, application_id, body).await
+async fn connect(pool: PgPool, token: &str, client_id: &str, body: Value) -> Response {
+    connect_with(pool, fake(), token, client_id, body).await
 }
 
 async fn connect_with(
     pool: PgPool,
     discord: Arc<FakeDiscord>,
     token: &str,
-    application_id: i64,
+    client_id: &str,
     body: Value,
 ) -> Response {
     let request = axum::http::Request::builder()
         .method("POST")
-        .uri(format!("/applications/{application_id}/connect"))
+        .uri(format!("/applications/{client_id}/connect"))
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
@@ -134,7 +137,7 @@ async fn a_guild_id_that_is_not_a_snowflake_is_400(pool: PgPool) {
     let response = connect(
         pool,
         &token,
-        1,
+        A_CLIENT_ID,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": "not-a-snowflake" }),
     )
     .await;
@@ -152,7 +155,7 @@ async fn a_bot_id_that_is_not_a_snowflake_is_400(pool: PgPool) {
     let response = connect(
         pool,
         &token,
-        1,
+        A_CLIENT_ID,
         json!({ "bot_id": "not-a-snowflake", "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -169,13 +172,14 @@ async fn a_bot_id_that_is_not_a_snowflake_is_400(pool: PgPool) {
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_snowflake_above_2_53_is_read_exactly(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
-    insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
 
     let response = connect(
         pool.clone(),
         &token,
-        1,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -197,12 +201,13 @@ async fn a_snowflake_above_2_53_is_read_exactly(pool: PgPool) {
 async fn somebody_elses_application_is_404(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let theirs = insert_application(&pool, STRANGER_DISCORD_ID, "theirs").await;
+    let theirs_client_id = client_id_of(&pool, theirs).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
 
     let response = connect(
         pool,
         &token,
-        theirs,
+        &theirs_client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -234,7 +239,7 @@ async fn an_app_token_is_401(pool: PgPool) {
     let response = connect(
         pool,
         &token,
-        application,
+        A_CLIENT_ID,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -262,7 +267,7 @@ async fn a_bot_described_with_the_client_id_is_bound(pool: PgPool) {
         pool.clone(),
         discord,
         &token,
-        application,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -287,6 +292,7 @@ async fn a_bot_described_with_the_client_id_is_bound(pool: PgPool) {
 async fn a_bot_described_without_the_client_id_is_400(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
 
     let discord = Arc::new(FakeDiscord::with_integrations(
@@ -298,7 +304,7 @@ async fn a_bot_described_without_the_client_id_is_400(pool: PgPool) {
         pool.clone(),
         discord,
         &token,
-        application,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -346,7 +352,7 @@ async fn a_bot_another_application_holds_is_409(pool: PgPool) {
         pool.clone(),
         discord,
         &token,
-        second,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -372,13 +378,14 @@ async fn a_bot_another_application_holds_is_409(pool: PgPool) {
 async fn a_guild_the_bot_is_not_in_is_403_not_installed(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
 
     let response = connect_with(
         pool,
         Arc::new(FakeDiscord::with_statuses(403, 403)),
         &token,
-        application,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -395,13 +402,14 @@ async fn a_guild_the_bot_is_not_in_is_403_not_installed(pool: PgPool) {
 async fn a_guild_without_manage_server_names_the_guild(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
 
     let response = connect_with(
         pool,
         Arc::new(FakeDiscord::with_statuses(403, 200)),
         &token,
-        application,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
@@ -422,13 +430,14 @@ async fn a_guild_without_manage_server_names_the_guild(pool: PgPool) {
 async fn a_guild_that_does_not_exist_is_404(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
 
     let response = connect_with(
         pool,
         Arc::new(FakeDiscord::with_statuses(404, 200)),
         &token,
-        application,
+        &client_id,
         json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
     )
     .await;
