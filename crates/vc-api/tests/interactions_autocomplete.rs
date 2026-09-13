@@ -9,7 +9,10 @@ mod support;
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{execute_from_guild, fake, interaction, setup_claim, state};
+use support::{
+    client_id_of, execute_from_guild, fake, insert_application, insert_user, interaction,
+    setup_claim, state,
+};
 
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
@@ -143,4 +146,67 @@ async fn the_id_option_under_show_offers_every_status(pool: PgPool) {
     expected.reverse();
 
     assert_eq!(values(&response), expected);
+}
+
+/// `/application show <client_id>`, and every other subcommand that names one: the uuid
+/// is offered from the caller's own, so nobody types one and nobody copies one from
+/// somewhere else.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_client_id_option_offers_the_callers_own_applications(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    insert_user(&pool, USER, DISCORD).await;
+    let application = insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = client_id_of(&pool, application).await;
+
+    let response = interaction(
+        router(pool),
+        autocomplete_payload(
+            "application",
+            focused_subcommand("show", "client_id", ""),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(8));
+    assert_eq!(values(&response), vec![client_id.clone()]);
+
+    // The label carries the name as well, because a name is not unique and the operator is
+    // choosing between their own applications rather than reading a uuid.
+    let label = choices(&response)[0]["name"]
+        .as_str()
+        .expect("a name")
+        .to_owned();
+
+    assert!(label.contains("テスト"), "{label}");
+    assert!(label.contains(&client_id), "{label}");
+}
+
+/// What is typed narrows it, and Discord does no filtering of its own — it shows what it
+/// is given.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_client_id_query_narrows_to_the_name_that_matches(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    insert_user(&pool, USER, DISCORD).await;
+    insert_application(&pool, DISCORD, "テスト").await;
+    let other = insert_application(&pool, DISCORD, "べつの").await;
+    let other_id = client_id_of(&pool, other).await;
+
+    let response = interaction(
+        router(pool),
+        autocomplete_payload(
+            "application",
+            focused_subcommand("show", "client_id", "べつ"),
+            DISCORD,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(values(&response), vec![other_id]);
 }

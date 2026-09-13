@@ -439,6 +439,60 @@ pub async fn insert_user(pool: &PgPool, id: i32, discord_id: i64) {
         .expect("advance users sequence");
 }
 
+/// An application owned by `owner_discord_id`, with the account created for it.
+///
+/// Both rows are needed by everything that looks an application up: the reads join
+/// through the account, and connecting writes the bot's Discord id onto it. Three test
+/// files had their own copy of this before it lived here.
+pub async fn insert_application(pool: &PgPool, owner_discord_id: i64, name: &str) -> i64 {
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO applications
+             (client_id, client_name, owner_discord_id, inserted_at, updated_at,
+              public_key, private_key)
+           VALUES (gen_random_uuid(), $1, $2, now(), now(), '\x00'::bytea, '\x00'::bytea)
+           RETURNING id"#,
+        name,
+        owner_discord_id
+    )
+    .fetch_one(pool)
+    .await
+    .expect("an application");
+
+    sqlx::query!(
+        "INSERT INTO users (status, application_id, inserted_at, updated_at)
+         VALUES (NULL, $1, now(), now())",
+        id
+    )
+    .execute(pool)
+    .await
+    .expect("the application's account");
+
+    id
+}
+
+/// The account created for an application, which an application token's subject is.
+pub async fn account_of(pool: &PgPool, application: i64) -> i32 {
+    sqlx::query_scalar!(
+        "SELECT id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the application's account")
+}
+
+/// An application's `client_id`, which is the uuid every call names it by.
+pub async fn client_id_of(pool: &PgPool, application: i64) -> String {
+    sqlx::query_scalar!(
+        "SELECT client_id::text FROM applications WHERE id = $1",
+        application
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the row")
+    .expect("a client id")
+}
+
 pub async fn insert_discord_auth(pool: &PgPool, discord_user_id: i64, token: &str) {
     let at = utc_now();
     sqlx::query!(

@@ -13,7 +13,7 @@
 mod support;
 
 use sqlx::PgPool;
-use support::{fake, get, insert_user, mint, mint_app, state};
+use support::{fake, get, insert_application, insert_user, mint, mint_app, state};
 
 const URI: &str = "/oauth2/clients";
 
@@ -22,36 +22,6 @@ const URI: &str = "/oauth2/clients";
 // anybody's.
 const OWNER_ID: i32 = 1;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
-
-/// An application owned by `owner_discord_id`, and the account created for it.
-///
-/// Both rows are needed: the read joins through the account, so an application
-/// whose account is missing is an application this endpoint cannot see.
-async fn insert_application(pool: &PgPool, owner_discord_id: i64, name: &str) -> i64 {
-    let id = sqlx::query_scalar!(
-        r#"INSERT INTO applications
-             (client_id, client_name, owner_discord_id, inserted_at, updated_at,
-              public_key, private_key)
-           VALUES (gen_random_uuid(), $1, $2, now(), now(), '\x00'::bytea, '\x00'::bytea)
-           RETURNING id"#,
-        name,
-        owner_discord_id
-    )
-    .fetch_one(pool)
-    .await
-    .expect("an application");
-
-    sqlx::query!(
-        "INSERT INTO users (status, application_id, inserted_at, updated_at)
-         VALUES (NULL, $1, now(), now())",
-        id
-    )
-    .execute(pool)
-    .await
-    .expect("the application's account");
-
-    id
-}
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_owner_is_answered_their_application(pool: PgPool) {

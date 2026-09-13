@@ -21,7 +21,9 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{FakeDiscord, Response, fake, get, insert_user, mint, mint_app, state};
+use support::{
+    FakeDiscord, Response, fake, get, insert_application, insert_user, mint, mint_app, state,
+};
 use tower::ServiceExt;
 
 const OWNER: i32 = 1;
@@ -35,36 +37,6 @@ const A_CLIENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 /// Above 2^53, so a value that survives only as text.
 const A_SNOWFLAKE: i64 = 900_000_000_000_000_001;
 const A_SNOWFLAKE_AS_TEXT: &str = "900000000000000001";
-
-/// An application owned by `owner_discord_id`, and the account created for it.
-///
-/// Both rows, because the write at the end of a connect gives the *account* a Discord
-/// id, and an application without one is an application that cannot be connected.
-async fn insert_application(pool: &PgPool, owner_discord_id: i64, name: &str) -> i64 {
-    let id = sqlx::query_scalar!(
-        r#"INSERT INTO applications
-             (client_id, client_name, owner_discord_id, inserted_at, updated_at,
-              public_key, private_key)
-           VALUES (gen_random_uuid(), $1, $2, now(), now(), '\x00'::bytea, '\x00'::bytea)
-           RETURNING id"#,
-        name,
-        owner_discord_id
-    )
-    .fetch_one(pool)
-    .await
-    .expect("an application");
-
-    sqlx::query!(
-        "INSERT INTO users (status, application_id, inserted_at, updated_at)
-         VALUES (NULL, $1, now(), now())",
-        id
-    )
-    .execute(pool)
-    .await
-    .expect("the application's account");
-
-    id
-}
 
 /// The application's `client_id`, which is the string the integration's description
 /// must contain for a connect to be allowed.
