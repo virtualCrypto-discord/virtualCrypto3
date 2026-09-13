@@ -213,7 +213,26 @@ pub mod ui {
     /// because Discord sends back only the `custom_id` and an ephemeral message cannot be
     /// looked up by id, so the screen and its subject both have to travel in this string.
     pub mod developer {
-        use super::{UiError, parse_id};
+        use super::UiError;
+
+        /// This space's own head byte, and the reason it has one.
+        ///
+        /// Every other space here shares `0xF0` and is told apart by *which parser runs*,
+        /// which works while each id shape is used in one place. This one is not: it shares
+        /// screens with `ui::modal`'s delete confirmation, and the first version of it took
+        /// `[0xF0, 1]` for `Home` — the same bytes as `confirm_currency_delete` — so a
+        /// dispatcher that tried this space first stole that modal.
+        ///
+        /// A head of its own means the bytes say which space they are, and a parse that
+        /// only accepts them refuses the rest.
+        const HEAD: u8 = 0xF1;
+
+        fn parse_id(source: &[u8]) -> Result<(u8, Vec<u8>), UiError> {
+            match source {
+                [head, id, rest @ ..] if *head == HEAD => Ok((*id, rest.to_vec())),
+                _ => Err(UiError::Head),
+            }
+        }
 
         /// Which screen the component belongs to. The numbers are this module's, and
         /// they must not be renumbered: a message already in a DM carries them.
@@ -240,9 +259,14 @@ pub mod ui {
             }
         }
 
+        /// The head this space writes, so the tests and the screens agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
         /// A screen with no subject.
         pub fn page(screen: Screen) -> [u8; 2] {
-            [0xF0, id(screen)]
+            [HEAD, id(screen)]
         }
 
         /// A screen about one application.
@@ -273,7 +297,7 @@ pub mod ui {
                 4 => Screen::Register,
                 5 => Screen::Edit,
                 6 => Screen::Back,
-                _ => return Err(UiError::Unknown(id)),
+                _ => return Err(UiError::Unknown(u16::from(id))),
             };
 
             // The packing left-aligns the last group, so a decoded payload comes back
@@ -405,9 +429,25 @@ mod tests {
         );
     }
 
+    /// The other spaces' head is refused, which is the whole point of this one having its
+    /// own: `[0xF0, 1]` is the delete confirmation's, and reading it here once stole that
+    /// modal.
+    #[test]
+    fn the_other_spaces_head_is_not_this_one() {
+        assert_eq!(
+            ui::developer::parse(&[0xF0, 1]),
+            Err(UiError::Head),
+            "0xF0 belongs to every other space"
+        );
+        assert!(ui::developer::parse(&[ui::developer::head(), 1]).is_ok());
+    }
+
     #[test]
     fn an_unknown_developer_screen_is_rejected() {
-        assert_eq!(ui::developer::parse(&[0xF0, 99]), Err(UiError::Unknown(99)));
+        assert_eq!(
+            ui::developer::parse(&[ui::developer::head(), 99]),
+            Err(UiError::Unknown(99))
+        );
     }
 
     #[test]
