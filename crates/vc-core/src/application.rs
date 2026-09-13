@@ -571,6 +571,7 @@ pub fn check_application_type(kind: &str) -> Result<(), MetadataError> {
 /// The metadata registration was given, already validated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewApplication {
+    pub response_types: Vec<String>,
     pub grant_types: Vec<String>,
     pub application_type: String,
     pub client_name: Option<String>,
@@ -603,10 +604,11 @@ pub struct Registered {
 /// owns it, and one row per redirect URI.
 ///
 /// The defaults are the Elixir's, and two of them are silent. `status` is `0`, and
-/// `response_types` is the **literal empty list** rather than the value that was
-/// validated — the Elixir validates it and then does not use it, which
-/// docs/oauth2.md records as a bug with no behaviour behind it. `grant_types`
-/// comes from the caller because it is the validated value.
+/// Both list fields come from the caller, because they are the values that were
+/// validated: a registration that names `response_types` gets them, and one that
+/// names none gets none. The Elixir wrote a literal empty list here and threw the
+/// validated value away, which docs/oauth2.md used to record; nothing downstream
+/// reads this field, so the difference is visible in the answer and nowhere else.
 pub async fn register(
     pool: &sqlx::PgPool,
     new: &NewApplication,
@@ -624,7 +626,7 @@ pub async fn register(
               application_type, client_name, client_uri, logo_uri, webhook_url,
               discord_support_server_invite_slug, owner_discord_id,
               private_key, public_key, inserted_at, updated_at)
-         VALUES (0, $1, $2, ARRAY[]::openid_connect_response_types[],
+         VALUES (0, $1, $2, $14::text[]::openid_connect_response_types[],
                  $3::text[]::openid_connect_grant_types[],
                  $4::text::openid_connect_application_type,
                  $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
@@ -641,7 +643,8 @@ pub async fn register(
         new.owner_discord_id,
         private_key.to_vec(),
         public_key,
-        crate::model::utc_now()
+        crate::model::utc_now(),
+        &new.response_types
     )
     .fetch_one(&mut *tx)
     .await?;

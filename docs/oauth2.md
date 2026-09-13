@@ -455,19 +455,19 @@ scheme, then the client id and the keypair, and only then the webhook handshake.
 … else :ok end` — so an application that registers none is registered without one,
 which is the same `:nop` its deliveries take later.
 
-**`response_types` is validated and then thrown away.** The row is built with
-`response_types: []` — a literal — so whatever the request asked for and passed
-`validate_response_types/1` is not what is stored. The answer to
-`GET /oauth2/clients/@me` therefore always shows `"response_types": []`, whatever
-was asked for. `grant_types` is taken from the validated value, so the two list
-fields are treated differently and this is the one that is treated wrongly.
+**`response_types` used to be validated and then thrown away, and is not any
+more.** The Elixir builds the row with `response_types: []` — a literal — so
+whatever the request asked for and passed `validate_response_types/1` is not what
+it stores, and its answer to `GET /oauth2/clients/@me` shows an empty array
+whatever was asked for. `grant_types` is taken from the validated value, so the
+Elixir treats its two list fields differently and treats this one wrongly.
 
-That is recorded rather than fixed, and rather than copied: it is a bug in the
-sense that the value validated is not the value used, but nothing downstream reads
-`response_types` — `preauthorize` checks the redirect URI and the grant types and
-the scopes and never this — so whether the port stores the request or the literal
-is a decision with no behaviour behind it. The literal is what the Elixir stores,
-and the field is answered as an empty array today.
+The port did the same, because that was the honest thing to do while the question
+was whether to port a bug, and it stores the validated value now. Nothing
+downstream reads `response_types` — `preauthorize` checks the redirect URI and the
+grant types and the scopes and never this — so the difference is visible in the
+answer and nowhere else, and it is a difference from the Elixir rather than from
+the specification.
 
 **And the two generated values.** The client id is `Ecto.UUID.generate/0`, so a
 UUID. The client secret is `:crypto.strong_rand_bytes(32)` base64-url encoded

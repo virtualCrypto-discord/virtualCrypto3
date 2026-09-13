@@ -378,10 +378,7 @@ async fn registration(
                     .as_deref(),
                 application_type: &new.application_type,
                 grant_types: &new.grant_types,
-                // Registration writes `response_types` as the literal empty list — the Elixir
-                // validates it and then does not use it, which docs/oauth2.md records — so a
-                // freshly registered application has none until an edit sets them.
-                response_types: &[],
+                response_types: &new.response_types,
             },
         ))),
         Err(refusal) => Ok(registered(developer::refusal(

@@ -327,7 +327,8 @@ pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Bo
 /// interaction's signature says it and there is no token at all. The auth is each
 /// surface's and stays there.
 pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
-    check_response_types(&body.response_types.unwrap_or_default()).map_err(metadata)?;
+    let response_types =
+        check_response_types(&body.response_types.unwrap_or_default()).map_err(metadata)?;
     let grant_types = check_grant_types(&body.grant_types.unwrap_or_default()).map_err(metadata)?;
 
     let application_type = body.application_type.unwrap_or_else(|| "web".to_owned());
@@ -373,6 +374,7 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
     }
 
     Ok(NewApplication {
+        response_types,
         grant_types,
         application_type,
         client_name: body.client_name,
