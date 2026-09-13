@@ -83,6 +83,11 @@ screen needs — but the token no longer has to travel in headers.
 1. **The consent screen** (`/oauth2/authorize`). It is what blocks the rest of
    OAuth2: no application can obtain a token without it, and it is the one page
    that must work when JavaScript does not, because OAuth2 sends browsers to it.
+
+   **This one is answered and not by the SPA.** It is a server-rendered route in
+   `routes/consent.rs` — `GET` shows the form, `POST` decides — so a browser sent
+   here by a client library needs no script to get through it, which is what the
+   paragraph above asks for. Nothing of it belongs in `web/`.
 2. **Discord login and logout**, with the `continue` return path and the CSRF
    state check the old callback already does.
 3. **The application list and detail** — the shapes already exist:
@@ -97,8 +102,9 @@ screen needs — but the token no longer has to travel in headers.
 
 ## What the SPA will need that does not exist yet
 
-- `GET /users/@me` and `GET /users/@me/balances` — the frontend's own endpoints.
-  The first is implemented; **the second is not**, and its goldens are captured.
+- `GET /users/@me` and `GET /users/@me/balances` — the frontend's own endpoints,
+  all of them implemented (`3c5e119`, and the four captured goldens are read by
+  tests as of `2e7056b`).
 - A JSON login callback, since the old one answers with headers and HTML.
 
 ## Still to read before the last two requirements
