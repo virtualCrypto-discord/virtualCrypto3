@@ -182,8 +182,28 @@ So a Rust endpoint doing this needs three Discord calls that the seam does not h
 guild integrations, a guild, a user — and one write to `users.discord_id`. None of it
 is guessable from the shape of the page, which is why it is written here.
 
-Unread still: the tail from l.110, the branch for an id that is a user rather than a
-bot.
+### The tail, and the constraint it depends on
+
+The remaining branches are all about the two ids being wrong in different ways:
+
+- the bot id names a **user rather than a bot** → said by reading the user and checking
+  `bot`, naming them (l.108-113).
+- the bot id names **nobody** → 404, and said so (l.115-120).
+- the integration was found but its description **does not contain the uuid** → the
+  bot's own username is given, because the operator is looking at it when they edit
+  the description (l.123-136). The message calls the uuid 「トークン」, which is the
+  word the page's own copy uses.
+
+And one branch that is a rule rather than a message:
+
+- `{:error, :conflicted_user_id}` → 「すでにそのBotは別のApplicationに紐付けられています。」
+  (l.138-139). **One bot belongs to one application.** That is a uniqueness the write
+  relies on — the same Discord id cannot be on two accounts — and it is the kind of
+  thing to check in the schema rather than assume, since a lookup that returns the
+  first match would silently overwrite instead of refusing.
+
+An earlier version of this section said the persistence was unread and asked whether
+there was any. There is: the binding, and this is the branch that says it is exclusive.
 
 Also to add on the Rust side, before any of it can be called: the Discord seam has
 members and roles (`get_guild_member`, `get_roles`) and no integrations call.
