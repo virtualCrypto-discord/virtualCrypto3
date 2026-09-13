@@ -10,7 +10,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user, option_text};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user};
 use crate::components::ephemeral;
 use crate::developer;
 use crate::routes::oauth2_clients::{
@@ -44,12 +44,6 @@ pub async fn handle(
             show(state, client_id_of(sub_options)?, payload).await?,
         )),
         "register" => register(state, payload).await,
-        // The screen is the editor: every field an edit can change has a control on it, so this
-        // subcommand answers with the screen rather than opening a form of its own.
-        "edit" => Ok(message(
-            show(state, client_id_of(sub_options)?, payload).await?,
-        )),
-        "connect" => connect(state, sub_options, payload).await,
         "help" => Ok(message(help())),
         // The rest are registered and not written yet. Saying so is better than the answer
         // an unknown subcommand gets, because this command exists and a person pressing it
@@ -206,26 +200,6 @@ async fn connect_bot(
     }
 }
 
-/// `/application connect`, whose bot is one of its options.
-async fn connect(
-    state: &AppState,
-    sub_options: Option<&Value>,
-    payload: &Value,
-) -> Result<Value, CommandError> {
-    let client_id = client_id_of(sub_options)?;
-
-    let bot = match sub_options.and_then(Value::as_object) {
-        Some(options) => option_text(options, "bot")?,
-        // The option is required and its picker only answers with users, so this is this side's
-        // assumption failing rather than something a caller did.
-        None => return Err(CommandError::missing("connect was given no bot")),
-    };
-
-    Ok(message(ephemeral(vec![
-        connect_bot(state, client_id, &bot, payload).await?,
-    ])))
-}
-
 /// One application, with its secret on the screen.
 ///
 /// The ownership check is the one the connect route makes, and in the same order: the
@@ -295,15 +269,18 @@ fn help() -> Value {
             crate::components::text(
                 "**/application**\n\n\
              `list` 自分が持つアプリケーション\n\
-             `show <client_id>` アプリケーションの詳細\n\
-             `register` 新しいアプリケーションを登録\n\
-             `edit <client_id>` 設定の変更\n\
-             `connect <client_id> <bot>` サーバーに Bot を接続\n\
-             `secret <client_id>` client_secret の表示\n\n\
+             `show <client_id>` アプリケーションの詳細と設定\n\
+             `register` 新しいアプリケーションを登録\n\n\
+             設定の変更と Bot の接続は `show` の画面から行います。\n\
              `client_id` は入力しながら候補から選べます。",
             ),
             crate::components::action_row(vec![crate::components::button(
-                "dev:list",
+                // A packed id, like every other: `"dev:list"` is a readable string that
+                // `custom_id::parse` cannot decode, so this button failed whenever it was
+                // pressed.
+                &crate::custom_id::ui::developer::custom_id(
+                    crate::custom_id::ui::developer::Screen::List,
+                ),
                 "アプリケーション",
                 crate::components::ButtonStyle::Primary,
             )]),
@@ -795,7 +772,7 @@ mod tests {
         // gains a level, which it has twice.
         let body = screen["components"].to_string();
 
-        for subcommand in ["list", "show", "register", "edit", "connect", "secret"] {
+        for subcommand in ["list", "show", "register"] {
             assert!(body.contains(subcommand), "{subcommand} is not in {body}");
         }
     }

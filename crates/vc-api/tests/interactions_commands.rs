@@ -216,75 +216,6 @@ fn application_payload(subcommand: &str, client_id: &str, user: i64) -> Value {
     )
 }
 
-/// Connecting is a guild's to run: in a DM there is no guild to connect to, and asking for
-/// one to be pasted is the thing this whole feature exists to avoid.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn application_connect_in_a_dm_says_where_to_run_it(pool: PgPool) {
-    const USER: i32 = 1;
-    const DISCORD: i64 = 100_000_000_000_000_001;
-
-    support::insert_user(&pool, USER, DISCORD).await;
-    let application = support::insert_application(&pool, DISCORD, "テスト").await;
-    let client_id = support::client_id_of(&pool, application).await;
-
-    // The same interaction with the guild taken away, which is what a DM is.
-    let mut payload = application_payload("connect", &client_id, DISCORD);
-    payload["data"]["options"][0]["options"]
-        .as_array_mut()
-        .expect("the subcommand's options")
-        .push(json!({ "name": "bot", "type": 6, "value": "100000000000000002" }));
-    payload
-        .as_object_mut()
-        .expect("an object")
-        .remove("guild_id");
-
-    let response = interaction(router(pool), payload).await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-
-    let rendered = response.body["data"].to_string();
-
-    assert!(rendered.contains("サーバーの中で行います"), "{rendered}");
-    assert!(!rendered.contains("100000000000000002"), "{rendered}");
-}
-
-/// `/application edit` answers with the screen, which is where every field is edited now.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn application_edit_shows_the_screen_that_edits_it(pool: PgPool) {
-    const USER: i32 = 1;
-    const DISCORD: i64 = 100_000_000_000_000_001;
-
-    support::insert_user(&pool, USER, DISCORD).await;
-    let application = support::insert_application(&pool, DISCORD, "テスト").await;
-    let client_id = support::client_id_of(&pool, application).await;
-
-    let response = interaction(
-        router(pool),
-        application_payload("edit", &client_id, DISCORD),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(response.body["type"], 4, "the screen, not a form");
-
-    // Every field an edit can change has a control on the screen, found by what each id names
-    // rather than by a label: the six buttons are all 編集 and the three menus all have their own
-    // placeholder, so the id is the only thing that says which field is which.
-    for field in [
-        "client_name",
-        "redirect_uris",
-        "client_uri",
-        "logo_uri",
-        "webhook_url",
-        "discord_support_server_invite_slug",
-        "application_type",
-        "grant_types",
-        "response_types",
-    ] {
-        field_control(&response.body["data"], field);
-    }
-}
-
 /// `/application list`: the caller's applications as a menu, keyed by the uuid the service
 /// answers with rather than by the name somebody typed.
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -523,7 +454,7 @@ async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
 
     let response = interaction(
         vc_api::router(support::state(pool.clone(), discord)),
-        connect_payload(&client_id, BOT, DISCORD),
+        chose_bot(&client_id, BOT, DISCORD),
     )
     .await;
 
@@ -565,7 +496,7 @@ async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
 
     let response = interaction(
         vc_api::router(support::state(pool.clone(), discord)),
-        connect_payload(&client_id, BOT, DISCORD),
+        chose_bot(&client_id, BOT, DISCORD),
     )
     .await;
 
@@ -620,21 +551,23 @@ async fn application_show_of_something_else_says_nothing_is_there(pool: PgPool) 
     assert!(!rendered.contains("ひとつ"), "{rendered}");
 }
 
-fn connect_payload(client_id: &str, bot: i64, user: i64) -> Value {
-    execute_from_guild(
-        json!({
-            "name": "application",
-            "options": [{
-                "name": "connect",
-                "type": 1,
-                "options": [
-                    { "name": "client_id", "type": 3, "value": client_id },
-                    { "name": "bot", "type": 6, "value": bot.to_string() },
-                ],
-            }],
-        }),
-        user,
-    )
+/// Choosing a bot from the menu on an application's screen, which is the only way to connect
+/// now: the subcommand that took a bot as an option is gone, and the guild comes from the
+/// interaction rather than from anything typed.
+fn chose_bot(client_id: &str, bot: i64, user: i64) -> Value {
+    json!({
+        "type": 3,
+        "data": {
+            "custom_id": vc_api::custom_id::ui::developer::custom_id_for(
+                vc_api::custom_id::ui::developer::Screen::Connect,
+                client_id,
+            ),
+            "component_type": 5,
+            "values": [bot.to_string()],
+        },
+        "member": { "user": { "id": user.to_string() } },
+        "guild_id": "100000000000000002",
+    })
 }
 
 fn pressed(custom_id: &str, user: i64) -> Value {

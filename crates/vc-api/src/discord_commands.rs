@@ -246,36 +246,6 @@ fn application() -> Value {
                 "options": [client_id_option()],
             },
             {
-                "name": "edit",
-                "description": "アプリケーションの設定を変更します。",
-                "type": 1,
-                "options": [client_id_option()],
-            },
-            {
-                "name": "connect",
-                "description": "アプリケーションの Bot をこのサーバーに接続します。",
-                "type": 1,
-                "options": [
-                    client_id_option(),
-                    {
-                        // A user option rather than a string with autocomplete: a bot is a
-                        // member of the guild, so Discord's own picker can offer it and
-                        // nobody types a snowflake. Autocomplete is only available on
-                        // string, integer and number options, so it is not an option here.
-                        "name": "bot",
-                        "description": "接続する Bot です。",
-                        "type": 6,
-                        "required": true,
-                    },
-                ],
-            },
-            {
-                "name": "secret",
-                "description": "アプリケーションの client_secret を表示します。",
-                "type": 1,
-                "options": [client_id_option()],
-            },
-            {
                 "name": "help",
                 "description": "このコマンドの使い方を表示します。",
                 "type": 1,
