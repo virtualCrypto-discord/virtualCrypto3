@@ -26,8 +26,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
-    let status =
-        discord_commands::register(&reqwest::Client::new(), &token, &client_id, guild).await?;
+    let status = discord_commands::register(
+        &reqwest::Client::new(),
+        discord_commands::API_BASE,
+        &token,
+        &client_id,
+        guild,
+    )
+    .await?;
 
     // The status is the answer: 200 is every command as given, 401 is the token, 403 is
     // the application not being the bot's.

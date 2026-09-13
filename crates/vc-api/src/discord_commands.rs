@@ -316,14 +316,22 @@ fn options_for_listing(user_description: &str) -> Value {
     ])
 }
 
+/// Where Discord's API is.
+///
+/// A constant and a parameter rather than a literal built into the URL, because the send
+/// is testable and a literal cannot be pointed at a server that answers the way Discord
+/// does. Every other Discord call in this service hard-codes it, which is why none of
+/// them are covered either.
+pub const API_BASE: &str = "https://discord.com/api/v10";
+
 /// The URL the list is `PUT` to. A guild id makes it that guild's commands rather than
 /// the application's, which is what the old script's optional argument did.
-pub fn url(client_id: &str, guild: Option<i64>) -> String {
+pub fn url(base: &str, client_id: &str, guild: Option<i64>) -> String {
     match guild {
         Some(guild) => {
-            format!("https://discord.com/api/v10/applications/{client_id}/guilds/{guild}/commands")
+            format!("{base}/applications/{client_id}/guilds/{guild}/commands")
         }
-        None => format!("https://discord.com/api/v10/applications/{client_id}/commands"),
+        None => format!("{base}/applications/{client_id}/commands"),
     }
 }
 
@@ -334,12 +342,13 @@ pub fn url(client_id: &str, guild: Option<i64>) -> String {
 /// else to do with the body — a 200 is the whole answer.
 pub async fn register(
     http: &reqwest::Client,
+    base: &str,
     bot_token: &str,
     client_id: &str,
     guild: Option<i64>,
 ) -> Result<u16, reqwest::Error> {
     let response = http
-        .put(url(client_id, guild))
+        .put(url(base, client_id, guild))
         .header(reqwest::header::AUTHORIZATION, format!("Bot {bot_token}"))
         .json(&commands())
         .send()
@@ -415,12 +424,95 @@ mod tests {
     #[test]
     fn a_guild_id_makes_it_that_guilds_command_list() {
         assert_eq!(
-            url("123", None),
+            url(API_BASE, "123", None),
             "https://discord.com/api/v10/applications/123/commands"
         );
         assert_eq!(
-            url("123", Some(456)),
+            url(API_BASE, "123", Some(456)),
             "https://discord.com/api/v10/applications/123/guilds/456/commands"
         );
+    }
+
+    /// The send, against a server that answers the way Discord would.
+    ///
+    /// This is what "the send is not covered" meant before — that it was not written,
+    /// not that it could not be. What it asserts is the whole of the request: the method
+    /// and path, because a bulk overwrite at the wrong URL is worse than no call; the
+    /// authorization, because a bot token is the only thing that makes this legal; and
+    /// the body, which is every command.
+    #[tokio::test]
+    async fn the_commands_go_up_as_one_put_with_the_bot_token() {
+        use std::sync::{Arc, Mutex};
+
+        use axum::Router;
+        use axum::extract::{OriginalUri, State};
+        use axum::http::HeaderMap;
+        use axum::routing::put;
+
+        #[derive(Clone, Default)]
+        struct Seen {
+            method: Arc<Mutex<String>>,
+            path: Arc<Mutex<String>>,
+            authorization: Arc<Mutex<String>>,
+            body: Arc<Mutex<Value>>,
+        }
+
+        async fn record(
+            State(seen): State<Seen>,
+            OriginalUri(uri): OriginalUri,
+            method: axum::http::Method,
+            headers: HeaderMap,
+            body: String,
+        ) -> &'static str {
+            *seen.method.lock().expect("not poisoned") = method.to_string();
+            *seen.path.lock().expect("not poisoned") = uri.path().to_owned();
+            *seen.authorization.lock().expect("not poisoned") = headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            *seen.body.lock().expect("not poisoned") =
+                serde_json::from_str(&body).expect("the body is json");
+
+            "[]"
+        }
+
+        let seen = Seen::default();
+        let app = Router::new()
+            .route("/applications/{id}/commands", put(record))
+            .with_state(seen.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let address = listener.local_addr().expect("the address");
+
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let status = register(
+            &reqwest::Client::new(),
+            &format!("http://{address}"),
+            "the-bot-token",
+            "the-client-id",
+            None,
+        )
+        .await
+        .expect("the request");
+
+        assert_eq!(status, 200);
+        assert_eq!(*seen.method.lock().expect("not poisoned"), "PUT");
+        assert_eq!(
+            *seen.path.lock().expect("not poisoned"),
+            "/applications/the-client-id/commands"
+        );
+        assert_eq!(
+            *seen.authorization.lock().expect("not poisoned"),
+            "Bot the-bot-token"
+        );
+
+        let sent = seen.body.lock().expect("not poisoned").clone();
+        assert_eq!(sent, Value::Array(commands()), "every command, as given");
     }
 }
