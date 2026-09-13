@@ -43,7 +43,14 @@ error it exits with; the second is everything else that is read, `WEB_ROOT` from
 built SPA is unpacked. Unset, `default_web_root()` decides, and `web/dist` is what
 `npm run build` writes — so a container has to place one where the other expects it.
 
-`RATE_LIMIT_PER_MINUTE=0` turns the v2 limit off. `WEBHOOK_PROXY_URL` together with
+`RATE_LIMIT_PER_MINUTE=0` turns the v2 limit off. `WEBHOOK_PROXY_URL` is the one entry here that a deployment does not have to
+provide: the emitter is a published endpoint of this project's, routed by its
+Worker to `vcrypto-webhook-emitter.sumidora.com` for every environment (see
+`wrangler.toml` in `virtualCrypto-discord/webhook-emitter-cf-workers`), so it
+defaults like `SITE_URL` does. What decides whether there is a proxy at all is the
+certificate below.
+
+It goes together with
 `VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` is the mTLS client the
 webhook handshake goes through — the Cloudflare Worker in front of an application's
 webhook requires a client certificate, which is why the pair is required together

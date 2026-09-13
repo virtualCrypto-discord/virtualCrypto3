@@ -125,7 +125,15 @@ fn optional_env(key: &str, default: &str) -> String {
 /// certificate will not parse is a configuration mistake and panics, because a
 /// server that boots without ever delivering is worse than one that says so.
 fn webhook_proxy() -> Option<vc_api::notification::Proxy> {
-    let url = std::env::var("WEBHOOK_PROXY_URL").ok()?;
+    // The emitter is a published endpoint of this project's, not a per-deployment
+    // one: its Worker routes to `vcrypto-webhook-emitter.sumidora.com` for every
+    // environment (wrangler.toml in virtualCrypto-discord/webhook-emitter-cf-workers).
+    // So it has a default like `SITE_URL` does, and what decides whether there is a
+    // proxy at all is the client certificate below.
+    let url = optional_env(
+        "WEBHOOK_PROXY_URL",
+        "https://vcrypto-webhook-emitter.sumidora.com",
+    );
     let certificate = std::env::var("VCRYPTO_WEBHOOK_PROXY_CERT")
         .ok()?
         .replace('#', "\n");
