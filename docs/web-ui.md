@@ -567,7 +567,7 @@ corrections in this document came about — so it is written down rather than qu
 fixed.
 
 ```
-client_id, client_secret (null), client_secret_expires_at (0),
+client_id, client_secret, client_secret_expires_at (0),
 redirect_uris: string[],
 user_id (string), discord_user_id (string|null),
 application_type, client_name, client_uri, discord_support_server_invite_slug,
@@ -575,6 +575,21 @@ grant_types: string[], logo_uri,
 owner_discord_id (string|null), response_types: string[], webhook_url,
 public_key (hex)
 ```
+
+**`client_secret` is not null, and this said it was.** Registration stores one
+(`vc-core/src/application.rs` l.604) into `applications.client_secret`, and `details`
+selects that column, so every read that renders an application answers with it — the list
+(`GET /oauth2/clients`), the RFC 7592 read (`GET /oauth2/clients/@me`), and the
+registration. That is RFC 7592's shape, where the read of a client includes its secret.
+
+What is **not** readable again is the `registration_access_token`: it is a token and not a
+column, so registration is the only time it is answered — which is what the page showing
+it says, and what it said wrongly about the secret until this was checked.
+
+Worth a decision rather than an accident: the list is answered to a **user** token, so a
+browser session can read the secrets of the applications it owns. The Elixir answered the
+same way, and its own detail page showed them, so nothing was lost — but whether a list
+should carry secrets is a question the old site never had to answer either.
 
 Two numbers again travel as strings, `user_id` and `discord_user_id`, which is the
 same rule the balances follow. `client_secret_expires_at` is a number, and is the

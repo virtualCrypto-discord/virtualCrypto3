@@ -211,6 +211,10 @@ export interface Registration {
 
 /// What a registration answers with, and the one moment the secret is legible.
 ///
+/// `registration_access_token` is answered once and is not stored anywhere, so this is
+/// the only time it can be read. The `client_secret` is not like that: it is column in
+/// `applications` and every read that renders an application answers with it.
+///
 /// `registration_access_token` is an application token for what was just created, not
 /// a token for the person who registered it: it is what an OIDC client would use to
 /// read and edit its own registration.

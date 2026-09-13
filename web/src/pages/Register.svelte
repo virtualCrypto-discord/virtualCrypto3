@@ -151,9 +151,11 @@
     </button></p>
   </form>
 {:else}
-  <!-- The secret is answered once and never again: neither the read nor the list
-       carries it. So this is the only screen that will ever show it, and it is worth
-       saying so where it is shown. -->
+  <!-- The registration token is answered once and never again — it is not stored, so
+       nothing can read it back — and that is what the warning below is about. The
+       client secret is a different matter: it is in `applications.client_secret`, and
+       `render` answers with it, so the list and the application's own read return it
+       too. Said plainly here because this file used to claim otherwise. -->
   <p>登録できました。次の3つを控えてください。</p>
 
   <dl>
@@ -171,7 +173,7 @@
     <dd><code>{registered.registration_access_token}</code></dd>
   </dl>
 
-  <p class="warning">client_secret と registration_access_token はこの画面にしか表示されません。</p>
+  <p class="warning">registration_access_token はこの画面にしか表示されません。</p>
 
   <p><a href="/applications">アプリケーション</a></p>
 {/if}
