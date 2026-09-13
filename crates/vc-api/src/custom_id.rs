@@ -287,6 +287,30 @@ pub mod ui {
             crate::custom_id::encode(0, &page(screen))
         }
 
+        /// The field a component edits, when the id was built by [`custom_id_for_field`].
+        ///
+        /// A newline separates it from the `client_id` because neither a uuid nor a field's
+        /// name can contain one, and an id that names no field splits to nothing.
+        pub fn field_of(data: &str) -> (&str, &str) {
+            match data.split_once('\n') {
+                Some((client_id, field)) => (client_id, field),
+                None => (data, ""),
+            }
+        }
+
+        /// The string a component carries for one field of one application.
+        ///
+        /// The field is in the id because there are nine of them and each has its own control:
+        /// a submission has to say which of the nine it is, and Discord hands back only what the
+        /// component was built with.
+        pub fn custom_id_for_field(screen: Screen, client_id: &str, field: &str) -> String {
+            let mut data = application(screen, client_id);
+            data.push(b'\n');
+            data.extend_from_slice(field.as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
         /// The string a component carries for a screen about one application.
         ///
         /// The `client_id` has to be in the id and not somewhere else: a form that changes

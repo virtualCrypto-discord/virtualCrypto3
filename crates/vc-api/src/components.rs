@@ -78,6 +78,28 @@ pub fn link_button(url: &str, label: &str) -> Value {
     })
 }
 
+/// A menu that may take more than one of its options.
+///
+/// A string select is the one select that works in a message *and* is given its options by the
+/// service, which is what makes it the thing to edit a set with — `grant_types` is two values
+/// out of two, and the set that is chosen is the set that is sent.
+pub fn select_many(
+    custom_id: &str,
+    placeholder: &str,
+    options: Vec<Value>,
+    min_values: u8,
+    max_values: u8,
+) -> Value {
+    json!({
+        "type": 3,
+        "custom_id": custom_id,
+        "placeholder": placeholder,
+        "options": options,
+        "min_values": min_values,
+        "max_values": max_values,
+    })
+}
+
 /// A picker for a user, which is how a bot is chosen.
 ///
 /// A bot is a user, so Discord already has the thing to ask with, and asking somebody to paste

@@ -448,8 +448,15 @@ pub const LOGO_LIMIT: usize = 2048;
 /// The Elixir returns `MapSet.to_list/1` of the validated value, so naming `code`
 /// twice stores it once — and it is the validated value that reaches the row, not
 /// the request.
+/// What a response type may be, which is the set the validator checks against and the set the
+/// screens offer. One list, because two would drift and offer a value the other refuses.
+pub const RESPONSE_TYPES: &[&str] = &["code"];
+
 pub fn check_response_types(types: &[String]) -> Result<Vec<String>, MetadataError> {
-    if types.iter().any(|kind| kind != "code") {
+    if types
+        .iter()
+        .any(|kind| !RESPONSE_TYPES.contains(&kind.as_str()))
+    {
         return Err(MetadataError::ResponseTypes);
     }
 
@@ -458,10 +465,13 @@ pub fn check_response_types(types: &[String]) -> Result<Vec<String>, MetadataErr
 
 /// `validate_grant_types/1`: a subset of `["authorization_code",
 /// "refresh_token"]`, as a set.
+/// What a grant type may be, in one list for the reason [`RESPONSE_TYPES`] is.
+pub const GRANT_TYPES: &[&str] = &["authorization_code", "refresh_token"];
+
 pub fn check_grant_types(types: &[String]) -> Result<Vec<String>, MetadataError> {
     if types
         .iter()
-        .any(|kind| kind != "authorization_code" && kind != "refresh_token")
+        .any(|kind| !GRANT_TYPES.contains(&kind.as_str()))
     {
         return Err(MetadataError::GrantTypes);
     }
@@ -547,8 +557,11 @@ pub fn check_slug(slug: &str) -> Result<(), MetadataError> {
 ///
 /// The one field with no `nil` clause in the Elixir, so "not given" cannot be
 /// said of it; the column has a default, so it is never absent in practice.
+/// What an application type may be, in one list for the reason [`RESPONSE_TYPES`] is.
+pub const APPLICATION_TYPES: &[&str] = &["web", "native"];
+
 pub fn check_application_type(kind: &str) -> Result<(), MetadataError> {
-    if kind == "web" || kind == "native" {
+    if APPLICATION_TYPES.contains(&kind) {
         Ok(())
     } else {
         Err(MetadataError::ApplicationType)
