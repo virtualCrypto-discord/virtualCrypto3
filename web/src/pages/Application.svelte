@@ -47,9 +47,7 @@
   <p>読み込めませんでした（{refused.status}）。</p>
 {:else if owned.length === 0}
   <p>まだアプリケーションを登録していません。</p>
-  <!-- Registration is `POST /oauth2/clients`, and what it needs is a form: a name,
-       the redirect URIs, and optionally a webhook. -->
-  <p>登録はまだこの画面からはできません。</p>
+  <p><a href="/applications/register">登録する</a></p>
 {:else}
   {#each owned as application (application.client_id)}
     <section>
