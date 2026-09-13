@@ -21,7 +21,7 @@ connect page" came from, on a site whose list linked it as
 | --- | --- | --- |
 | `GET /` | landing page | |
 | `GET /logout` | ends the session | |
-| `GET /invite`, `/support` | redirects | to the bot and the support guild |
+| `GET /invite`, `/support` | redirects | to the bot and the support guild — **built**, from `Links` |
 | `GET /callback/discord` | the Discord OAuth2 callback | see the session model below |
 | `POST /token` | the session's VC API token | re-issues on demand |
 | `live /app` | **a stub at the tip** | `<h1>Content</h1>`; the mypage it replaced is Elm |
@@ -94,9 +94,21 @@ screen needs — but the token no longer has to travel in headers.
 ## The requirements, in the order they matter
 
 **What is left, in one place**: the **contract flow** (item 5, not read), the
-**documents** (item 7, another repository's prose), and the small pages the old site had
-that this list never turned into items — `/invite` and `/support`, which redirect, and
-`GET /applications/verification`, a readme. The **edit form** is not on this list on
+**documents** (item 7, another repository's prose), and one small page — `GET
+/applications/verification`, whose body renders `readme.html`.
+
+`/invite` and `/support` are built: `web::invite` and `web::support` redirect from
+`Links::invite_url` and `Links::support_guild_invite_url`, which `vc-server` already
+fills from `VCRYPTO_INVITE_URL` and `VCRYPTO_SUPPORT_GUILD_INVITE_URL`, so the bot's
+invite and the support guild's address stayed where the command responses read them
+from. 307 rather than the Elixir's 302, because that is what axum has for a move that is
+not permanent and a `GET` cannot tell them apart.
+
+`/applications/verification` is prose, and the prose is in the history the warning at the
+top is about: `lib/virtualCrypto_web/templates/application/readme.html.eex`, blob
+`616e250f`. It is a page that explains how to prove a bot belongs to an application,
+which is what the connect page's paragraph says in a sentence — so it is worth reading
+before it is rebuilt, and it is not in the tree at the tip. The **edit form** is not on this list on
 purpose: it is a decision about holding an application's credentials in a page, recorded
 under item 3.
 

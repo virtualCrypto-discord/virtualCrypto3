@@ -58,6 +58,23 @@ pub async fn login(State(state): State<AppState>, Query(query): Query<LoginQuery
 /// A signed cookie cannot be un-signed, only replaced by one that has already
 /// expired. The attributes have to match the cookie being replaced, or the
 /// browser keeps the original.
+/// `/invite` and `/support`: where a browser that asks for the bot, or for the guild,
+/// ends up.
+///
+/// Redirects and not pages, because there is nothing of this service's to show.
+///
+/// 307, which is `Redirect::temporary` and is what axum has for a move that is not
+/// permanent. The Elixir's `redirect(external:)` was a 302, and for a `GET` the two are
+/// the same thing to a browser. The addresses come from `Links`, so the bot's invite and
+/// the support guild stay where the command responses already read them from.
+pub async fn invite(State(state): State<AppState>) -> Response {
+    Redirect::temporary(&state.links().invite_url).into_response()
+}
+
+pub async fn support(State(state): State<AppState>) -> Response {
+    Redirect::temporary(&state.links().support_guild_invite_url).into_response()
+}
+
 pub async fn logout(State(state): State<AppState>) -> Response {
     (
         [(SET_COOKIE, clear_cookie(state.secure_cookies()))],

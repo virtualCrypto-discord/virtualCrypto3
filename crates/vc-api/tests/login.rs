@@ -13,7 +13,7 @@ use axum::body::Body;
 use axum::http::Request;
 use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use sqlx::PgPool;
-use support::{JWT_SECRET, SESSION_SECRET, fake, state};
+use support::{JWT_SECRET, SESSION_SECRET, fake, links, state};
 use tower::ServiceExt;
 use vc_api::session::{COOKIE_NAME, Session};
 
@@ -312,4 +312,26 @@ async fn without_a_session_there_is_no_token(pool: PgPool) {
         .expect("router response");
 
     assert_eq!(response.status().as_u16(), 401);
+}
+
+/// `/invite` and `/support`: the two addresses the old site kept for a browser that
+/// wanted the bot or the guild, answered from the same settings the command responses
+/// read, and as redirects because there is nothing of ours to show.
+///
+/// Asserted against `support::links()`, which is what the state under test carries, so
+/// this says the setting is used rather than that a URL looks plausible.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_bot_and_guild_addresses_are_redirects(pool: PgPool) {
+    let configured = links();
+    let app = vc_api::router(state(pool, fake()));
+
+    let (status, location, _) = visit(app.clone(), "/invite").await;
+
+    assert_eq!(status, 307);
+    assert_eq!(location, configured.invite_url);
+
+    let (status, location, _) = visit(app, "/support").await;
+
+    assert_eq!(status, 307);
+    assert_eq!(location, configured.support_guild_invite_url);
 }

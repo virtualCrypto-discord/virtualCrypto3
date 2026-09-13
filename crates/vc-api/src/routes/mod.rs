@@ -44,6 +44,9 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         .route("/login", get(web::login))
         .route("/logout", get(web::logout))
         .route("/callback/discord", get(web::discord_callback))
+        // Where the old site sent a browser that asked for the bot or the guild.
+        .route("/invite", get(web::invite))
+        .route("/support", get(web::support))
         .route("/token", post(web::token))
         // The consent screen, which OAuth2 sends browsers to.
         .route("/oauth2/authorize", get(oauth2::authorize))
