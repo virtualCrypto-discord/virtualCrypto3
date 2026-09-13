@@ -1,21 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { ApiError, balances, loginUrl, me, type Account, type Balance } from "../api";
+  import {
+    ApiError,
+    balances,
+    exchangeToken,
+    loginUrl,
+    me,
+    type Account,
+    type Balance,
+  } from "../api";
 
   // A 401 here is not an error to show: it means the browser has no session, and
   // where to send it to get one is what the API says in the response.
   const login = loginUrl("/me");
 
-  // NOT YET: this reads with the session cookie, and the v2 endpoints want a bearer
-  // token. The browser exchanges its session for one at `POST /token` — the callback
-  // deliberately does not issue it, since a token written during a navigation is one
-  // nobody holds and cannot be revoked. That exchange is the missing step, and its
-  // request shape has not been read here, so it is not guessed at in `api.ts`.
-  //
-  // What this page does get from the API as written: 400, for no `Authorization`
-  // header at all. The three refusals below are the ones it will show once the
-  // exchange is in.
+  // The v2 endpoints want a bearer token, while a browser has a session cookie. The
+  // exchange is the step between them: `POST /token` reads the cookie and answers
+  // one. The callback deliberately does not issue a token, because one written during
+  // a navigation is one nobody holds and cannot be revoked.
 
   let account = $state<Account | null>(null);
   let holdings = $state<Balance[]>([]);
@@ -24,9 +27,12 @@
 
   onMount(async () => {
     try {
-      // In parallel: the two answer different questions and neither needs the
+      // The exchange first: the two reads need what it answers with.
+      const token = await exchangeToken();
+
+      // Then in parallel: they answer different questions and neither needs the
       // other's answer.
-      [account, holdings] = await Promise.all([me(), balances()]);
+      [account, holdings] = await Promise.all([me(token.access_token), balances(token.access_token)]);
     } catch (thrown) {
       if (thrown instanceof ApiError) {
         refused = thrown;

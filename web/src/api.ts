@@ -38,6 +38,13 @@ export class ApiError extends Error {
   }
 }
 
+/// A bearer token, for the calls that want one. The reads below take it as an
+/// argument rather than holding it: a module-level token would outlive the session
+/// it came from, and the page that has one knows where to keep it.
+function authorize(token?: string): HeadersInit {
+  return token === undefined ? {} : { Authorization: `Bearer ${token}` };
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<unknown> {
   const response = await fetch(path, {
     ...init,
@@ -88,18 +95,37 @@ export interface Balance {
   currency: Currency;
 }
 
-/// The account the session belongs to.
-export function me(): Promise<Account> {
-  return request("/api/v2/users/@me") as Promise<Account>;
+/// What `POST /token` answers with. `expires_in` is seconds, and it is a JSON
+/// number here — the one number in this API that is not a string, because it is
+/// computed rather than stored.
+export interface IssuedToken {
+  access_token: string;
+  expires_in: number;
+}
+
+/// Exchanges the session cookie for a token.
+///
+/// A POST with no body: what identifies the caller is the cookie. The callback
+/// deliberately does not issue one — a token written during a navigation is a token
+/// nobody holds and cannot be revoked — so this is where a browser gets its own.
+export function exchangeToken(): Promise<IssuedToken> {
+  return request("/token", { method: "POST" }) as Promise<IssuedToken>;
+}
+
+/// The account the token belongs to.
+export function me(token: string): Promise<Account> {
+  return request("/api/v2/users/@me", { headers: authorize(token) }) as Promise<Account>;
 }
 
 /// What that account holds, one entry per currency.
-export function balances(): Promise<Balance[]> {
-  return request("/api/v2/users/@me/balances") as Promise<Balance[]>;
+export function balances(token: string): Promise<Balance[]> {
+  return request("/api/v2/users/@me/balances", {
+    headers: authorize(token),
+  }) as Promise<Balance[]>;
 }
 
-export function currencies(): Promise<Currency[]> {
-  return request("/api/v2/currencies") as Promise<Currency[]>;
+export function currencies(token: string): Promise<Currency[]> {
+  return request("/api/v2/currencies", { headers: authorize(token) }) as Promise<Currency[]>;
 }
 
 /// The URL to navigate to in order to start a login, and the URL to navigate to in
