@@ -197,10 +197,12 @@ The remaining branches are all about the two ids being wrong in different ways:
 And one branch that is a rule rather than a message:
 
 - `{:error, :conflicted_user_id}` → 「すでにそのBotは別のApplicationに紐付けられています。」
-  (l.138-139). **One bot belongs to one application.** That is a uniqueness the write
-  relies on — the same Discord id cannot be on two accounts — and it is the kind of
-  thing to check in the schema rather than assume, since a lookup that returns the
-  first match would silently overwrite instead of refusing.
+  (l.138-139). **One bot belongs to one application**, and the schema says so:
+  `users_discord_id_index` is `UNIQUE` on `users.discord_id`, so the second
+  application to try to bind that bot gets a unique violation rather than taking the
+  binding away. The write has to answer that violation as this message, and it is
+  worth knowing that the constraint is what catches it — a lookup that returned the
+  first match would have overwritten the other application's binding silently.
 
 An earlier version of this section said the persistence was unread and asked whether
 there was any. There is: the binding, and this is the branch that says it is exclusive.
