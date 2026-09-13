@@ -319,3 +319,25 @@ which is the mTLS the worker demands. And a notification is **fire-and-forget**:
 `Task.start`, so a slow application does not slow the claim that caused it, with
 an account that has no application being a silent `:nop`.
 
+## The v2 rate limit, and why it is an extractor
+
+The limiter already exists and the interaction endpoint already uses it:
+`RateLimiter::allow(&self, key: &str) -> bool`, keyed per caller — the interaction
+side asks for `format!("discord:{user}")`. What v2 has not got is the calling of
+it, and where to call it decides how much code that is.
+
+A layer on the v2 router is the wrong place. The limit is per **account**, and an
+account is only known once the token has been verified — which happens inside the
+handlers, through the `AuthUser` extractor. A layer would therefore have to verify
+tokens a second time, or limit on the address, and the Elixir counts the caller.
+
+The right place is an extractor of the same kind: one that verifies the token and
+then asks the limiter, so a handler takes `Limited` instead of `AuthUser` and
+cannot forget to be limited. It has to be `FromRequestParts<AppState>` rather than
+generic over `AuthState`, because the limiter is the state's and `AuthState` — the
+pool and the signing secret — does not carry it.
+
+That is a parameter change in every v2 handler: mechanical, about twenty of them,
+and the compiler finds them all. The refusal is the one the interaction endpoint
+already answers with, and `RATE_LIMIT_PER_MINUTE=0` still turns it off.
+
