@@ -27,6 +27,7 @@ use vc_core::application::{
 use crate::discord_auth::resolve_token;
 use crate::error::ApiError;
 use crate::notification::{Handshake, fresh_keypair, verify};
+use crate::rate_limit::TooSoon;
 use crate::state::AppState;
 
 /// An application as the API answers it, with its owner and its redirect URIs.
@@ -495,6 +496,12 @@ pub async fn register(
             return internal("no webhook proxy is configured");
         };
 
+        // The handshake is the expensive thing here, and this is what stops one
+        // requester spending all of it.
+        if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
+            return rate_limited(too_soon);
+        }
+
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|since| since.as_secs() as i64)
@@ -539,6 +546,25 @@ pub async fn register(
             "registration_client_uri": format!("{}/oauth2/clients/@me", state.links().site_url),
             "client_secret_expires_at": 0,
         })),
+    )
+        .into_response()
+}
+
+/// A handshake that came too soon.
+///
+/// The three windows answer different questions — a retry storm, somebody
+/// hammering, a day's worth of this service's time — so a client is told which one
+/// it hit rather than only that it hit one.
+fn rate_limited(too_soon: TooSoon) -> Response {
+    let description = match too_soon {
+        TooSoon::Seconds3 => "retry_after_3_seconds",
+        TooSoon::Hour => "retry_after_1_hour",
+        TooSoon::Day => "retry_after_1_day",
+    };
+
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({ "error": "rate_limit_exceeded", "error_description": description })),
     )
         .into_response()
 }
@@ -718,6 +744,12 @@ pub async fn edit(
         let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
             return internal("the application's private key is not 32 bytes");
         };
+
+        // The handshake is the expensive thing here, and this is what stops one
+        // requester spending all of it.
+        if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
+            return rate_limited(too_soon);
+        }
 
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

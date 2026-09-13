@@ -84,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vc_api::state::Outbound {
             proxy: proxy.clone(),
             notifier: notifier.clone(),
+            handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
         // A loose per-user allowance; `RATE_LIMIT_PER_MINUTE=0` turns it off.
         Arc::new(vc_api::rate_limit::RateLimiter::new(

@@ -263,6 +263,7 @@ pub fn state_with_limiter(
         vc_api::state::Outbound {
             proxy: None,
             notifier: Arc::new(NoopNotifier),
+            handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
         limiter,
     )
@@ -284,6 +285,7 @@ pub fn state_with_notifier(
         vc_api::state::Outbound {
             proxy: None,
             notifier,
+            handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
         // Unlimited by default, so the other tests are not held to it.
         Arc::new(RateLimiter::new(0, vc_api::rate_limit::DEFAULT_WINDOW)),

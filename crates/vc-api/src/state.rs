@@ -7,6 +7,7 @@ use vc_core::notification::Notifier;
 use crate::discord::DiscordApi;
 use crate::notification::Proxy;
 use crate::rate_limit::RateLimiter;
+use crate::rate_limit::VerificationLimiter;
 
 /// The public URLs the command responses link to, plus the logo their embeds show.
 #[derive(Clone, Debug)]
@@ -55,6 +56,10 @@ impl Signing {
 pub struct Outbound {
     pub proxy: Option<Arc<Proxy>>,
     pub notifier: Arc<dyn Notifier>,
+    /// The handshake's allowance. In the state rather than built where it is asked
+    /// for, because a limiter per request is a limiter whose windows reset every
+    /// time and therefore limit nothing.
+    pub handshake: Arc<VerificationLimiter>,
 }
 
 #[derive(Clone)]
@@ -133,6 +138,11 @@ impl AppState {
     /// something this service cannot do.
     pub fn webhook_proxy(&self) -> Option<&Arc<Proxy>> {
         self.outbound.proxy.as_ref()
+    }
+
+    /// The allowance a webhook handshake is held to, which is per requester.
+    pub fn handshake_limiter(&self) -> &VerificationLimiter {
+        &self.outbound.handshake
     }
 
     pub fn links(&self) -> &Links {
