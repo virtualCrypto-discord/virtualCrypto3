@@ -245,8 +245,25 @@ the comment there says, so that a client reading an integer gets one.
 `client_secret` is null wherever the caller should not see it, which is the list and
 the single read; registration answers with it once.
 
-Still to read before an application page: whether `GET /oauth2/clients/@me` (`mine`,
-l.168) answers an array or something keyed by the token's kind. The note that the
-endpoint is "split by kind" admits both readings, and the difference decides the
-page's first line.
+### Which of the two it answers, and the fact underneath it
+
+Read out of `mine` (l.168), and the answer is decided by the token's kind, not by a
+query parameter:
+
+- a **`user` token** — the subject is a person — is answered with an **array** of
+  none or one (l.196).
+- an **`app` token** — the subject is the application's own account — is answered
+  with that **one application, or `null`** if it is gone (l.189-195).
+
+Both find it the same way; the difference is the shape of the answer (l.166-167).
+
+**None or one is not a display choice, it is the data.** `users.application_id` links
+an account to at most one application (l.162), so an account either has an
+application or does not — there is no second one to list. The application page
+should therefore read as a page about *the* application and offer to register when
+there is none, rather than as a list with an "add" button that could never be used
+twice.
+
+An app token for an application that no longer exists is answered `null` rather than
+"not found". That is the Elixir's choice, reproduced deliberately (l.192-194).
 
