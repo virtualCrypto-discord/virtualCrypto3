@@ -121,9 +121,7 @@ pub fn application(
         ),
         // Without a logo a section has nothing for its accessory, and the button that was there
         // went to the connect screen with no bot to connect with.
-        _ => text(format!(
-            "**{name}**\n{state}\n`{client_id}`\nここから設定を変えられます。"
-        )),
+        _ => text(format!("**{name}**\n{state}\n`{client_id}`")),
     };
 
     container(
