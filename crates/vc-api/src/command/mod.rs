@@ -6,8 +6,9 @@
 //! directly; the renderers stay separate functions so they still line up with
 //! `InteractionsJSON`.
 
+pub mod application;
 pub mod autocomplete;
-pub mod bal;
+mod bal;
 pub mod claim;
 pub mod create;
 pub mod delete;
@@ -193,6 +194,7 @@ pub async fn handle(
     match name {
         "help" => Ok(help(state)),
         "invite" => Ok(invite(state)),
+        "application" => application::handle(state, options, payload).await,
         "bal" => bal::handle(state, payload).await,
         "claim" => claim::handle(state, options, payload).await,
         "create" => create::handle(state, options, payload).await,
