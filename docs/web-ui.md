@@ -123,10 +123,24 @@ What is known, and what has to be checked before it is built:
   pseudocommands": the answers here are interaction responses. The secret can be sent on
   that basis, and it must be `ephemeral` — a DM the bot can no longer edit is still a
   message Discord keeps.
-- **Nothing in this repository registers commands.** There is no `contexts`, no
-  `integration_types`, no call that sets application commands — only the invite URL with
-  `scope=applications.commands bot`. Whatever Discord surface is chosen, its registration
-  happens outside this tree and has to be found before the handlers are written.
+- **The registration is not missing, it was never ported.** I wrote here that it lived
+  outside this tree and had to be found; it is in the old one, at
+  **`priv/register-commands.exs`**, and this repository has no equivalent — no command
+  definitions, no call that sets them. That file defines all nine commands (`help`,
+  `invite`, `give`, `pay`, `info`, `create`, `delete`, `bal`, `claim`) with their full
+  option trees, and sends them as one `PUT` to
+  `https://discord.com/api/v10/applications/{client_id}/commands`, or to
+  `.../guilds/{guild}/commands` when given a guild id, with `Authorization: Bot {token}`.
+
+  So the port is incomplete in a way nothing in this tree says out loud, and the DM work
+  starts by closing that: the definitions, and something that sends them.
+
+- **`dm_permission` is already the DM answer, and it is the deprecated spelling.**
+  `give`, `create` and `delete` carry `"dm_permission" => false`; the other six let DMs
+  through. Discord replaced the field with `contexts` (where a command may run) and
+  `integration_types` (who may install it), so anything built now should be expressed in
+  those rather than carried over as it was — which is also where "not slash commands, a
+  newer feature" lands. Read the current shape before writing it.
 - **The commands assume a guild.** `bal`, `pay` and `give` read the guild's currencies, and
   `interactions.rs` gets the guild from the payload. A DM has none, so anything guild-shaped
   — connecting a bot above all — has to take the id as an argument or have a DM meaning
