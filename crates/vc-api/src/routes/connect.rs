@@ -73,7 +73,7 @@ fn text<'a>(object: &'a Map<String, Value>, key: &str) -> &'a str {
 /// Ownership is decided first and by id, so a client id that belongs to somebody else
 /// is indistinguishable from one that does not exist. That is the whole reason the
 /// answer to both is a 404: this endpoint must not confirm which client ids are real.
-async fn owned_by_client_id(
+pub(crate) async fn owned_by_client_id(
     pool: &PgPool,
     owned: &[i64],
     client_id: &str,

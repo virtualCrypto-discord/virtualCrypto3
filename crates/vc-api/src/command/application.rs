@@ -30,10 +30,11 @@ pub async fn handle(
         .and_then(Value::as_str)
         .ok_or_else(|| CommandError::missing("application has no subcommand"))?;
 
-    let _sub_options = options.get("sub_options");
+    let sub_options = options.get("sub_options");
 
     let screen = match subcommand {
         "list" => list(state, payload).await?,
+        "show" => show(state, sub_options, payload).await?,
         "help" => help(),
         // The rest are registered and not written yet. Saying so is better than the
         // answer an unknown subcommand gets, because this command exists and a person
@@ -47,6 +48,49 @@ pub async fn handle(
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": screen,
     }))
+}
+
+/// One application, with its secret on the screen.
+///
+/// The ownership check is the one the connect route makes, and in the same order: the
+/// caller's own ids first, and only then a `client_id` looked for among them. Checking the
+/// uuid first would answer whether an application exists to somebody who owns none.
+async fn show(
+    state: &AppState,
+    sub_options: Option<&Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+    let client_id = client_id_of(sub_options)?;
+
+    let owned = vc_core::application::owned_by(state.pool(), account).await?;
+
+    let found = crate::routes::connect::owned_by_client_id(state.pool(), &owned, client_id)
+        .await
+        .map_err(vc_core::Error::from)?;
+
+    let Some(found) = found else {
+        return Ok(ephemeral(vec![crate::components::text(format!(
+            "`{client_id}` は見つかりませんでした。"
+        ))]));
+    };
+
+    Ok(ephemeral(vec![developer::application(
+        &found.client_id,
+        found.client_name.as_deref(),
+        found.discord_user_id.is_some(),
+        found.logo_uri.as_deref(),
+        found.client_secret.as_deref(),
+    )]))
+}
+
+/// The `client_id` a subcommand was given, which autocomplete filled from the caller's own.
+fn client_id_of(sub_options: Option<&Value>) -> Result<&str, CommandError> {
+    sub_options
+        .and_then(|options| options.get("client_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| CommandError::missing("this subcommand needs a client_id"))
 }
 
 /// What the caller owns, as the menu [`developer::applications`] draws.
