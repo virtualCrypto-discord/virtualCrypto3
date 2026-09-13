@@ -274,6 +274,17 @@ pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Bo
         )));
     }
 
+    validated(body)
+}
+
+/// What was asked for, once it makes sense.
+///
+/// The metadata checks without the question of who is asking, because a registration
+/// arrives from two places that answer that differently: an account's token, which says
+/// which account is asking, and a form filled in beside a Discord message, where the
+/// interaction's signature says it and there is no token at all. The auth is each
+/// surface's and stays there.
+pub fn validated(body: Registration) -> Result<NewApplication, Box<Response>> {
     check_response_types(&body.response_types.unwrap_or_default()).map_err(metadata)?;
     let grant_types = check_grant_types(&body.grant_types.unwrap_or_default()).map_err(metadata)?;
 
@@ -495,6 +506,49 @@ pub async fn register(
         .and_then(Value::as_str)
         .and_then(|id| id.parse().ok());
 
+    let created = match create(&state, subject, &new).await {
+        Ok(created) => created,
+        Err(refusal) => return *refusal,
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "client_id": created.client_id,
+            "client_secret": created.client_secret,
+            "registration_access_token": created.access_token,
+            "registration_client_uri": format!("{}/oauth2/clients/@me", state.links().site_url),
+            "client_secret_expires_at": 0,
+        })),
+    )
+        .into_response()
+}
+
+/// What a registration created: the three values both surfaces need.
+///
+/// The endpoint says them as JSON and the command says them as a screen, so this stops at
+/// the values and lets each one talk.
+pub struct Created {
+    pub client_id: String,
+    pub client_secret: String,
+    pub access_token: String,
+}
+
+/// A registration, from where each surface can meet: after the caller is established as an
+/// account, and before anything is said back.
+///
+/// The HTTP route establishes the caller with a token and then asks Discord who they are;
+/// a Discord form has the interaction's signature for that. What is left is the same work
+/// either way — the keypair, the webhook handshake, the row, and the registration token —
+/// and it is here once.
+///
+/// `subject` is only the account the handshake's rate limit is charged to, which is the
+/// account that would be asking twice.
+pub async fn create(
+    state: &AppState,
+    subject: i32,
+    new: &NewApplication,
+) -> Result<Created, Box<Response>> {
     // Both halves, because the row needs both: the private one signs deliveries
     // and the public one is what the application verifies them with.
     let private_key = fresh_keypair();
@@ -506,13 +560,13 @@ pub async fn register(
         let Some(proxy) = state.webhook_proxy() else {
             // Not the application's fault, and saying "verification failed" would
             // send someone to look at a request that is fine.
-            return internal("no webhook proxy is configured");
+            return Err(Box::new(internal("no webhook proxy is configured")));
         };
 
         // The handshake is the expensive thing here, and this is what stops one
         // requester spending all of it.
         if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
-            return rate_limited(too_soon);
+            return Err(Box::new(rate_limited(too_soon)));
         }
 
         let at = std::time::SystemTime::now()
@@ -521,18 +575,18 @@ pub async fn register(
             .unwrap_or_default();
 
         if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
-            return refused(
+            return Err(Box::new(refused(
                 StatusCode::BAD_REQUEST,
                 "webhook_verification_failed",
                 "the webhook did not verify",
-            );
+            )));
         }
     }
 
     let registered =
-        match vc_core::application::register(state.pool(), &new, &private_key, &public_key).await {
+        match vc_core::application::register(state.pool(), new, &private_key, &public_key).await {
             Ok(registered) => registered,
-            Err(_) => return internal("the application could not be written"),
+            Err(_) => return Err(Box::new(internal("the application could not be written"))),
         };
 
     // The registration access token is issued for the account registration
@@ -547,20 +601,16 @@ pub async fn register(
     .await;
 
     let Ok(access_token) = issued else {
-        return internal("the registration token could not be issued");
+        return Err(Box::new(internal(
+            "the registration token could not be issued",
+        )));
     };
 
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "client_id": registered.client_id,
-            "client_secret": registered.client_secret,
-            "registration_access_token": access_token,
-            "registration_client_uri": format!("{}/oauth2/clients/@me", state.links().site_url),
-            "client_secret_expires_at": 0,
-        })),
-    )
-        .into_response()
+    Ok(Created {
+        client_id: registered.client_id,
+        client_secret: registered.client_secret,
+        access_token,
+    })
 }
 
 /// A handshake that came too soon.
