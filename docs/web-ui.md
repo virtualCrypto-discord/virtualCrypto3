@@ -107,13 +107,37 @@ screen needs — but the token no longer has to travel in headers.
   tests as of `2e7056b`).
 - A JSON login callback, since the old one answers with headers and HTML.
 
-## Still to read before the last two requirements
+## The connect flow, read out of `live/connect_application.ex`
 
-`lib/virtualCrypto_web/live/connect_application.ex` (146 lines, and the only
-LiveView with real events) and
-`lib/virtualCrypto_web/live/contract/approve_application.ex`. Together they hold
-the connect and contract flows, which are the only parts of the old site whose
-behaviour is not described above.
+The one LiveView with real events, and what it does is prove that the bot an
+application owns is really that application's.
+
+`mount` refuses to run without an `id`, and sends the browser to
+`/applications/<id>` when the application is not found (l.5-33). Otherwise it
+assigns the application, its owner account and the entered `bot_id`/`guild_id`, with
+`edit` false.
+
+`verify` (l.41) is the check, and the mechanism is worth stating: it reads the
+guild's **integrations** from Discord (`get_guild_integrations_with_status_code`,
+l.46) and looks for one whose `application.description` **contains the
+application's uuid** (l.60). The bot's integration description is therefore the
+thing the application's owner writes the uuid into, and the service verifies
+ownership by reading it back from Discord rather than by trusting the browser. On a
+match it records the bot's id and answers 「認証成功しました。トークンは削除して差し支えありません。」
+— the token may be deleted (l.65-70).
+
+Two failure paths read the guild (l.73) and the user (l.97) for a message. One
+of them, at l.66, calls `String.to_integer` on the bot id — the same shape as the
+crash noted elsewhere, and reachable with a non-numeric id, since the id comes from
+the form.
+
+`change` (l.146) does nothing but put the two ids into the assigns and set `edit`
+true — the LiveView's live form, which an SPA does not need.
+
+## Still to read
+
+`lib/virtualCrypto_web/live/contract/approve_application.ex`, for the contract
+approval (`/contract/:id`). Its `mount` is the only clause; the rest is unread.
 
 ## How it is served
 
