@@ -440,6 +440,15 @@ mod tests {
             //
             // What the rules then see is this payload's name, description, options,
             // types, limits and flags, which is the whole of what it says.
+            //
+            // What Twilight does with the field, read from its source rather than its
+            // docs: `twilight_model`'s `Command` derives `Serialize` with no
+            // `skip_serializing` on `version`, so a `Command` that goes to Discord
+            // carries one — the ecosystem sends it. How `twilight-util`'s
+            // `CommandBuilder::build` fills it is **not read**: that crate is not a
+            // dependency here, so its source is not on this machine, and a grep of a
+            // directory that does not exist is what said otherwise. Ours omits it, which
+            // is what the documented parameters allow.
             let mut payload = command;
             payload["version"] = json!("1");
 
