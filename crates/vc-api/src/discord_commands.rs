@@ -38,6 +38,7 @@ pub fn commands() -> Vec<Value> {
     vec![
         help(),
         invite(),
+        application(),
         give(),
         pay(),
         info(),
@@ -208,6 +209,90 @@ fn bal() -> Value {
         "description": "自分の所持通貨を確認します。",
         "contexts": [0, 1],
         "integration_types": [0, 1],
+    })
+}
+
+/// The developer features, as one command with subcommands.
+///
+/// Subcommands rather than a conversation of buttons: Discord renders and validates the
+/// arguments (a typed option, its own picker for a user, autocomplete for a uuid), so
+/// there is nothing to build for input and nothing to validate twice. The old file's
+/// `claim` is the same shape, for the same reason.
+///
+/// `contexts` is a field of the command and not of a subcommand, so `connect` being
+/// guild-only cannot be said here — its handler refuses in a DM and says where to run it,
+/// which is the plan's note and the honest place for it.
+fn application() -> Value {
+    json!({
+        "name": "application",
+        "description": "アプリケーションの登録・確認・編集と、Bot の接続です。",
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
+        "options": [
+            {
+                "name": "register",
+                "description": "新しいアプリケーションを登録します。",
+                "type": 1,
+            },
+            {
+                "name": "list",
+                "description": "自分が持つアプリケーションの一覧を表示します。",
+                "type": 1,
+            },
+            {
+                "name": "show",
+                "description": "アプリケーションの詳細を表示します。",
+                "type": 1,
+                "options": [client_id_option()],
+            },
+            {
+                "name": "edit",
+                "description": "アプリケーションの設定を変更します。",
+                "type": 1,
+                "options": [client_id_option()],
+            },
+            {
+                "name": "connect",
+                "description": "アプリケーションの Bot をこのサーバーに接続します。",
+                "type": 1,
+                "options": [
+                    client_id_option(),
+                    {
+                        // A user option rather than a string with autocomplete: a bot is a
+                        // member of the guild, so Discord's own picker can offer it and
+                        // nobody types a snowflake. Autocomplete is only available on
+                        // string, integer and number options, so it is not an option here.
+                        "name": "bot",
+                        "description": "接続する Bot です。",
+                        "type": 6,
+                        "required": true,
+                    },
+                ],
+            },
+            {
+                "name": "secret",
+                "description": "アプリケーションの client_secret を表示します。",
+                "type": 1,
+                "options": [client_id_option()],
+            },
+            {
+                "name": "help",
+                "description": "このコマンドの使い方を表示します。",
+                "type": 1,
+            },
+        ],
+    })
+}
+
+/// The application every subcommand but `register`, `list` and `help` is about, filled in
+/// by autocomplete from the caller's own — so the uuid is never typed.
+fn client_id_option() -> Value {
+    json!({
+        "name": "client_id",
+        "description": "対象のアプリケーションです。",
+        "type": 3,
+        "required": true,
+        "autocomplete": true,
     })
 }
 
@@ -415,7 +500,16 @@ mod tests {
         assert_eq!(
             named,
             vec![
-                "help", "invite", "give", "pay", "info", "create", "delete", "bal", "claim"
+                "help",
+                "invite",
+                "application",
+                "give",
+                "pay",
+                "info",
+                "create",
+                "delete",
+                "bal",
+                "claim"
             ]
         );
     }
