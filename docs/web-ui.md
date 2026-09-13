@@ -469,11 +469,37 @@ when it is not theirs or not there — and renders it. This service answers the 
 frontend's detail page picks one out of the list by `client_id`, which is the same
 question the Elixir's page asked, answered where the answer already was.
 
-The Elixir's client-registration surface is four routes, and all four have a
-counterpart — `GET /oauth2/clients` (user tokens only; an app token is 401
-`invalid_kind`) is this service's `GET /oauth2/clients/@me`, a different path for the
-same call, and `GET`/`PATCH /oauth2/clients/@me` and `POST /oauth2/clients` match the
-rest. Nothing was dropped; one thing is served to the browser from the browser.
+### `@me` means two different things, and the one here is the wrong one
+
+**Corrected again, and this correction is the one that matters.** The paragraph that
+stood here said the Elixir's four client-registration routes all have a counterpart and
+that one of them changed path. Reading the controllers says otherwise.
+
+In the Elixir:
+
+| Route | What it is |
+| --- | --- |
+| `GET /oauth2/clients?user=@me` | the **list** — matched on the query parameter, and a request without it is 400 `invalid_request`/`required_user_parameter` |
+| `POST /oauth2/clients` | registration, which answers `registration_client_uri: /oauth2/clients/@me` |
+| `GET /oauth2/clients/@me` | the **client the token belongs to**, `kind == "app"` required — RFC 7592's read |
+| `PATCH /oauth2/clients/@me` | the same client, edited — RFC 7592's update |
+
+Here, `GET /oauth2/clients/@me` is the **list**, on a user token, and an app token is
+answered 401 `invalid_kind`. So the path that registration hands out as
+`registration_client_uri` (`routes/oauth2_clients.rs:559`, and `web/src/api.ts:216`) is
+*not* the read it names: an RFC 7592 client that does what the registration told it to
+do is refused.
+
+**The read is missing.** That is a gap in the client-registration surface rather than a
+naming difference — the same shape of mistake as the connect route taking the numeric
+id, and it is written down here because the paragraph above said the opposite while
+looking convincing.
+
+What the fix is: `GET /oauth2/clients/@me` taking an **app** token and answering that
+application (that is what `registration_client_uri` promises, and `edit` already does it
+for `PATCH` on the same path), and the list moving to wherever its own path should be —
+the Elixir put it in a query parameter, and neither `/oauth2/clients` nor
+`/oauth2/clients/@me` is free to mean both.
 
 ```
 client_id, client_secret (null), client_secret_expires_at (0),
