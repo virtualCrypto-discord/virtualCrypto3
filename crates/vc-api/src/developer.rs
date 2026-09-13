@@ -25,9 +25,11 @@
 
 use serde_json::Value;
 
+use vc_core::application::{APPLICATION_TYPES, GRANT_TYPES, RESPONSE_TYPES};
+
 use crate::components::{
-    ButtonStyle, action_row, button, container, link_button, section, select, select_option,
-    separator, text, thumbnail, user_select,
+    ButtonStyle, action_row, button, container, link_button, section, select, select_many,
+    select_option, separator, text, thumbnail, user_select,
 };
 
 /// The accent each state carries, since the colour is the fastest thing a person reads.
@@ -111,6 +113,17 @@ pub fn applications(applications: &[Value]) -> Value {
     )
 }
 
+/// The three fields whose values are a set the service defines, and what they are now.
+///
+/// They travel together because they are the same kind of thing — an enumerated field, whose
+/// menu is built from the set the validator checks against — and because a screen that names
+/// each of them as its own argument is a signature nobody reads.
+pub struct Choices<'a> {
+    pub application_type: &'a str,
+    pub grant_types: &'a [String],
+    pub response_types: &'a [String],
+}
+
 /// One application, with what can be done to it.
 pub fn application(
     client_id: &str,
@@ -118,6 +131,7 @@ pub fn application(
     connected: bool,
     logo_uri: Option<&str>,
     secret: Option<&str>,
+    choices: Choices<'_>,
 ) -> Value {
     let name = name.unwrap_or("（名前なし）");
     let state = if connected {
@@ -143,6 +157,64 @@ pub fn application(
         vec![
             heading,
             separator(),
+            // The three fields whose values are a set the service defines, each with its own
+            // menu and nothing behind a button: a string select is the one select a message may
+            // carry with options we choose, which is exactly what an enumerated field is, and
+            // the set that comes back is the set that is sent.
+            text(format!(
+                "**アプリケーションの種類**（`application_type`）\n{}",
+                choices.application_type
+            )),
+            action_row(vec![select_many(
+                &crate::custom_id::ui::developer::custom_id_for_field(
+                    crate::custom_id::ui::developer::Screen::Edit,
+                    client_id,
+                    "application_type",
+                ),
+                "種類を選ぶ",
+                APPLICATION_TYPES
+                    .iter()
+                    .map(|kind| select_option(kind, kind, None))
+                    .collect(),
+                1,
+                1,
+            )]),
+            text(format!(
+                "**グラントタイプ**（`grant_types`）\n{}",
+                listing(choices.grant_types)
+            )),
+            action_row(vec![select_many(
+                &crate::custom_id::ui::developer::custom_id_for_field(
+                    crate::custom_id::ui::developer::Screen::Edit,
+                    client_id,
+                    "grant_types",
+                ),
+                "グラントタイプを選ぶ",
+                GRANT_TYPES
+                    .iter()
+                    .map(|kind| select_option(kind, kind, None))
+                    .collect(),
+                0,
+                GRANT_TYPES.len() as u8,
+            )]),
+            text(format!(
+                "**レスポンスタイプ**（`response_types`）\n{}",
+                listing(choices.response_types)
+            )),
+            action_row(vec![select_many(
+                &crate::custom_id::ui::developer::custom_id_for_field(
+                    crate::custom_id::ui::developer::Screen::Edit,
+                    client_id,
+                    "response_types",
+                ),
+                "レスポンスタイプを選ぶ",
+                RESPONSE_TYPES
+                    .iter()
+                    .map(|kind| select_option(kind, kind, None))
+                    .collect(),
+                0,
+                RESPONSE_TYPES.len() as u8,
+            )]),
             // The secret is written on the screen rather than behind a button. The
             // button was mine, not the page's: every response here is ephemeral, so
             // revealing it on request shows it to the person already reading.
@@ -159,6 +231,15 @@ pub fn application(
             )]),
         ],
     )
+}
+
+/// A set as a line of text, which is what the screen shows above its menu.
+fn listing(values: &[String]) -> String {
+    if values.is_empty() {
+        "（なし）".to_owned()
+    } else {
+        values.join(", ")
+    }
 }
 
 /// The secret as it appears on the application's screen.
@@ -358,7 +439,18 @@ mod tests {
         for screen in [
             home("name", "https://example.test/verification"),
             applications(&[]),
-            application("id", None, false, None, Some("the-secret")),
+            application(
+                "id",
+                None,
+                false,
+                None,
+                Some("the-secret"),
+                Choices {
+                    application_type: "web",
+                    grant_types: &[],
+                    response_types: &[],
+                },
+            ),
             connect_result("id", Some("no")),
             connect_result("id", None),
         ] {
@@ -394,6 +486,11 @@ mod tests {
                 true,
                 Some("https://example.test/logo.png"),
                 None,
+                Choices {
+                    application_type: "web",
+                    grant_types: &[],
+                    response_types: &[],
+                },
             ),
         ] {
             assert!(screen.get("content").is_none(), "{screen}");

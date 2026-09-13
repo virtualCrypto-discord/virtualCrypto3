@@ -304,6 +304,11 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
         found.discord_user_id.is_some(),
         found.logo_uri.as_deref(),
         found.client_secret.as_deref(),
+        developer::Choices {
+            application_type: &found.application_type,
+            grant_types: &found.grant_types,
+            response_types: &found.response_types,
+        },
     )]))
 }
 
@@ -430,6 +435,14 @@ async fn registration(
             false,
             None,
             Some(&created.client_secret),
+            developer::Choices {
+                application_type: &new.application_type,
+                grant_types: &new.grant_types,
+                // Registration writes `response_types` as the literal empty list — the Elixir
+                // validates it and then does not use it, which docs/oauth2.md records — so a
+                // freshly registered application has none until an edit sets them.
+                response_types: &[],
+            },
         ))),
         Err(refusal) => Ok(registered(developer::refusal(
             "登録",
@@ -480,6 +493,11 @@ async fn edit_form(
                 now.discord_user_id.is_some(),
                 now.logo_uri.as_deref(),
                 now.client_secret.as_deref(),
+                developer::Choices {
+                    application_type: &now.application_type,
+                    grant_types: &now.grant_types,
+                    response_types: &now.response_types,
+                },
             ))),
             _ => Ok(registered(developer::refusal("変更", None))),
         },
@@ -520,6 +538,54 @@ pub async fn component(
     match (component_type, screen) {
         // The list's menu. Its id says which screen the menu is on rather than what choosing
         // does, so the value that came back is the thing to act on, and it is a `client_id`.
+        // A field's own menu: the id says which application and which field, and the values
+        // that came back are the set the person chose. This comes first because the arm below
+        // takes any string select and that one is the list's menu, not a field's.
+        (Some(3), Screen::Edit) => {
+            let (client_id, field) = crate::custom_id::ui::developer::field_of(&client_id);
+
+            let Some((application_id, found)) = owned(state, client_id, payload).await? else {
+                return Err(CommandError::Unknown);
+            };
+
+            let values = data
+                .and_then(|data| data.get("values"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            let Some((field, value)) = edited(field, values) else {
+                return Err(CommandError::Unknown);
+            };
+
+            let mut body = Map::new();
+            body.insert(field, value);
+
+            let changes = match changes(&body) {
+                Ok(changes) => changes,
+                Err(refusal) => {
+                    return Ok(update(ephemeral(vec![developer::refusal(
+                        "変更",
+                        refusal.description.as_deref(),
+                    )])));
+                }
+            };
+
+            // The application's own account, which is what the endpoint's token subject is, so
+            // the handshake budget is the application's either way.
+            let key = found.user_id.to_string();
+
+            match apply(state, application_id, &key, &changes).await {
+                // The screen again, so the person sees the set they now have rather than the one
+                // they chose — which is the same thing only when the write agreed with them.
+                Ok(()) => Ok(update(show(state, client_id, payload).await?)),
+                Err(refusal) => Ok(update(ephemeral(vec![developer::refusal(
+                    "変更",
+                    refusal.description.as_deref(),
+                )]))),
+            }
+        }
+        // The list's menu, whose value is the application to look at.
         (Some(3), _) => Ok(update(show(state, chosen(data)?, payload).await?)),
         // The bot picker on an application's screen, whose value is the bot that was chosen.
         (Some(5), Screen::Connect) => {
@@ -532,6 +598,22 @@ pub async fn component(
         // The list, from a screen that is not it: the one button left that goes anywhere.
         (Some(2), Screen::List | Screen::Back) => Ok(update(list(state, payload).await?)),
         _ => Err(CommandError::Unknown),
+    }
+}
+
+/// One field, as the request takes it.
+///
+/// Two of these fields are sets and one is a single value, and the difference is the endpoint's:
+/// `grant_types` and `response_types` are read as arrays and `application_type` as a string. So
+/// a single choice is unwrapped here rather than sent as an array the endpoint would refuse.
+fn edited(field: &str, values: Vec<Value>) -> Option<(String, Value)> {
+    match field {
+        "application_type" => values
+            .first()
+            .map(|value| (field.to_owned(), value.clone())),
+        "grant_types" | "response_types" => Some((field.to_owned(), Value::Array(values))),
+        // Anything else is a field with no menu, which means an id this module did not build.
+        _ => None,
     }
 }
 
