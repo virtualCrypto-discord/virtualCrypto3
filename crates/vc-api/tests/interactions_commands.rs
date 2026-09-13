@@ -247,3 +247,46 @@ async fn application_connect_in_a_dm_says_where_to_run_it(pool: PgPool) {
     assert!(rendered.contains("サーバーの中で行います"), "{rendered}");
     assert!(!rendered.contains("100000000000000002"), "{rendered}");
 }
+
+/// `/application edit <client_id>`: the form arrives filled in, because a field the `PATCH`
+/// is not sent comes back cleared. This is the property the modal exists for, and until now
+/// nothing asserted it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_edit_prefills_what_the_application_has(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let response = interaction(
+        router(pool),
+        application_payload("edit", &client_id, DISCORD),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], 9, "a modal, not a message");
+
+    let inputs = |name: &str| -> Value {
+        response.body["data"]["components"]
+            .as_array()
+            .expect("the labels")
+            .iter()
+            .find(|label| label["component"]["custom_id"] == name)
+            .map(|label| label["component"].clone())
+            .unwrap_or(Value::Null)
+    };
+
+    assert_eq!(inputs("client_name")["value"], "テスト");
+
+    // A field the application does not have is sent without a `value` at all, which is what
+    // an empty box is. Sending an empty string would be a field the `PATCH` clears.
+    assert!(
+        inputs("webhook_url").get("value").is_none(),
+        "{:?}",
+        inputs("webhook_url")
+    );
+    assert_eq!(inputs("redirect_uris")["value"], "");
+}
