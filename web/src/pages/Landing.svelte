@@ -18,6 +18,9 @@
 
 <p><a class="login" href={login}>Discord でログイン</a></p>
 
+<!-- An ordinary link: it reloads, and the API answers it with this document. -->
+<p><a href="/me">アカウント</a></p>
+
 <style>
   h1 {
     margin-bottom: 0.5rem;

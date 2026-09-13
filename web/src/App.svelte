@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Account from "./pages/Account.svelte";
   import Landing from "./pages/Landing.svelte";
 
   // The shell. The pages land here as they arrive, starting with the landing page,
@@ -21,6 +22,8 @@
 <main>
   {#if path === "/"}
     <Landing />
+  {:else if path === "/me"}
+    <Account />
   {:else}
     <h1>見つかりません</h1>
     <p>このページはまだありません。</p>
