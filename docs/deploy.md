@@ -6,29 +6,34 @@ correct as this list.
 
 ## What the server requires
 
-Read out of the code that enforces it, not from memory. The first list is what
-`require_env` refuses to start without, each named in the error it exits with; the
-second is everything else that is read, `WEB_ROOT` from `vc-api` rather than from
-`main.rs`.
+**The names are the deployment's, not this code's.** They were read from
+`flyctl secrets list -a virtualcrypto-prod`, because that is what the running service
+actually has: the values are already there, so a port that invented its own names
+would exit at startup naming variables nobody has. `VCRYPTO_*` is the older
+service's spelling and it is the one to keep.
+
+The first list is what `require_env` refuses to start without, each named in the
+error it exits with; the second is everything else that is read, `WEB_ROOT` from
+`vc-api` rather than from `main.rs`.
 
 - `DATABASE_URL`
-- `DISCORD_BOT_TOKEN`
-- `DISCORD_CLIENT_ID`
-- `DISCORD_CLIENT_SECRET`
-- `DISCORD_PUBLIC_KEY`
-- `GUARDIAN_SECRET_KEY`
-- `SESSION_SECRET`
+- `VCRYPTO_BOT_TOKEN`
+- `VCRYPTO_CLIENT_ID`
+- `VCRYPTO_CLIENT_SECRET`
+- `VCRYPTO_PUBLIC_KEY`
+- `VCRYPTO_API_JWT_SECRET_KEY`
+- `SECRET_KEY_BASE`
 
-`DISCORD_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by name.
+`VCRYPTO_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by name.
 
 ## What it takes with a default
 
-- `INVITE_URL`
+- `VCRYPTO_INVITE_URL`
 - `PORT`
 - `RATE_LIMIT_PER_MINUTE`
 - `SECURE_COOKIES`
-- `SITE_URL`
-- `SUPPORT_GUILD_INVITE_URL`
+- `VCRYPTO_SITE_URL`
+- `VCRYPTO_SUPPORT_GUILD_INVITE_URL`
 - `VCRYPTO_WEBHOOK_PROXY_CERT`
 - `VCRYPTO_WEBHOOK_PROXY_KEY`
 - `WEBHOOK_PROXY_URL`

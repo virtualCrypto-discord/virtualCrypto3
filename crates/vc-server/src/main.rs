@@ -16,11 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let database_url = require_env("DATABASE_URL")?;
-    let jwt_secret = require_env("GUARDIAN_SECRET_KEY")?;
-    let discord_client_id = require_env("DISCORD_CLIENT_ID")?;
-    let discord_client_secret = require_env("DISCORD_CLIENT_SECRET")?;
-    let discord_bot_token = require_env("DISCORD_BOT_TOKEN")?;
-    let discord_public_key = vc_api::discord::parse_public_key(&require_env("DISCORD_PUBLIC_KEY")?)
+    let jwt_secret = require_env("VCRYPTO_API_JWT_SECRET_KEY")?;
+    let discord_client_id = require_env("VCRYPTO_CLIENT_ID")?;
+    let discord_client_secret = require_env("VCRYPTO_CLIENT_SECRET")?;
+    let discord_bot_token = require_env("VCRYPTO_BOT_TOKEN")?;
+    let discord_public_key = vc_api::discord::parse_public_key(&require_env("VCRYPTO_PUBLIC_KEY")?)
         .ok_or_else(|| "DISCORD_PUBLIC_KEY must be 32 hex-encoded bytes".to_string())?;
     let port = std::env::var("PORT")
         .ok()
@@ -30,22 +30,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Elixir keeps these in `config/*.exs`; they are not secrets, so the defaults
     // match the ones the checked-in examples use.
     let links = Links {
-        site_url: optional_env("SITE_URL", "https://vcrypto.sumidora.com"),
-        invite_url: std::env::var("INVITE_URL").unwrap_or_else(|_| {
+        site_url: optional_env("VCRYPTO_SITE_URL", "https://vcrypto.sumidora.com"),
+        invite_url: std::env::var("VCRYPTO_INVITE_URL").unwrap_or_else(|_| {
             format!(
                 "https://discord.com/api/oauth2/authorize?client_id={discord_client_id}\
                  &permissions=0&scope=applications.commands%20bot"
             )
         }),
         support_guild_invite_url: optional_env(
-            "SUPPORT_GUILD_INVITE_URL",
+            "VCRYPTO_SUPPORT_GUILD_INVITE_URL",
             "https://discord.com/invite/Hgp5DpG",
         ),
     };
 
     // A session that cannot be signed is not a session, so this secret is
     // required rather than defaulted to something convenient.
-    let session_secret = require_env("SESSION_SECRET")?;
+    let session_secret = require_env("SECRET_KEY_BASE")?;
     // Secure unless switched off, because the alternative fails quietly: a
     // missing flag would send session cookies in the clear.
     let secure_cookies = optional_env("SECURE_COOKIES", "true") != "false";
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             discord_bot_token,
             // Where Discord sends the browser back to. It has to match the URL
             // the login redirect used, so a deployment sets its own origin.
-            std::env::var("DISCORD_OAUTH2_REDIRECT_URI")
+            std::env::var("VCRYPTO_DISCORD_CALLBACK_URI")
                 .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
         vc_api::state::Outbound {
