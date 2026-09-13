@@ -76,3 +76,49 @@ async fn the_api_keeps_its_own_routes(pool: PgPool) {
     assert_eq!(status, 200);
     assert!(body.contains("\"status\":\"ok\""), "body: {body}");
 }
+
+/// The `Cache-Control` a request is answered with. These two headers are one
+/// decision — names that change may be kept, the file that names them may not — so
+/// they are tested next to each other.
+async fn cache_control(app: Router, uri: &str) -> Option<String> {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+
+    response
+        .headers()
+        .get(axum::http::header::CACHE_CONTROL)
+        .map(|value| value.to_str().expect("a header value").to_owned())
+}
+
+/// A hashed name may be kept for as long as anything asks for it: if the file
+/// changes, so does its name, so this copy is never the wrong one.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_hashed_asset_may_be_kept_forever(pool: PgPool) {
+    let app = vc_api::router_with_web(state(pool, fake()), built_spa());
+
+    assert_eq!(
+        cache_control(app, "/assets/app.js").await.as_deref(),
+        Some("public, max-age=31536000, immutable")
+    );
+}
+
+/// The index may not be kept at all: it is what names the hashed assets, so a stale
+/// copy sends a browser looking for files the deploy has already removed. This is
+/// the half of the pair that breaks in a way nobody reports as a bug — the page
+/// merely fails to load for people who visited before.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_index_may_not_be_kept(pool: PgPool) {
+    let app = vc_api::router_with_web(state(pool, fake()), built_spa());
+
+    assert_eq!(
+        cache_control(app, "/me/applications").await.as_deref(),
+        Some("no-cache")
+    );
+}
