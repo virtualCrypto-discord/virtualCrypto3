@@ -1,5 +1,21 @@
 # The web UI, derived from the site it replaces
 
+> **The SPA is dropped, by decision.** Nothing below is a plan to build `web/` any more.
+> What stays true, and is why this document is worth keeping, is everything read out of
+> the old site that the **service** needs regardless of who is calling it: the connect
+> flow's two conditions and its six refusals, the id `/applications/:id` means, the
+> RFC 7592 read that `registration_client_uri` names, the session and callback the
+> browser routes still use, and the note at the top of the old repository's history being
+> a rewrite rather than a site.
+>
+> The requirements list below is left as it was written — as what the SPA would have
+> needed — because that is the honest record of the reading. Treat the items marked
+> **done** as service routes that exist, and the two not built (the claims page, the
+> documents) as things nobody has to do.
+>
+> What was built in `web/` stays where it is and still passes `svelte-check`; removing it
+> is a decision for whoever drops it, not a consequence of this note.
+
 The requirements below come from the Elixir app's own pages rather than from
 imagination: the router's browser scope, its three LiveViews, and the controllers
 behind them. Where something was not read, it says so.
