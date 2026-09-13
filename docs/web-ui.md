@@ -173,8 +173,8 @@ without saying which reads as unbuilt, which this one has already been read as o
    `GET /api/v2/users/@me/claims`, which is implemented and tested here (`v2_claims.rs`,
    `v2_claims_list.rs`) with the goldens the capture gave. `web/` has no page for it, so
    the API's own answers have nowhere to be seen.
-6. **The landing page**, which is prose plus a login button — **done**.
-7. **The documents** — link them rather than rebuild them; they are static prose
+7. **The landing page**, which is prose plus a login button — **done**.
+8. **The documents** — link them rather than rebuild them; they are static prose
    that already lives in `virtualcrypto-docs`.
 
 ## What the SPA will need that does not exist yet
