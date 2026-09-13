@@ -18,6 +18,26 @@
 //!   not a transcription.
 //! - The option types are Discord's numbers: 1 subcommand, 3 string, 4 integer, 5 boolean,
 //!   6 user.
+//!
+//! ## Two coherent ways to do this, and this file is neither
+//!
+//! That `version` has to be filled in before the rules will look at the payload is the
+//! tell: `twilight_model`'s `Command` is the type Twilight sends, it carries a field a
+//! request does not have, and a hand-written payload therefore has to be doctored before
+//! it fits. Two arrangements do not need that:
+//!
+//! - **Build the payload with `twilight-util`'s `CommandBuilder`** and send what it
+//!   produces. Then `version` is the library's business, the type and the rules agree by
+//!   construction, and nothing is filled in. It costs a third dependency and turns the
+//!   `json!` literals here into builders — a rewrite of this file rather than a patch.
+//! - **Validate the pieces rather than the whole.**
+//!   `twilight_validate::command::option` takes a `CommandOption`, which a request's
+//!   option object maps onto with nothing invented, so the option rules — names,
+//!   descriptions, choices — are available without the command-level ones.
+//!
+//! What is here is neither: literals validated by filling a field the request does not
+//! carry. It works, and it checks real rules, but it is the arrangement that needs a
+//! paragraph of explanation, and an arrangement that needs one is the one to replace.
 
 use serde_json::{Value, json};
 
