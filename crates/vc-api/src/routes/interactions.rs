@@ -113,6 +113,18 @@ async fn modal(state: &AppState, payload: &Value) -> Response {
         return text(StatusCode::BAD_REQUEST, "Type Not Found");
     };
 
+    // The developer screens have a head byte of their own, so trying them first cannot
+    // steal another space's id — which it did, before they had one.
+    if let Ok((screen, client_id)) =
+        crate::custom_id::ui::developer::parse(&crate::custom_id::parse(custom_id))
+    {
+        return match crate::command::application::modal(state, screen, &client_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     let path = crate::custom_id::ui::modal::parse(&crate::custom_id::parse(custom_id));
 
     match path {

@@ -312,6 +312,38 @@ fn help() -> Value {
     )])
 }
 
+/// A submitted form: `dev:register` or `dev:edit`.
+///
+/// The values arrive as the modal's components, each keyed by the `custom_id` its input was
+/// built with. Reading them is the next piece; the flows behind the two forms are the HTTP
+/// routes' and are not extracted yet, so this says what it is rather than pretending.
+pub async fn modal(
+    _state: &AppState,
+    screen: crate::custom_id::ui::developer::Screen,
+    client_id: &str,
+    _payload: &Value,
+) -> Result<Value, CommandError> {
+    match screen {
+        crate::custom_id::ui::developer::Screen::Register
+        | crate::custom_id::ui::developer::Screen::Edit => {
+            let target = if client_id.is_empty() {
+                String::new()
+            } else {
+                format!(" (`{client_id}`)")
+            };
+
+            Ok(message(ephemeral(vec![crate::components::container(
+                None,
+                vec![crate::components::text(format!(
+                    "このフォーム{target} の処理はまだ実装されていません。"
+                ))],
+            )])))
+        }
+        // A screen with no form: reaching here means the id was built wrong.
+        _ => Err(CommandError::Unknown),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
