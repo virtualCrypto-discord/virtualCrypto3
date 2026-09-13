@@ -65,7 +65,9 @@ fn message(screen: Value) -> Value {
 /// what this asks for.
 fn register() -> Value {
     crate::components::modal(
-        "dev:register",
+        &crate::custom_id::ui::developer::custom_id(
+            crate::custom_id::ui::developer::Screen::Register,
+        ),
         "アプリケーションの登録",
         vec![
             crate::components::label(
@@ -123,7 +125,7 @@ async fn edit(
     let redirect_uris = found.redirect_uris.join("\n");
 
     Ok(crate::components::modal(
-        "dev:edit",
+        &crate::custom_id::ui::developer::custom_id(crate::custom_id::ui::developer::Screen::Edit),
         "アプリケーションの設定",
         vec![
             crate::components::label(
