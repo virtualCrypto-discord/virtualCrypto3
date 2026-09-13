@@ -48,6 +48,10 @@ pub struct FakeDiscord {
     /// screen asks for either, so they are empty unless a test sets them.
     member: Map<String, Value>,
     roles: Vec<Map<String, Value>>,
+    /// What `get_guild_integrations_with_status` reports. Empty unless a test sets it,
+    /// and an empty list is a guild with nothing installed rather than a guild that
+    /// cannot be read.
+    integrations: Vec<Map<String, Value>>,
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
     webhooks: Mutex<Vec<Value>>,
@@ -94,10 +98,39 @@ impl FakeDiscord {
             guild,
             member: Map::new(),
             roles: Vec::new(),
+            integrations: Vec::new(),
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             webhooks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The integrations `get_guild_integrations_with_status` reports, which is where
+    /// the connect flow looks for the bot it was given and for the client id it must
+    /// be described with.
+    ///
+    /// The elements are built here rather than by the caller because Discord's shape is
+    /// what the endpoint reads: `application.bot.id` to find the bot, and
+    /// `application.description` to check the id was written into it.
+    pub fn with_integrations(guild: Value, bots: &[(i64, &str)]) -> Self {
+        let mut fake = Self::with_guild(guild);
+
+        fake.integrations = bots
+            .iter()
+            .map(|(bot_id, description)| {
+                json!({
+                    "application": {
+                        "bot": { "id": bot_id.to_string(), "username": "a bot" },
+                        "description": description,
+                    }
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default()
+            })
+            .collect();
+
+        fake
     }
 
     pub fn refresh_calls(&self) -> usize {
@@ -128,31 +161,34 @@ impl Default for FakeDiscord {
 
 #[async_trait]
 impl DiscordApi for FakeDiscord {
-    // The connect flow's three calls, answered as "not configured yet" rather than as
-    // a guild full of integrations: a test that needs a real answer should get one
-    // from the fake's own fields, and until then pretending is worse than refusing.
-    // The status is what a test would vary; 200 with nothing in it is what an empty
-    // guild looks like.
+    // The connect flow's three calls. The integrations and the guild are the fake's
+    // own fields, so a test says which guild it is asking about rather than being
+    // answered a made-up one.
+    //
+    // The user lookup answers 404 instead: the fake does not know any user beyond the
+    // ones its other calls report, and "no such user" is a refusal where an empty 200
+    // would be a claim that the id exists and is not a bot. A test that needs the other
+    // answers should give the fake the field to say so.
 
     async fn get_guild_integrations_with_status(
         &self,
         _guild_id: i64,
     ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError> {
-        Ok((200, Vec::new()))
+        Ok((200, self.integrations.clone()))
     }
 
     async fn get_guild_with_status(
         &self,
         _guild_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
-        Ok((200, Map::new()))
+        Ok((200, self.guild.clone()))
     }
 
     async fn get_user_with_status(
         &self,
         _user_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
-        Ok((200, Map::new()))
+        Ok((404, Map::new()))
     }
     async fn get_user_info(&self, _token: &str) -> Result<Map<String, Value>, DiscordError> {
         Ok(self.payload.clone())

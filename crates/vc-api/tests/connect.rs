@@ -17,9 +17,11 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{Response, fake, insert_user, mint, mint_app, state};
+use support::{FakeDiscord, Response, fake, insert_user, mint, mint_app, state};
 use tower::ServiceExt;
 
 const OWNER: i32 = 1;
@@ -61,7 +63,31 @@ async fn insert_application(pool: &PgPool, owner_discord_id: i64, name: &str) ->
     id
 }
 
+/// The application's `client_id`, which is the string the integration's description
+/// must contain for a connect to be allowed.
+async fn client_id_of(pool: &PgPool, application: i64) -> String {
+    sqlx::query_scalar!(
+        "SELECT client_id::text FROM applications WHERE id = $1",
+        application
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the row")
+    // The column is nullable, but an application without a client id is not one.
+    .expect("a client id")
+}
+
 async fn connect(pool: PgPool, token: &str, application_id: i64, body: Value) -> Response {
+    connect_with(pool, fake(), token, application_id, body).await
+}
+
+async fn connect_with(
+    pool: PgPool,
+    discord: Arc<FakeDiscord>,
+    token: &str,
+    application_id: i64,
+    body: Value,
+) -> Response {
     let request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/applications/{application_id}/connect"))
@@ -73,7 +99,7 @@ async fn connect(pool: PgPool, token: &str, application_id: i64, body: Value) ->
         ))
         .expect("request");
 
-    let response = vc_api::router(state(pool, fake()))
+    let response = vc_api::router(state(pool, discord))
         .oneshot(request)
         .await
         .expect("router response");
@@ -138,8 +164,8 @@ async fn a_bot_id_that_is_not_a_snowflake_is_400(pool: PgPool) {
 /// A snowflake above 2^53 gets past the parse, which is the point of carrying the ids
 /// as text: had either side made a double of it, this would not be the same guild.
 ///
-/// It stops at the fake's empty guild, and the answer is the one for a bot that is not
-/// in a guild — which is what an empty integration list means.
+/// It stops at the fake's empty guild, and at the user lookup, which answers that there
+/// is no such id.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_snowflake_above_2_53_is_read_exactly(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
@@ -154,7 +180,7 @@ async fn a_snowflake_above_2_53_is_read_exactly(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 400, "{:?}", response.body);
+    assert_eq!(response.status, 404, "{:?}", response.body);
     assert_eq!(response.body["error"], "invalid_bot");
 
     // And the number really is the one that was typed, rather than a rounded double.
@@ -215,4 +241,127 @@ async fn an_app_token_is_401(pool: PgPool) {
 
     assert_eq!(response.status, 401, "{:?}", response.body);
     assert_eq!(response.body["error"], "invalid_kind");
+}
+
+/// The whole of a connect: the integration is found by the bot's id, its description is
+/// checked for the client id, and the bot's id is written onto the application's own
+/// account. That account had no discord id, which is what makes it the application's.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_bot_described_with_the_client_id_is_bound(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT_ID, &client_id)],
+    ));
+
+    let response = connect_with(
+        pool.clone(),
+        discord,
+        &token,
+        application,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 204, "{:?}", response.body);
+
+    let bound = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the account");
+
+    assert_eq!(bound, Some(BOT_ID));
+}
+
+/// The bot is in the guild and the integration is there, but the description does not
+/// name this application — so nothing is written. This is the check that keeps a bot
+/// from being claimed by an application that merely knows its id.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_bot_described_without_the_client_id_is_400(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT_ID, "something else entirely")],
+    ));
+
+    let response = connect_with(
+        pool.clone(),
+        discord,
+        &token,
+        application,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 400, "{:?}", response.body);
+    assert_eq!(response.body["error"], "invalid_description");
+
+    let bound = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the account");
+
+    assert_eq!(bound, None, "nothing was written");
+}
+
+/// One bot belongs to one application, because `users_discord_id_index` is unique. The
+/// second application is told so rather than being allowed to take it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_bot_another_application_holds_is_409(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+
+    let first = insert_application(&pool, OWNER_DISCORD_ID, "first").await;
+    sqlx::query!(
+        "UPDATE users SET discord_id = $1 WHERE application_id = $2",
+        BOT_ID,
+        first
+    )
+    .execute(&pool)
+    .await
+    .expect("the first application takes the bot");
+
+    let second = insert_application(&pool, OWNER_DISCORD_ID, "second").await;
+    let client_id = client_id_of(&pool, second).await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT_ID, &client_id)],
+    ));
+
+    let response = connect_with(
+        pool.clone(),
+        discord,
+        &token,
+        second,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 409, "{:?}", response.body);
+    assert_eq!(response.body["error"], "already_connected");
+
+    // And the first application still has it, which is what the unique index means.
+    let still = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        first
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the first account");
+
+    assert_eq!(still, Some(BOT_ID));
 }
