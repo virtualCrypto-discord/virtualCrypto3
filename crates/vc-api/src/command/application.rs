@@ -304,7 +304,13 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
         found.discord_user_id.is_some(),
         found.logo_uri.as_deref(),
         found.client_secret.as_deref(),
-        developer::Choices {
+        developer::Fields {
+            client_name: found.client_name.as_deref(),
+            redirect_uris: &found.redirect_uris,
+            client_uri: found.client_uri.as_deref(),
+            logo_uri: found.logo_uri.as_deref(),
+            webhook_url: found.webhook_url.as_deref(),
+            discord_support_server_invite_slug: found.discord_support_server_invite_slug.as_deref(),
             application_type: &found.application_type,
             grant_types: &found.grant_types,
             response_types: &found.response_types,
@@ -435,7 +441,15 @@ async fn registration(
             false,
             None,
             Some(&created.client_secret),
-            developer::Choices {
+            developer::Fields {
+                client_name: new.client_name.as_deref(),
+                redirect_uris: &new.redirect_uris,
+                client_uri: new.client_uri.as_deref(),
+                logo_uri: new.logo_uri.as_deref(),
+                webhook_url: new.webhook_url.as_deref(),
+                discord_support_server_invite_slug: new
+                    .discord_support_server_invite_slug
+                    .as_deref(),
                 application_type: &new.application_type,
                 grant_types: &new.grant_types,
                 // Registration writes `response_types` as the literal empty list — the Elixir
@@ -493,7 +507,15 @@ async fn edit_form(
                 now.discord_user_id.is_some(),
                 now.logo_uri.as_deref(),
                 now.client_secret.as_deref(),
-                developer::Choices {
+                developer::Fields {
+                    client_name: now.client_name.as_deref(),
+                    redirect_uris: &now.redirect_uris,
+                    client_uri: now.client_uri.as_deref(),
+                    logo_uri: now.logo_uri.as_deref(),
+                    webhook_url: now.webhook_url.as_deref(),
+                    discord_support_server_invite_slug: now
+                        .discord_support_server_invite_slug
+                        .as_deref(),
                     application_type: &now.application_type,
                     grant_types: &now.grant_types,
                     response_types: &now.response_types,
@@ -596,9 +618,97 @@ pub async fn component(
             ])))
         }
         // The list, from a screen that is not it: the one button left that goes anywhere.
+        // 編集, which opens the form for the one field the id names.
+        (Some(2), Screen::Edit) => {
+            let (client_id, field) = crate::custom_id::ui::developer::field_of(&client_id);
+            edit_field(state, client_id, field, payload).await
+        }
         (Some(2), Screen::List | Screen::Back) => Ok(update(list(state, payload).await?)),
         _ => Err(CommandError::Unknown),
     }
+}
+
+/// The form for one field, which is what a text input needs.
+///
+/// A text input is a component only a modal may carry, so the six fields that are free text each
+/// open one — and each form asks for exactly the field its button was beside, with what the field
+/// holds now as the pre-filled value, so an untouched box comes back as what was there rather
+/// than as a clearing.
+async fn edit_field(
+    state: &AppState,
+    client_id: &str,
+    field: &str,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let Some((_, found)) = owned(state, client_id, payload).await? else {
+        return Ok(message(ephemeral(vec![developer::plain(
+            "そのアプリケーションはありません。",
+        )])));
+    };
+
+    // `redirect_uris` is the one of these that is a list, and a paragraph input is the shape for
+    // it: one URI per line, which is what `body` turns back into a list.
+    let redirects = found.redirect_uris.join("\n");
+
+    let (label, now, style, longest) = match field {
+        "client_name" => (
+            "クライアント名",
+            found.client_name.as_deref(),
+            crate::components::TextInputStyle::Short,
+            None,
+        ),
+        "redirect_uris" => (
+            "リダイレクト URI",
+            Some(redirects.as_str()),
+            crate::components::TextInputStyle::Paragraph,
+            Some(4000),
+        ),
+        "client_uri" => (
+            "クライアント URI",
+            found.client_uri.as_deref(),
+            crate::components::TextInputStyle::Short,
+            None,
+        ),
+        "logo_uri" => (
+            "ロゴ URI",
+            found.logo_uri.as_deref(),
+            crate::components::TextInputStyle::Short,
+            None,
+        ),
+        "webhook_url" => (
+            "webhook URL",
+            found.webhook_url.as_deref(),
+            crate::components::TextInputStyle::Short,
+            None,
+        ),
+        "discord_support_server_invite_slug" => (
+            "サポートサーバーの招待 slug",
+            found.discord_support_server_invite_slug.as_deref(),
+            crate::components::TextInputStyle::Short,
+            None,
+        ),
+        // A field with no form, which means a button this module did not build.
+        _ => return Err(CommandError::Unknown),
+    };
+
+    Ok(crate::components::modal(
+        // The field is in the id, so the submission says which of the nine it is.
+        &crate::custom_id::ui::developer::custom_id_for_field(
+            crate::custom_id::ui::developer::Screen::Edit,
+            &found.client_id,
+            field,
+        ),
+        &format!("{label}の変更"),
+        vec![crate::components::label(
+            label,
+            if style == crate::components::TextInputStyle::Paragraph {
+                Some("1行に1つ入力してください。")
+            } else {
+                None
+            },
+            crate::components::text_input(field, style, true, longest, now),
+        )],
+    ))
 }
 
 /// One field, as the request takes it.

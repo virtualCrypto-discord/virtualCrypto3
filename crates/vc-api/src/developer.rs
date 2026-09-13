@@ -113,12 +113,17 @@ pub fn applications(applications: &[Value]) -> Value {
     )
 }
 
-/// The three fields whose values are a set the service defines, and what they are now.
+/// What an application is now, field by field: the nine the endpoint lets an edit change.
 ///
-/// They travel together because they are the same kind of thing — an enumerated field, whose
-/// menu is built from the set the validator checks against — and because a screen that names
-/// each of them as its own argument is a signature nobody reads.
-pub struct Choices<'a> {
+/// They travel together because the screen shows all nine and each has its own control, and
+/// because a screen that names each as its own argument is a signature nobody reads.
+pub struct Fields<'a> {
+    pub client_name: Option<&'a str>,
+    pub redirect_uris: &'a [String],
+    pub client_uri: Option<&'a str>,
+    pub logo_uri: Option<&'a str>,
+    pub webhook_url: Option<&'a str>,
+    pub discord_support_server_invite_slug: Option<&'a str>,
     pub application_type: &'a str,
     pub grant_types: &'a [String],
     pub response_types: &'a [String],
@@ -131,7 +136,7 @@ pub fn application(
     connected: bool,
     logo_uri: Option<&str>,
     secret: Option<&str>,
-    choices: Choices<'_>,
+    fields: Fields<'_>,
 ) -> Value {
     let name = name.unwrap_or("（名前なし）");
     let state = if connected {
@@ -157,13 +162,44 @@ pub fn application(
         vec![
             heading,
             separator(),
+            // The six fields that are free text, each beside the value it edits and with its own
+            // button — a text input is a component only a modal may carry, so these are the six
+            // that need a form, and the form asks for exactly the field its button is next to.
+            // A section is what puts a control beside the text it is about; none of them is
+            // gathered at the bottom, because a button away from its value is a guess.
+            editing(
+                client_id,
+                "client_name",
+                "クライアント名",
+                fields.client_name,
+            ),
+            editing(
+                client_id,
+                "redirect_uris",
+                "リダイレクト URI",
+                Some(&listing(fields.redirect_uris)),
+            ),
+            editing(
+                client_id,
+                "client_uri",
+                "クライアント URI",
+                fields.client_uri,
+            ),
+            editing(client_id, "logo_uri", "ロゴ URI", fields.logo_uri),
+            editing(client_id, "webhook_url", "webhook URL", fields.webhook_url),
+            editing(
+                client_id,
+                "discord_support_server_invite_slug",
+                "サポートサーバーの招待 slug",
+                fields.discord_support_server_invite_slug,
+            ),
             // The three fields whose values are a set the service defines, each with its own
             // menu and nothing behind a button: a string select is the one select a message may
             // carry with options we choose, which is exactly what an enumerated field is, and
             // the set that comes back is the set that is sent.
             text(format!(
                 "**アプリケーションの種類**（`application_type`）\n{}",
-                choices.application_type
+                fields.application_type
             )),
             action_row(vec![select_many(
                 &crate::custom_id::ui::developer::custom_id_for_field(
@@ -181,7 +217,7 @@ pub fn application(
             )]),
             text(format!(
                 "**グラントタイプ**（`grant_types`）\n{}",
-                listing(choices.grant_types)
+                listing(fields.grant_types)
             )),
             action_row(vec![select_many(
                 &crate::custom_id::ui::developer::custom_id_for_field(
@@ -199,7 +235,7 @@ pub fn application(
             )]),
             text(format!(
                 "**レスポンスタイプ**（`response_types`）\n{}",
-                listing(choices.response_types)
+                listing(fields.response_types)
             )),
             action_row(vec![select_many(
                 &crate::custom_id::ui::developer::custom_id_for_field(
@@ -230,6 +266,28 @@ pub fn application(
                 "接続する Bot を選ぶ",
             )]),
         ],
+    )
+}
+
+/// One field that is free text: what it is now, and the button that opens its form.
+///
+/// The button is the section's accessory, which is what a section is for — the control sits
+/// beside the text it acts on rather than in a row somewhere else.
+fn editing(client_id: &str, field: &str, label: &str, now: Option<&str>) -> Value {
+    section(
+        vec![text(format!(
+            "**{label}**（`{field}`）\n{}",
+            now.unwrap_or("（なし）")
+        ))],
+        button(
+            &crate::custom_id::ui::developer::custom_id_for_field(
+                crate::custom_id::ui::developer::Screen::Edit,
+                client_id,
+                field,
+            ),
+            "編集",
+            ButtonStyle::Primary,
+        ),
     )
 }
 
@@ -445,7 +503,13 @@ mod tests {
                 false,
                 None,
                 Some("the-secret"),
-                Choices {
+                Fields {
+                    client_name: None,
+                    redirect_uris: &[],
+                    client_uri: None,
+                    logo_uri: None,
+                    webhook_url: None,
+                    discord_support_server_invite_slug: None,
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],
@@ -486,7 +550,13 @@ mod tests {
                 true,
                 Some("https://example.test/logo.png"),
                 None,
-                Choices {
+                Fields {
+                    client_name: None,
+                    redirect_uris: &[],
+                    client_uri: None,
+                    logo_uri: None,
+                    webhook_url: None,
+                    discord_support_server_invite_slug: None,
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],
