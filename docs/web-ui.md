@@ -153,12 +153,37 @@ one whose `application.description` contains the application's uuid (l.60). That
 whole verification — ownership is proved by reading back from Discord what the
 operator wrote into the bot's integration description, not by trusting the form.
 
-What is **not** read, and therefore not to be guessed: what `verify` does with
-`assigns.app_user_id` and `String.to_integer(assigns.bot_id)` (l.65-66) — whether
-anything is persisted, and if so as what — and what the two failure branches (l.73,
-l.97) read the guild and the user for. Those lines are where the next reader should
-start, with the same rule as everywhere else in this work: the Elixir is the
-specification, and this file's description of it is not.
+### What it actually does, now read
+
+Two conditions, and the first is the one that is easy to miss: the target integration
+is the one whose `application.bot.id` **equals** the submitted bot id (l.50-57), and
+only then must its `application.description` **contain** the application's uuid (l.60).
+So the uuid is a second signature on an integration already identified by its bot, not
+the way it is found.
+
+And it writes something. On success it calls
+`VirtualCrypto.ConnectUser.set_discord_user_id(app_user_id, bot_id)` (l.62-67) — the
+application account's `discord_id` is set to the bot's. That is the point of the whole
+flow: an application's account is created with no Discord id, and connecting binds it
+to the bot that speaks for it, having checked with Discord that the bot is in the guild
+and that its description carries this application's uuid.
+
+The failures are distinguished rather than collapsed, which is most of the file:
+
+- integrations 403 → the guild is read to say which of the two it is: the service is
+  not in that server at all, or it is there without Manage Server (l.72-87).
+- integrations 404 → that server id does not exist (l.89-90).
+- anything else → the status is named (l.92-93).
+- no matching integration → the bot id is looked up, and then the guild, to say that
+  the bot is not in that server (l.95-105). A user id that is not a bot is a further
+  branch (l.108-).
+
+So a Rust endpoint doing this needs three Discord calls that the seam does not have —
+guild integrations, a guild, a user — and one write to `users.discord_id`. None of it
+is guessable from the shape of the page, which is why it is written here.
+
+Unread still: the tail from l.110, the branch for an id that is a user rather than a
+bot.
 
 Also to add on the Rust side, before any of it can be called: the Discord seam has
 members and roles (`get_guild_member`, `get_roles`) and no integrations call.
