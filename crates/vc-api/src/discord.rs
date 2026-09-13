@@ -69,6 +69,37 @@ pub trait DiscordApi: Send + Sync {
     /// what a member's own permissions are ORed together from.
     async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError>;
 
+    /// `Discord.Api.Raw.get_guild_integrations_with_status_code/1`: the guild's
+    /// integrations, which is how the connect flow asks Discord whether a bot is in a
+    /// guild and what it says it is for.
+    ///
+    /// The status is returned rather than folded away, because the answers are not
+    /// interchangeable: 403 is "not there" or "not permitted", 404 is "no such
+    /// guild", and the caller tells them apart by asking about the guild as well.
+    /// Uncached, like the rest of `Raw`: a permission question answered from fifteen
+    /// minutes ago is a permission question answered wrongly.
+    async fn get_guild_integrations_with_status(
+        &self,
+        guild_id: i64,
+    ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError>;
+
+    /// `Discord.Api.Raw.get_guild_with_status_code/1`, for telling 403 from 200.
+    ///
+    /// The cached `get_guild` answers `Option`, folding every failure into "not
+    /// there", which is right for decorating an embed and wrong for saying whether
+    /// the service is missing from a server or merely lacks Manage Server.
+    async fn get_guild_with_status(
+        &self,
+        guild_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError>;
+
+    /// `Discord.Api.Raw.get_user_with_status/1`, for saying that an id is a person's
+    /// rather than a bot's, and naming them when it is.
+    async fn get_user_with_status(
+        &self,
+        user_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError>;
+
     /// The bot's own user id, which for a Discord application is the same number
     /// as its client id. The consent screen asks whether the bot is in a guild
     /// before it asks a person anything: a grant belongs to a guild, and one the
@@ -228,6 +259,31 @@ impl CachedDiscord {
 
 #[async_trait]
 impl DiscordApi for CachedDiscord {
+    // The three status-aware calls delegate like the rest. They are deliberately not
+    // cached, which is why nothing here wraps them.
+
+    async fn get_guild_integrations_with_status(
+        &self,
+        guild_id: i64,
+    ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError> {
+        self.inner
+            .get_guild_integrations_with_status(guild_id)
+            .await
+    }
+
+    async fn get_guild_with_status(
+        &self,
+        guild_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError> {
+        self.inner.get_guild_with_status(guild_id).await
+    }
+
+    async fn get_user_with_status(
+        &self,
+        user_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError> {
+        self.inner.get_user_with_status(user_id).await
+    }
     /// Not cached: the Elixir cache wraps `get_user` and `get_guild` only, and a
     /// token is looked up once per request.
     async fn get_user_info(&self, token: &str) -> Result<Map<String, Value>, DiscordError> {
@@ -318,6 +374,97 @@ impl HttpDiscordApi {
 
 #[async_trait]
 impl DiscordApi for HttpDiscordApi {
+    // The same shape as `get_roles`: a literal base, the bot's own token in a
+    // `Bot` header, and a status that is read rather than compared to `NOT_FOUND`.
+
+    async fn get_guild_integrations_with_status(
+        &self,
+        guild_id: i64,
+    ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError> {
+        let response = self
+            .http
+            .get(format!(
+                "https://discord.com/api/guilds/{guild_id}/integrations"
+            ))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let status = response.status().as_u16();
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let integrations = body
+            .as_array()
+            .map(|integrations| {
+                integrations
+                    .iter()
+                    .filter_map(|integration| integration.as_object().cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok((status, integrations))
+    }
+
+    async fn get_guild_with_status(
+        &self,
+        guild_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError> {
+        let response = self
+            .http
+            .get(format!(
+                "https://discord.com/api/guilds/{guild_id}?with_counts=false"
+            ))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let status = response.status().as_u16();
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        Ok((status, body.as_object().cloned().unwrap_or_default()))
+    }
+
+    async fn get_user_with_status(
+        &self,
+        user_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError> {
+        let response = self
+            .http
+            .get(format!("https://discord.com/api/users/{user_id}"))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let status = response.status().as_u16();
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        Ok((status, body.as_object().cloned().unwrap_or_default()))
+    }
     async fn get_user_info(&self, token: &str) -> Result<Map<String, Value>, DiscordError> {
         let response = self
             .http

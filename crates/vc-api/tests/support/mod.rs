@@ -128,6 +128,32 @@ impl Default for FakeDiscord {
 
 #[async_trait]
 impl DiscordApi for FakeDiscord {
+    // The connect flow's three calls, answered as "not configured yet" rather than as
+    // a guild full of integrations: a test that needs a real answer should get one
+    // from the fake's own fields, and until then pretending is worse than refusing.
+    // The status is what a test would vary; 200 with nothing in it is what an empty
+    // guild looks like.
+
+    async fn get_guild_integrations_with_status(
+        &self,
+        _guild_id: i64,
+    ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError> {
+        Ok((200, Vec::new()))
+    }
+
+    async fn get_guild_with_status(
+        &self,
+        _guild_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError> {
+        Ok((200, Map::new()))
+    }
+
+    async fn get_user_with_status(
+        &self,
+        _user_id: i64,
+    ) -> Result<(u16, Map<String, Value>), DiscordError> {
+        Ok((200, Map::new()))
+    }
     async fn get_user_info(&self, _token: &str) -> Result<Map<String, Value>, DiscordError> {
         Ok(self.payload.clone())
     }
