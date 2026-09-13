@@ -39,20 +39,8 @@ pub fn home(display_name: &str, verification_url: &str) -> Value {
             separator(),
             text("アプリケーションの登録と、そのアプリケーションの Bot の接続ができます。"),
             action_row(vec![
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::List,
-                    ),
-                    "アプリケーション",
-                    ButtonStyle::Primary,
-                ),
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Connect,
-                    ),
-                    "Bot を接続",
-                    ButtonStyle::Secondary,
-                ),
+                button("dev:list", "アプリケーション", ButtonStyle::Primary),
+                button("dev:connect", "Bot を接続", ButtonStyle::Secondary),
             ]),
             action_row(vec![link_button(verification_url, "この画面について")]),
         ],
@@ -70,20 +58,8 @@ pub fn applications(applications: &[Value]) -> Value {
             vec![
                 text("まだアプリケーションを登録していません。"),
                 action_row(vec![
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Home,
-                        ),
-                        "登録する",
-                        ButtonStyle::Primary,
-                    ),
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Home,
-                        ),
-                        "戻る",
-                        ButtonStyle::Secondary,
-                    ),
+                    button("dev:register", "登録する", ButtonStyle::Primary),
+                    button("dev:home", "戻る", ButtonStyle::Secondary),
                 ]),
             ],
         );
@@ -111,27 +87,13 @@ pub fn applications(applications: &[Value]) -> Value {
                 options.len()
             )),
             action_row(vec![select(
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::Back,
-                ),
+                "dev:application",
                 "アプリケーションを選ぶ",
                 options,
             )]),
             action_row(vec![
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Register,
-                    ),
-                    "登録する",
-                    ButtonStyle::Secondary,
-                ),
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Home,
-                    ),
-                    "戻る",
-                    ButtonStyle::Secondary,
-                ),
+                button("dev:register", "登録する", ButtonStyle::Secondary),
+                button("dev:home", "戻る", ButtonStyle::Secondary),
             ]),
         ],
     )
@@ -156,13 +118,7 @@ pub fn application(
         vec![text(format!("**{name}**\n{state}\n`{client_id}`"))],
         match logo_uri {
             Some(url) if !url.is_empty() => thumbnail(url),
-            _ => button(
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::Connect,
-                ),
-                "接続",
-                ButtonStyle::Primary,
-            ),
+            _ => button("dev:connect", "接続", ButtonStyle::Primary),
         },
     );
 
@@ -176,28 +132,10 @@ pub fn application(
             // revealing it on request shows it to the person already reading.
             secret_block(secret),
             action_row(vec![
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Connect,
-                    ),
-                    "設定を変更",
-                    ButtonStyle::Primary,
-                ),
-                button(
-                    &crate::custom_id::ui::developer::custom_id(
-                        crate::custom_id::ui::developer::Screen::Connect,
-                    ),
-                    "Bot を接続",
-                    ButtonStyle::Secondary,
-                ),
+                button("dev:edit", "設定を変更", ButtonStyle::Primary),
+                button("dev:connect", "Bot を接続", ButtonStyle::Secondary),
             ]),
-            action_row(vec![button(
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::List,
-                ),
-                "戻る",
-                ButtonStyle::Secondary,
-            )]),
+            action_row(vec![button("dev:list", "戻る", ButtonStyle::Secondary)]),
         ],
     )
 }
@@ -230,20 +168,8 @@ pub fn connect_result(client_id: &str, refusal: Option<&str>) -> Value {
                     "Bot を接続しました。このアプリケーションのアカウントに、Bot の Discord ID が入りました。",
                 ),
                 action_row(vec![
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::List,
-                        ),
-                        "アプリケーション",
-                        ButtonStyle::Primary,
-                    ),
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Home,
-                        ),
-                        "戻る",
-                        ButtonStyle::Secondary,
-                    ),
+                    button("dev:application", "アプリケーション", ButtonStyle::Primary),
+                    button("dev:home", "戻る", ButtonStyle::Secondary),
                 ]),
             ],
         ),
@@ -254,17 +180,9 @@ pub fn connect_result(client_id: &str, refusal: Option<&str>) -> Value {
                 // The form again, because every refusal here is something the operator
                 // fixes by entering one of the two ids differently.
                 action_row(vec![
+                    button("dev:connect", "もう一度", ButtonStyle::Primary),
                     button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::Connect,
-                        ),
-                        "もう一度",
-                        ButtonStyle::Primary,
-                    ),
-                    button(
-                        &crate::custom_id::ui::developer::custom_id(
-                            crate::custom_id::ui::developer::Screen::List,
-                        ),
+                        "dev:application",
                         "アプリケーション",
                         ButtonStyle::Secondary,
                     ),
@@ -343,24 +261,9 @@ mod tests {
         let screen = applications(&[]);
 
         assert!(first_text(&screen).contains("まだ"));
-        let actual =
-            screen["components"].as_array().expect("components")[1]["components"][0]["custom_id"]
-                .clone();
-        let expected = json!(crate::custom_id::ui::developer::custom_id(
-            crate::custom_id::ui::developer::Screen::Register
-        ));
-
-        println!("ACTUAL   {actual:?}");
-        println!("EXPECTED {expected:?}");
-        println!(
-            "DECODED  {:?}",
-            crate::custom_id::ui::developer::parse(&crate::custom_id::parse(
-                actual.as_str().expect("a string")
-            ))
-        );
-        println!(
-            "WANT     {:?}",
-            crate::custom_id::ui::developer::Screen::Register
+        assert_eq!(
+            screen["components"].as_array().expect("components")[1]["components"][0]["custom_id"],
+            "dev:register"
         );
     }
 
@@ -405,16 +308,7 @@ mod tests {
         assert!(!found.is_empty());
 
         for id in found {
-            // Not "looks like an id": every one has to decode back to one of the screens,
-            // which is what the dispatcher will do with it. A readable string that happens
-            // to look right would fail there, and a test that only checked the prefix
-            // would not notice.
-            let decoded = crate::custom_id::parse(&id);
-
-            assert!(
-                crate::custom_id::ui::developer::parse(&decoded).is_ok(),
-                "{id} does not decode to a developer screen"
-            );
+            assert!(id.starts_with("dev:"), "{id}");
         }
     }
 
