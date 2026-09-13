@@ -456,9 +456,24 @@ learned to build them.
 
 ## The application object, as an SPA receives it
 
-One shape, answered by three endpoints — the single read, the list, and the
-registration — and built in one place, `routes/oauth2_clients.rs::render` (l.63), so
-an error in it is an error in three endpoints at once.
+One shape, built in one place, `routes/oauth2_clients.rs::render` (l.62), so an error in
+it is an error in every endpoint that answers with it.
+
+**Two of those endpoints exist here, not three.** This said three — the single read, the
+list, the registration — and the third is the old site's, not this one's. The Elixir's
+single read is `GET /applications/:id` (`ApplicationController.index`), a **browser**
+page that takes a **uuid** (`UUID.info(id)`, so a non-uuid is a 404 before anything is
+looked up), reads `Auth.get_user_application(user.id, id)` — the caller's own, and a 404
+when it is not theirs or not there — and renders it. This service answers the list
+(`GET /oauth2/clients/@me`) and the registration (`POST /oauth2/clients`), and the
+frontend's detail page picks one out of the list by `client_id`, which is the same
+question the Elixir's page asked, answered where the answer already was.
+
+The Elixir's client-registration surface is four routes, and all four have a
+counterpart — `GET /oauth2/clients` (user tokens only; an app token is 401
+`invalid_kind`) is this service's `GET /oauth2/clients/@me`, a different path for the
+same call, and `GET`/`PATCH /oauth2/clients/@me` and `POST /oauth2/clients` match the
+rest. Nothing was dropped; one thing is served to the browser from the browser.
 
 ```
 client_id, client_secret (null), client_secret_expires_at (0),
