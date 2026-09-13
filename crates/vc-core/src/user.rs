@@ -231,3 +231,58 @@ pub async fn application_id(
     // user, or a user that is not anybody's application.
     Ok(found.flatten())
 }
+
+/// What binding a bot to an application ran into.
+#[derive(Debug)]
+pub enum BindError {
+    /// The bot is already another application's. `users.discord_id` is unique, so
+    /// this is the database saying so rather than a check of ours.
+    Taken,
+    Database(sqlx::Error),
+}
+
+impl std::fmt::Display for BindError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BindError::Taken => write!(f, "that bot is another application's"),
+            BindError::Database(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+/// `ConnectUser.set_discord_user_id/2`: an application's account, and the bot that
+/// speaks for it.
+///
+/// The account registration created has no `discord_id`; this is what gives it one,
+/// once Discord has confirmed the bot is in the guild and carries the application's
+/// uuid in its integration description.
+///
+/// **The write is attempted rather than checked.** `users_discord_id_index` is unique,
+/// so the database is what decides whether a bot is already taken — and asking first
+/// would be a check that another request can pass between it and the write. Which is
+/// also why the unique violation is a named outcome here: the Elixir has
+/// `:conflicted_user_id` for exactly this, and it is a case with a message of its own
+/// rather than a database error.
+pub async fn bind_bot(
+    pool: &sqlx::PgPool,
+    application_user_id: i32,
+    bot_id: i64,
+) -> std::result::Result<(), BindError> {
+    let written = sqlx::query!(
+        "UPDATE users SET discord_id = $1, updated_at = now() WHERE id = $2",
+        bot_id,
+        application_user_id
+    )
+    .execute(pool)
+    .await;
+
+    match written {
+        Ok(_) => Ok(()),
+        Err(sqlx::Error::Database(error))
+            if error.constraint() == Some("users_discord_id_index") =>
+        {
+            Err(BindError::Taken)
+        }
+        Err(error) => Err(BindError::Database(error)),
+    }
+}
