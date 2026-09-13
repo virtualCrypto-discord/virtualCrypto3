@@ -212,3 +212,35 @@ fn application_payload(subcommand: &str, client_id: &str, user: i64) -> Value {
         user,
     )
 }
+
+/// Connecting is a guild's to run: in a DM there is no guild to connect to, and asking for
+/// one to be pasted is the thing this whole feature exists to avoid.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_connect_in_a_dm_says_where_to_run_it(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    // The same interaction with the guild taken away, which is what a DM is.
+    let mut payload = application_payload("connect", &client_id, DISCORD);
+    payload["data"]["options"][0]["options"]
+        .as_array_mut()
+        .expect("the subcommand's options")
+        .push(json!({ "name": "bot", "type": 6, "value": "100000000000000002" }));
+    payload
+        .as_object_mut()
+        .expect("an object")
+        .remove("guild_id");
+
+    let response = interaction(router(pool), payload).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("サーバーの中で行います"), "{rendered}");
+    assert!(!rendered.contains("100000000000000002"), "{rendered}");
+}

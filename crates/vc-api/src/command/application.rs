@@ -35,6 +35,7 @@ pub async fn handle(
     let screen = match subcommand {
         "list" => list(state, payload).await?,
         "show" => show(state, sub_options, payload).await?,
+        "connect" => connect(sub_options, payload)?,
         "help" => help(),
         // The rest are registered and not written yet. Saying so is better than the
         // answer an unknown subcommand gets, because this command exists and a person
@@ -48,6 +49,29 @@ pub async fn handle(
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": screen,
     }))
+}
+
+/// `/application connect`, which is a guild's to run.
+///
+/// Connecting a bot to a server from a DM means asking somebody to paste a guild id, which
+/// is the most error-prone thing in this feature and exactly what the web page's form does
+/// badly. In a guild the id is already in the interaction, so there is nothing to type —
+/// and if this is run in a DM anyway, saying where to run it is better than silence.
+///
+/// The flow itself is the HTTP route's, `routes/connect.rs`, and it is not extracted yet,
+/// so the guild branch says that rather than pretending.
+fn connect(sub_options: Option<&Value>, payload: &Value) -> Result<Value, CommandError> {
+    let _ = client_id_of(sub_options)?;
+
+    if payload.get("guild_id").and_then(Value::as_str).is_none() {
+        return Ok(ephemeral(vec![crate::components::text(
+            "Bot の接続はサーバーの中で行います。接続したいサーバーで              `/application connect` を実行してください。",
+        )]));
+    }
+
+    Ok(ephemeral(vec![crate::components::text(
+        "接続の処理はまだ実装されていません。",
+    )]))
 }
 
 /// One application, with its secret on the screen.
