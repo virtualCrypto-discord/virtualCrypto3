@@ -32,23 +32,177 @@ pub async fn handle(
 
     let sub_options = options.get("sub_options");
 
-    let screen = match subcommand {
-        "list" => list(state, payload).await?,
-        "show" => show(state, sub_options, payload).await?,
-        "connect" => connect(sub_options, payload)?,
-        "help" => help(),
-        // The rest are registered and not written yet. Saying so is better than the
-        // answer an unknown subcommand gets, because this command exists and a person
-        // pressing it deserves to know which part is missing.
-        other => ephemeral(vec![crate::components::text(format!(
+    // Every arm answers with a whole response, because they are not all the same kind:
+    // `register` and `edit` open a modal, which is its own callback type and cannot be
+    // wrapped in the message one.
+    match subcommand {
+        "list" => Ok(message(list(state, payload).await?)),
+        "show" => Ok(message(show(state, sub_options, payload).await?)),
+        "register" => Ok(register()),
+        "edit" => edit(state, sub_options, payload).await,
+        "connect" => connect(sub_options, payload),
+        "help" => Ok(message(help())),
+        // The rest are registered and not written yet. Saying so is better than the answer
+        // an unknown subcommand gets, because this command exists and a person pressing it
+        // deserves to know which part is missing.
+        other => Ok(message(ephemeral(vec![crate::components::text(format!(
             "`{other}` はまだ実装されていません。"
-        ))]),
-    };
+        ))]))),
+    }
+}
 
-    Ok(json!({
+/// A response that shows a message. The screens are message-shaped; a modal is not.
+fn message(screen: Value) -> Value {
+    json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": screen,
-    }))
+    })
+}
+
+/// The modal that registers an application.
+///
+/// `register` has nothing to pre-fill and nothing to read: an application is created with
+/// what this asks for.
+fn register() -> Value {
+    crate::components::modal(
+        "dev:register",
+        "アプリケーションの登録",
+        vec![
+            crate::components::label(
+                "クライアント名",
+                Some("アプリケーションの名前です。"),
+                crate::components::text_input(
+                    "client_name",
+                    crate::components::TextInputStyle::Short,
+                    true,
+                    None,
+                    None,
+                ),
+            ),
+            crate::components::label(
+                "リダイレクト URI",
+                Some("1行に1つ入力してください。"),
+                crate::components::text_input(
+                    "redirect_uris",
+                    crate::components::TextInputStyle::Paragraph,
+                    true,
+                    Some(4000),
+                    None,
+                ),
+            ),
+            crate::components::label(
+                "webhook URL",
+                Some("指定すると、登録時にその URL へ確認のリクエストを送ります。"),
+                crate::components::text_input(
+                    "webhook_url",
+                    crate::components::TextInputStyle::Short,
+                    false,
+                    None,
+                    None,
+                ),
+            ),
+        ],
+    )
+}
+
+/// The modal that changes one, filled with what it has now.
+///
+/// A field that is not sent back is a field the `PATCH` clears, so every field this asks
+/// for is pre-filled from the application: an edit is a correction, not a retyping.
+async fn edit(
+    state: &AppState,
+    sub_options: Option<&Value>,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let Some(found) = owned_application(state, sub_options, payload).await? else {
+        return Ok(message(ephemeral(vec![crate::components::text(
+            "そのアプリケーションはありません。".to_string(),
+        )])));
+    };
+
+    let redirect_uris = found.redirect_uris.join("\n");
+
+    Ok(crate::components::modal(
+        "dev:edit",
+        "アプリケーションの設定",
+        vec![
+            crate::components::label(
+                "クライアント名",
+                None,
+                crate::components::text_input(
+                    "client_name",
+                    crate::components::TextInputStyle::Short,
+                    true,
+                    None,
+                    found.client_name.as_deref(),
+                ),
+            ),
+            crate::components::label(
+                "リダイレクト URI",
+                Some("1行に1つ入力してください。"),
+                crate::components::text_input(
+                    "redirect_uris",
+                    crate::components::TextInputStyle::Paragraph,
+                    true,
+                    Some(4000),
+                    Some(&redirect_uris),
+                ),
+            ),
+            crate::components::label(
+                "クライアント URI",
+                None,
+                crate::components::text_input(
+                    "client_uri",
+                    crate::components::TextInputStyle::Short,
+                    false,
+                    None,
+                    found.client_uri.as_deref(),
+                ),
+            ),
+            crate::components::label(
+                "ロゴ URI",
+                None,
+                crate::components::text_input(
+                    "logo_uri",
+                    crate::components::TextInputStyle::Short,
+                    false,
+                    None,
+                    found.logo_uri.as_deref(),
+                ),
+            ),
+            crate::components::label(
+                "webhook URL",
+                None,
+                crate::components::text_input(
+                    "webhook_url",
+                    crate::components::TextInputStyle::Short,
+                    false,
+                    None,
+                    found.webhook_url.as_deref(),
+                ),
+            ),
+        ],
+    ))
+}
+
+/// The caller's own application that this interaction names, or nothing.
+///
+/// The ownership check is the connect route's, in the same order, and it is here once for
+/// `show` and `edit` both.
+async fn owned_application(
+    state: &AppState,
+    sub_options: Option<&Value>,
+    payload: &Value,
+) -> Result<Option<crate::routes::oauth2_clients::Details>, CommandError> {
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+    let client_id = client_id_of(sub_options)?;
+
+    let owned = vc_core::application::owned_by(state.pool(), account).await?;
+
+    crate::routes::connect::owned_by_client_id(state.pool(), &owned, client_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// `/application connect`, which is a guild's to run.
@@ -63,15 +217,19 @@ pub async fn handle(
 fn connect(sub_options: Option<&Value>, payload: &Value) -> Result<Value, CommandError> {
     let _ = client_id_of(sub_options)?;
 
-    if payload.get("guild_id").and_then(Value::as_str).is_none() {
-        return Ok(ephemeral(vec![crate::components::text(
-            "Bot の接続はサーバーの中で行います。接続したいサーバーで              `/application connect` を実行してください。",
-        )]));
-    }
+    // Every screen is one container, which is not only for looks: the schema the tests
+    // validate against rejects a bare Text Display at the top level of a message, and it
+    // caught these two doing it.
+    let body = if payload.get("guild_id").and_then(Value::as_str).is_none() {
+        "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application connect` を実行してください。"
+    } else {
+        "接続の処理はまだ実装されていません。"
+    };
 
-    Ok(ephemeral(vec![crate::components::text(
-        "接続の処理はまだ実装されていません。",
-    )]))
+    Ok(message(ephemeral(vec![crate::components::container(
+        None,
+        vec![crate::components::text(body)],
+    )])))
 }
 
 /// One application, with its secret on the screen.
@@ -84,20 +242,10 @@ async fn show(
     sub_options: Option<&Value>,
     payload: &Value,
 ) -> Result<Value, CommandError> {
-    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
-    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
-    let client_id = client_id_of(sub_options)?;
-
-    let owned = vc_core::application::owned_by(state.pool(), account).await?;
-
-    let found = crate::routes::connect::owned_by_client_id(state.pool(), &owned, client_id)
-        .await
-        .map_err(vc_core::Error::from)?;
-
-    let Some(found) = found else {
-        return Ok(ephemeral(vec![crate::components::text(format!(
-            "`{client_id}` は見つかりませんでした。"
-        ))]));
+    let Some(found) = owned_application(state, sub_options, payload).await? else {
+        return Ok(ephemeral(vec![crate::components::text(
+            "そのアプリケーションはありません。".to_string(),
+        )]));
     };
 
     Ok(ephemeral(vec![developer::application(
@@ -140,9 +288,11 @@ async fn list(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
 }
 
 fn help() -> Value {
-    ephemeral(vec![
-        crate::components::text(
-            "**/application**\n\n\
+    ephemeral(vec![crate::components::container(
+        None,
+        vec![
+            crate::components::text(
+                "**/application**\n\n\
              `list` 自分が持つアプリケーション\n\
              `show <client_id>` アプリケーションの詳細\n\
              `register` 新しいアプリケーションを登録\n\
@@ -150,13 +300,14 @@ fn help() -> Value {
              `connect <client_id> <bot>` サーバーに Bot を接続\n\
              `secret <client_id>` client_secret の表示\n\n\
              `client_id` は入力しながら候補から選べます。",
-        ),
-        crate::components::action_row(vec![crate::components::button(
-            "dev:list",
-            "アプリケーション",
-            crate::components::ButtonStyle::Primary,
-        )]),
-    ])
+            ),
+            crate::components::action_row(vec![crate::components::button(
+                "dev:list",
+                "アプリケーション",
+                crate::components::ButtonStyle::Primary,
+            )]),
+        ],
+    )])
 }
 
 #[cfg(test)]
@@ -175,7 +326,10 @@ mod tests {
         assert_eq!(screen["flags"], json!(32832));
         assert_eq!(screen["content"], Value::Null);
 
-        let body = screen["components"][0]["content"].as_str().expect("text");
+        // Every screen is one container, and the copy is somewhere inside it: asserting on
+        // the whole thing as text is what keeps this from breaking each time the tree
+        // gains a level, which it has twice.
+        let body = screen["components"].to_string();
 
         for subcommand in ["list", "show", "register", "edit", "connect", "secret"] {
             assert!(body.contains(subcommand), "{subcommand} is not in {body}");

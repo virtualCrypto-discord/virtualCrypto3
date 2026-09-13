@@ -194,7 +194,10 @@ async fn application_show_does_not_confirm_somebody_elses(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(!rendered.contains("theirs"), "{rendered}");
-    assert!(rendered.contains("見つかりませんでした"), "{rendered}");
+    assert!(
+        rendered.contains("そのアプリケーションはありません"),
+        "{rendered}"
+    );
 }
 
 /// A `/application <subcommand> <client_id>` interaction, which is what a person running
