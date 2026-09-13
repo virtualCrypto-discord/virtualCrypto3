@@ -182,10 +182,12 @@ So a Rust endpoint doing this needs three Discord calls the seam does not have a
 write to `users.discord_id`. None of it is guessable from the shape of the page, which
 is why it is written here.
 
-Where those calls go, since it is three places and not one: `DiscordApi` in
-`crates/vc-api/src/discord.rs` (l.41-), `HttpDiscordApi` (l.320-), and `FakeDiscord` in
-`crates/vc-api/tests/support/mod.rs` (l.130-). Every call the service makes is a trait
-method for exactly this reason.
+Where those calls go, since it is four places and not one: the `DiscordApi` trait in
+`crates/vc-api/src/discord.rs` (l.41-), `HttpDiscordApi` (l.320-), **`CachedDiscord`**
+(l.230-), and `FakeDiscord` in `crates/vc-api/tests/support/mod.rs` (l.130-). Every
+call the service makes is a trait method, and `CachedDiscord` delegates all of them to
+the inner one — which is easy to miss, because the place a call is implemented is not
+the place a method has to exist.
 
 Two of the three are not new calls but **status-aware versions of ones that exist**.
 `get_guild` and `get_user` answer `Option`, folding every failure into "not there", and
