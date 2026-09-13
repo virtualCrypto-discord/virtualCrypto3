@@ -698,6 +698,51 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Response>> {
 /// An `app` token, because the application is asking about itself — and nothing
 /// is written for the fields the request does not name, which is what `changes`
 /// preserves and `patch` honours.
+/// `GET /oauth2/clients/@me`: the application the token is for.
+///
+/// This is RFC 7592's read of the client identified by the token, and it is the URI
+/// `POST /oauth2/clients` names in `registration_client_uri` — so it takes an
+/// **application** token, the one that registration answered with, and a user token is
+/// refused with the same `invalid_kind` that `PATCH` on this path gives. The two being
+/// the same call is the point: a client that follows the registration's own answer has
+/// to be able to read itself at the address it was handed.
+pub async fn me(State(state): State<AppState>, user: AuthUser) -> Response {
+    if user.kind != vc_auth::Kind::App {
+        return refused(
+            StatusCode::UNAUTHORIZED,
+            "invalid_kind",
+            "an application token is required",
+        );
+    }
+
+    if !user.scopes.oauth2_register {
+        return refused(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "oauth2.register is required",
+        );
+    }
+
+    let Ok(subject) = i32::try_from(user.subject) else {
+        return internal("the token's subject is not an account id");
+    };
+
+    let found = vc_core::user::application_id(state.pool(), subject)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(application_id) = found else {
+        return internal("the application's account is gone");
+    };
+
+    match details(state.pool(), application_id).await {
+        Ok(Some(found)) => Json(render(&found)).into_response(),
+        Ok(None) => refused(StatusCode::NOT_FOUND, "not_found", "no such application"),
+        Err(_) => internal("the application could not be read"),
+    }
+}
+
 pub async fn edit(
     State(state): State<AppState>,
     user: AuthUser,

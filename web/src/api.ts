@@ -150,8 +150,13 @@ export interface Application {
 /// A user token's, and the endpoint refuses any other kind with 401 `invalid_kind` —
 /// an application cannot ask which applications it owns. The list is by
 /// `owner_discord_id`, so it is none, one, or several.
+///
+/// The path is the **collection**, and `/oauth2/clients/@me` is not it: that one is the
+/// application's read of itself, with an application token, which is what
+/// `registration_client_uri` names. The two shared a path until the Elixir's controllers
+/// were read.
 export function applications(token: string): Promise<Application[]> {
-  return request("/oauth2/clients/@me", {
+  return request("/oauth2/clients", {
     headers: authorize(token),
   }) as Promise<Application[]>;
 }

@@ -15,7 +15,7 @@ mod support;
 use sqlx::PgPool;
 use support::{fake, get, insert_user, mint, mint_app, state};
 
-const URI: &str = "/oauth2/clients/@me";
+const URI: &str = "/oauth2/clients";
 
 // The person, and the account created for their application. The second has no
 // discord id, which is what makes it the application's account rather than

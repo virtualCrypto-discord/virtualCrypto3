@@ -470,7 +470,7 @@ async fn the_id_the_list_hands_out_is_the_id_a_connect_takes(pool: PgPool) {
     // about below.
     let listed = get(
         vc_api::router(state(pool.clone(), discord.clone())),
-        "/oauth2/clients/@me",
+        "/oauth2/clients",
         Some(&token),
     )
     .await;
@@ -497,7 +497,7 @@ async fn the_id_the_list_hands_out_is_the_id_a_connect_takes(pool: PgPool) {
     // account now carries the bot's Discord id, which is what connecting means.
     let after = get(
         vc_api::router(state(pool, fake())),
-        "/oauth2/clients/@me",
+        "/oauth2/clients",
         Some(&token),
     )
     .await;

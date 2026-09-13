@@ -490,16 +490,27 @@ answered 401 `invalid_kind`. So the path that registration hands out as
 *not* the read it names: an RFC 7592 client that does what the registration told it to
 do is refused.
 
-**The read is missing.** That is a gap in the client-registration surface rather than a
-naming difference — the same shape of mistake as the connect route taking the numeric
-id, and it is written down here because the paragraph above said the opposite while
-looking convincing.
+**The read was missing**, which was a gap in the client-registration surface rather than
+a naming difference — the same shape of mistake as the connect route taking the numeric
+id, and written down here because the paragraph above said the opposite while looking
+convincing.
 
-What the fix is: `GET /oauth2/clients/@me` taking an **app** token and answering that
-application (that is what `registration_client_uri` promises, and `edit` already does it
-for `PATCH` on the same path), and the list moving to wherever its own path should be —
-the Elixir put it in a query parameter, and neither `/oauth2/clients` nor
-`/oauth2/clients/@me` is free to mean both.
+**Fixed.** `GET /oauth2/clients/@me` is now the read: an **app** token, the same refusals
+`PATCH` on that path already gave, answering the application its account belongs to
+(`oauth2_clients.rs::me`). The list moved to the collection, `GET /oauth2/clients`, where
+`POST /oauth2/clients` already was — the Elixir put the list behind a `user=@me` query
+parameter that only ever had one valid value, and neither path is free to mean both.
+
+The list's own tests moved with it (`oauth2_clients_mine.rs`), and the round trip test
+that reads the list and connects with what it answered caught the move immediately, which
+is the second time that test has earned its place. `oauth2_clients_me.rs` covers the read.
+
+What is still not covered: registering and then reading the application back with the
+token registration answered. Driving `POST /oauth2/clients` needs the caller to have a
+stored Discord authorization — it is verified against Discord, as the Elixir's was — and
+the test support has no fixture for one. The test was written, refused a 500 at that
+check, and taken back out rather than worked around, so `registration_client_uri` is
+asserted by nothing.
 
 ```
 client_id, client_secret (null), client_secret_expires_at (0),

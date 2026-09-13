@@ -49,11 +49,18 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         .route("/oauth2/authorize", get(oauth2::authorize))
         .route("/oauth2/authorize", post(oauth2::approve))
         .route("/oauth2/token", post(oauth2_token::token))
+        // The collection: what the caller owns, and registration. The list used to be
+        // on `/@me` with the read, which is the one path RFC 7592 fixes: registration
+        // answers `registration_client_uri: /oauth2/clients/@me`, so the read has to be
+        // there and the list cannot be.
+        .route(
+            "/oauth2/clients",
+            get(oauth2_clients::mine).post(oauth2_clients::register),
+        )
         .route(
             "/oauth2/clients/@me",
-            get(oauth2_clients::mine).patch(oauth2_clients::edit),
+            get(oauth2_clients::me).patch(oauth2_clients::edit),
         )
-        .route("/oauth2/clients", post(oauth2_clients::register))
         // Not under `/oauth2`: this is a call a page makes about an application it
         // names, rather than a registration endpoint about the caller.
         .route("/applications/{id}/connect", post(connect::connect))
