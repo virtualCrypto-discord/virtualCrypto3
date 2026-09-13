@@ -105,6 +105,7 @@ pub fn application(
     name: Option<&str>,
     connected: bool,
     logo_uri: Option<&str>,
+    secret: Option<&str>,
 ) -> Value {
     let name = name.unwrap_or("（名前なし）");
     let state = if connected {
@@ -126,40 +127,32 @@ pub fn application(
         vec![
             heading,
             separator(),
+            // The secret is written on the screen rather than behind a button. The
+            // button was mine, not the page's: every response here is ephemeral, so
+            // revealing it on request shows it to the person already reading.
+            secret_block(secret),
             action_row(vec![
-                button("dev:connect", "Bot を接続", ButtonStyle::Primary),
-                button("dev:secret", "client_secret を表示", ButtonStyle::Secondary),
+                button("dev:edit", "設定を変更", ButtonStyle::Primary),
+                button("dev:connect", "Bot を接続", ButtonStyle::Secondary),
             ]),
             action_row(vec![button("dev:list", "戻る", ButtonStyle::Secondary)]),
         ],
     )
 }
 
-/// The `client_secret`, on a message only its owner can see.
+/// The secret as it appears on the application's screen.
 ///
-/// The sentence about the `registration_access_token` is the point of this screen rather
-/// than decoration: the secret can be read here and the token cannot be read anywhere, and
-/// the page that hands the token out said the opposite about both until it was checked.
-pub fn secret(client_id: &str, secret: Option<&str>) -> Value {
-    let body = match secret {
-        Some(secret) => format!(
+/// The sentence about the `registration_access_token` is the point rather than decoration:
+/// the secret can be read here and the token cannot be read anywhere, and the page that
+/// hands the token out said the opposite about both until it was checked.
+fn secret_block(secret: Option<&str>) -> Value {
+    match secret {
+        Some(secret) => text(format!(
             "**client_secret**\n```\n{secret}\n```\nこの返信はあなたにだけ見えています。\
              \n`registration_access_token` は登録時にしか表示されず、ここからは読めません。"
-        ),
-        None => format!("`{client_id}` の client_secret は記録されていません。"),
-    };
-
-    container(
-        Some(WORKING),
-        vec![
-            text(body),
-            action_row(vec![button(
-                "dev:application",
-                "戻る",
-                ButtonStyle::Secondary,
-            )]),
-        ],
-    )
+        )),
+        None => text("client_secret は記録されていません。"),
+    }
 }
 
 /// What the connect flow answered.
@@ -305,8 +298,7 @@ mod tests {
         for screen in [
             home("name", "https://example.test/verification"),
             applications(&[]),
-            application("id", None, false, None),
-            secret("id", Some("s")),
+            application("id", None, false, None, Some("the-secret")),
             connect_result("id", Some("no")),
             connect_result("id", None),
         ] {
@@ -327,7 +319,13 @@ mod tests {
         for screen in [
             home("name", "https://example.test/verification"),
             applications(&[]),
-            application("id", None, true, Some("https://example.test/logo.png")),
+            application(
+                "id",
+                None,
+                true,
+                Some("https://example.test/logo.png"),
+                None,
+            ),
         ] {
             assert!(screen.get("content").is_none(), "{screen}");
             assert_eq!(screen["type"], 17);
