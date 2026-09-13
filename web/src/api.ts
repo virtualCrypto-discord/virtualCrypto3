@@ -112,6 +112,46 @@ export function exchangeToken(): Promise<IssuedToken> {
   return request("/token", { method: "POST" }) as Promise<IssuedToken>;
 }
 
+/// An application, as `render` builds it. One shape, answered by the single read,
+/// the list and the registration.
+///
+/// Two more numbers travel as strings — `user_id` and `discord_user_id` — as the
+/// balances do. `client_secret_expires_at` does not: it is a zero rather than a
+/// null so that a client reading an integer gets one, and `expires_in` is the other
+/// such exception.
+///
+/// `client_secret` is null wherever the caller should not see it, which is here.
+export interface Application {
+  client_id: string;
+  client_secret: string | null;
+  client_secret_expires_at: number;
+  redirect_uris: string[];
+  user_id: string;
+  discord_user_id: string | null;
+  application_type: string;
+  client_name: string | null;
+  client_uri: string | null;
+  discord_support_server_invite_slug: string | null;
+  grant_types: string[];
+  logo_uri: string | null;
+  owner_discord_id: string | null;
+  response_types: string[];
+  webhook_url: string | null;
+  public_key: string;
+}
+
+/// The applications the token's subject owns.
+///
+/// For a user token — which is the kind a browser holds — this is none or one,
+/// because `users.application_id` links an account to at most one application. For
+/// an app token the endpoint answers the single application instead, or `null`; the
+/// browser never holds that kind.
+export function applications(token: string): Promise<Application[]> {
+  return request("/oauth2/clients/@me", {
+    headers: authorize(token),
+  }) as Promise<Application[]>;
+}
+
 /// The account the token belongs to.
 export function me(token: string): Promise<Account> {
   return request("/api/v2/users/@me", { headers: authorize(token) }) as Promise<Account>;
