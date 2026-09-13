@@ -168,3 +168,47 @@ async fn the_address_registration_hands_out_is_readable(pool: PgPool) {
     assert_eq!(read.status, 200, "{:?}", read.body);
     assert_eq!(read.body["client_id"], registered["client_id"]);
 }
+
+/// The response types a registration names are what the row gets.
+///
+/// They were a literal empty array until now: `validate_response_types/1` ran and its answer was
+/// thrown away, which is the one thing in this endpoint that was ported from the Elixir with the
+/// knowledge that it was wrong. Nothing downstream reads the field, so the row is where to look.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn registration_stores_the_response_types_it_validated(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    insert_discord_auth(&pool, OWNER_DISCORD_ID, "a-discord-token").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/oauth2/clients")
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({
+                "client_name": "one",
+                "redirect_uris": ["https://example.test/callback"],
+                "response_types": ["code"],
+            }))
+            .expect("encode body"),
+        ))
+        .expect("request");
+
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(request)
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 201);
+
+    let stored = sqlx::query_scalar!(
+        r#"SELECT response_types::text[] AS "response_types!" FROM applications"#
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the application");
+
+    assert_eq!(stored, vec!["code".to_owned()]);
+}
