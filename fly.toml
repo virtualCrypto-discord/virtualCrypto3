@@ -1,0 +1,17 @@
+# The application this replaces, with the configuration it already has: the same
+# internal port this server defaults to, the same region, and no `[env]` — every
+# value it needs is a secret the application already carries.
+app = "virtualcrypto-prod"
+primary_region = "phx"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # The same command the current deployment runs, which this image provides as a
+  # script over `sqlx migrate run`.
+  release_command = "/app/bin/migrate"
+
+[http_service]
+  internal_port = 8080
+  force_https = true

@@ -1,0 +1,21 @@
+# What must not reach the builder.
+
+# 20 GB of build output, and two copies of node_modules. None of it is an input, and
+# all of it would otherwise be copied into the build context first.
+target/
+node_modules/
+web/node_modules/
+
+# Built by the image's own first stage.
+web/dist/
+
+.git/
+.github/
+
+# Documentation, and the development environment the image does not use.
+docs/
+systemd/
+scripts/
+flake.nix
+flake.lock
+justfile
