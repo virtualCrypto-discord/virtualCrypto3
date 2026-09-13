@@ -10,12 +10,15 @@
 //!
 //! Two notes on the shape, because they are the parts that are easy to carry over wrong:
 //!
-//! - `dm_permission` is what the old file used, and Discord has since replaced it with
-//!   `contexts` (where a command may be run) and `integration_types` (who may install the
-//!   application). It is kept here because this is a port and the old file is the source —
-//!   the three commands that set it to `false` are the ones that mean something, and the
-//!   rest default to allowing DMs. Moving to `contexts` is a change with its own reason,
-//!   not a transcription.
+//! - The old file's `dm_permission` is gone, and `contexts` is what replaced it: `GUILD`
+//!   (`0`) and `BOT_DM` (`1`) are the two that matter here, and `integration_types` says
+//!   who may install — `GUILD_INSTALL` (`0`) and `USER_INSTALL` (`1`). Both values are from
+//!   the vendored spec at `tests/discord-schema/openapi.json`.
+//!
+//!   **The three commands that set `dm_permission` to `false` are expressed by leaving
+//!   `BOT_DM` out** — `give`, `create` and `delete` carry `"contexts": [0]` and the six
+//!   that allowed DMs carry `[0, 1]`. That is the whole of what the deprecated field said,
+//!   said in the field that replaced it.
 //! - The option types are Discord's numbers: 1 subcommand, 3 string, 4 integer, 5 boolean,
 //!   6 user.
 //!
@@ -63,6 +66,8 @@ fn help() -> Value {
     json!({
         "name": "help",
         "description": "ヘルプを表示します。",
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -70,6 +75,8 @@ fn invite() -> Value {
     json!({
         "name": "invite",
         "description": "Botの招待URLを表示します。",
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -92,7 +99,8 @@ fn give() -> Value {
                 "required": false,
             },
         ],
-        "dm_permission": false,
+        "contexts": [0],
+        "integration_types": [0, 1],
         "default_member_permissions": "0",
     })
 }
@@ -122,6 +130,8 @@ fn pay() -> Value {
                 "required": true,
             },
         ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -145,6 +155,8 @@ fn info() -> Value {
                 "autocomplete": true,
             },
         ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -174,7 +186,8 @@ fn create() -> Value {
                 "required": true,
             },
         ],
-        "dm_permission": false,
+        "contexts": [0],
+        "integration_types": [0, 1],
         "default_member_permissions": "0",
     })
 }
@@ -183,7 +196,8 @@ fn delete() -> Value {
     json!({
         "name": "delete",
         "description": "通貨を削除します。削除は、作成後72時間の間のみ可能です",
-        "dm_permission": false,
+        "contexts": [0],
+        "integration_types": [0, 1],
         "default_member_permissions": "0",
     })
 }
@@ -192,6 +206,8 @@ fn bal() -> Value {
     json!({
         "name": "bal",
         "description": "自分の所持通貨を確認します。",
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -304,6 +320,8 @@ fn claim() -> Value {
                 ],
             },
         ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -402,20 +420,44 @@ mod tests {
         );
     }
 
-    /// The three the old file kept out of DMs, which is the part of this that is a
-    /// decision rather than a transcription.
+    /// The three the old file kept out of DMs, now said with `contexts` rather than the
+    /// `dm_permission` that Discord deprecated. `GUILD` is `0` and `BOT_DM` is `1`; the
+    /// six that allowed DMs carry both.
     #[test]
     fn the_guild_only_commands_still_say_so() {
         for command in commands() {
             let name = command["name"].as_str().expect("a name");
-            let in_dms = command
-                .get("dm_permission")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
 
-            let expected = !["give", "create", "delete"].contains(&name);
+            let contexts: Vec<u64> = command["contexts"]
+                .as_array()
+                .expect("contexts")
+                .iter()
+                .map(|value| value.as_u64().expect("a context"))
+                .collect();
 
-            assert_eq!(in_dms, expected, "{name}");
+            let expected: Vec<u64> = if ["give", "create", "delete"].contains(&name) {
+                vec![0]
+            } else {
+                vec![0, 1]
+            };
+
+            assert_eq!(contexts, expected, "{name}");
+        }
+    }
+
+    /// Every command is installable by a guild and by a user, and every one says so: the
+    /// DM surface is a user-installed command run in a DM, so a command that cannot be
+    /// user-installed cannot be reached there at all.
+    #[test]
+    fn every_command_can_be_user_installed() {
+        for command in commands() {
+            let name = command["name"].as_str().expect("a name");
+
+            assert_eq!(
+                command["integration_types"],
+                json!([0, 1]),
+                "{name} is not both installable"
+            );
         }
     }
 
