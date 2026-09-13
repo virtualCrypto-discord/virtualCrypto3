@@ -251,6 +251,14 @@ loads the application by this id in `mount` and still has the struct's own `.id`
 `set_discord_user_id`, which is the numeric one — the two are not interchangeable, and
 that is the trap here.
 
+**Done** (`92f8a9b`). `connect.rs` takes `Path<String>` and looks the client id up among
+the ids `owned_by` returned, and the tests name applications by the id they actually
+have. Ownership is still decided first and by id: checking the path first would answer
+whether a client id is real to somebody who owns nothing.
+
+The page is now buildable — the list already has `client_id`, so the link is
+`/applications/<client_id>/connect` and nothing has to be added to any response.
+
 Where those calls go, since it is four places and not one: the `DiscordApi` trait in
 `crates/vc-api/src/discord.rs` (l.41-), `HttpDiscordApi` (l.320-), **`CachedDiscord`**
 (l.230-), and `FakeDiscord` in `crates/vc-api/tests/support/mod.rs` (l.130-). Every
