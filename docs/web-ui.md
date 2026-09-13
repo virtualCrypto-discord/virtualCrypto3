@@ -93,6 +93,9 @@ screen needs — but the token no longer has to travel in headers.
 
 ## The requirements, in the order they matter
 
+Each one says which it is — built, or not read — because a list that mixes the two
+without saying which reads as unbuilt, which this one has already been read as once.
+
 1. **The consent screen** (`/oauth2/authorize`). It is what blocks the rest of
    OAuth2: no application can obtain a token without it, and it is the one page
    that must work when JavaScript does not, because OAuth2 sends browsers to it.
@@ -102,9 +105,15 @@ screen needs — but the token no longer has to travel in headers.
    here by a client library needs no script to get through it, which is what the
    paragraph above asks for. Nothing of it belongs in `web/`.
 2. **Discord login and logout**, with the `continue` return path and the CSRF
-   state check the old callback already does.
-3. **The application list and detail** — the shapes already exist:
-   `GET /oauth2/clients/@me` answers the list, and the detail is the same object.
+   state check the old callback already does — **done, and tested**. `/login` mints a
+   state (`routes/web.rs:38`) and puts the browser at Discord with it (`:46`), the
+   callback refuses an answer whose state is not the one it sent (`:111`), and it
+   returns the browser to the `continue` it was given, home when it was given none
+   (`:152`). `logout` clears the cookie (`:61`). `tests/login.rs` covers the redirect
+   and its state, the callback in full, a state that does not match, and the logout.
+   Nothing here was unread: this item was on the list without saying which it was.
+3. **The application list and detail** — **done**: `GET /oauth2/clients/@me` answers the
+   list, the detail is the same object, and `web/` has both pages.
 
    **Editing is not a page in this site.** `PATCH /oauth2/clients/@me` requires an
    application token — it answers `invalid_kind` to anything else — and a browser
@@ -118,7 +127,7 @@ screen needs — but the token no longer has to travel in headers.
    Elm list said about the id recorded below.
 5. **The contract approval** (`/contract/:id`) — not read, still. The Elm has
    `assets/elm/src/Mypage/Claim.elm`, so this one also starts there.
-6. **The landing page**, which is prose plus a login button.
+6. **The landing page**, which is prose plus a login button — **done**.
 7. **The documents** — link them rather than rebuild them; they are static prose
    that already lives in `virtualcrypto-docs`.
 
