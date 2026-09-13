@@ -18,8 +18,13 @@ use serde_json::json;
 use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
+use axum::http::HeaderValue;
+use axum::http::header::CACHE_CONTROL;
+use tower::ServiceBuilder;
+
 use crate::state::AppState;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
     // Everything under `/api` shares the `plug :accepts, ["json"]` pipeline, and
@@ -50,10 +55,36 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         .route("/oauth2/clients", post(oauth2_clients::register))
         .route("/oauth2/token/revoke", post(oauth2_token::revoke))
         .merge(api)
+        // Vite writes every file it builds under `assets/` with a content hash in
+        // its name, so a change to one changes the name: a copy may be kept for as
+        // long as anything still asks for that name, which is forever.
+        //
+        // Claimed by its own route rather than left to the fallback so that the
+        // fallback can be told the opposite, below.
+        .nest_service(
+            "/assets",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(ServeDir::new(web_root.join("assets"))),
+        )
         // Everything nothing else claimed is a client-side route, so the SPA is
         // handed its own index and left to route it.
+        //
+        // `no-cache` here, and it is not a detail: the index is the file that names
+        // the hashed assets, so a cached copy is a browser asking for files the
+        // deploy has already removed. The two headers are one decision.
         .fallback_service(
-            ServeDir::new(&web_root).fallback(ServeFile::new(web_root.join("index.html"))),
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ))
+                .service(
+                    ServeDir::new(&web_root).fallback(ServeFile::new(web_root.join("index.html"))),
+                ),
         )
         .layer(
             // Discord only says "the endpoint URL could not be validated", so a
