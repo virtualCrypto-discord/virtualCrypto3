@@ -428,14 +428,18 @@ mod tests {
         for command in commands() {
             let name = command["name"].as_str().unwrap_or("?").to_owned();
 
-            // `twilight_model`'s `Command` documents itself as "data sent to Discord to
-            // create a command", which is what this is, and `version` is the one field it
-            // requires that Discord's own request does not describe: an autoincrementing
-            // identifier of the command's definition, which a builder fills with 1 —
-            // `Id` is non-zero — and so does this. `id` and `application_id` are optional
-            // and are not set; what the rules below see is this payload's name,
-            // description, options, types, limits and flags, which is the whole of what
-            // it says.
+            // `version` is filled here and **not** in `commands()`, and that is checked
+            // against Discord rather than decided: the documented JSON parameters of both
+            // `Create Global Application Command` and `Bulk Overwrite Global Application
+            // Commands` are `id?`, `name`, `description`, `options`,
+            // `default_member_permissions`, `dm_permission`, `integration_types`,
+            // `contexts`, `type`, `nsfw` and `handler` — no `version`. So the payload that
+            // goes on the wire does not carry it, and it is added here only because
+            // `twilight_model`'s `Command`, which the rules are written against, requires
+            // the field: a non-zero `Id`, hence 1.
+            //
+            // What the rules then see is this payload's name, description, options,
+            // types, limits and flags, which is the whole of what it says.
             let mut payload = command;
             payload["version"] = json!("1");
 
