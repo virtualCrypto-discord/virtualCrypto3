@@ -205,6 +205,81 @@ pub mod ui {
         }
     }
 
+    /// The screens the DM's developer features move between.
+    ///
+    /// Not from the Elixir: it had no Discord surface for registering an application,
+    /// listing your own or connecting a bot, so there is nothing to mirror. What is
+    /// mirrored is the shape — a head byte, a numeric screen, and the payload after it —
+    /// because Discord sends back only the `custom_id` and an ephemeral message cannot be
+    /// looked up by id, so the screen and its subject both have to travel in this string.
+    pub mod developer {
+        use super::{UiError, parse_id};
+
+        /// Which screen the component belongs to. The numbers are this module's, and
+        /// they must not be renumbered: a message already in a DM carries them.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Screen {
+            Home,
+            List,
+            Connect,
+            Secret,
+            Back,
+        }
+
+        fn id(screen: Screen) -> u8 {
+            match screen {
+                Screen::Home => 1,
+                Screen::List => 2,
+                Screen::Connect => 3,
+                Screen::Secret => 4,
+                Screen::Back => 5,
+            }
+        }
+
+        /// A screen with no subject.
+        pub fn page(screen: Screen) -> [u8; 2] {
+            [0xF0, id(screen)]
+        }
+
+        /// A screen about one application.
+        ///
+        /// The `client_id` is appended as its own text rather than packed into bits: it
+        /// is 36 characters, the limit is 100, and the readable form is one a test can
+        /// write down and a person can recognise in a log.
+        pub fn application(screen: Screen, client_id: &str) -> Vec<u8> {
+            let mut out = page(screen).to_vec();
+            out.extend_from_slice(client_id.as_bytes());
+
+            out
+        }
+
+        pub fn parse(source: &[u8]) -> Result<(Screen, String), UiError> {
+            let (id, data) = parse_id(source)?;
+
+            let screen = match id {
+                1 => Screen::Home,
+                2 => Screen::List,
+                3 => Screen::Connect,
+                4 => Screen::Secret,
+                5 => Screen::Back,
+                _ => return Err(UiError::Unknown(id)),
+            };
+
+            // The packing left-aligns the last group, so a decoded payload comes back
+            // padded with NULs — the module above says so. A `client_id` is a uuid and
+            // never contains one, so cutting them is what recovers the string that went
+            // in, and a payload that is not text at all is one this module did not build.
+            let trimmed = data
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&data[..0], |end| &data[..=end]);
+
+            let client_id = String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head)?;
+
+            Ok((screen, client_id))
+        }
+    }
+
     pub mod modal {
         use super::{UiError, parse_id};
 
@@ -272,6 +347,56 @@ mod tests {
     #[test]
     fn an_unknown_discriminator_is_rejected() {
         assert_eq!(ui::button::parse(&[0x00, 1]), Err(UiError::Head));
+    }
+
+    /// The screen and its subject both survive, which is the whole reason they travel
+    /// here: Discord sends the `custom_id` back and nothing else, and an ephemeral
+    /// message cannot be fetched to ask what it was showing.
+    #[test]
+    fn a_developer_screen_survives_the_round_trip() {
+        let client_id = "3f1c2f4e-9a11-4d2b-8c3e-5f6a7b8c9d0e";
+
+        let encoded = encode(
+            0,
+            &ui::developer::application(ui::developer::Screen::Connect, client_id),
+        );
+        let (screen, found) = ui::developer::parse(&parse(&encoded)).expect("a known screen");
+
+        assert_eq!(screen, ui::developer::Screen::Connect);
+        assert_eq!(found, client_id);
+    }
+
+    /// A screen with no subject is the same shape with nothing after the id.
+    #[test]
+    fn a_developer_screen_without_a_subject_round_trips() {
+        let encoded = encode(0, &ui::developer::page(ui::developer::Screen::Home));
+        let (screen, found) = ui::developer::parse(&parse(&encoded)).expect("a known screen");
+
+        assert_eq!(screen, ui::developer::Screen::Home);
+        assert_eq!(found, "");
+    }
+
+    /// Discord cuts a `custom_id` at 100 characters, and the largest one here is a screen
+    /// plus a uuid. Asserted rather than assumed, because the packing is what makes it
+    /// fit and the packing is easy to change.
+    #[test]
+    fn the_longest_developer_id_fits_in_discords_hundred_characters() {
+        let client_id = "3f1c2f4e-9a11-4d2b-8c3e-5f6a7b8c9d0e";
+        let encoded = encode(
+            0,
+            &ui::developer::application(ui::developer::Screen::Connect, client_id),
+        );
+
+        assert!(
+            encoded.chars().count() <= 100,
+            "{} chars",
+            encoded.chars().count()
+        );
+    }
+
+    #[test]
+    fn an_unknown_developer_screen_is_rejected() {
+        assert_eq!(ui::developer::parse(&[0xF0, 99]), Err(UiError::Unknown(99)));
     }
 
     #[test]
