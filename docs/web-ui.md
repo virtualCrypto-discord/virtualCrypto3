@@ -178,9 +178,24 @@ The failures are distinguished rather than collapsed, which is most of the file:
   the bot is not in that server (l.95-105). A user id that is not a bot is a further
   branch (l.108-).
 
-So a Rust endpoint doing this needs three Discord calls that the seam does not have —
-guild integrations, a guild, a user — and one write to `users.discord_id`. None of it
-is guessable from the shape of the page, which is why it is written here.
+So a Rust endpoint doing this needs three Discord calls the seam does not have and one
+write to `users.discord_id`. None of it is guessable from the shape of the page, which
+is why it is written here.
+
+Where those calls go, since it is three places and not one: `DiscordApi` in
+`crates/vc-api/src/discord.rs` (l.41-), `HttpDiscordApi` (l.320-), and `FakeDiscord` in
+`crates/vc-api/tests/support/mod.rs` (l.130-). Every call the service makes is a trait
+method for exactly this reason.
+
+Two of the three are not new calls but **status-aware versions of ones that exist**.
+`get_guild` and `get_user` answer `Option`, folding every failure into "not there", and
+this flow needs to tell 403 from 200: it reads the guild only to say which of "the
+service is not in that server" and "it is there without Manage Server" it is. That is
+the difference between two messages the operator acts on differently, so it cannot be
+folded. The Elixir has `get_guild_with_status_code` and `get_user_with_status` for the
+same reason, under `Raw`, which is also where the integrations call belongs — none of
+the three should be cached, since a permission question answered from fifteen minutes
+ago is a permission question answered wrongly.
 
 ### The tail, and the constraint it depends on
 
