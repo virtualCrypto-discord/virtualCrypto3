@@ -34,13 +34,19 @@ pub const IS_COMPONENTS_V2: u64 = 1 << 15;
 /// What an ephemeral, components-only interaction response looks like.
 ///
 /// Used for every screen: `content` and `embeds` empty as the flag requires, `components`
-/// as given. What the handler does with the result — answer with it, or edit the message
-/// it is already on — is the handler's business.
+/// as given, and no mentions parsed. The last is not decoration — a mention in a Text Display
+/// pings exactly as one in `content` does, so a message that names a user has to say whether it
+/// means to. Everything here says it does not, which is what every command did before there were
+/// components and what a payment notice needs in particular.
+///
+/// What the handler does with the result — answer with it, or edit the message it is already on —
+/// is the handler's business.
 pub fn ephemeral(components: Vec<Value>) -> Value {
     json!({
         "flags": EPHEMERAL | IS_COMPONENTS_V2,
         "content": Value::Null,
         "embeds": [],
+        "allowed_mentions": { "parse": [] },
         "components": components,
     })
 }
@@ -204,6 +210,7 @@ pub fn text_input(
     required: bool,
     max_length: Option<u64>,
     value: Option<&str>,
+    placeholder: Option<&str>,
 ) -> Value {
     let mut input = json!({
         "type": 4,
@@ -218,6 +225,10 @@ pub fn text_input(
 
     if let Some(value) = value {
         input["value"] = json!(truncate(value, 4000));
+    }
+
+    if let Some(placeholder) = placeholder {
+        input["placeholder"] = json!(truncate(placeholder, 100));
     }
 
     input
@@ -333,7 +344,7 @@ mod modal_tests {
             vec![label(
                 "クライアント名",
                 None,
-                text_input("client_name", TextInputStyle::Short, true, None, None),
+                text_input("client_name", TextInputStyle::Short, true, None, None, None),
             )],
         );
 
@@ -355,7 +366,7 @@ mod modal_tests {
         let field = label(
             &long,
             Some(&long),
-            text_input("x", TextInputStyle::Short, true, None, None),
+            text_input("x", TextInputStyle::Short, true, None, None, None),
         );
 
         assert_eq!(field["label"].as_str().expect("label").chars().count(), 45);
@@ -379,14 +390,23 @@ mod modal_tests {
             true,
             Some(4000),
             Some("https://example.test/callback"),
+            Some("1行に1つ"),
         );
 
         assert_eq!(input["style"], 2);
         assert_eq!(input["max_length"], 4000);
         assert_eq!(input["value"], "https://example.test/callback");
         assert_eq!(input["required"], true);
+        assert_eq!(input["placeholder"], "1行に1つ");
 
-        let short = text_input("client_name", TextInputStyle::Short, false, None, None);
+        let short = text_input(
+            "client_name",
+            TextInputStyle::Short,
+            false,
+            None,
+            None,
+            None,
+        );
 
         assert_eq!(short["style"], 1);
         assert!(short.get("value").is_none(), "{short}");

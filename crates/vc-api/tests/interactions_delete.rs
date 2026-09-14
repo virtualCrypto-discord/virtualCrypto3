@@ -38,17 +38,19 @@ async fn delete_asks_for_confirmation(pool: PgPool) {
     assert_eq!(response.body["data"]["title"], json!("通貨の削除"));
 
     let required = format!("delete {}", money.unit);
-    let row = &response.body["data"]["components"][0];
-    assert_eq!(row["type"], json!(1));
+    let field = &response.body["data"]["components"][0];
 
-    let input = &row["components"][0];
+    assert_eq!(field["type"], json!(18));
+    assert_eq!(
+        field["label"],
+        json!(format!("確認のため、「{required}」と入力してください。"))
+    );
+
+    let input = &field["component"];
+
     assert_eq!(input["type"], json!(4));
     assert_eq!(input["custom_id"], json!("confirm"));
     assert_eq!(input["style"], json!(1));
-    assert_eq!(
-        input["label"],
-        json!(format!("確認のため、「{required}」と入力してください。"))
-    );
     assert_eq!(input["placeholder"], json!(required));
 }
 
@@ -66,16 +68,16 @@ async fn delete_outside_the_window_is_refused(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "components": [{
+                "type": 10,
                 "content": "エラー: 作成から72時間以上経過しているため削除できません。",
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// `delete_test.exs`'s "confirm delete": the typed unit is the confirmation, and
@@ -92,7 +94,11 @@ async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
                 &vc_api::custom_id::ui::modal::confirm_currency_delete(),
             ),
             "components": [{
-                "components": [{ "value": format!("delete {}", money.unit) }],
+                "type": 18,
+                "component": {
+                    "custom_id": "confirm",
+                    "value": format!("delete {}", money.unit),
+                },
             }],
         },
         "member": {
@@ -106,16 +112,16 @@ async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "components": [{
+                "type": 10,
                 "content": "通貨を削除しました。",
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 
     assert!(
         support::currency_by_unit(&pool, &money.unit)

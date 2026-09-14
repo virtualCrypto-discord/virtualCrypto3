@@ -1,10 +1,7 @@
 use serde_json::{Map, Value, json};
 use vc_core::currency::DeleteCheck;
 
-use super::{
-    ACTION_ROW, CHANNEL_MESSAGE_WITH_SOURCE, CommandError, EPHEMERAL, MODAL, TEXT_INPUT,
-    TEXT_INPUT_STYLE_SHORT, as_int,
-};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, as_int};
 use crate::state::AppState;
 
 /// `Command.handle/4` for `delete`, rendered by `InteractionsJSON.delete/1`
@@ -41,26 +38,24 @@ pub async fn handle(
 fn render_confirm(unit: &str) -> Value {
     let required = format!("delete {unit}");
 
-    json!({
-        "type": MODAL,
-        "data": {
-            "title": "通貨の削除",
-            "custom_id": crate::custom_id::encode(
-                0,
-                &crate::custom_id::ui::modal::confirm_currency_delete(),
+    // A label rather than an action row: an input inside a row is the form Discord deprecated in
+    // modals, and the row existed to carry the `label` field that a label now carries itself.
+    crate::components::modal(
+        &crate::custom_id::encode(0, &crate::custom_id::ui::modal::confirm_currency_delete()),
+        "通貨の削除",
+        vec![crate::components::label(
+            &format!("確認のため、「{required}」と入力してください。"),
+            None,
+            crate::components::text_input(
+                "confirm",
+                crate::components::TextInputStyle::Short,
+                true,
+                None,
+                None,
+                Some(&required),
             ),
-            "components": [{
-                "type": ACTION_ROW,
-                "components": [{
-                    "type": TEXT_INPUT,
-                    "custom_id": "confirm",
-                    "style": TEXT_INPUT_STYLE_SHORT,
-                    "label": format!("確認のため、「{required}」と入力してください。"),
-                    "placeholder": required,
-                }],
-            }],
-        },
-    })
+        )],
+    )
 }
 
 /// `Interaction.Modal.handle/4` for `[:delete, :confirm]`: the typed unit is the
@@ -76,9 +71,9 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
         .and_then(|data| data.get("components"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
-        .and_then(|row| row.get("components"))
-        .and_then(Value::as_array)
-        .and_then(|inputs| inputs.first())
+        // A label holds its component under `component`, which is the one thing the deprecated
+        // action row spelled differently.
+        .and_then(|row| row.get("component"))
         .and_then(|input| input.get("value"))
         .and_then(Value::as_str)
         .ok_or_else(|| CommandError::missing("the delete modal has no value"))?;
@@ -97,11 +92,10 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
 
     Ok(json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "content": "通貨を削除しました。",
-            "allowed_mentions": { "parse": [] },
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            None,
+            vec![crate::components::text("通貨を削除しました。")],
+        )]),
     }))
 }
 
@@ -109,10 +103,9 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
 fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "content": content,
-            "allowed_mentions": { "parse": [] },
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            None,
+            vec![crate::components::text(content)],
+        )]),
     })
 }
