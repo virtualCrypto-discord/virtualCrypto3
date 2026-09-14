@@ -35,16 +35,11 @@ fn from_guild(receiver: i64, amount: Value, unit: &str, sender: i64) -> Value {
 fn assert_error(response: &Response, content: &str) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "content": content,
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!(content),
     );
+
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -88,20 +83,16 @@ async fn a_payment_moves_the_amount_between_the_accounts(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "embeds": [{
-                    "description": format!(
-                        "<@{}>から<@{}>へ**20** `{}`送金されました。",
-                        money.user1, money.user2, money.unit
-                    ),
-                    "color": COLOR_OK,
-                }],
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!(format!(
+            "<@{}>から<@{}>へ**20** `{}`送金されました。",
+            money.user1, money.user2, money.unit
+        )),
+    );
+
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        json!(COLOR_OK),
     );
 
     assert_eq!(
@@ -129,7 +120,7 @@ async fn paying_an_unknown_receiver_creates_their_account(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"]["embeds"][0]["description"],
+        response.body["data"]["components"][0]["components"][0]["content"],
         json!(format!(
             "<@{}>から<@{}>へ**20** `{}`送金されました。",
             money.user1, receiver, money.unit
@@ -170,7 +161,7 @@ async fn paying_the_whole_balance_empties_the_account(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"]["embeds"][0]["description"],
+        response.body["data"]["components"][0]["components"][0]["content"],
         json!(format!(
             "<@{}>から<@{}>へ**{}** `{}`送金されました。",
             money.user1, money.user2, sender_before, money.unit

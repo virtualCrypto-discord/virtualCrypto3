@@ -2,8 +2,8 @@ use serde_json::{Map, Value, json};
 use vc_core::payment::PayError;
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, EPHEMERAL, as_int, get_user, mention,
-    option_text, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, get_user, mention, option_text,
+    value_text,
 };
 use crate::state::AppState;
 
@@ -52,32 +52,44 @@ pub async fn handle(
 }
 
 /// `Interactions.Pay.render/2` for `:ok`.
+///
+/// Public, as it was: a payment is said in the channel it happened in. What changed is the shape
+/// — an embed is content and a message with components has none — so the sentence is a Text
+/// Display in a container with the accent the embed carried. `allowed_mentions` stays, because a
+/// mention in a Text Display pings exactly as one in content does.
 fn render_ok(sender: i64, receiver: &str, amount: &Value, unit: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
-            "embeds": [{
-                "description": format!(
+            "flags": crate::components::IS_COMPONENTS_V2,
+            "components": [crate::components::container(
+                // The command's colours are `i64` and a container's accent is the 24 bits.
+                Some(COLOR_OK as u32),
+                vec![crate::components::text(format!(
                     "{}から{}へ**{}** `{}`送金されました。",
                     mention(sender),
                     mention(receiver),
                     value_text(amount),
                     unit,
-                ),
-                "color": COLOR_OK,
-            }],
+                ))],
+            )],
             "allowed_mentions": { "parse": [] },
         },
     })
 }
 
 /// `Interactions.Pay.render/2` for `:error`.
+///
+/// Ephemeral, as it was, and no accent: the message it was is not an embed and carried no colour.
 fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
-            "flags": EPHEMERAL,
-            "content": content,
+            "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
+            "components": [crate::components::container(
+                None,
+                vec![crate::components::text(content)],
+            )],
             "allowed_mentions": { "parse": [] },
         },
     })
