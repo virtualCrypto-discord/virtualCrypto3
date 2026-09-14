@@ -57,41 +57,37 @@ fn from_guild_in(
 fn assert_ok(response: &Response, unit: &str) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "embeds": [{
-                    "description": format!(
-                        "✅ 通貨の作成に成功しました！ `/info unit: {unit}`コマンドで通貨の情報をご覧ください。\n\
-                         削除したい場合は、72時間以内に`/delete`コマンドを実行してください。"
-                    ),
-                    "color": COLOR_OK,
-                }],
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_OK,
+            "components": [{
+                "type": 10,
+                "content": format!(
+                    "✅ 通貨の作成に成功しました！ `/info unit: {unit}`コマンドで通貨の情報をご覧ください。\n\
+                     削除したい場合は、72時間以内に`/delete`コマンドを実行してください。"
+                ),
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// `Interactions.Create.render/3` for `{:error, reason, options}`.
 fn assert_error(response: &Response, description: &str) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "title": "エラー",
-                    "description": description,
-                    "color": COLOR_ERROR,
-                }],
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_ERROR,
+            "components": [{
+                "type": 10,
+                "content": format!("**エラー**\n{description}"),
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

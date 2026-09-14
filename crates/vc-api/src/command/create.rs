@@ -2,8 +2,8 @@ use serde_json::{Map, Value, json};
 use vc_core::currency::{self, CreateError};
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, EPHEMERAL, as_int,
-    as_permissions, is_administrator, option_text, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, as_permissions,
+    is_administrator, option_text, value_text,
 };
 use crate::state::AppState;
 
@@ -100,17 +100,15 @@ pub async fn handle(
 fn render_ok(options: &Map<String, Value>) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "embeds": [{
-                "description": format!(
-                    "\u{2705} 通貨の作成に成功しました！ `/info unit: {}`コマンドで通貨の情報をご覧ください。\n\
-                     削除したい場合は、72時間以内に`/delete`コマンドを実行してください。",
-                    option_display(options, "unit"),
-                ),
-                "color": COLOR_OK,
-            }],
-            "allowed_mentions": { "parse": [] },
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            // The accent the embed carried.
+            Some(COLOR_OK as u32),
+            vec![crate::components::text(format!(
+                "\u{2705} 通貨の作成に成功しました！ `/info unit: {}`コマンドで通貨の情報をご覧ください。\n\
+                 削除したい場合は、72時間以内に`/delete`コマンドを実行してください。",
+                option_display(options, "unit"),
+            ))],
+        )]),
     })
 }
 
@@ -118,15 +116,14 @@ fn render_ok(options: &Map<String, Value>) -> Value {
 fn render_error(reason: Reason, options: &Map<String, Value>) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "title": "エラー",
-                "description": reason.message(options),
-                "color": COLOR_ERROR,
-            }],
-            "allowed_mentions": { "parse": [] },
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            Some(COLOR_ERROR as u32),
+            // The title a line of its own, as the embed had it.
+            vec![crate::components::text(format!(
+                "**エラー**\n{}",
+                reason.message(options)
+            ))],
+        )]),
     })
 }
 
