@@ -25,15 +25,14 @@ async fn bal_lists_the_currency_the_user_holds(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(4));
     assert_eq!(
-        response.body["data"],
-        json!({
-            "flags": 64,
-            "content": format!(
-                "所持通貨一覧\n```yaml\n{}: 199500 {}\n```",
-                money.name, money.unit
-            ),
-        })
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!(format!(
+            "所持通貨一覧\n```yaml\n{}: 199500 {}\n```",
+            money.name, money.unit
+        )),
     );
+
+    assert_eq!(response.body["data"]["flags"], json!(32832),);
 }
 
 /// The list is ordered by unit, which for these two currencies is `n` then `w`.
@@ -45,15 +44,14 @@ async fn bal_lists_every_currency_in_unit_order(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"],
-        json!({
-            "flags": 64,
-            "content": format!(
-                "所持通貨一覧\n```yaml\n{}: 1000 {}\n{}: 200000 {}\n```",
-                money.name, money.unit, money.name2, money.unit2
-            ),
-        })
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!(format!(
+            "所持通貨一覧\n```yaml\n{}: 1000 {}\n{}: 200000 {}\n```",
+            money.name, money.unit, money.name2, money.unit2
+        )),
     );
+
+    assert_eq!(response.body["data"]["flags"], json!(32832),);
 }
 
 /// A discord id with no account has no assets to join, so the command answers
@@ -66,10 +64,9 @@ async fn bal_for_an_unknown_user_says_there_is_nothing(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"],
-        json!({
-            "flags": 64,
-            "content": "所持通貨一覧\n```\n通貨を持っていません。\n```",
-        })
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!("所持通貨一覧\n```\n通貨を持っていません。\n```"),
     );
+
+    assert_eq!(response.body["data"]["flags"], json!(32832),);
 }

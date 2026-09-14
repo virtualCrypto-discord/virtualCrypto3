@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, EPHEMERAL};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError};
 use crate::state::AppState;
 
 /// `Command.handle/4` for `bal`, rendered by `InteractionsJSON.bal/1` through
@@ -32,8 +32,11 @@ fn render(balances: &[vc_core::balance::Balance]) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
-            "flags": EPHEMERAL,
-            "content": content,
+            "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
+            "components": [crate::components::container(
+                None,
+                vec![crate::components::text(content)],
+            )],
         },
     })
 }
