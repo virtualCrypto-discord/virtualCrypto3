@@ -27,9 +27,16 @@ fidelity effort on them the way the documented endpoints deserve.
 
 `Authz.md` documents three token kinds — `user`, `app` and `guild` — and says a
 `guild` token is what may `give`. The implementation's `verify_claims/2` accepts
-only `user` and `app`, so a `guild` token is rejected today; the rewrite mirrors
-the implementation. If `guild` tokens are ever issued, the kind check has to
-grow with them.
+only `user` and `app`, so a `guild` token is rejected today.
+
+**No longer true, and kept here because the shape is deliberate.** The rewrite
+implements the `guild` kind the specification asks for, but the claim is not what
+carries it: the token a guild issues for is the `access_tokens` row the code flow
+has always handed out, and its guild-ness is what that row resolves to
+(`vc_core::grant::resolve_token`). The kind check `verify_claims/2` would grow is
+instead answered by the grant — see `docs/issue.md` for the endpoint, the scope,
+and the three ways a guild says yes. If `guild` tokens are ever issued *as* JWTs,
+that check still has to grow with them.
 
 Behaviour that the Elixir service has and this rewrite does not implement yet,
 listed here so it cannot be forgotten. Everything here is deliberately deferred;
@@ -88,9 +95,12 @@ says nothing once authentication has decided who is calling: `RATE_LIMIT_PER_MIN
 (default 120, zero disables it) applies to the Discord user behind an
 interaction, established by the signature check that runs before it.
 
-The v2 REST API is not covered yet. Its identity is the token's subject, which
-the `AuthUser` extractor already resolves, so the limiter needs to be held there
-the same way.
+The v2 REST API takes the same extractor an endpoint does when it needs it, in
+`routes/limited.rs`: `Limited(AuthUser)` counts per account `v2:{subject}`, and
+the guild endpoints count per application `guild:{application_id}` in the guild
+token's own extractor. The coverage is still uneven — an endpoint is limited when
+its extractor is one of those, and the limiter has to be asked for where the
+token's identity is — but the per-account shape is where it lands.
 
 ## Not yet verified against captures
 

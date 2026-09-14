@@ -1,7 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { ApiError, applications, exchangeToken, loginUrl, type Application } from "../api";
+  import {
+    ApiError,
+    allowGuild,
+    applications,
+    exchangeToken,
+    grants,
+    loginUrl,
+    revokeGuild,
+    type Application,
+    type Grant,
+  } from "../api";
 
   // The client id, from the path — the id the list links with, and the one the connect
   // route takes.
@@ -13,6 +23,14 @@
   let loading = $state(true);
   let refused = $state<ApiError | null>(null);
 
+  // The guilds this application may issue in, and the guild id being added. The
+  // request paths are `/applications/.../grants` — the application's own grants,
+  // named by its client id the way every one of this page's other calls names it.
+  let grantsList = $state<Grant[] | null>(null);
+  let grantGuildId = $state("");
+  let grantBusy = $state(false);
+  let grantError = $state<string | null>(null);
+
   onMount(async () => {
     try {
       const token = await exchangeToken();
@@ -23,6 +41,10 @@
       // be answered with anyway.
       const owned = await applications(token.access_token);
       found = owned.find((application) => application.client_id === clientId) ?? null;
+
+      if (found !== null) {
+        grantsList = await grants(token.access_token, clientId);
+      }
     } catch (thrown) {
       if (thrown instanceof ApiError) {
         refused = thrown;
@@ -33,6 +55,55 @@
       loading = false;
     }
   });
+
+  async function reloadGrants(token: string) {
+    grantsList = await grants(token, clientId);
+  }
+
+  async function addGuild() {
+    const id = grantGuildId.trim();
+
+    if (id === "") {
+      return;
+    }
+
+    grantBusy = true;
+    grantError = null;
+
+    try {
+      const token = (await exchangeToken()).access_token;
+      await allowGuild(token, clientId, id);
+      grantGuildId = "";
+      await reloadGrants(token);
+    } catch (thrown) {
+      if (thrown instanceof ApiError) {
+        grantError = thrown.message;
+      } else {
+        throw thrown;
+      }
+    } finally {
+      grantBusy = false;
+    }
+  }
+
+  async function removeGuild(guildId: string) {
+    grantBusy = true;
+    grantError = null;
+
+    try {
+      const token = (await exchangeToken()).access_token;
+      await revokeGuild(token, clientId, guildId);
+      await reloadGrants(token);
+    } catch (thrown) {
+      if (thrown instanceof ApiError) {
+        grantError = thrown.message;
+      } else {
+        throw thrown;
+      }
+    } finally {
+      grantBusy = false;
+    }
+  }
 </script>
 
 <h1>アプリケーション</h1>
@@ -90,6 +161,59 @@
     <p><a href="/applications/{found.client_id}/connect">Bot を接続する</a></p>
   </section>
 
+  <!-- The guilds this application may issue in — which nothing else on this page
+       shows, and which is what an application's whole reason for being here is. A
+       permission is added with the guild's id, and taken away with its button. The
+       service asks Discord whether the caller may act for the guild when adding;
+       taking one away asks nothing, because an owner narrowing what their own
+       application may do is not a decision the guild has to be asked about. -->
+  <section>
+    <h2>発行を許可したサーバー</h2>
+
+    {#if grantsList === null}
+      <p>読み込んでいます…</p>
+    {:else if grantsList.length === 0}
+      <p>発行を許可したサーバーはありません。</p>
+    {:else}
+      <ul>
+        {#each grantsList as grant (grant.guild_id)}
+          <li>
+            {grant.guild_name ?? "（名前を取得できませんでした）"}
+            <code>{grant.guild_id}</code>
+            <button type="button" disabled={grantBusy} onclick={() => removeGuild(grant.guild_id)}>
+              取り消す
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
+    <!-- Text the whole way, for the reason the connect page's ids stay text: a guild
+         id is a snowflake, and JavaScript's number cannot hold one. -->
+    <form
+      onsubmit={(event) => {
+        event.preventDefault();
+        void addGuild();
+      }}
+    >
+      <p>
+        <label>
+          サーバー ID<br />
+          <input bind:value={grantGuildId} inputmode="numeric" autocomplete="off" />
+        </label>
+        <small>あなたが管理者の Discord サーバーです。`/grant allow` と同じ許可です。</small>
+      </p>
+
+      <p><button type="submit" disabled={grantBusy || grantGuildId.trim() === ""}>
+        {grantBusy ? "送信しています…" : "許可する"}
+      </button></p>
+    </form>
+
+    {#if grantError}
+      <p class="error">{grantError}</p>
+    {/if}
+  </section>
+
   <!-- The edit form is not here either; the reason is in the list page and in
        docs/web-ui.md: `PATCH /oauth2/clients/@me` wants an application's token, and a
        browser holds a person's. -->
@@ -124,5 +248,28 @@
   ul {
     padding-left: 1.2rem;
     margin: 0;
+  }
+
+  button {
+    font: inherit;
+  }
+
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+  }
+
+  label {
+    display: block;
+  }
+
+  small {
+    display: block;
+    color: #555;
+  }
+
+  .error {
+    color: #b91c1c;
   }
 </style>

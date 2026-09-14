@@ -28,6 +28,19 @@ are listed separately so the Elixir coverage can still be read off at a glance.
 | `v2/user_transactions/pay/bulk/bulk_user_transacion_controller_test.exs` | 12 | `tests/v2_transactions_bulk.rs` | ported — plus cases for entry validation and an unknown unit |
 | `v2/user_transactions/pay/bulk/bulk_user_transaction_controller_idempotency_test.exs` | 1 | `tests/v2_transactions_bulk.rs` | ported |
 
+No Elixir file exists for issuing over the API, the grant it needs, or the
+routes that write and read it — neither the endpoint, nor the `guild` token
+with a scope the specification only names, nor `/grant`, nor the consent
+screen's `vc.issue`. The following hold additions, all from `docs/issue.md`:
+
+| Area | Rust test file | cases |
+| --- | --- | --- |
+| the issuing endpoint | `tests/v2_issue.rs` | 16: guild tokens that issue and record themselves as given, scopeless grants refused before and after the body, user/app/unknown/expired/scopeless tokens refused, empty and guildless grants, pool and amount failures, and the key that issues once |
+| `/grant` in Discord | `tests/interactions_grant.rs` | 11: the confirmation, allowing and dismissing, the list, approving and denying a request, one decision only, the administrator bit on the command and on the button, and the DM |
+| the application's grants | `tests/guild_grants.rs` | 11: the empty list, the list with names and scopes, allowing by an administrator, issuing with what was allowed, the member refused, the unreadable guild, the snowflake that is not one, revoking by scope, somebody else's application, an application token, and a missing scope |
+| the application's requests | `tests/grant_requests.rs` | 7: asking, the same ask twice, the list that reads the answer back, an answer that issues, a user token, a missing scope, and the snowflake that is not one |
+| the scope a consent screen may ask for | `tests/oauth2_preauthorize.rs` (2 of) | `vc.issue` passes `preauthorize`, and an approval records it on the code the exchange writes the grant from |
+
 The bulk path reproduces `transfer_bulk/3`'s batching rather than transferring
 entry by entry: the units and the receivers are each resolved in one statement,
 the sender's rows are locked once, and the receiver upsert, the sender decrement

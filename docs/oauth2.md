@@ -157,6 +157,17 @@ Four grants, and the shape they answer in is not the same for all of them.
 | any other `grant_type` | 400 `unsupported_grant_type` |
 | no `grant_type` at all | 400 `invalid_request`, `grant_type_parameter_missing` |
 
+### What a guild-scoped token is good for
+
+`POST /api/v2/currencies/issue`, and so far only that. The Elixir answers with
+the token but accepts it nowhere — its `verify_claims/2` refuses any kind but
+`user` and `app` — and this rewrite makes the token mean something instead of
+refusing an unknown kind. The token is the `access_tokens` row's own id; its
+grant carries both the guild (so the endpoint spends that guild's pool and no
+other's) and its scopes (so taking `vc.issue` away stops it issuing). See
+`docs/issue.md` for the endpoint, the `vc.issue` scope, and the three ways a
+guild grants it — the consent screen, the application's own page, and `/grant`.
+
 Three things in it are worth knowing before writing any of it.
 
 **The code exchange authenticates with the body, not with basic auth.** It reads

@@ -329,3 +329,63 @@ export function connect(
     body: JSON.stringify(connection),
   }) as Promise<void>;
 }
+
+/// A guild the application may issue in, as `/applications/{id}/grants` answers
+/// with it.
+///
+/// The `guild_id` is a string, like every Discord id in this file: a snowflake
+/// JSON's number cannot hold. `guild_name` is `null` when Discord could not be
+/// asked — the row is real either way, and the page says so.
+export interface Grant {
+  guild_id: string;
+  guild_name: string | null;
+  scopes: string[];
+  updated_at: string;
+}
+
+/// What allowing a guild answers with: the guild, and the scope it now carries.
+export interface AllowedGrant {
+  guild_id: string;
+  scopes: string[];
+}
+
+/// The guilds the token's caller allows this application to issue in.
+///
+/// The caller is the application's owner: the endpoint reads which applications
+/// their account owns and answers 404 for a `clientId` that is not one of them,
+/// rather than saying whether the id exists.
+export function grants(token: string, clientId: string): Promise<Grant[]> {
+  return request(`/applications/${encodeURIComponent(clientId)}/grants`, {
+    headers: authorize(token),
+  }) as Promise<Grant[]>;
+}
+
+/// Allows the application to issue from the guild's pool — which is what
+/// `/grant allow` does in Discord, said from this page instead.
+///
+/// The caller's account has to be able to act for the guild: the service asks
+/// Discord the question the consent screen asks, and a guild the caller may not
+/// act for is refused.
+export function allowGuild(
+  token: string,
+  clientId: string,
+  guildId: string,
+): Promise<AllowedGrant> {
+  return request(`/applications/${encodeURIComponent(clientId)}/grants`, {
+    method: "POST",
+    headers: { ...authorize(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ guild_id: guildId }),
+  }) as Promise<AllowedGrant>;
+}
+
+/// Takes the issuing permission back.
+///
+/// The grant stays and only its scope goes, so a guild token that was already
+/// issued stops being able to issue and nothing else changes — which is also why
+/// a guild with nothing to take back is answered the same 204 as one that had.
+export function revokeGuild(token: string, clientId: string, guildId: string): Promise<void> {
+  return request(
+    `/applications/${encodeURIComponent(clientId)}/grants/${encodeURIComponent(guildId)}`,
+    { method: "DELETE", headers: authorize(token) },
+  ) as Promise<void>;
+}
