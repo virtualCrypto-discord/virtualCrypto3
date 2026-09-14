@@ -80,13 +80,21 @@ pub fn button(custom_id: &str, label: &str, style: ButtonStyle) -> Value {
 /// the page they would move to is the page they are on. A label is optional in Discord's button
 /// and an emoji is what these say instead.
 pub fn icon_button(custom_id: &str, emoji: &str, style: ButtonStyle, disabled: bool) -> Value {
-    json!({
+    let mut button = json!({
         "type": 2,
         "style": style as u8,
         "emoji": { "name": emoji },
         "custom_id": custom_id,
-        "disabled": disabled,
-    })
+    });
+
+    // Written only when it is true: false is the default, and a message that says `disabled:
+    // false` is a different message from one that says nothing, which is what the claim list
+    // has always sent.
+    if disabled {
+        button["disabled"] = json!(true);
+    }
+
+    button
 }
 
 /// A button that opens a URL and, because it does, sends nothing back.
@@ -318,7 +326,10 @@ mod tests {
         assert_eq!(disabled["emoji"]["name"], "⏪");
         assert_eq!(disabled["disabled"], json!(true));
         assert!(disabled.get("label").is_none(), "{disabled}");
-        assert_eq!(enabled["disabled"], json!(false));
+        assert!(
+            enabled.get("disabled").is_none(),
+            "an enabled button says nothing about it: {enabled}"
+        );
     }
 
     #[test]
