@@ -323,18 +323,17 @@ fn assert_message(response: &support::Response, message: &str) {
 fn assert_action_result(response: &support::Response, claim_id: i64, result: &str) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "description": format!("id: {claim_id}の請求を{result}"),
-                    "color": COLOR_OK,
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_OK,
+            "components": [{
+                "type": 10,
+                "content": format!("id: {claim_id}の請求を{result}"),
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 const INVALID_OPERATOR: &str = "この請求に対してこの操作を行う権限がありません。";

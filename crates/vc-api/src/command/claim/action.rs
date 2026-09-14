@@ -2,9 +2,7 @@ use serde_json::{Value, json};
 use vc_core::claim::{Transition, TransitionError};
 
 use super::{render_error, sub_option};
-use crate::command::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, EPHEMERAL, as_int, get_user,
-};
+use crate::command::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, get_user};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -70,12 +68,12 @@ fn render(transition: Transition, claim_id: i64) -> Value {
 
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "description": format!("id: {claim_id}の請求を{result}"),
-                "color": COLOR_OK,
-            }],
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            // The accent the embed carried.
+            Some(COLOR_OK as u32),
+            vec![crate::components::text(format!(
+                "id: {claim_id}の請求を{result}"
+            ))],
+        )]),
     })
 }
