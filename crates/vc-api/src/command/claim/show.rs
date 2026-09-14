@@ -5,7 +5,7 @@ use vc_core::claim::{ClaimCurrency, ClaimView};
 use super::{format_date_time, render_error, sub_option};
 use crate::command::{
     ACTION_ROW, BUTTON, BUTTON_STYLE_DANGER, BUTTON_STYLE_PRIMARY, BUTTON_STYLE_SUCCESS,
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, EPHEMERAL, as_int, get_user, mention,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, as_int, get_user, mention,
 };
 use crate::state::AppState;
 
@@ -52,17 +52,6 @@ fn render(claim: &ClaimView, me: i64, assets: Option<&[Balance]>) -> Value {
     let claimant = claim.claimant.discord_id;
     let payer = claim.payer.discord_id;
 
-    let field = json!({
-        "name": format!("{}{}", render_rs_icon(me, claimant, payer), claim.id),
-        "value": format!(
-            "状態　: {}\n請求額: **{amount}** `{unit}`\n請求元: {}\n請求先: {}\n請求日: {}",
-            render_status(claim.status.as_deref()),
-            mention(claimant.unwrap_or_default()),
-            mention(payer.unwrap_or_default()),
-            format_date_time(claim.inserted_at),
-        ),
-    });
-
     // `currencies.unit` is unique, so finding the balance by the claim's unit is
     // the same as `depends_assets/1` finding it by currency id.
     let current = assets.map(|assets| {
@@ -73,35 +62,45 @@ fn render(claim: &ClaimView, me: i64, assets: Option<&[Balance]>) -> Value {
             .unwrap_or(0)
     });
 
-    let mut embeds = vec![json!({
-        "title": "請求",
-        "fields": [field],
-        "color": COLOR_BRAND,
-    })];
+    // The embed was a title and a field, and a Text Display has no title: it is a bold line above
+    // what it introduced. The second embed was the quotation, the same way.
+    let heading = format!(
+        "**請求**\n**{}{}**",
+        render_rs_icon(me, claimant, payer),
+        claim.id
+    );
+    let field = format!(
+        "状態　: {}\n請求額: **{amount}** `{unit}`\n請求元: {}\n請求先: {}\n請求日: {}",
+        render_status(claim.status.as_deref()),
+        mention(claimant.unwrap_or_default()),
+        mention(payer.unwrap_or_default()),
+        format_date_time(claim.inserted_at),
+    );
 
-    let mut components = Vec::new();
+    let mut children = vec![crate::components::text(format!("{heading}\n{field}"))];
+
+    let mut rows = Vec::new();
 
     if let Some(current) = current {
-        embeds.push(json!({
-            "title": "残高",
-            "color": COLOR_BRAND,
-            "description": render_quotation(&claim.currency, current, amount),
-        }));
-        components.push(action_row(claim, me, Some(current)));
+        children.push(crate::components::text(format!(
+            "**残高**\n{}",
+            render_quotation(&claim.currency, current, amount)
+        )));
+        rows.push(action_row(claim, me, Some(current)));
     } else if claim.status.as_deref() == Some("pending") {
-        components.push(action_row(claim, me, None));
+        rows.push(action_row(claim, me, None));
     }
+
+    // The text, then the buttons: a person reads the claim before acting on it.
+    children.extend(rows);
 
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            // A `:command` action renders an empty content; a button press puts
-            // the result of the action here instead.
-            "content": "",
-            "embeds": embeds,
-            "components": components,
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            // Both embeds carried this accent.
+            Some(COLOR_BRAND as u32),
+            children,
+        )]),
     })
 }
 

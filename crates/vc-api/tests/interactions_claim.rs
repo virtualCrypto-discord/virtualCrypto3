@@ -63,33 +63,34 @@ fn assert_shown(response: &support::Response, claim_id: i64, claim: &ClaimSet, i
     let body = &response.body;
 
     assert_eq!(body["type"], json!(4));
-    assert_eq!(body["data"]["flags"], json!(64));
-    assert_eq!(body["data"]["content"], json!(""));
+    assert_eq!(body["data"]["flags"], json!(32832));
+    assert_eq!(body["data"]["content"], json!(null));
 
-    let embed = &body["data"]["embeds"][0];
-    assert_eq!(embed["title"], json!("請求"));
-    assert_eq!(embed["color"], json!(COLOR_BRAND));
-    assert_eq!(embed["fields"][0]["name"], json!(format!("📤📥{claim_id}")));
+    // The container holds the text and then the buttons, and it carries the accent both embeds
+    // had.
+    let container = &body["data"]["components"][0];
+    assert_eq!(container["type"], json!(17));
+    assert_eq!(container["accent_color"], json!(COLOR_BRAND));
+
+    // The embed's title and its field, which were two keys and are one sentence now.
     assert_eq!(
-        embed["fields"][0]["value"],
+        container["components"][0]["content"],
         json!(format!(
-            "状態　: ⌛未決定\n請求額: **100** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{inserted_at}>",
+            "**請求**\n**📤📥{claim_id}**\n状態　: ⌛未決定\n請求額: **100** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{inserted_at}>",
             money.unit, money.user1, money.user1
         ))
     );
 
-    let quotation = &body["data"]["embeds"][1];
-    assert_eq!(quotation["title"], json!("残高"));
-    assert_eq!(quotation["color"], json!(COLOR_BRAND));
+    // And the quotation, the same way.
     assert_eq!(
-        quotation["description"],
+        container["components"][1]["content"],
         json!(format!(
-            "**{}**: `200000{}` - `100{}` => `199900{}`",
+            "**残高**\n**{}**: `200000{}` - `100{}` => `199900{}`",
             money.name, money.unit, money.unit, money.unit
         ))
     );
 
-    let row = &body["data"]["components"][0];
+    let row = &container["components"][2];
     assert_eq!(row["type"], json!(1));
 
     let buttons = row["components"].as_array().expect("the buttons");
