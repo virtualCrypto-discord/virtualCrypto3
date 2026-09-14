@@ -42,17 +42,13 @@ fn from_guild(
 fn assert_error(response: &Response, content: &str) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "tts": false,
-                "flags": 64,
-                "content": content,
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "components": [{ "type": 10, "content": content }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -74,21 +70,20 @@ async fn give_issues_from_the_pool(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "embeds": [{
-                    "description": format!(
-                        "✅ <@{}>へ**100** `{}`発行されました。\n残りの発行枠: **400** `{}`",
-                        money.user2, money.unit, money.unit
-                    ),
-                    "color": COLOR_OK,
-                }],
-                "allowed_mentions": { "parse": [] },
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_OK,
+            "components": [{
+                "type": 10,
+                "content": format!(
+                    "✅ <@{}>へ**100** `{}`発行されました。\n残りの発行枠: **400** `{}`",
+                    money.user2, money.unit, money.unit
+                ),
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 
     assert_eq!(
         get_amount(&pool, money.user2, money.currency).await,
@@ -124,7 +119,7 @@ async fn give_without_an_amount_issues_the_whole_pool(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"]["embeds"][0]["description"],
+        response.body["data"]["components"][0]["components"][0]["content"],
         json!(format!(
             "✅ <@{}>へ**500** `{}`発行されました。\n残りの発行枠: **0** `{}`",
             money.user2, money.unit, money.unit

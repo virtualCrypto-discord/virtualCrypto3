@@ -2,8 +2,8 @@ use serde_json::{Map, Value, json};
 use vc_core::issue::{GiveError, Issued};
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, EPHEMERAL, as_int, as_permissions,
-    is_administrator, mention, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, as_permissions, is_administrator,
+    mention, value_text,
 };
 use crate::state::AppState;
 
@@ -62,33 +62,31 @@ pub async fn handle(
 fn render_ok(receiver: &str, issued: &Issued) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "embeds": [{
-                "description": format!(
-                    "\u{2705} {}へ**{}** `{}`発行されました。\n残りの発行枠: **{}** `{}`",
-                    mention(receiver),
-                    issued.amount,
-                    issued.unit,
-                    issued.pool_amount,
-                    issued.unit,
-                ),
-                "color": COLOR_OK,
-            }],
-            "allowed_mentions": { "parse": [] },
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            // The accent the embed carried.
+            Some(COLOR_OK as u32),
+            vec![crate::components::text(format!(
+                "\u{2705} {}へ**{}** `{}`発行されました。\n残りの発行枠: **{}** `{}`",
+                mention(receiver),
+                issued.amount,
+                issued.unit,
+                issued.pool_amount,
+                issued.unit,
+            ))],
+        )]),
     })
 }
 
-/// `Interactions.Give.render/2` for `:error`. Unlike `pay`, this one says
-/// `tts: false`.
+/// `Interactions.Give.render/2` for `:error`.
+///
+/// It said `tts: false` where `pay` said nothing, which is the same message: false is the default
+/// and the components shape has no place to repeat it.
 fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "tts": false,
-            "flags": EPHEMERAL,
-            "content": content,
-            "allowed_mentions": { "parse": [] },
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            None,
+            vec![crate::components::text(content)],
+        )]),
     })
 }
