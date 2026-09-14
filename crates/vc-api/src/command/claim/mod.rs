@@ -10,7 +10,7 @@ use vc_core::claim::Transition;
 
 use crate::claim_list::Position;
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError, EPHEMERAL};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError};
 use crate::state::AppState;
 
 /// `Command.handle/4`'s `"claim"` clauses: the subcommand picks a handler.
@@ -55,18 +55,14 @@ fn format_date_time(value: PrimitiveDateTime) -> String {
 
 /// `Interactions.Claim.render/1` for `{:error, _, error}`.
 ///
-/// Unlike the other commands' errors this one carries no `allowed_mentions`,
-/// which the ported tests compare against.
+/// The title is a line of its own, as an embed's title was: components have no title, so it is
+/// bold text above the sentence it introduced.
 fn render_error(description: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "title": "エラー",
-                "description": description,
-                "color": COLOR_ERROR,
-            }],
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            Some(COLOR_ERROR as u32),
+            vec![crate::components::text(format!("**エラー**\n{description}"))],
+        )]),
     })
 }

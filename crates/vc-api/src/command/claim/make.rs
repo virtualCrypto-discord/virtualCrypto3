@@ -3,7 +3,7 @@ use vc_core::claim::CreateError;
 
 use super::{render_error, sub_option};
 use crate::command::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, EPHEMERAL, as_int, get_user, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, get_user, value_text,
 };
 use crate::state::AppState;
 
@@ -51,14 +51,12 @@ pub async fn handle(
 fn render(claim_id: i64) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "description": format!(
-                    "請求id: {claim_id} で請求を受け付けました。`/claim show id:{claim_id}`でご確認ください。"
-                ),
-                "color": COLOR_OK,
-            }],
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            // The accent the embed carried.
+            Some(COLOR_OK as u32),
+            vec![crate::components::text(format!(
+                "請求id: {claim_id} で請求を受け付けました。`/claim show id:{claim_id}`でご確認ください。"
+            ))],
+        )]),
     })
 }

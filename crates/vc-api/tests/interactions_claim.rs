@@ -122,11 +122,11 @@ async fn make_creates_a_claim_and_reports_its_id(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
 
-    let description = response.body["data"]["embeds"][0]["description"]
+    let description = response.body["data"]["components"][0]["components"][0]["content"]
         .as_str()
         .expect("a description")
         .to_string();
-    assert_eq!(response.body["data"]["flags"], json!(64));
+    assert_eq!(response.body["data"]["flags"], json!(32832));
     assert_eq!(response.body["type"], json!(4));
 
     let prefix = "請求id: ";
@@ -166,19 +166,17 @@ async fn make_rejects_a_non_positive_amount(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "title": "エラー",
-                    "color": COLOR_ERROR,
-                    "description": "不正な金額です。1以上9223372036854775807以下である必要があります。",
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_ERROR,
+            "components": [{
+                "type": 10,
+                "content": "**エラー**\n不正な金額です。1以上9223372036854775807以下である必要があります。",
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -194,19 +192,17 @@ async fn make_rejects_an_unknown_unit(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "title": "エラー",
-                    "color": COLOR_ERROR,
-                    "description": "指定された通貨は存在しません。",
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_ERROR,
+            "components": [{
+                "type": 10,
+                "content": "**エラー**\n指定された通貨は存在しません。",
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -218,19 +214,17 @@ async fn show_reports_an_unknown_claim(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "title": "エラー",
-                    "color": COLOR_ERROR,
-                    "description": "そのidの請求は見つかりませんでした。",
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_ERROR,
+            "components": [{
+                "type": 10,
+                "content": "**エラー**\nそのidの請求は見つかりませんでした。",
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// c6 is a claim user1 made on themselves, so user2 is a party to nothing in it.
@@ -244,19 +238,17 @@ async fn show_hides_a_claim_the_caller_is_not_part_of(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "title": "エラー",
-                    "color": COLOR_ERROR,
-                    "description": "そのidの請求は見つかりませんでした。",
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_ERROR,
+            "components": [{
+                "type": 10,
+                "content": "**エラー**\nそのidの請求は見つかりませんでした。",
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// The caller is both parties, holds more than the claim asks, and so sees the
@@ -304,19 +296,17 @@ async fn patch(pool: PgPool, action: &str, id: i64, user: i64) -> support::Respo
 fn assert_message(response: &support::Response, message: &str) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "title": "エラー",
-                    "color": COLOR_ERROR,
-                    "description": message,
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_ERROR,
+            "components": [{
+                "type": 10,
+                "content": format!("**エラー**\n{}", message),
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// `Interactions.Claim.render/1` for a transition the caller was allowed to make.
