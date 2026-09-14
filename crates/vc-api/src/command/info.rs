@@ -2,8 +2,8 @@ use serde_json::{Map, Value, json};
 use vc_core::currency::{CurrencyInfo, CurrencySelector};
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, EPHEMERAL, as_int,
-    get_user, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, as_int, get_user,
+    value_text,
 };
 use crate::state::AppState;
 
@@ -58,44 +58,63 @@ pub async fn handle(
 fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -> Value {
     let unit = info.unit.clone().unwrap_or_default();
 
+    let mut children = Vec::new();
+
+    // The guild was the embed's author: a line with a small icon beside it. A section is that
+    // pairing — its text with an accessory — and a thumbnail is the small image, so the icon keeps
+    // its place and moves to the right of the sentence. With no icon there is no accessory to
+    // have, and a section requires one, so the name is a Text Display of its own.
+    if let Some(guild) = &guild {
+        let name = guild.get("name").map(value_text).unwrap_or_default();
+
+        children.push(match guild_icon(guild) {
+            Some(url) => crate::components::section(
+                vec![crate::components::text(format!("**{name}**"))],
+                crate::components::thumbnail(&url),
+            ),
+            None => crate::components::text(format!("**{name}**")),
+        });
+    }
+
+    // The title, then the four fields, then the footer. The fields were `inline`, which is four
+    // columns in an embed and four lines here: a Text Display is a block, so the arrangement is
+    // the one thing about this message that components cannot say the same way.
+    children.push(crate::components::text(format!(
+        "**{}**",
+        info.name.clone().unwrap_or_default()
+    )));
+    children.push(crate::components::text(format!(
+        "**総発行量**\n`{}{unit}`",
+        info.total_amount
+    )));
+    children.push(crate::components::text(format!(
+        "**発行枠**\n`{}{unit}`",
+        info.pool_amount.unwrap_or(0)
+    )));
+    children.push(crate::components::text(format!(
+        "**あなたの所持量**\n`{amount}{unit}`"
+    )));
+    children.push(crate::components::text(format!(
+        "**削除可能**\n{}",
+        if info.is_deletable(vc_core::model::utc_now()) {
+            "はい"
+        } else {
+            "いいえ"
+        }
+    )));
+    // `-# ` is how a line is written small, which is what the footer was.
+    children.push(crate::components::text(
+        "-# 発行枠は一日一回総発行量の0.5%増加し、最大で総発行量の3.5%となります。",
+    ));
+
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "title": info.name.clone().unwrap_or_default(),
-                "author": render_guild(guild),
-                "color": COLOR_BRAND,
-                "fields": [
-                    {
-                        "name": "総発行量",
-                        "value": format!("`{}{unit}`", info.total_amount),
-                        "inline": true,
-                    },
-                    {
-                        "name": "発行枠",
-                        "value": format!("`{}{unit}`", info.pool_amount.unwrap_or(0)),
-                        "inline": true,
-                    },
-                    {
-                        "name": "あなたの所持量",
-                        "value": format!("`{amount}{unit}`"),
-                        "inline": true,
-                    },
-                    {
-                        "name": "削除可能",
-                        "value": if info.is_deletable(vc_core::model::utc_now()) {
-                            "はい"
-                        } else {
-                            "いいえ"
-                        },
-                        "inline": true,
-                    },
-                ],
-                "footer": {
-                    "text": "発行枠は一日一回総発行量の0.5%増加し、最大で総発行量の3.5%となります。",
-                },
-            }],
+            "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
+            "components": [crate::components::container(
+                Some(COLOR_BRAND as u32),
+                children,
+            )],
         },
     })
 }
@@ -105,40 +124,34 @@ fn render_error(description: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "title": "エラー",
-                "color": COLOR_ERROR,
-                "description": description,
-            }],
+            "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
+            "components": [crate::components::container(
+                Some(COLOR_ERROR as u32),
+                vec![crate::components::text(format!("**エラー**\n{description}"))],
+            )],
             "allowed_mentions": { "parse": [] },
         },
     })
 }
 
-/// `Interactions.Info.render_guild/1`: the guild's name, plus its icon when
-/// Discord reports one. A missing icon and an explicit null both add nothing.
-fn render_guild(guild: Option<Map<String, Value>>) -> Value {
-    let Some(guild) = guild else {
-        return Value::Null;
+/// `Interactions.Info.render_guild/1`, as the icon alone.
+///
+/// A missing icon and an explicit null both add nothing, which is why this is an `Option`: the
+/// section that shows the guild's name needs an accessory, and a URL that is not one would be
+/// worse than having none.
+fn guild_icon(guild: &Map<String, Value>) -> Option<String> {
+    let Some(Value::String(hash)) = guild.get("icon") else {
+        return None;
     };
 
-    let mut author = json!({
-        "name": guild.get("name").map(value_text).unwrap_or_default(),
-    });
+    let format = if hash.starts_with("a_") {
+        "gif"
+    } else {
+        "webp"
+    };
+    let id = guild.get("id").map(value_text).unwrap_or_default();
 
-    if let Some(Value::String(hash)) = guild.get("icon") {
-        let format = if hash.starts_with("a_") {
-            "gif"
-        } else {
-            "webp"
-        };
-        let id = guild.get("id").map(value_text).unwrap_or_default();
-
-        author["icon_url"] = json!(format!(
-            "https://cdn.discordapp.com/icons/{id}/{hash}.{format}"
-        ));
-    }
-
-    author
+    Some(format!(
+        "https://cdn.discordapp.com/icons/{id}/{hash}.{format}"
+    ))
 }
