@@ -5,6 +5,7 @@ members = [
     "crates/vc-auth",
     "crates/vc-api",
     "crates/vc-server",
+    "crates/vc-demo-app",
 ]
 
 [workspace.package]

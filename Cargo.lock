@@ -2568,6 +2568,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vc-demo-app"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ed25519-dalek",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "vc-server"
 version = "0.1.0"
 dependencies = [
