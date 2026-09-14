@@ -120,19 +120,26 @@ pub fn link_button(url: &str, label: &str) -> Value {
 /// out of two, and the set that is chosen is the set that is sent.
 pub fn select_many(
     custom_id: &str,
-    placeholder: &str,
+    placeholder: Option<&str>,
     options: Vec<Value>,
     min_values: u8,
     max_values: u8,
 ) -> Value {
-    json!({
+    let mut select = json!({
         "type": 3,
         "custom_id": custom_id,
-        "placeholder": placeholder,
         "options": options,
         "min_values": min_values,
         "max_values": max_values,
-    })
+    });
+
+    // A select without one is a select Discord shows empty, which is what the claim list's menu
+    // is: its options are the claims' own ids, and there is no sentence to put above them.
+    if let Some(placeholder) = placeholder {
+        select["placeholder"] = json!(truncate(placeholder, 150));
+    }
+
+    select
 }
 
 /// A picker for a user, which is how a bot is chosen.

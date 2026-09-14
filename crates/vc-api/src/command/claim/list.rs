@@ -5,9 +5,8 @@ use vc_core::claim::{ClaimPage, ClaimView, PageTarget, SrFilter};
 use super::format_date_time;
 use crate::claim_list::{ListOptions, Page, Position, encode_claim_ids};
 use crate::command::{
-    ACTION_ROW, BUTTON, BUTTON_STYLE_DANGER, BUTTON_STYLE_PRIMARY, BUTTON_STYLE_SECONDARY,
-    BUTTON_STYLE_SUCCESS, CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, SELECT_MENU,
-    UPDATE_MESSAGE, as_int, get_user, mention,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, get_user,
+    mention,
 };
 use crate::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
 use crate::custom_id::ui::select_menu::claim_select;
@@ -299,32 +298,29 @@ fn pagination_row(position: Position, page: &ClaimPage, options: &ListOptions) -
             Some(target) => page_custom_id(k, position, target, options),
         };
 
-        json!({
-            "type": BUTTON,
-            "style": BUTTON_STYLE_SECONDARY,
-            "emoji": { "name": emoji },
-            "custom_id": custom_id,
-            "disabled": target.is_none(),
-        })
+        crate::components::icon_button(
+            &custom_id,
+            emoji,
+            crate::components::ButtonStyle::Secondary,
+            // A page that is not there is a button that says so.
+            Some(target.is_none()),
+        )
     };
 
-    json!({
-        "type": ACTION_ROW,
-        "components": [
-            button(0, "⏪", page.first.map(PageTarget::Number)),
-            button(1, "⏮️", page.prev.map(PageTarget::Number)),
-            button(2, "⏭️", page.next),
-            button(3, "⏩", page.last),
-            // The reload button is always available, so it carries no `disabled`
-            // at all.
-            {
-                "type": BUTTON,
-                "style": BUTTON_STYLE_SECONDARY,
-                "emoji": { "name": "🔄" },
-                "custom_id": page_custom_id(4, position, PageTarget::Number(page.page), options),
-            },
-        ],
-    })
+    crate::components::action_row(vec![
+        button(0, "⏪", page.first.map(PageTarget::Number)),
+        button(1, "⏮️", page.prev.map(PageTarget::Number)),
+        button(2, "⏭️", page.next),
+        button(3, "⏩", page.last),
+        // The reload button is always available, so it carries no `disabled`
+        // at all.
+        crate::components::icon_button(
+            &page_custom_id(4, position, PageTarget::Number(page.page), options),
+            "🔄",
+            crate::components::ButtonStyle::Secondary,
+            None,
+        ),
+    ])
 }
 
 /// `Listing.custom_id/4` for a page: the list's position and the options with the
@@ -378,16 +374,14 @@ fn select_row(
         })
         .collect();
 
-    json!({
-        "type": ACTION_ROW,
-        "components": [{
-            "type": SELECT_MENU,
-            "custom_id": crate::custom_id::encode(k, &payload),
-            "max_values": pending.len(),
-            "min_values": 0,
-            "options": choices,
-        }],
-    })
+    crate::components::action_row(vec![crate::components::select_many(
+        &crate::custom_id::encode(k, &payload),
+        // The options are the claims themselves, so there is no sentence to put above them.
+        None,
+        choices,
+        0,
+        u8::try_from(pending.len()).unwrap_or(u8::MAX),
+    )])
 }
 
 /// One currency's share of a selection: what the operator holds, against what is
@@ -546,34 +540,52 @@ fn action_row(
 
     let ids: Vec<i64> = selected.iter().map(|claim| claim.id).collect();
 
-    let button = |k: u8, emoji: &str, style: i64, action: Action, disabled: Option<bool>| {
+    let button = |k: u8,
+                  emoji: &str,
+                  style: crate::components::ButtonStyle,
+                  action: Action,
+                  disabled: Option<bool>| {
         let mut payload = claim_action(action).to_vec();
         payload.extend_from_slice(&options.encode());
         payload.extend_from_slice(&encode_claim_ids(&ids));
 
-        let mut button = json!({
-            "type": BUTTON,
-            "style": style,
-            "emoji": { "name": emoji },
-            "custom_id": crate::custom_id::encode(k, &payload),
-        });
-
-        // Only the actions that can be refused carry the flag; going back is
-        // always possible.
-        if let Some(disabled) = disabled {
-            button["disabled"] = json!(disabled);
-        }
-
-        button
+        crate::components::icon_button(
+            &crate::custom_id::encode(k, &payload),
+            emoji,
+            style,
+            // Only the actions that can be refused carry the flag; going back is always possible.
+            disabled,
+        )
     };
 
-    Some(json!({
-        "type": ACTION_ROW,
-        "components": [
-            button(5, "⬅️", BUTTON_STYLE_SECONDARY, Action::Back, None),
-            button(6, "✅", BUTTON_STYLE_SUCCESS, Action::Approve, Some(!approvable)),
-            button(7, "❌", BUTTON_STYLE_DANGER, Action::Deny, Some(!deniable)),
-            button(8, "🗑️", BUTTON_STYLE_PRIMARY, Action::Cancel, Some(!cancelable)),
-        ],
-    }))
+    Some(crate::components::action_row(vec![
+        button(
+            5,
+            "⬅️",
+            crate::components::ButtonStyle::Secondary,
+            Action::Back,
+            None,
+        ),
+        button(
+            6,
+            "✅",
+            crate::components::ButtonStyle::Success,
+            Action::Approve,
+            Some(!approvable),
+        ),
+        button(
+            7,
+            "❌",
+            crate::components::ButtonStyle::Danger,
+            Action::Deny,
+            Some(!deniable),
+        ),
+        button(
+            8,
+            "🗑️",
+            crate::components::ButtonStyle::Primary,
+            Action::Cancel,
+            Some(!cancelable),
+        ),
+    ]))
 }

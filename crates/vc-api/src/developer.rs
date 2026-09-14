@@ -174,7 +174,7 @@ pub fn application(
                     client_id,
                     "application_type",
                 ),
-                "種類を選ぶ",
+                Some("種類を選ぶ"),
                 APPLICATION_TYPES
                     .iter()
                     .map(|kind| select_option(kind, kind, None))
@@ -192,7 +192,7 @@ pub fn application(
                     client_id,
                     "grant_types",
                 ),
-                "グラントタイプを選ぶ",
+                Some("グラントタイプを選ぶ"),
                 GRANT_TYPES
                     .iter()
                     .map(|kind| select_option(kind, kind, None))
@@ -210,7 +210,7 @@ pub fn application(
                     client_id,
                     "response_types",
                 ),
-                "レスポンスタイプを選ぶ",
+                Some("レスポンスタイプを選ぶ"),
                 RESPONSE_TYPES
                     .iter()
                     .map(|kind| select_option(kind, kind, None))
