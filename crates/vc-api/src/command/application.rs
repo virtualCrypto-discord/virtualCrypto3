@@ -207,8 +207,11 @@ async fn connect_bot(
 /// uuid first would answer whether an application exists to somebody who owns none.
 async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Value, CommandError> {
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(ephemeral(vec![developer::plain(
-            "そのアプリケーションはありません。",
+        // A refusal rather than a sentence: it carries the list button, and a screen with no way
+        // on is the same problem as a button that goes nowhere.
+        return Ok(ephemeral(vec![developer::refusal(
+            "表示",
+            Some("そのアプリケーションはありません。"),
         )]));
     };
 
@@ -490,8 +493,9 @@ async fn edit_field(
     payload: &Value,
 ) -> Result<Value, CommandError> {
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(message(ephemeral(vec![developer::plain(
-            "そのアプリケーションはありません。",
+        return Ok(message(ephemeral(vec![developer::refusal(
+            "変更",
+            Some("そのアプリケーションはありません。"),
         )])));
     };
 
