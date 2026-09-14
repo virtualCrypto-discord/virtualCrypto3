@@ -1045,7 +1045,11 @@ async fn assert_action_error(pool: PgPool, action: Action, claim: i64, user: i64
     let (response, body) = press(&api, pool, action, &[claim], user).await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(body, json!({ "content": content, "flags": 64 }));
+    assert_eq!(
+        body["components"],
+        json!([{ "type": 17, "components": [{ "type": 10, "content": content }] }])
+    );
+    assert_eq!(body["flags"], json!(32832));
 }
 
 /// The one case in each file that carries the action through: the money moves,
@@ -1070,12 +1074,10 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     .await;
 
     assert_eq!(
-        body,
-        json!({
-            "content": format!("id: `{claim_id}` の請求を承諾し、支払いました。"),
-            "flags": 64,
-        })
+        body["components"],
+        json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を承諾し、支払いました。") }] }])
     );
+    assert_eq!(body["flags"], json!(32832));
 
     // The press answers with the list redrawn, not with the outcome.
     assert_eq!(response.status, 200, "body: {}", response.body);
@@ -1304,12 +1306,10 @@ async fn pressing_deny_leaves_the_money_where_it_is(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        body,
-        json!({
-            "content": format!("id: `{claim_id}` の請求を拒否しました。"),
-            "flags": 64,
-        })
+        body["components"],
+        json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を拒否しました。") }] }])
     );
+    assert_eq!(body["flags"], json!(32832));
 
     let claim = vc_core::claim::view(&pool, 1, claim_id)
         .await
@@ -1486,12 +1486,10 @@ async fn pressing_cancel_is_the_claimants_move(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        body,
-        json!({
-            "content": format!("id: `{claim_id}` の請求をキャンセルしました。"),
-            "flags": 64,
-        })
+        body["components"],
+        json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求をキャンセルしました。") }] }])
     );
+    assert_eq!(body["flags"], json!(32832));
 
     let claim = vc_core::claim::view(&pool, 1, claim_id)
         .await

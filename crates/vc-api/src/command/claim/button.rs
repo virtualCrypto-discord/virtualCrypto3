@@ -1,9 +1,9 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 use vc_core::claim::{PartialClaim, UpdateClaimsError};
 
 use super::list;
 use crate::claim_list::ListOptions;
-use crate::command::{CommandError, EPHEMERAL, as_int, get_user};
+use crate::command::{CommandError, as_int, get_user};
 use crate::custom_id::ui::button::{Action, Path, parse};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -127,7 +127,11 @@ async fn patch(
         }
     };
 
-    Ok(json!({ "content": content, "flags": EPHEMERAL }))
+    // A follow-up message rather than an interaction response, and the same shape either way:
+    // `content` is what the components flag forbids, so the sentence is a Text Display.
+    Ok(crate::components::ephemeral(vec![
+        crate::components::container(None, vec![crate::components::text(content)]),
+    ]))
 }
 
 /// `Interaction.Button.action_str/1`.
