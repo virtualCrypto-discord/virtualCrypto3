@@ -32,18 +32,10 @@ pub const COLOR_OK: i64 = 0x38EA42;
 pub const COLOR_ERROR: i64 = 0xEA3875;
 pub const COLOR_BRAND: i64 = 0x6221ED;
 
-/// `Interactions.Util`: component types and their styles.
-pub const ACTION_ROW: i64 = 1;
-pub const BUTTON: i64 = 2;
-pub const SELECT_MENU: i64 = 3;
-pub const TEXT_INPUT: i64 = 4;
-pub const BUTTON_STYLE_PRIMARY: i64 = 1;
-pub const BUTTON_STYLE_SECONDARY: i64 = 2;
-pub const BUTTON_STYLE_SUCCESS: i64 = 3;
-pub const BUTTON_STYLE_DANGER: i64 = 4;
-pub const BUTTON_STYLE_LINK: i64 = 5;
-pub const TEXT_INPUT_STYLE_SHORT: i64 = 1;
-pub const TEXT_INPUT_STYLE_PARAGRAPH: i64 = 2;
+// The component types and button styles that were here are gone with the last of the hand-built
+// components: every one of them is a function in `crate::components` now, where the shape is
+// written once and named. What is left above is what a *response* is rather than what a message
+// says — the callback types a command answers with, and the accent each state carries.
 
 /// Why a command produced no response.
 #[derive(Debug)]
