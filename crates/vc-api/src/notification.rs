@@ -86,37 +86,97 @@ impl Proxy {
             url: url.into(),
         })
     }
+}
 
-    /// Send a delivery, answering with the status the *destination* gave.
-    ///
-    /// `None` is a proxy that did not say: the status travels in `X-Status`
-    /// because the proxy's own answer is a `200` whatever the destination did,
-    /// and a caller that cannot tell those apart cannot act on either.
-    pub async fn send(&self, delivery: &Delivery) -> Result<Option<(u16, Value)>, reqwest::Error> {
-        let response = self
-            .http
-            .post(&self.url)
-            .header("X-Signature-Ed25519", &delivery.signature)
-            .header("X-Signature-Timestamp", delivery.timestamp.to_string())
-            .header(FORWARD, &delivery.forward)
-            .body(delivery.body.clone())
-            .send()
-            .await?;
+impl Transport for Proxy {
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
 
-        // The status first, because the body consumes the response and the
-        // handshake needs both.
-        let status = response
+    fn endpoint<'a>(&'a self, _delivery: &'a Delivery) -> &'a str {
+        &self.url
+    }
+
+    /// The status the *destination* gave, which the proxy reports in a header: the proxy's own
+    /// answer is a `200` whatever the destination did, and a caller that cannot tell those apart
+    /// cannot act on either. A proxy that answered without saying is a proxy that did not answer.
+    fn status(&self, response: &reqwest::Response) -> Option<u16> {
+        response
             .headers()
             .get(STATUS)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse().ok());
-
-        let body = response.json::<Value>().await.ok();
-
-        // A proxy that answered without saying what the application said is a
-        // proxy that did not answer.
-        Ok(status.zip(body))
+            .and_then(|value| value.parse().ok())
     }
+}
+
+/// Straight at the application, for the machines that have no proxy.
+///
+/// A development machine has none, and a registration that names a `webhook_url` has to be
+/// verifiable there or the application flow cannot be exercised end to end. What it needs is the
+/// same request sent to the address the delivery names, and the status the application answers
+/// with rather than one a proxy reported.
+pub struct Direct {
+    http: reqwest::Client,
+}
+
+impl Default for Direct {
+    fn default() -> Self {
+        Self {
+            http: reqwest::Client::new(),
+        }
+    }
+}
+
+impl Transport for Direct {
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    fn endpoint<'a>(&'a self, delivery: &'a Delivery) -> &'a str {
+        &delivery.forward
+    }
+
+    fn status(&self, response: &reqwest::Response) -> Option<u16> {
+        Some(response.status().as_u16())
+    }
+}
+
+/// Where a webhook goes, which is the only thing that differs between the two ways of sending one.
+///
+/// The request is the same either way — the same two signature headers over the same body — so it
+/// is written once, in [`send`]. A transport answers two questions about it: *where* it goes, and
+/// *where the status is read from*. The proxy relays to a destination it names in a header and
+/// reports the answer in another; a direct call is answered by the application itself.
+/// The two bounds are the ones a delivery needs rather than decoration: the notifier spawns the
+/// send, so a transport that is not `Send + Sync` cannot be used from it at all.
+pub trait Transport: Send + Sync {
+    fn http(&self) -> &reqwest::Client;
+    fn endpoint<'a>(&'a self, delivery: &'a Delivery) -> &'a str;
+    fn status(&self, response: &reqwest::Response) -> Option<u16>;
+}
+
+/// Send a delivery, however this service reaches applications.
+pub async fn send(
+    transport: &dyn Transport,
+    delivery: &Delivery,
+) -> Result<Option<(u16, Value)>, reqwest::Error> {
+    let response = transport
+        .http()
+        .post(transport.endpoint(delivery))
+        .header("X-Signature-Ed25519", &delivery.signature)
+        .header("X-Signature-Timestamp", delivery.timestamp.to_string())
+        // The proxy needs to be told where to relay to. Sending it to an application that does not
+        // read it costs one header, and a branch here would cost the shape this is here to keep.
+        .header(FORWARD, &delivery.forward)
+        .body(delivery.body.clone())
+        .send()
+        .await?;
+
+    // The status first, because the body consumes the response and the handshake needs both.
+    let status = transport.status(&response);
+    let body = response.json::<Value>().await.ok();
+
+    Ok(status.zip(body))
 }
 
 /// The event body for a claim update: type 2, with the events as its data.
@@ -208,7 +268,7 @@ async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32,
 
     let delivery = delivery(&body, &private_key, url, now);
 
-    if let Err(error) = proxy.send(&delivery).await {
+    if let Err(error) = send(proxy, &delivery).await {
         tracing::warn!(application_id, %error, "could not reach the webhook proxy");
     }
 }
@@ -263,9 +323,14 @@ pub fn fresh_keypair() -> [u8; 32] {
 /// Two requests, as the Elixir sends them. The second is signed with a keypair
 /// generated here and used for nothing else, because its whole purpose is to be a
 /// signature the application should refuse.
-pub async fn verify(proxy: &Proxy, url: &str, private_key: &[u8; 32], at: i64) -> Handshake {
-    let real = send_ping(proxy, url, private_key, at).await;
-    let wrong = send_ping(proxy, url, &fresh_keypair(), at).await;
+pub async fn verify(
+    transport: &dyn Transport,
+    url: &str,
+    private_key: &[u8; 32],
+    at: i64,
+) -> Handshake {
+    let real = send_ping(transport, url, private_key, at).await;
+    let wrong = send_ping(transport, url, &fresh_keypair(), at).await;
 
     handshake(
         real.as_ref().map(|(status, body)| (*status, body)),
@@ -275,15 +340,14 @@ pub async fn verify(proxy: &Proxy, url: &str, private_key: &[u8; 32], at: i64) -
 
 /// One PING, and what the application answered through the proxy.
 async fn send_ping(
-    proxy: &Proxy,
+    transport: &dyn Transport,
     url: &str,
     private_key: &[u8; 32],
     at: i64,
 ) -> Option<(u16, Value)> {
     let ping = serde_json::json!({ "type": PING });
 
-    proxy
-        .send(&delivery(&ping, private_key, url, at))
+    send(transport, &delivery(&ping, private_key, url, at))
         .await
         .ok()
         .flatten()

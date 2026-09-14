@@ -601,10 +601,13 @@ pub async fn create(
         .to_bytes();
 
     if let Some(webhook_url) = new.webhook_url.as_deref() {
-        let Some(proxy) = state.webhook_proxy() else {
-            // Not the application's fault, and saying "verification failed" would
-            // send someone to look at a request that is fine.
-            return Err(Box::new(internal("no webhook proxy is configured")));
+        // With no proxy configured the handshake goes straight at the webhook: a development
+        // machine has no proxy, and a registration that names a webhook has to be verifiable
+        // there for the application flow to be exercised at all.
+        let direct = crate::notification::Direct::default();
+        let transport: &dyn crate::notification::Transport = match state.webhook_proxy() {
+            Some(proxy) => proxy.as_ref(),
+            None => &direct,
         };
 
         // The handshake is the expensive thing here, and this is what stops one
@@ -618,7 +621,7 @@ pub async fn create(
             .map(|since| since.as_secs() as i64)
             .unwrap_or_default();
 
-        if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
+        if verify(transport, webhook_url, &private_key, at).await != Handshake::Passed {
             return Err(refusal(
                 StatusCode::BAD_REQUEST,
                 "webhook_verification_failed",
@@ -898,8 +901,11 @@ pub async fn apply(
     // with a fresh pair: the pair is what it verifies deliveries with, so a new one
     // would be a handshake nobody could answer.
     if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
-        let Some(proxy) = state.webhook_proxy() else {
-            return Err(Box::new(internal("no webhook proxy is configured")));
+        // No proxy is a direct handshake, as in registration.
+        let direct = crate::notification::Direct::default();
+        let transport: &dyn crate::notification::Transport = match state.webhook_proxy() {
+            Some(proxy) => proxy.as_ref(),
+            None => &direct,
         };
 
         let webhook = vc_core::application::webhook_data(state.pool(), application_id)
@@ -928,7 +934,7 @@ pub async fn apply(
             .map(|since| since.as_secs() as i64)
             .unwrap_or_default();
 
-        if verify(proxy, webhook_url, &private_key, at).await != Handshake::Passed {
+        if verify(transport, webhook_url, &private_key, at).await != Handshake::Passed {
             return Err(refusal(
                 StatusCode::BAD_REQUEST,
                 "webhook_verification_failed",
