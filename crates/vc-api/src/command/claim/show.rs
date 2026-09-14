@@ -4,7 +4,6 @@ use vc_core::claim::{ClaimCurrency, ClaimView};
 
 use super::{format_date_time, render_error, sub_option};
 use crate::command::{
-    ACTION_ROW, BUTTON, BUTTON_STYLE_DANGER, BUTTON_STYLE_PRIMARY, BUTTON_STYLE_SUCCESS,
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, as_int, get_user, mention,
 };
 use crate::state::AppState;
@@ -115,32 +114,26 @@ fn action_row(claim: &ClaimView, me: i64, current: Option<i64>) -> Value {
     let deny = claim.payer.discord_id != Some(me);
     let cancel = claim.claimant.discord_id != Some(me);
 
-    json!({
-        "type": ACTION_ROW,
-        "components": [
-            {
-                "type": BUTTON,
-                "style": BUTTON_STYLE_SUCCESS,
-                "emoji": { "name": "✅" },
-                "custom_id": action_custom_id(1, ButtonAction::Approve, claim.id),
-                "disabled": approve,
-            },
-            {
-                "type": BUTTON,
-                "style": BUTTON_STYLE_DANGER,
-                "emoji": { "name": "❌" },
-                "custom_id": action_custom_id(2, ButtonAction::Deny, claim.id),
-                "disabled": deny,
-            },
-            {
-                "type": BUTTON,
-                "style": BUTTON_STYLE_PRIMARY,
-                "emoji": { "name": "🗑️" },
-                "custom_id": action_custom_id(3, ButtonAction::Cancel, claim.id),
-                "disabled": cancel,
-            },
-        ],
-    })
+    crate::components::action_row(vec![
+        crate::components::icon_button(
+            &action_custom_id(1, ButtonAction::Approve, claim.id),
+            "✅",
+            crate::components::ButtonStyle::Success,
+            Some(approve),
+        ),
+        crate::components::icon_button(
+            &action_custom_id(2, ButtonAction::Deny, claim.id),
+            "❌",
+            crate::components::ButtonStyle::Danger,
+            Some(deny),
+        ),
+        crate::components::icon_button(
+            &action_custom_id(3, ButtonAction::Cancel, claim.id),
+            "🗑️",
+            crate::components::ButtonStyle::Primary,
+            Some(cancel),
+        ),
+    ])
 }
 
 use crate::custom_id::ui::button::Action as ButtonAction;

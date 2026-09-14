@@ -79,7 +79,12 @@ pub fn button(custom_id: &str, label: &str, style: ButtonStyle) -> Value {
 /// The claim list's controls are these: five glyphs in a row, some of them greyed out because
 /// the page they would move to is the page they are on. A label is optional in Discord's button
 /// and an emoji is what these say instead.
-pub fn icon_button(custom_id: &str, emoji: &str, style: ButtonStyle, disabled: bool) -> Value {
+pub fn icon_button(
+    custom_id: &str,
+    emoji: &str,
+    style: ButtonStyle,
+    disabled: Option<bool>,
+) -> Value {
     let mut button = json!({
         "type": 2,
         "style": style as u8,
@@ -87,11 +92,12 @@ pub fn icon_button(custom_id: &str, emoji: &str, style: ButtonStyle, disabled: b
         "custom_id": custom_id,
     });
 
-    // Written only when it is true: false is the default, and a message that says `disabled:
-    // false` is a different message from one that says nothing, which is what the claim list
-    // has always sent.
-    if disabled {
-        button["disabled"] = json!(true);
+    // `Some` writes the key and `None` leaves it out, because the claim list does both: the
+    // buttons that act on a claim say `disabled: false` when they are pressable, and the ones
+    // that move between pages say nothing at all. False is the default either way, so this is
+    // about saying what the service already said rather than about what Discord reads.
+    if let Some(disabled) = disabled {
+        button["disabled"] = json!(disabled);
     }
 
     button
@@ -319,8 +325,8 @@ mod tests {
     /// open is the page it is on.
     #[test]
     fn an_icon_button_carries_its_emoji_and_whether_it_is_disabled() {
-        let disabled = icon_button("journey-0", "⏪", ButtonStyle::Secondary, true);
-        let enabled = icon_button("reload", "🔄", ButtonStyle::Secondary, false);
+        let disabled = icon_button("journey-0", "⏪", ButtonStyle::Secondary, Some(true));
+        let enabled = icon_button("reload", "🔄", ButtonStyle::Secondary, None);
 
         assert_eq!(disabled["type"], json!(2));
         assert_eq!(disabled["emoji"]["name"], "⏪");
@@ -328,7 +334,12 @@ mod tests {
         assert!(disabled.get("label").is_none(), "{disabled}");
         assert!(
             enabled.get("disabled").is_none(),
-            "an enabled button says nothing about it: {enabled}"
+            "a button that says nothing about it: {enabled}"
+        );
+        assert_eq!(
+            icon_button("claim-1", "✅", ButtonStyle::Success, Some(false))["disabled"],
+            json!(false),
+            "and one that says it is pressable"
         );
     }
 
