@@ -14,3 +14,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ed25519-dalek.workspace = true
+
+[[bin]]
+name = "demo-issue"
+path = "src/bin/demo-issue.rs"
