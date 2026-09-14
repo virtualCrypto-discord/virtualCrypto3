@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use crate::model::utc_now;
 
 #[derive(Debug)]
-pub enum GiveError {
+pub enum IssueError {
     NotFoundCurrency,
     NotEnoughAmount,
     InvalidAmount,
@@ -22,16 +22,19 @@ pub struct Issued {
 /// `Money.give/1` through `Query.Issue.issue/3`: hand out currency from a guild's
 /// pool.
 ///
-/// `amount` of `None` is the `:all` a `/give` without an amount asks for, which
+/// The Elixir named the command `give` and the query it calls `issue`; this is one function,
+/// named after the query.
+///
+/// `amount` of `None` is the `:all` a `/issue` without an amount asks for, which
 /// issues whatever the pool holds. The currency is read with a lock, so the pool
 /// check and the decrement cannot interleave with another issue.
-pub async fn give(
+pub async fn issue(
     pool: &PgPool,
     guild_id: i64,
     receiver_discord_id: i64,
     amount: Option<i64>,
-) -> std::result::Result<Issued, GiveError> {
-    let mut tx = pool.begin().await.map_err(GiveError::Database)?;
+) -> std::result::Result<Issued, IssueError> {
+    let mut tx = pool.begin().await.map_err(IssueError::Database)?;
 
     let currency = sqlx::query!(
         "SELECT id, unit, pool_amount FROM currencies WHERE guild_id = $1 FOR UPDATE",
@@ -39,10 +42,10 @@ pub async fn give(
     )
     .fetch_optional(&mut *tx)
     .await
-    .map_err(GiveError::Database)?;
+    .map_err(IssueError::Database)?;
 
     let Some(currency) = currency else {
-        return Err(GiveError::NotFoundCurrency);
+        return Err(IssueError::NotFoundCurrency);
     };
 
     let pool_amount = currency.pool_amount.unwrap_or(0);
@@ -51,15 +54,15 @@ pub async fn give(
         // `:all` issues the pool, which has to hold something to be worth a
         // history row.
         None if pool_amount > 0 => pool_amount,
-        None => return Err(GiveError::NotEnoughAmount),
+        None => return Err(IssueError::NotEnoughAmount),
         Some(amount) if amount > 0 && pool_amount >= amount => amount,
-        Some(amount) if amount > 0 => return Err(GiveError::NotEnoughAmount),
-        Some(_) => return Err(GiveError::InvalidAmount),
+        Some(amount) if amount > 0 => return Err(IssueError::NotEnoughAmount),
+        Some(_) => return Err(IssueError::InvalidAmount),
     };
 
     let receiver = crate::user::insert_if_not_exists(&mut tx, receiver_discord_id)
         .await
-        .map_err(GiveError::Database)?;
+        .map_err(IssueError::Database)?;
 
     let now = utc_now();
 
@@ -76,7 +79,7 @@ pub async fn give(
     )
     .execute(&mut *tx)
     .await
-    .map_err(GiveError::Database)?;
+    .map_err(IssueError::Database)?;
 
     sqlx::query!(
         "UPDATE currencies SET pool_amount = pool_amount - $1 WHERE id = $2",
@@ -85,7 +88,7 @@ pub async fn give(
     )
     .execute(&mut *tx)
     .await
-    .map_err(GiveError::Database)?;
+    .map_err(IssueError::Database)?;
 
     sqlx::query!(
         "INSERT INTO currency_given_histories
@@ -98,9 +101,9 @@ pub async fn give(
     )
     .execute(&mut *tx)
     .await
-    .map_err(GiveError::Database)?;
+    .map_err(IssueError::Database)?;
 
-    tx.commit().await.map_err(GiveError::Database)?;
+    tx.commit().await.map_err(IssueError::Database)?;
 
     Ok(Issued {
         amount,

@@ -16,7 +16,7 @@
 //!   the vendored spec at `tests/discord-schema/openapi.json`.
 //!
 //!   **The three commands that set `dm_permission` to `false` are expressed by leaving
-//!   `BOT_DM` out** — `give`, `create` and `delete` carry `"contexts": [0]` and the six
+//!   `BOT_DM` out** — `issue`, `create` and `delete` carry `"contexts": [0]` and the six
 //!   that allowed DMs carry `[0, 1]`. That is the whole of what the deprecated field said,
 //!   said in the field that replaced it.
 //! - The option types are Discord's numbers: 1 subcommand, 3 string, 4 integer, 5 boolean,
@@ -39,7 +39,7 @@ pub fn commands() -> Vec<Value> {
         help(),
         invite(),
         application(),
-        give(),
+        issue(),
         pay(),
         info(),
         create(),
@@ -82,9 +82,9 @@ fn invite() -> Value {
 }
 
 /// Guild-only, and said so: issuing currency from the pool is an administrator's act.
-fn give() -> Value {
+fn issue() -> Value {
     json!({
-        "name": "give",
+        "name": "issue",
         "description": "発行枠から通貨を発行します。管理者権限が必要です。amountを省略した場合は全額が指定されたuserに発行されます。",
         "options": [
             {
@@ -161,7 +161,7 @@ fn info() -> Value {
     })
 }
 
-/// The same as `give` and `delete`: creating a currency is not something a DM can be
+/// The same as `issue` and `delete`: creating a currency is not something a DM can be
 /// about, because the currency belongs to a guild.
 fn create() -> Value {
     json!({
@@ -473,7 +473,7 @@ mod tests {
                 "help",
                 "invite",
                 "application",
-                "give",
+                "issue",
                 "pay",
                 "info",
                 "create",
@@ -499,7 +499,7 @@ mod tests {
                 .map(|value| value.as_u64().expect("a context"))
                 .collect();
 
-            let expected: Vec<u64> = if ["give", "create", "delete"].contains(&name) {
+            let expected: Vec<u64> = if ["issue", "create", "delete"].contains(&name) {
                 vec![0]
             } else {
                 vec![0, 1]

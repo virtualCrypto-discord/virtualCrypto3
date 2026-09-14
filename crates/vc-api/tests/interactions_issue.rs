@@ -1,4 +1,4 @@
-//! The `give` command.
+//! The `issue` command, which the Elixir called `give`.
 //!
 //! Elixir has no test for this command — `Money.give/1` is only exercised through
 //! `setup_money/1` — so these cases are additions rather than a port, and they
@@ -20,13 +20,13 @@ fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
 }
 
-fn give_data(receiver: i64, amount: Option<Value>) -> Value {
+fn issue_data(receiver: i64, amount: Option<Value>) -> Value {
     let mut options = vec![json!({ "name": "user", "value": receiver.to_string() })];
     if let Some(amount) = amount {
         options.push(json!({ "name": "amount", "value": amount }));
     }
 
-    json!({ "name": "give", "options": options })
+    json!({ "name": "issue", "options": options })
 }
 
 fn from_guild(
@@ -36,7 +36,7 @@ fn from_guild(
     guild_id: i64,
     permissions: &str,
 ) -> Value {
-    support::from_guild(give_data(receiver, amount), sender, guild_id, permissions)
+    support::from_guild(issue_data(receiver, amount), sender, guild_id, permissions)
 }
 
 fn assert_error(response: &Response, content: &str) {
@@ -52,7 +52,7 @@ fn assert_error(response: &Response, content: &str) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn give_issues_from_the_pool(pool: PgPool) {
+async fn issuing_from_the_pool_credits_the_receiver(pool: PgPool) {
     let money = setup_money(&pool).await;
     let receiver_before = get_amount(&pool, money.user2, money.currency).await;
 
@@ -101,7 +101,7 @@ async fn give_issues_from_the_pool(pool: PgPool) {
 /// Without an amount the `handle/4` clause fills in `:all`, which issues what
 /// the pool holds.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn give_without_an_amount_issues_the_whole_pool(pool: PgPool) {
+async fn issuing_without_an_amount_issues_the_whole_pool(pool: PgPool) {
     let money = setup_money(&pool).await;
     let receiver_before = get_amount(&pool, money.user2, money.currency).await;
 
@@ -133,7 +133,7 @@ async fn give_without_an_amount_issues_the_whole_pool(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn give_more_than_the_pool_is_refused(pool: PgPool) {
+async fn issuing_more_than_the_pool_is_refused(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
@@ -152,7 +152,7 @@ async fn give_more_than_the_pool_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn give_needs_the_administrator_bit(pool: PgPool) {
+async fn issuing_needs_the_administrator_bit(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
@@ -165,12 +165,12 @@ async fn give_needs_the_administrator_bit(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn give_in_a_direct_message_is_refused(pool: PgPool) {
+async fn issuing_in_a_direct_message_is_refused(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let response = interaction(
         router(pool),
-        support::execute_from_dm(give_data(money.user2, Some(json!(100))), money.user1),
+        support::execute_from_dm(issue_data(money.user2, Some(json!(100))), money.user1),
     )
     .await;
 

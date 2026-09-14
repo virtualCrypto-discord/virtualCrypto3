@@ -1,5 +1,5 @@
 use serde_json::{Map, Value, json};
-use vc_core::issue::{GiveError, Issued};
+use vc_core::issue::{IssueError, Issued};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, as_permissions, is_administrator,
@@ -10,6 +10,9 @@ use crate::state::AppState;
 /// `Command.handle/4` for `give`, rendered by `InteractionsJSON.give/1` through
 /// `Interactions.Give.render/2`.
 ///
+/// The Elixir registered the command as `give`; this service registers it as `issue`, the name
+/// the query behind it already had. The handler is otherwise the same.
+///
 /// This issues currency from the guild's pool rather than moving it between
 /// users, so it is the one management command that changes the supply.
 pub async fn handle(
@@ -17,8 +20,8 @@ pub async fn handle(
     options: &Map<String, Value>,
     payload: &Value,
 ) -> Result<Value, CommandError> {
-    // Every `give` clause takes a guild, so a direct message has no handler at
-    // all; the same is true when the receiver is missing.
+    // Every `Command.handle/4` clause for `give` takes a guild, so a direct message has no
+    // handler at all; the same is true when the receiver is missing.
     let Some(guild_id) = payload.get("guild_id").and_then(as_int) else {
         return Ok(render_error("エラー: DMでは実行できません。"));
     };
@@ -31,7 +34,7 @@ pub async fn handle(
         .get("member")
         .and_then(|member| member.get("permissions"))
         .and_then(as_permissions)
-        .ok_or_else(|| CommandError::missing("give has no permissions"))?;
+        .ok_or_else(|| CommandError::missing("issue has no permissions"))?;
 
     if !is_administrator(permissions) {
         return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
@@ -39,22 +42,22 @@ pub async fn handle(
 
     let receiver_discord_id: i64 = receiver
         .parse()
-        .map_err(|_| CommandError::missing("give receiver is not an id"))?;
+        .map_err(|_| CommandError::missing("issue receiver is not an id"))?;
 
     // A missing amount is the `:all` the second `handle/4` clause fills in.
     let amount = match options.get("amount") {
         Some(amount) => Some(
-            as_int(amount).ok_or_else(|| CommandError::missing("give amount is not a number"))?,
+            as_int(amount).ok_or_else(|| CommandError::missing("issue amount is not a number"))?,
         ),
         None => None,
     };
 
-    match vc_core::issue::give(state.pool(), guild_id, receiver_discord_id, amount).await {
+    match vc_core::issue::issue(state.pool(), guild_id, receiver_discord_id, amount).await {
         Ok(issued) => Ok(render_ok(&receiver, &issued)),
-        Err(GiveError::Database(error)) => Err(CommandError::from(error)),
-        Err(GiveError::NotFoundCurrency) => Ok(render_error("エラー: 通貨が存在しません。")),
-        Err(GiveError::InvalidAmount) => Ok(render_error("エラー: 不正な金額です。")),
-        Err(GiveError::NotEnoughAmount) => Ok(render_error("エラー: 通貨が不足しています。")),
+        Err(IssueError::Database(error)) => Err(CommandError::from(error)),
+        Err(IssueError::NotFoundCurrency) => Ok(render_error("エラー: 通貨が存在しません。")),
+        Err(IssueError::InvalidAmount) => Ok(render_error("エラー: 不正な金額です。")),
+        Err(IssueError::NotEnoughAmount) => Ok(render_error("エラー: 通貨が不足しています。")),
     }
 }
 

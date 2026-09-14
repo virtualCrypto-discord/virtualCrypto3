@@ -71,10 +71,10 @@ counterpart. `setup_money/1` inserts the rows its Elixir version ends up with
 rather than calling the domain functions, which keeps each test's data explicit
 and its failures readable.
 
-The `give` command has **no Elixir test at all**; it is exercised only through
-`setup_money/1` calling `Money.give/1`. `tests/interactions_give.rs` therefore
-holds additions rather than ports: they follow `Command.handle/4` and
-`Query.Issue.issue/3` directly.
+The `give` command — registered as `/issue` here — has **no Elixir test at all**;
+it is exercised only through `setup_money/1` calling `Money.give/1`.
+`tests/interactions_issue.rs` therefore holds additions rather than ports: they
+follow `Command.handle/4` and `Query.Issue.issue/3` directly.
 
 **Every Elixir interaction case is ported, and the endpoint is still not whole.**
 Type 4 (autocomplete) answers 501, and the Elixir suite has no test for it, so

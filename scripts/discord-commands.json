@@ -8,7 +8,7 @@
     "description": "Botの招待URLを表示します。"
   },
   {
-    "name": "give",
+    "name": "issue",
     "description": "発行枠から通貨を発行します。管理者権限が必要です。amountを省略した場合は全額が指定されたuserに発行されます。",
     "options": [
       { "name": "user", "description": "発行先のユーザーです。", "type": 6, "required": true },

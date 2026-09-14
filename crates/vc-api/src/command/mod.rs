@@ -12,8 +12,8 @@ mod bal;
 pub mod claim;
 pub mod create;
 pub mod delete;
-pub mod give;
 pub mod info;
+pub mod issue;
 pub mod pay;
 
 use serde_json::{Map, Value, json};
@@ -191,8 +191,8 @@ pub async fn handle(
         "claim" => claim::handle(state, options, payload).await,
         "create" => create::handle(state, options, payload).await,
         "delete" => delete::handle(state, options, payload).await,
-        "give" => give::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
+        "issue" => issue::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),
     }

@@ -188,6 +188,26 @@ practice; it is recorded because it is not a faithful reproduction.
 
 ## Deliberate differences
 
+### The currency command is `/issue` here, where the Elixir's was `/give`
+
+Renamed, not reimplemented. The Elixir registered `give` in
+`priv/register-commands.exs` and dispatched it in `Command.handle/4`, but the call
+behind it was `Query.Issue.issue/3` all along — so this service registers and
+dispatches `issue`, and the domain function is `vc_core::issue::issue`. The
+options, the administrator bit, the guild requirement and the answers are
+unchanged; `tests/interactions_issue.rs` is the port, and `docs/test-port.md`
+records that Elixir had no test for it either way.
+
+The rename stops at the command. The table the operation writes keeps the Elixir's
+name, `currency_given_histories`, because the baseline is the v2 Ecto schema and
+both services share it.
+
+Registering the new name is what removes the old one — Discord's `PUT` to
+`/applications/{client_id}/commands` is a bulk overwrite, so `just register-commands`
+puts `/issue` up and takes `/give` down in one call. Until it is run Discord still
+offers `/give`, and an interaction for it is answered `400 Type Not Found`, since no
+`Command.handle/4` clause matches that name any more.
+
 ### The login redirect is 303 where Phoenix sent 302
 
 `Redirect::to` in axum is `303 See Other`; `Phoenix.Controller.redirect/2` sends
