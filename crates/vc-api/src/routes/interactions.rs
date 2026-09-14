@@ -163,6 +163,19 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         };
     }
 
+    // The grant screens have a head of their own for the same reason: a guild's
+    // buttons are tried in an order, and a shared head would be read by whichever
+    // space came first.
+    if let Some(custom_id) = custom_id
+        && crate::custom_id::ui::grant::parse(&crate::custom_id::parse(custom_id)).is_ok()
+    {
+        return match crate::command::grant::component(state, custom_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     match (component_type, custom_id) {
         (Some(2), Some(custom_id)) => {
             match crate::command::claim::button::handle(state, custom_id, payload).await {

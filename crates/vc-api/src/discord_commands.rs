@@ -15,9 +15,9 @@
 //!   who may install — `GUILD_INSTALL` (`0`) and `USER_INSTALL` (`1`). Both values are from
 //!   the vendored spec at `tests/discord-schema/openapi.json`.
 //!
-//!   **The three commands that set `dm_permission` to `false` are expressed by leaving
-//!   `BOT_DM` out** — `issue`, `create` and `delete` carry `"contexts": [0]` and the six
-//!   that allowed DMs carry `[0, 1]`. That is the whole of what the deprecated field said,
+//!   **The commands that set `dm_permission` to `false` are expressed by leaving
+//!   `BOT_DM` out** — `issue`, `grant`, `create` and `delete` carry `"contexts": [0]` and the
+//!   rest carry `[0, 1]`. That is the whole of what the deprecated field said,
 //!   said in the field that replaced it.
 //! - The option types are Discord's numbers: 1 subcommand, 3 string, 4 integer, 5 boolean,
 //!   6 user.
@@ -33,13 +33,15 @@
 //! neither is here.
 use serde_json::{Value, json};
 
-/// Every command, in the order the old file sent them.
+/// Every command: the old file's, in the order it sent them, with this service's
+/// own additions beside the commands they belong to.
 pub fn commands() -> Vec<Value> {
     vec![
         help(),
         invite(),
         application(),
         issue(),
+        grant(),
         pay(),
         info(),
         create(),
@@ -98,6 +100,40 @@ fn issue() -> Value {
                 "description": "発行する通貨の量です。",
                 "type": 4,
                 "required": false,
+            },
+        ],
+        "contexts": [0],
+        "integration_types": [0, 1],
+        "default_member_permissions": "0",
+    })
+}
+
+/// Guild-only, and an administrator's act twice over: this is the command that
+/// decides whether an application may issue from the guild's pool, which is what
+/// makes the issuing endpoint something the guild agreed to rather than something
+/// an application helped itself to.
+fn grant() -> Value {
+    json!({
+        "name": "grant",
+        "description": "アプリケーションにこのサーバーでの発行を許可します。管理者権限が必要です。",
+        "options": [
+            {
+                "name": "list",
+                "description": "発行を申請しているアプリケーションの一覧を表示します。",
+                "type": 1,
+            },
+            {
+                "name": "allow",
+                "description": "指定したアプリケーションに発行を許可します。",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "client_id",
+                        "description": "許可するアプリケーションの client_id です。",
+                        "type": 3,
+                        "required": true,
+                    },
+                ],
             },
         ],
         "contexts": [0],
@@ -474,6 +510,7 @@ mod tests {
                 "invite",
                 "application",
                 "issue",
+                "grant",
                 "pay",
                 "info",
                 "create",
@@ -484,9 +521,10 @@ mod tests {
         );
     }
 
-    /// The three the old file kept out of DMs, now said with `contexts` rather than the
-    /// `dm_permission` that Discord deprecated. `GUILD` is `0` and `BOT_DM` is `1`; the
-    /// six that allowed DMs carry both.
+    /// The ones the old file kept out of DMs, and the two this service added to that set
+    /// with them, now said with `contexts` rather than the `dm_permission` that Discord
+    /// deprecated. `GUILD` is `0` and `BOT_DM` is `1`; the ones that allowed DMs carry
+    /// both.
     #[test]
     fn the_guild_only_commands_still_say_so() {
         for command in commands() {
@@ -499,7 +537,7 @@ mod tests {
                 .map(|value| value.as_u64().expect("a context"))
                 .collect();
 
-            let expected: Vec<u64> = if ["issue", "create", "delete"].contains(&name) {
+            let expected: Vec<u64> = if ["issue", "grant", "create", "delete"].contains(&name) {
                 vec![0]
             } else {
                 vec![0, 1]

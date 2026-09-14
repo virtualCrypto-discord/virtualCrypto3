@@ -419,64 +419,23 @@ fn to_login(uri: &Uri) -> Response {
 /// The guild checks, and the account's right to act for it.
 ///
 /// Answers with the guild id, which the screen shows and which the code that
-/// follows is bound to.
+/// follows is bound to. The chain itself is [`crate::permissions::guild_access`],
+/// because the page that allows a guild runs the same one — and the two answers it
+/// can refuse with are what that returns `Unknown` and `Denied` for.
 async fn describe(state: &AppState, request: &Request, account_id: i64) -> Result<i64, Refusal> {
-    let guild = state
-        .discord()
-        .get_guild(request.guild_id)
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| Refusal::redirect("invalid_request", "invalid_guild_id"))?;
-
-    // A grant belongs to a guild, so the bot has to be in it: one the bot cannot
-    // see is not a guild it can grant anything in.
-    let in_guild = state
-        .discord()
-        .get_guild_member(request.guild_id, state.discord().bot_user_id())
-        .await
-        .ok()
-        .flatten()
-        .is_some();
-
-    if !in_guild {
-        return Err(Refusal::redirect("invalid_request", "invalid_guild_id"));
-    }
-
-    let account = vc_core::user::find_by_id(state.pool(), account_id as i32)
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| Refusal::redirect("invalid_request", "permission_denied"))?;
-
-    // The Elixir used the session's VirtualCrypto id as a Discord id here, which
-    // is why its answer was always no.
-    let Some(discord_id) = account.discord_id else {
+    let Ok(account_id) = i32::try_from(account_id) else {
         return Err(Refusal::redirect("invalid_request", "permission_denied"));
     };
 
-    let member = state
-        .discord()
-        .get_guild_member(request.guild_id, discord_id)
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| Refusal::redirect("invalid_request", "invalid_guild_id"))?;
-
-    let roles = state
-        .discord()
-        .get_roles(request.guild_id)
-        .await
-        .unwrap_or_default();
-
-    let facts = crate::permissions::guild_facts(&guild, &member, &roles)
-        .ok_or_else(|| Refusal::redirect("invalid_request", "invalid_guild_id"))?;
-
-    if !crate::permissions::may_act_for_guild(discord_id, &facts) {
-        return Err(Refusal::redirect("invalid_request", "permission_denied"));
+    match crate::permissions::guild_access(state, request.guild_id, account_id).await {
+        crate::permissions::GuildAccess::Permitted => Ok(request.guild_id),
+        crate::permissions::GuildAccess::Unknown => {
+            Err(Refusal::redirect("invalid_request", "invalid_guild_id"))
+        }
+        crate::permissions::GuildAccess::Denied => {
+            Err(Refusal::redirect("invalid_request", "permission_denied"))
+        }
     }
-
-    Ok(request.guild_id)
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@
 use serde_json::{Map, Value};
 
 use crate::command::{as_int, as_permissions, is_administrator};
+use crate::state::AppState;
 
 /// What the consent screen needs to know about a guild and one member of it,
 /// read out of Discord's own JSON.
@@ -91,6 +92,88 @@ pub fn member_permissions(member_role_ids: &[i64], roles: &[(i64, u64)]) -> u64 
                 .map(|(_, permissions)| *permissions)
         })
         .fold(0, |held, permissions| held | permissions)
+}
+
+/// What asking Discord about a guild and an account came to.
+///
+/// Three answers rather than two, because the surfaces that ask need to tell
+/// "there is nothing here to ask about" from "the person asking may not": the
+/// consent screen redirects the browser to the client for the first and refuses
+/// for the second, and an API answers 404 and 403.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuildAccess {
+    /// The account owns the guild, or administers it.
+    Permitted,
+    /// Discord has no such guild, this service's bot is not in it, or the account
+    /// is not: a request about it cannot be answered at all.
+    Unknown,
+    /// The account is in the guild and may not act for it.
+    Denied,
+}
+
+/// May this account act for this guild?
+///
+/// The chain the consent screen has always run, in one place because three
+/// surfaces ask the same question — the consent screen, the page that allows a
+/// guild, and the connect flow's own variant — and because the answer is the same
+/// one each time. A Discord lookup that fails is [`GuildAccess::Unknown`] rather
+/// than an error, which is what the consent screen did with `.ok().flatten()`: a
+/// guild that could not be read and one that is not there are the same nothing to
+/// act for.
+pub async fn guild_access(state: &AppState, guild_id: i64, account_id: i32) -> GuildAccess {
+    let Some(guild) = state.discord().get_guild(guild_id).await.ok().flatten() else {
+        return GuildAccess::Unknown;
+    };
+
+    // A grant belongs to a guild, so the bot has to be in it: one the bot cannot
+    // see is not a guild it can grant anything in.
+    if state
+        .discord()
+        .get_guild_member(guild_id, state.discord().bot_user_id())
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return GuildAccess::Unknown;
+    }
+
+    // The Elixir used the session's VirtualCrypto id as a Discord id here, which is
+    // why its answer was always no.
+    let Some(discord_id) = vc_core::user::find_by_id(state.pool(), account_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|account| account.discord_id)
+    else {
+        return GuildAccess::Denied;
+    };
+
+    let Some(member) = state
+        .discord()
+        .get_guild_member(guild_id, discord_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return GuildAccess::Unknown;
+    };
+
+    let roles = state
+        .discord()
+        .get_roles(guild_id)
+        .await
+        .unwrap_or_default();
+
+    let Some(facts) = guild_facts(&guild, &member, &roles) else {
+        return GuildAccess::Unknown;
+    };
+
+    if may_act_for_guild(discord_id, &facts) {
+        GuildAccess::Permitted
+    } else {
+        GuildAccess::Denied
+    }
 }
 
 #[cfg(test)]

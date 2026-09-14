@@ -12,6 +12,7 @@ mod bal;
 pub mod claim;
 pub mod create;
 pub mod delete;
+pub mod grant;
 pub mod info;
 pub mod issue;
 pub mod pay;
@@ -191,6 +192,7 @@ pub async fn handle(
         "claim" => claim::handle(state, options, payload).await,
         "create" => create::handle(state, options, payload).await,
         "delete" => delete::handle(state, options, payload).await,
+        "grant" => grant::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
         "issue" => issue::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,

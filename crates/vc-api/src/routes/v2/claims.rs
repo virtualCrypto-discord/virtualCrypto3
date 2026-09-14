@@ -524,7 +524,7 @@ fn header_value(
 }
 
 /// `DateTime.from_naive!(naive, "Etc/UTC")` serialized by Jason.
-fn format_timestamp(value: PrimitiveDateTime) -> String {
+pub(crate) fn format_timestamp(value: PrimitiveDateTime) -> String {
     let format =
         time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 

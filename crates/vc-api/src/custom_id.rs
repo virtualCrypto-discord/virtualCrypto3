@@ -348,6 +348,99 @@ pub mod ui {
         }
     }
 
+    /// The guild's `/grant` screens: one confirmation, and one pair of buttons per
+    /// pending request.
+    ///
+    /// Not the Elixir's — it had no command that allowed an application anything —
+    /// so what is mirrored is the shape: a head byte, a numeric action, and the
+    /// subject after it. The head is its own for the reason the developer space's
+    /// is: a dispatcher tries these spaces in some order, and a space that shares
+    /// another's bytes is one the earlier parser steals.
+    pub mod grant {
+        use super::UiError;
+
+        /// This space's own head byte.
+        const HEAD: u8 = 0xF2;
+
+        fn parse_id(source: &[u8]) -> Result<(u8, Vec<u8>), UiError> {
+            match source {
+                [head, id, rest @ ..] if *head == HEAD => Ok((*id, rest.to_vec())),
+                _ => Err(UiError::Head),
+            }
+        }
+
+        /// What a button asks for. The numbers are this module's and must not be
+        /// renumbered: a message in a guild carries them.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Action {
+            /// `/grant allow`: the confirmation, accepted.
+            Allow,
+            /// The same confirmation, dismissed.
+            Cancel,
+            /// A pending request, approved.
+            Approve,
+            /// A pending request, denied.
+            Deny,
+        }
+
+        fn id(action: Action) -> u8 {
+            match action {
+                Action::Allow => 1,
+                Action::Cancel => 2,
+                Action::Approve => 3,
+                Action::Deny => 4,
+            }
+        }
+
+        /// The head this space writes, so the tests and the screens agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        /// The action, and the id it is about: an application's numeric id, or a
+        /// request's. Written as text rather than packed into bits, the way the
+        /// developer screens write their `client_id`, so a person reading a log can
+        /// tell what the button was for.
+        pub fn page(action: Action, subject: i64) -> Vec<u8> {
+            let mut out = vec![HEAD, id(action)];
+            out.extend_from_slice(subject.to_string().as_bytes());
+
+            out
+        }
+
+        /// The string a component carries, packed the way every other id here is.
+        pub fn custom_id(action: Action, subject: i64) -> String {
+            crate::custom_id::encode(0, &page(action, subject))
+        }
+
+        pub fn parse(source: &[u8]) -> Result<(Action, i64), UiError> {
+            let (id, data) = parse_id(source)?;
+
+            let action = match id {
+                1 => Action::Allow,
+                2 => Action::Cancel,
+                3 => Action::Approve,
+                4 => Action::Deny,
+                _ => return Err(UiError::Unknown(u16::from(id))),
+            };
+
+            // The packing left-aligns the last group, so the decoded payload is
+            // padded with NULs; an id never contains one, so cutting them recovers
+            // the text, and anything that is not a number is not one of ours.
+            let trimmed = data
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&data[..0], |end| &data[..=end]);
+
+            let subject = std::str::from_utf8(trimmed)
+                .ok()
+                .and_then(|text| text.parse().ok())
+                .ok_or(UiError::Head)?;
+
+            Ok((action, subject))
+        }
+    }
+
     pub mod modal {
         use super::{UiError, parse_id};
 
@@ -479,6 +572,38 @@ mod tests {
     fn an_unknown_developer_screen_is_rejected() {
         assert_eq!(
             ui::developer::parse(&[ui::developer::head(), 99]),
+            Err(UiError::Unknown(99))
+        );
+    }
+
+    /// The grant space round-trips the action and the id it is about, which is the
+    /// whole of what one of its buttons carries.
+    #[test]
+    fn a_grant_button_survives_the_round_trip() {
+        let encoded = ui::grant::custom_id(ui::grant::Action::Approve, 4242);
+        let (action, subject) = ui::grant::parse(&parse(&encoded)).expect("a known action");
+
+        assert_eq!(action, ui::grant::Action::Approve);
+        assert_eq!(subject, 4242);
+    }
+
+    /// Its head is its own, so a dispatcher that tries this space first cannot read
+    /// another space's button — and its own bytes are refused by nobody else.
+    #[test]
+    fn the_grant_space_refuses_another_spaces_bytes() {
+        assert_eq!(
+            ui::grant::parse(&[ui::developer::head(), 1]),
+            Err(UiError::Head)
+        );
+        assert_eq!(ui::grant::parse(&[0xF0, 1]), Err(UiError::Head));
+        assert!(ui::grant::parse(&[ui::grant::head(), 1, b'7']).is_ok());
+    }
+
+    /// An action this space does not have is an id it did not write.
+    #[test]
+    fn an_unknown_grant_action_is_rejected() {
+        assert_eq!(
+            ui::grant::parse(&[ui::grant::head(), 99, b'7']),
             Err(UiError::Unknown(99))
         );
     }

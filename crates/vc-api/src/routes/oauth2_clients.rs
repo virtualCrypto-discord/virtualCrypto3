@@ -260,7 +260,7 @@ impl Refusal {
 ///
 /// The sentences are anything a sentence can be made of, because some of them name what the
 /// caller asked about: the bot that is not in the guild, the guild's own name.
-pub(crate) fn refusal(
+pub fn refusal(
     status: StatusCode,
     error: impl Into<Cow<'static, str>>,
     description: impl Into<Cow<'static, str>>,
@@ -273,7 +273,7 @@ pub(crate) fn refusal(
 }
 
 /// An OAuth error, which is the shape every endpoint around this one answers with.
-pub(crate) fn refused(
+pub fn refused(
     status: StatusCode,
     error: impl Into<Cow<'static, str>>,
     description: impl Into<Cow<'static, str>>,
@@ -685,7 +685,7 @@ fn rate_limited(too_soon: TooSoon) -> Refusal {
 /// will not take the write, or because this service has no proxy — and none of
 /// those is something the caller can act on, so none of them is answered as though
 /// the request were wrong.
-pub(crate) fn internal(why: &'static str) -> Refusal {
+pub fn internal(why: &'static str) -> Refusal {
     tracing::error!(why, "a registration could not be completed");
 
     Refusal {
