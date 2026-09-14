@@ -237,18 +237,23 @@ pub fn invite(state: &AppState) -> Value {
     embed(description, links.logo_url())
 }
 
-/// The ephemeral, brand-coloured embed both commands share.
+/// The ephemeral, brand-coloured message both commands share.
+///
+/// It was an embed with a title, a description and a thumbnail. A section is the shape for text
+/// with something beside it, so the title and the description are its text and the logo is its
+/// accessory — which is where a thumbnail may go, and the only place one may.
 fn embed(description: String, logo_url: String) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": [{
-                "color": COLOR_BRAND,
-                "title": "VirtualCrypto",
-                "thumbnail": { "url": logo_url },
-                "description": description,
-            }],
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            Some(COLOR_BRAND as u32),
+            vec![crate::components::section(
+                vec![
+                    crate::components::text("**VirtualCrypto**"),
+                    crate::components::text(description),
+                ],
+                crate::components::thumbnail(&logo_url),
+            )],
+        )]),
     })
 }

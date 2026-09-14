@@ -40,20 +40,24 @@ async fn help(pool: PgPool) {
     );
 
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "color": 0x0062_21ED,
-                    "title": "VirtualCrypto",
-                    "thumbnail": { "url": "https://vcrypto.sumidora.com/static/images/logo.jpg" },
-                    "description": description,
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": 0x0062_21ED,
+            "components": [{
+                "type": 9,
+                "components": [
+                    { "type": 10, "content": "**VirtualCrypto**" },
+                    { "type": 10, "content": description },
+                ],
+                "accessory": {
+                    "type": 11,
+                    "media": { "url": "https://vcrypto.sumidora.com/static/images/logo.jpg" },
+                },
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -71,20 +75,24 @@ async fn invite(pool: PgPool) {
     );
 
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "embeds": [{
-                    "color": 0x0062_21ED,
-                    "title": "VirtualCrypto",
-                    "thumbnail": { "url": "https://vcrypto.sumidora.com/static/images/logo.jpg" },
-                    "description": description,
-                }],
-            },
-        })
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": 0x0062_21ED,
+            "components": [{
+                "type": 9,
+                "components": [
+                    { "type": 10, "content": "**VirtualCrypto**" },
+                    { "type": 10, "content": description },
+                ],
+                "accessory": {
+                    "type": 11,
+                    "media": { "url": "https://vcrypto.sumidora.com/static/images/logo.jpg" },
+                },
+            }],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// `verified/2` needs `data.name`; without it the interaction falls through to
