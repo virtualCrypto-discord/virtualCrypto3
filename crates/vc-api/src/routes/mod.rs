@@ -1,4 +1,8 @@
 pub mod connect;
+pub mod grant_requests;
+pub mod grants;
+pub mod guild_token;
+pub mod idempotency;
 pub mod interactions;
 pub mod limited;
 pub mod oauth2;
@@ -14,7 +18,7 @@ use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use serde_json::json;
 use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -67,6 +71,18 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         // Not under `/oauth2`: this is a call a page makes about an application it
         // names, rather than a registration endpoint about the caller.
         .route("/applications/{id}/connect", post(connect::connect))
+        .route(
+            "/applications/{id}/grants",
+            get(grants::index).post(grants::allow),
+        )
+        .route(
+            "/applications/{id}/grants/{guild_id}",
+            delete(grants::revoke),
+        )
+        .route(
+            "/oauth2/clients/@me/grant-requests",
+            get(grant_requests::index).post(grant_requests::create),
+        )
         .route("/oauth2/token/revoke", post(oauth2_token::revoke))
         .merge(api)
         // Vite writes every file it builds under `assets/` with a content hash in

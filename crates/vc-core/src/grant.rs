@@ -90,9 +90,14 @@ pub async fn grant_for_code(
 /// One statement for however many scopes, as `insert_all/3` is, rather than one
 /// per scope — the same care `UserResolver.resolve_ids/1` takes and for the same
 /// reason. Conflicting rows are left alone, which is what makes redeeming a
-/// second code of the same pair harmless.
+/// second code of the same pair harmless, and what makes writing the same grant
+/// twice harmless.
+///
+/// Takes a connection rather than a pool because a grant is written both on its
+/// own — a guild saying yes from Discord — and inside the transaction that
+/// answers a request.
 pub async fn create_grant_scopes(
-    pool: &PgPool,
+    connection: &mut sqlx::PgConnection,
     grant_id: i64,
     scopes: &[String],
     now: OffsetDateTime,
@@ -108,7 +113,7 @@ pub async fn create_grant_scopes(
         scopes,
         at
     )
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
 
     Ok(())
@@ -321,9 +326,16 @@ pub async fn exchange_code(
         return Err(ExchangeError::UsedCode);
     };
 
-    create_grant_scopes(pool, grant_id, &taken.scopes, now)
+    let mut connection = pool
+        .acquire()
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
+
+    create_grant_scopes(&mut connection, grant_id, &taken.scopes, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidCode)?;
+
+    drop(connection);
 
     let access_token = create_access_token(pool, grant_id, now)
         .await
@@ -407,6 +419,315 @@ pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Res
     .await?;
 
     Ok(found)
+}
+
+/// The grant's row and the scopes it carries, written as one act.
+///
+/// The upsert does not touch `latest_code`: that column is how a code exchange
+/// tells a spent code from one that was never issued, and a guild saying yes from
+/// Discord is not a code.
+async fn write_grant(
+    connection: &mut sqlx::PgConnection,
+    application_id: i64,
+    guild_id: i64,
+    scopes: &[String],
+    now: OffsetDateTime,
+) -> Result<i64> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let grant_id = sqlx::query_scalar!(
+        "INSERT INTO grants (application_id, guild_id, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $3)
+         ON CONFLICT (application_id, guild_id) DO UPDATE SET updated_at = EXCLUDED.updated_at
+         RETURNING id",
+        application_id,
+        guild_id,
+        at
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+
+    create_grant_scopes(connection, grant_id, scopes, now).await?;
+
+    Ok(grant_id)
+}
+
+/// A guild saying yes without a browser in the way: what `/grant` writes from
+/// Discord, and what the application's own page writes for its owner.
+///
+/// Not the Elixir's. There, a grant was only ever a side effect of redeeming an
+/// authorization code, which is why an application could not be allowed anything
+/// without a person opening an authorization URL.
+pub async fn allow_in_guild(
+    pool: &PgPool,
+    application_id: i64,
+    guild_id: i64,
+    scopes: &[&str],
+    now: OffsetDateTime,
+) -> Result<i64> {
+    let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_string()).collect();
+    let mut connection = pool.acquire().await?;
+
+    write_grant(&mut connection, application_id, guild_id, &scopes, now).await
+}
+
+/// Take one scope back, leaving the grant and its other scopes alone.
+///
+/// The grant itself stays: it is what the guild's tokens hang off, and deleting it
+/// would revoke more than the permission being taken away. A guild token already
+/// issued loses the scope instead, because its scopes are read from here.
+pub async fn disallow_in_guild(
+    pool: &PgPool,
+    application_id: i64,
+    guild_id: i64,
+    scope: &str,
+) -> Result<bool> {
+    let deleted = sqlx::query!(
+        "DELETE FROM grant_scopes
+          WHERE scope = $3::text::virtual_crypto_scope_type
+            AND grant_id IN (SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2)",
+        application_id,
+        guild_id,
+        scope
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(deleted.rows_affected() > 0)
+}
+
+/// What a guild granted an application.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantedGuild {
+    pub guild_id: i64,
+    pub scopes: Vec<String>,
+    pub updated_at: PrimitiveDateTime,
+}
+
+/// Every guild an application holds a grant in, with what it may do there.
+///
+/// `guild_id <> 0` is not decoration: a code exchange whose authorization request
+/// named no guild writes the sentinel `unwrap_or_default` leaves behind, and that
+/// row is not a guild anything can be done in.
+pub async fn grants_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantedGuild>> {
+    let rows = sqlx::query!(
+        r#"SELECT g.guild_id AS "guild_id!",
+                  g.updated_at,
+                  COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
+                           ARRAY[]::text[]) AS "scopes!"
+             FROM grants g
+             LEFT JOIN grant_scopes s ON s.grant_id = g.id
+            WHERE g.application_id = $1 AND g.guild_id IS NOT NULL AND g.guild_id <> 0
+            GROUP BY g.id, g.guild_id, g.updated_at
+            ORDER BY g.guild_id"#,
+        application_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| GrantedGuild {
+            guild_id: row.guild_id,
+            scopes: row.scopes,
+            updated_at: row.updated_at,
+        })
+        .collect())
+}
+
+/// What a guild token turned out to be: which application, for which guild, and
+/// what that grant carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenGrant {
+    pub application_id: i64,
+    /// The application's own account — `users.id`, which is an `integer` here and
+    /// not the `bigint` its Discord ids are — and the identity an idempotent
+    /// request is filed under.
+    pub account_id: i32,
+    pub guild_id: i64,
+    pub scopes: Vec<String>,
+}
+
+/// A guild token, resolved: the grant an `access_tokens` row belongs to.
+///
+/// This is the `guild` kind, and it is a row rather than a JWT because that is
+/// what the code flow has always handed out — `Authz.md` calls the claim a kind,
+/// and the kind here is the token's provenance. `None` is every way a token can
+/// fail to be one: unparsable, expired, revoked, or issued for a grant with no
+/// guild in it.
+pub async fn resolve_token(
+    pool: &PgPool,
+    token_id: Uuid,
+    now: OffsetDateTime,
+) -> Result<Option<TokenGrant>> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let found = sqlx::query!(
+        r#"SELECT g.application_id AS "application_id!",
+                  u.id AS "account_id!",
+                  g.guild_id AS "guild_id!",
+                  COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
+                           ARRAY[]::text[]) AS "scopes!"
+             FROM access_tokens t
+             JOIN grants g ON g.id = t.grant_id
+             JOIN users u ON u.application_id = g.application_id
+             LEFT JOIN grant_scopes s ON s.grant_id = g.id
+            WHERE t.token_id = $1
+              AND t.expires >= $2
+              AND g.guild_id IS NOT NULL AND g.guild_id <> 0
+            GROUP BY g.id, u.id"#,
+        token_id,
+        at
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(found.map(|row| TokenGrant {
+        application_id: row.application_id,
+        account_id: row.account_id,
+        guild_id: row.guild_id,
+        scopes: row.scopes,
+    }))
+}
+
+/// An application asking a guild for a permission.
+///
+/// Asking twice is the same ask, so a second request while one is pending keeps
+/// the request that is there. A decided one is not reused: a guild that said no
+/// may be asked again, and the ask is a new row.
+pub async fn request_grant(
+    pool: &PgPool,
+    application_id: i64,
+    guild_id: i64,
+    now: OffsetDateTime,
+) -> Result<i64> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let id = sqlx::query_scalar!(
+        "INSERT INTO grant_requests (application_id, guild_id, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $3)
+         ON CONFLICT (application_id, guild_id) WHERE status = 'pending'
+         DO UPDATE SET updated_at = EXCLUDED.updated_at
+         RETURNING id",
+        application_id,
+        guild_id,
+        at
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(id)
+}
+
+/// A pending request as the guild's command lists it: with the name to show, and
+/// the `client_id` an administrator was told to look for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRequest {
+    pub id: i64,
+    pub application_id: i64,
+    pub client_id: String,
+    pub client_name: Option<String>,
+}
+
+/// What a guild has been asked for and not yet answered.
+pub async fn requests_in_guild(pool: &PgPool, guild_id: i64) -> Result<Vec<PendingRequest>> {
+    let rows = sqlx::query!(
+        r#"SELECT r.id, r.application_id, a.client_id::text AS "client_id!", a.client_name
+             FROM grant_requests r
+             JOIN applications a ON a.id = r.application_id
+            WHERE r.guild_id = $1 AND r.status = 'pending'
+            ORDER BY r.id"#,
+        guild_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| PendingRequest {
+            id: row.id,
+            application_id: row.application_id,
+            client_id: row.client_id,
+            client_name: row.client_name,
+        })
+        .collect())
+}
+
+/// A request as the application that made it reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantRequest {
+    pub id: i64,
+    pub application_id: i64,
+    pub guild_id: i64,
+    pub status: String,
+}
+
+/// What an application has asked for, answered or not.
+pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantRequest>> {
+    let rows = sqlx::query!(
+        "SELECT id, application_id, guild_id, status
+           FROM grant_requests
+          WHERE application_id = $1
+          ORDER BY id",
+        application_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| GrantRequest {
+            id: row.id,
+            application_id: row.application_id,
+            guild_id: row.guild_id,
+            status: row.status,
+        })
+        .collect())
+}
+
+/// The guild's answer to a request: the status, and for a yes the grant itself.
+///
+/// One transaction, because a request answered yes that granted nothing is a
+/// state the application reads as approval and acts on. `None` is a request that
+/// is not this guild's, not there, or already answered — the three the caller
+/// answers the same way.
+pub async fn decide_request(
+    pool: &PgPool,
+    request_id: i64,
+    guild_id: i64,
+    approved: bool,
+    scopes: &[&str],
+    now: OffsetDateTime,
+) -> Result<Option<i64>> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+    let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_string()).collect();
+
+    let mut tx = pool.begin().await?;
+
+    let application_id = sqlx::query_scalar!(
+        "UPDATE grant_requests
+            SET status = $3, updated_at = $4
+          WHERE id = $1 AND guild_id = $2 AND status = 'pending'
+        RETURNING application_id",
+        request_id,
+        guild_id,
+        if approved { "approved" } else { "denied" },
+        at
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(application_id) = application_id else {
+        return Ok(None);
+    };
+
+    if approved {
+        write_grant(&mut tx, application_id, guild_id, &scopes, now).await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(Some(application_id))
 }
 
 /// `revoke_access_token/1`: forget an access token.

@@ -161,10 +161,12 @@ async fn scopes_are_recorded_once_however_often_they_are_given(pool: PgPool) {
         .expect("a grant")
         .expect("a new one");
 
-    create_grant_scopes(&pool, grant_id, &["openid".to_string()], now)
+    let mut connection = pool.acquire().await.expect("a connection");
+
+    create_grant_scopes(&mut connection, grant_id, &["openid".to_string()], now)
         .await
         .expect("the scopes");
-    create_grant_scopes(&pool, grant_id, &["openid".to_string()], now)
+    create_grant_scopes(&mut connection, grant_id, &["openid".to_string()], now)
         .await
         .expect("the same scopes again");
 

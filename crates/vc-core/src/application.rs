@@ -197,8 +197,12 @@ pub async fn redirect_uri_is_registered(
     Ok(found)
 }
 
-/// The one scope the service has ever accepted.
+/// The one scope the Elixir ever accepted.
 pub const OPENID: &str = "openid";
+
+/// The scope a guild grants an application so that it may issue from the guild's
+/// pool. Not the Elixir's: it issues no token that could do it.
+pub const ISSUE: &str = "vc.issue";
 
 /// Why a list of scopes was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,16 +212,20 @@ pub enum ScopeError {
     Invalid,
 }
 
-/// `is_valid_scopes?/1`: no repeats, and nothing but `openid`.
+/// `is_valid_scopes?/1`: no repeats, and nothing but `openid` — and, since the
+/// issuing grant, `vc.issue`.
 ///
-/// Which leaves exactly two acceptable answers, `[]` and `["openid"]` — so the
-/// consent screen's `scope` is usually nothing at all. Written as the two rules
-/// the Elixir states rather than as `len() <= 1`, because "no repeats" is the
-/// half a caller would not think to check.
+/// The Elixir's rule was `openid` alone, which left exactly two acceptable
+/// answers, `[]` and `["openid"]`. `vc.issue` is the second scope a consent screen
+/// may ask for, and it is what gives the code flow's guild token something to do:
+/// the grant the scope is recorded on is what the issuing endpoint reads. Written
+/// as the two rules the Elixir states rather than as a list membership test,
+/// because "no repeats" is the half a caller would not think to check.
 pub fn check_scopes(scopes: &[String]) -> Result<(), ScopeError> {
     let unique: std::collections::HashSet<&String> = scopes.iter().collect();
 
-    if unique.len() != scopes.len() || scopes.iter().any(|scope| scope != OPENID) {
+    if unique.len() != scopes.len() || scopes.iter().any(|scope| scope != OPENID && scope != ISSUE)
+    {
         Err(ScopeError::Invalid)
     } else {
         Ok(())
@@ -925,9 +933,11 @@ mod tests {
     }
 
     #[test]
-    fn the_only_acceptable_scopes_are_none_and_openid() {
+    fn the_acceptable_scopes_are_openid_and_vc_issue() {
         assert_eq!(scopes(&[]), Ok(()));
         assert_eq!(scopes(&["openid"]), Ok(()));
+        assert_eq!(scopes(&["vc.issue"]), Ok(()));
+        assert_eq!(scopes(&["openid", "vc.issue"]), Ok(()));
     }
 
     #[test]

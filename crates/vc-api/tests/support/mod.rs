@@ -67,15 +67,22 @@ pub struct FakeDiscord {
 
 impl FakeDiscord {
     pub fn new() -> Self {
-        Self::with_guild(json!({ "name": "TestGuild" }))
+        Self::with_guild(json!({ "name": "TestGuild", "owner_id": "0" }))
     }
 
     /// The member `get_guild_member` reports and the guild's roles. A member's
     /// permissions are ORed from the roles they carry, so a test says which
     /// roles the member has and what each role grants — the permissions being
     /// decimal strings, as Discord sends them.
-    pub fn with_member(member_roles: &[&str], roles: &[(i64, u64)]) -> Self {
-        let mut fake = Self::new();
+    ///
+    /// The `owner_id` is the same id the account's `discord_id` must be for a
+    /// test to exercise the owner path: `guild_facts` reads the owner out of
+    /// the guild, and a member it does not know is not the owner.
+    pub fn with_member(owner_id: i64, member_roles: &[&str], roles: &[(i64, u64)]) -> Arc<Self> {
+        let mut fake = Self::with_guild(json!({
+            "name": "TestGuild",
+            "owner_id": owner_id.to_string(),
+        }));
 
         fake.member = json!({ "roles": member_roles })
             .as_object()
@@ -91,7 +98,7 @@ impl FakeDiscord {
             })
             .collect();
 
-        fake
+        Arc::new(fake)
     }
 
     /// The guild `get_guild` reports. The interaction tests vary it to cover the
@@ -216,6 +223,13 @@ impl DiscordApi for FakeDiscord {
         Ok(self.payload.clone())
     }
 
+    /// The member `get_guild_member` reports, whatever member is asked for.
+    ///
+    /// Discord answers a user that is not in the guild with 404, and this stands
+    /// in for every answer but that one: the guild's `owner_id` is what tells the
+    /// owner apart from everyone else, and `guild_facts` reads the owner out of
+    /// the guild rather than out of the member. A blank member — the plain
+    /// fake's — is what makes an unreadable guild.
     async fn get_guild_member(
         &self,
         _guild_id: i64,
@@ -571,6 +585,43 @@ pub async fn mint_app(pool: &PgPool, subject: i32, scopes: &[&str]) -> String {
     )
     .await
     .expect("issue an app token")
+}
+
+/// A grant an application holds in a guild, and the token that names it.
+///
+/// This is the `guild` kind: not a JWT but the `access_tokens` row the code flow
+/// answers with, which is why a test builds it through the same two functions
+/// production does rather than by signing anything.
+pub async fn insert_grant(
+    pool: &PgPool,
+    application: i64,
+    guild_id: i64,
+    scopes: &[&str],
+) -> String {
+    vc_core::grant::allow_in_guild(
+        pool,
+        application,
+        guild_id,
+        scopes,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("a grant");
+
+    mint_guild_token(pool, application, guild_id).await
+}
+
+/// The token for a grant that is already there: `create_access_token/2`, which is
+/// what both the code exchange and `client_credentials` with a guild id call.
+pub async fn mint_guild_token(pool: &PgPool, application: i64, guild_id: i64) -> String {
+    let grant = vc_core::grant::grant_for(pool, application, guild_id)
+        .await
+        .expect("look up the grant")
+        .expect("a grant");
+
+    vc_core::grant::create_access_token(pool, grant, OffsetDateTime::now_utc())
+        .await
+        .expect("a guild token")
 }
 
 /// Delete the jti row, exactly like Guardian.revoke/1.

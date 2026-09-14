@@ -194,6 +194,75 @@ async fn a_scope_that_is_not_openid_is_refused(pool: PgPool) {
     assert_eq!(checked, Err(PreauthorizeError::InvalidScope));
 }
 
+/// The second scope a consent screen may ask for: the one a guild grants an
+/// application so that it may issue from the guild's pool.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn vc_issue_is_an_acceptable_scope(pool: PgPool) {
+    let client_id = Uuid::new_v4();
+    application(
+        &pool,
+        client_id,
+        &["authorization_code"],
+        &["https://app.example/callback"],
+    )
+    .await;
+
+    let checked = preauthorize(
+        &pool,
+        &scopes(&["vc.issue"]),
+        "https://app.example/callback",
+        &client_id.to_string(),
+    )
+    .await;
+
+    assert!(checked.is_ok(), "{checked:?}");
+}
+
+/// And what an approval records is what a grant carries: `authorize` writes the
+/// authorization code whose exchange later writes the grant's scopes, and a grant
+/// with `vc.issue` is what a guild token resolves to.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_approved_vc_issue_is_permitted(pool: PgPool) {
+    use vc_core::application::authorize;
+
+    let client_id = Uuid::new_v4();
+    application(
+        &pool,
+        client_id,
+        &["authorization_code"],
+        &["https://app.example/callback"],
+    )
+    .await;
+
+    // Openid is what the consent screen grants by default and `vc.issue` what it
+    // grants alongside it: both have to pass `check` for the exchange that follows
+    // to write them onto the grant.
+    let code = authorize(
+        &pool,
+        900_000_000_000_000_001,
+        &scopes(&["openid", "vc.issue"]),
+        "https://app.example/callback",
+        &client_id.to_string(),
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("a code");
+
+    let stored = sqlx::query!(
+        r#"SELECT scopes::text[] AS "scopes!" FROM authorization_codes WHERE code = $1"#,
+        code
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the code");
+
+    assert!(
+        stored.scopes.contains(&"vc.issue".to_owned()),
+        "{:?}",
+        stored.scopes
+    );
+}
+
 /// The order is the contract: this request is wrong about two things and is
 /// answered by the earlier one.
 #[sqlx::test(migrations = "../vc-core/migrations")]

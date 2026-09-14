@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO grants (application_id, guild_id, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $3)\n         ON CONFLICT (application_id, guild_id) DO UPDATE SET updated_at = EXCLUDED.updated_at\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grants",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "599e825b295d5dd4ec9eae9a35e984ab1f5b3f29339eca0022409e7016ecdfac"
+}
