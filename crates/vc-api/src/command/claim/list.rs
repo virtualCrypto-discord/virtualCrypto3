@@ -6,8 +6,8 @@ use super::format_date_time;
 use crate::claim_list::{ListOptions, Page, Position, encode_claim_ids};
 use crate::command::{
     ACTION_ROW, BUTTON, BUTTON_STYLE_DANGER, BUTTON_STYLE_PRIMARY, BUTTON_STYLE_SECONDARY,
-    BUTTON_STYLE_SUCCESS, CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, EPHEMERAL,
-    SELECT_MENU, UPDATE_MESSAGE, as_int, get_user, mention,
+    BUTTON_STYLE_SUCCESS, CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, SELECT_MENU,
+    UPDATE_MESSAGE, as_int, get_user, mention,
 };
 use crate::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
 use crate::custom_id::ui::select_menu::claim_select;
@@ -178,35 +178,37 @@ fn render(
         .filter(|claim| claim.status.as_deref() == Some("pending"))
         .collect();
 
-    let embed = json!({
-        "title": title(position),
-        "color": COLOR_BRAND,
-        "fields": fields(position, &page.claims, me, &[]),
-        "description": if page.claims.is_empty() {
-            json!("表示する内容がありません。")
-        } else {
-            Value::Null
-        },
-    });
+    // The page's title was an embed's title: a bold line, with the list under it.
+    let mut children = vec![crate::components::text(format!("**{}**", title(position)))];
 
-    let mut components = vec![pagination_row(position, page, options)];
+    if page.claims.is_empty() {
+        children.push(crate::components::text("表示する内容がありません。"));
+    } else {
+        children.extend(fields(position, &page.claims, me, &[]));
+    }
+
+    // The rows first: pagination and the menu change what is on the page rather than say
+    // anything about it.
+    let mut rows = vec![pagination_row(position, page, options)];
 
     // The select menu lists what can still be acted on, so it is absent from an
     // empty page.
     if !pending.is_empty() {
-        components.push(select_row(MAX_COLUMN_COUNT, &pending, me, options, &[]));
+        rows.push(select_row(MAX_COLUMN_COUNT, &pending, me, options, &[]));
     }
 
     // The action row only appears once something has been selected, which a
     // command cannot do.
 
+    children.extend(rows);
+
     json!({
         "type": kind,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": [embed],
-            "components": components,
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            // What both embeds carried.
+            Some(COLOR_BRAND as u32),
+            children,
+        )]),
     })
 }
 
@@ -232,15 +234,15 @@ fn fields(position: Position, claims: &[ClaimView], me: i64, selected: &[i64]) -
             lines.extend(users(position, claim));
             lines.push(format!("請求日: {}", format_date_time(claim.inserted_at)));
 
-            json!({
-                "name": format!(
-                    "{}{}{}",
-                    render_selection(claim.status.as_deref(), selected.contains(&claim.id)),
-                    render_rs_icon(me, claim.claimant.discord_id, claim.payer.discord_id),
-                    claim.id
-                ),
-                "value": lines.join("\n"),
-            })
+            let name = format!(
+                "{}{}{}",
+                render_selection(claim.status.as_deref(), selected.contains(&claim.id)),
+                render_rs_icon(me, claim.claimant.discord_id, claim.payer.discord_id),
+                claim.id
+            );
+
+            // The field's name and its value as one Text Display: a component has no `name`.
+            crate::components::text(format!("**{name}**\n{}", lines.join("\n")))
         })
         .collect()
 }
@@ -479,46 +481,43 @@ pub fn selection(
 
     let quotations = quotations(&selected_claims, me, balances);
 
-    let mut embeds = vec![json!({
-        "title": title(position),
-        "color": COLOR_BRAND,
-        "fields": fields(position, claims, me, selected),
-        "description": if claims.is_empty() {
-            json!("表示する内容がありません。")
-        } else {
-            Value::Null
-        },
-    })];
+    let mut children = vec![crate::components::text(format!("**{}**", title(position)))];
+
+    if claims.is_empty() {
+        children.push(crate::components::text("表示する内容がありません。"));
+    } else {
+        children.extend(fields(position, claims, me, selected));
+    }
 
     if !quotations.is_empty() {
-        embeds.push(json!({
-            "title": "残高",
-            "color": COLOR_BRAND,
-            "description": quotations
+        children.push(crate::components::text(format!(
+            "**残高**\n{}",
+            quotations
                 .iter()
                 .map(quotation_text)
                 .collect::<Vec<_>>()
                 .join("\n"),
-        }));
+        )));
     }
 
-    let mut components = Vec::new();
+    let mut rows = Vec::new();
 
     if !pending.is_empty() {
-        components.push(select_row(0, &pending, me, options, selected));
+        rows.push(select_row(0, &pending, me, options, selected));
     }
 
     if let Some(row) = action_row(&selected_claims, &quotations, me, options) {
-        components.push(row);
+        rows.push(row);
     }
+
+    children.extend(rows);
 
     json!({
         "type": UPDATE_MESSAGE,
-        "data": {
-            "flags": EPHEMERAL,
-            "embeds": embeds,
-            "components": components,
-        },
+        "data": crate::components::ephemeral(vec![crate::components::container(
+            Some(COLOR_BRAND as u32),
+            children,
+        )]),
     })
 }
 

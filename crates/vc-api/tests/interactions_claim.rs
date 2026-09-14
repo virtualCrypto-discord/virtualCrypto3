@@ -874,13 +874,17 @@ async fn list_reports_an_empty_page(pool: PgPool) {
     let reload = page_custom_id(4, Position::All, Page::Number(1), &options);
 
     assert_eq!(response.status, 200, "body: {}", response.body);
+    // What the page says, and then the row that changes it: the title and the empty state are
+    // Text Displays where an embed's title and description were.
     assert_eq!(
-        response.body,
-        json!({
-            "type": 4,
-            "data": {
-                "flags": 64,
-                "components": [{
+        response.body["data"]["components"],
+        json!([{
+            "type": 17,
+            "accent_color": COLOR_BRAND,
+            "components": [
+                { "type": 10, "content": "**請求一覧(all)**" },
+                { "type": 10, "content": "表示する内容がありません。" },
+                {
                     "type": 1,
                     "components": [
                         { "type": 2, "style": 2, "emoji": { "name": "⏪" }, "custom_id": "disabled-0", "disabled": true },
@@ -889,16 +893,11 @@ async fn list_reports_an_empty_page(pool: PgPool) {
                         { "type": 2, "style": 2, "emoji": { "name": "⏩" }, "custom_id": "disabled-3", "disabled": true },
                         { "type": 2, "style": 2, "emoji": { "name": "🔄" }, "custom_id": reload },
                     ],
-                }],
-                "embeds": [{
-                    "title": "請求一覧(all)",
-                    "color": COLOR_BRAND,
-                    "fields": [],
-                    "description": "表示する内容がありません。",
-                }],
-            },
-        })
+                },
+            ],
+        }])
     );
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -910,7 +909,7 @@ async fn list_renders_the_first_page(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(4));
-    assert_eq!(response.body["data"]["flags"], json!(64));
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 
     let page = first_page(&pool, 1).await;
     assert_eq!(
@@ -924,9 +923,11 @@ async fn list_renders_the_first_page(pool: PgPool) {
         .iter()
         .map(|claim| {
             json!({
-                "name": format!("◻️{}{}", claim_icon(money.user1, claim), claim.id),
-                "value": format!(
-                    "状態　: ⌛未決定\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
+                "type": 10,
+                "content": format!(
+                    "**◻️{}{}**\n状態　: ⌛未決定\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
+                    claim_icon(money.user1, claim),
+                    claim.id,
                     claim.amount.unwrap_or_default(),
                     claim.currency.unit.clone().unwrap_or_default(),
                     claim.claimant.discord_id.unwrap_or_default(),
@@ -937,16 +938,28 @@ async fn list_renders_the_first_page(pool: PgPool) {
         })
         .collect();
 
-    let embed = &response.body["data"]["embeds"][0];
-    assert_eq!(embed["title"], json!("請求一覧(all)"));
-    assert_eq!(embed["color"], json!(COLOR_BRAND));
-    assert_eq!(embed["fields"], json!(expected));
+    // The title is a bold line, the accent is the container's, and the list comes after the
+    // rows: how many rows there are depends on the page, so the list is read from the end.
+    let container = &response.body["data"]["components"][0];
+    assert_eq!(container["type"], json!(17));
+    assert_eq!(container["accent_color"], json!(COLOR_BRAND));
+    let children = container["components"].as_array().expect("the children");
+
+    // The title, and then the list; the rows are last, and how many there are depends on the
+    // page. So the reading is from the front for what was said and from the back for what was
+    // offered.
+    assert_eq!(children[0]["content"], json!("**請求一覧(all)**"));
+    assert_eq!(
+        &children[1..1 + expected.len()],
+        expected.as_slice(),
+        "the list: {container}"
+    );
 
     let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
     let options = list_options(Position::All);
 
     assert_eq!(
-        response.body["data"]["components"][0]["components"],
+        container["components"][container["components"].as_array().expect("children").len() - 2]["components"],
         json!([
             { "type": 2, "style": 2, "emoji": { "name": "⏪" }, "custom_id": "disabled-0", "disabled": true },
             { "type": 2, "style": 2, "emoji": { "name": "⏮️" }, "custom_id": "disabled-1", "disabled": true },
@@ -961,7 +974,8 @@ async fn list_renders_the_first_page(pool: PgPool) {
         ])
     );
 
-    let select = &response.body["data"]["components"][1]["components"][0];
+    let select = &container["components"]
+        [container["components"].as_array().expect("children").len() - 1]["components"][0];
     assert_eq!(select["type"], json!(3));
     assert_eq!(select["min_values"], json!(0));
     assert_eq!(select["max_values"], json!(ids.len()));
@@ -1072,18 +1086,23 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     // The press answers with the list redrawn, not with the outcome.
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(7));
-    assert_eq!(response.body["data"]["flags"], json!(64));
+    assert_eq!(response.body["data"]["flags"], json!(32832));
     assert_eq!(
-        response.body["data"]["embeds"][0]["title"],
-        json!("請求一覧(all)")
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!("**請求一覧(all)**")
     );
 
     // Only user2's other claim is left, so the page holds one row.
     let remaining = first_page(&pool, 2).await;
     assert_eq!(remaining.claims.len(), 1);
     assert_eq!(remaining.claims[0].id, claims.id(1));
+    // The menu is the last row: the page's list comes first, then the rows that move through it.
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+
     assert_eq!(
-        response.body["data"]["components"][1]["components"][0]["max_values"],
+        children[children.len() - 1]["components"][0]["max_values"],
         json!(1)
     );
 
@@ -1643,16 +1662,17 @@ fn selection_values(ids: &[i64]) -> Value {
 }
 
 fn ticked(response: &support::Response) -> Vec<bool> {
-    response.body["data"]["embeds"][0]["fields"]
+    response.body["data"]["components"][0]["components"]
         .as_array()
-        .expect("the fields")
+        .expect("the children")
         .iter()
-        .map(|field| {
-            field["name"]
-                .as_str()
-                .expect("a field name")
-                .starts_with('☑')
-        })
+        // The title is the first Text Display and the quotation is the last: the claims are the
+        // ones between them. A claim nobody has ticked carries no mark at all, so filtering on
+        // one would drop exactly the claims this is asked about.
+        .filter_map(|child| child["content"].as_str())
+        .skip(1)
+        .take_while(|content| !content.starts_with("**残高"))
+        .map(|content| content.starts_with("**☑"))
         .collect()
 }
 
@@ -1680,26 +1700,38 @@ async fn selecting_everything_marks_it_and_warns(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     // The selection answers by replacing the message the menu was on.
     assert_eq!(response.body["type"], json!(7));
-    assert_eq!(response.body["data"]["flags"], json!(64));
+    assert_eq!(response.body["data"]["flags"], json!(32832));
 
     assert_eq!(ticked(&response), vec![true, true, true]);
 
     // user1 holds 200000 and is being asked for 10000099, so the quotation warns.
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+
     assert_eq!(
-        response.body["data"]["embeds"][1]["description"],
+        children[children.len() - 3]["content"],
         json!(format!(
-            "**{}**: `200000{}` - `10000099{}` => `-9800099{}`⚠",
+            "**残高**\n**{}**: `200000{}` - `10000099{}` => `-9800099{}`⚠",
             money.name, money.unit, money.unit, money.unit
         ))
     );
 
-    let menu = &response.body["data"]["components"][0]["components"][0];
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+
+    // The menu is the first row, and the rows are last: the quotation is between them.
+    let menu = &children[children.len() - 2]["components"][0];
     assert_eq!(menu["type"], json!(3));
     assert_eq!(menu["max_values"], json!(3));
     assert_eq!(menu["custom_id"], json!(select_menu_custom_id(0, &ids)));
 
     // user1 is not the payer of all three, so nothing can be acted on.
-    let buttons = response.body["data"]["components"][1]["components"]
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+    let buttons = children[children.len() - 1]["components"]
         .as_array()
         .expect("the buttons");
     assert_eq!(buttons.len(), 4);
@@ -1736,10 +1768,14 @@ async fn selecting_one_affordable_claim_enables_the_actions(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+
     assert_eq!(
-        response.body["data"]["embeds"][1]["description"],
+        children[children.len() - 3]["content"],
         json!(format!(
-            "**{}**: `200000{}` - `100{}` => `199900{}`",
+            "**残高**\n**{}**: `200000{}` - `100{}` => `199900{}`",
             money.name, money.unit, money.unit, money.unit
         ))
     );
@@ -1747,7 +1783,10 @@ async fn selecting_one_affordable_claim_enables_the_actions(pool: PgPool) {
     // The page is newest first, and c6 is the newest of the three.
     assert_eq!(ticked(&response), vec![true, false, false]);
 
-    let buttons = response.body["data"]["components"][1]["components"]
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+    let buttons = children[children.len() - 1]["components"]
         .as_array()
         .expect("the buttons");
     for button in &buttons[1..] {
