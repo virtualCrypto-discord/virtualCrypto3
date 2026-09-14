@@ -376,6 +376,87 @@ mod tests {
         )
     }
 
+    /// An application, as far as a handshake can tell: it verifies a signature the way its own
+    /// documentation says, answers the PING it believes, and refuses the one it does not.
+    async fn application(public: VerifyingKey) -> String {
+        let hook = move |headers: axum::http::HeaderMap, body: String| async move {
+            let header = |name: &str| {
+                headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+
+            let signature = header("X-Signature-Ed25519");
+            let timestamp = header("X-Signature-Timestamp");
+
+            let bytes: Option<[u8; 64]> = (0..signature.len() / 2)
+                .map(|pair| u8::from_str_radix(&signature[pair * 2..pair * 2 + 2], 16).ok())
+                .collect::<Option<Vec<_>>>()
+                .and_then(|bytes| bytes.try_into().ok());
+
+            let message = format!("{timestamp}{body}");
+
+            let believed = bytes
+                .map(|bytes| Signature::from_bytes(&bytes))
+                .is_some_and(|signature| public.verify(message.as_bytes(), &signature).is_ok());
+
+            if believed {
+                (
+                    axum::http::StatusCode::OK,
+                    axum::Json(json!({ "type": PING })),
+                )
+            } else {
+                (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({})))
+            }
+        };
+
+        let app = axum::Router::new().route("/hook", axum::routing::post(hook));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let address = listener.local_addr().expect("the address");
+
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        format!("http://{address}/hook")
+    }
+
+    /// No proxy is a direct handshake, which is the whole point of this: a machine with no proxy
+    /// could not register an application that names a webhook at all, and so could not exercise
+    /// the application flow.
+    #[tokio::test]
+    async fn a_handshake_without_a_proxy_goes_straight_at_the_webhook() {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let url = application(signing.verifying_key()).await;
+
+        assert_eq!(
+            verify(&Direct::default(), &url, &signing.to_bytes(), 1_700_000_000).await,
+            Handshake::Passed,
+            "{url}"
+        );
+    }
+
+    /// And a delivery goes there too, rather than through anything: the same request the proxy
+    /// would relay, answered by the application itself.
+    #[tokio::test]
+    async fn a_delivery_without_a_proxy_is_answered_by_the_application() {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let url = application(signing.verifying_key()).await;
+
+        let sent = send(
+            &Direct::default(),
+            &delivery(&json!({ "type": PING }), &signing.to_bytes(), &url, 1),
+        )
+        .await
+        .expect("a request");
+
+        assert_eq!(sent.map(|(status, _)| status), Some(200));
+    }
+
     /// The check an application makes, from its own documentation: the timestamp
     /// and the body concatenated, verified with the public key.
     #[test]
