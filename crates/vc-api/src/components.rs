@@ -74,6 +74,21 @@ pub fn button(custom_id: &str, label: &str, style: ButtonStyle) -> Value {
     })
 }
 
+/// A button whose face is an emoji, and which may be disabled.
+///
+/// The claim list's controls are these: five glyphs in a row, some of them greyed out because
+/// the page they would move to is the page they are on. A label is optional in Discord's button
+/// and an emoji is what these say instead.
+pub fn icon_button(custom_id: &str, emoji: &str, style: ButtonStyle, disabled: bool) -> Value {
+    json!({
+        "type": 2,
+        "style": style as u8,
+        "emoji": { "name": emoji },
+        "custom_id": custom_id,
+        "disabled": disabled,
+    })
+}
+
 /// A button that opens a URL and, because it does, sends nothing back.
 pub fn link_button(url: &str, label: &str) -> Value {
     json!({
@@ -290,6 +305,20 @@ mod tests {
         assert_eq!(response["content"], Value::Null);
         assert_eq!(response["embeds"], json!([]));
         assert_eq!(response["components"][0]["type"], json!(10));
+    }
+
+    /// A claim's control: an emoji rather than a label, and greyed out when the page it would
+    /// open is the page it is on.
+    #[test]
+    fn an_icon_button_carries_its_emoji_and_whether_it_is_disabled() {
+        let disabled = icon_button("journey-0", "⏪", ButtonStyle::Secondary, true);
+        let enabled = icon_button("reload", "🔄", ButtonStyle::Secondary, false);
+
+        assert_eq!(disabled["type"], json!(2));
+        assert_eq!(disabled["emoji"]["name"], "⏪");
+        assert_eq!(disabled["disabled"], json!(true));
+        assert!(disabled.get("label").is_none(), "{disabled}");
+        assert_eq!(enabled["disabled"], json!(false));
     }
 
     #[test]
