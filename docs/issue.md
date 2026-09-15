@@ -141,6 +141,14 @@ carries the `auth_req_id` and the tokens come from the token endpoint. An
 application without a webhook polls instead, which is why the push is a ping
 and not the decision itself.
 
+Which events reach the webhook is the application's own choice, named at
+registration and changed with an edit: `subscribed_events` names the `type`
+values it wants — `2` for a claim update, `3` for a grant decision — and it is
+exactly what it says: checked is sent, unchecked is not, and empty is nothing.
+An application that only issues names `[3]` and is never woken for a claim; one
+that only pays names `[2]` and never for a grant. The handshake's `1` is not
+subscribable, because a PING is a check rather than an event.
+
 ## The application's own view
 
 `GET /oauth2/clients/@me/grant-requests` reads back what the application asked

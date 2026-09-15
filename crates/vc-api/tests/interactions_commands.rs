@@ -179,6 +179,101 @@ async fn application_show_renders_the_callers_own(pool: PgPool) {
     assert!(rendered.contains("テスト"), "{rendered}");
 }
 
+/// The screen carries the subscription menu: the two events as choices, and the
+/// menu's id names the application and the field, the way the other menus do.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_show_offers_the_event_menu(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let response = interaction(
+        router(pool),
+        application_payload("show", &client_id, DISCORD),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("通知イベント"), "{rendered}");
+    assert!(rendered.contains("subscribed_events"), "{rendered}");
+}
+
+/// Choosing the events writes the set and shows the screen again, so the person
+/// sees the set they now have rather than the one they chose.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn choosing_events_writes_the_set(pool: PgPool) {
+    const USER: i32 = 1;
+    const DISCORD: i64 = 100_000_000_000_000_001;
+
+    support::insert_user(&pool, USER, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+
+    let shown = interaction(
+        router(pool.clone()),
+        application_payload("show", &client_id, DISCORD),
+    )
+    .await;
+
+    assert_eq!(shown.status, 200, "body: {}", shown.body);
+
+    let menu = field_menu(&shown.body["data"], "subscribed_events");
+
+    let response = interaction(router(pool.clone()), chose_multi(&menu, &["3"], DISCORD)).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let now = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .expect("the application could be read")
+        .expect("it exists");
+
+    assert_eq!(now.subscribed_events, [3]);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("発行許可の決定"), "{rendered}");
+}
+
+/// The menu for one set field, out of the screen the bot rendered: the id whose
+/// field half names it.
+fn field_menu(screen: &Value, field: &str) -> String {
+    fn walk(value: &Value, field: &str, found: &mut Option<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(id) = map.get("custom_id").and_then(Value::as_str)
+                    && let Ok((_, data)) =
+                        vc_api::custom_id::ui::developer::parse(&vc_api::custom_id::parse(id))
+                    && vc_api::custom_id::ui::developer::field_of(&data).1 == field
+                {
+                    *found = Some(id.to_owned());
+                }
+
+                for nested in map.values() {
+                    walk(nested, field, found);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, field, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = None;
+    walk(screen, field, &mut found);
+
+    found.unwrap_or_else(|| panic!("no menu for {field} in {screen}"))
+}
+
 /// Somebody else's uuid and a uuid that is not there are the same answer, which is the
 /// point of checking ownership before the id rather than after.
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -355,9 +450,19 @@ async fn a_submitted_edit_changes_the_application(pool: PgPool) {
 }
 
 fn chose(custom_id: &str, value: &str, user: i64) -> Value {
+    chose_multi(custom_id, &[value], user)
+}
+
+/// The same choice with several values, which is what a set menu sends: the
+/// values are the set the person chose, and the set is what is stored.
+fn chose_multi(custom_id: &str, values: &[&str], user: i64) -> Value {
     json!({
         "type": 3,
-        "data": { "custom_id": custom_id, "component_type": 3, "values": [value] },
+        "data": {
+            "custom_id": custom_id,
+            "component_type": 3,
+            "values": values,
+        },
         "user": { "id": user.to_string() },
     })
 }

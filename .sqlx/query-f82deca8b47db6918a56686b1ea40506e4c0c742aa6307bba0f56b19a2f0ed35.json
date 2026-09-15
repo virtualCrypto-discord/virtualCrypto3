@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT client_name, client_uri, logo_uri, webhook_url,\n                  discord_support_server_invite_slug,\n                  application_type::text AS \"application_type!\",\n                  grant_types::text[] AS \"grant_types!\",\n                  response_types::text[] AS \"response_types!\"\n             FROM applications WHERE id = $1",
+  "query": "SELECT client_name, client_uri, logo_uri, webhook_url,\n                  discord_support_server_invite_slug,\n                  application_type::text AS \"application_type!\",\n                  grant_types::text[] AS \"grant_types!\",\n                  response_types::text[] AS \"response_types!\",\n                  subscribed_events AS \"subscribed_events!: Vec<i64>\"\n             FROM applications WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -75,6 +75,17 @@
         "name": "response_types!",
         "type_info": "TextArray",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "subscribed_events!: Vec<i64>",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "subscribed_events"
+          }
+        }
       }
     ],
     "parameters": {
@@ -90,8 +101,9 @@
       true,
       null,
       null,
-      null
+      null,
+      false
     ]
   },
-  "hash": "ab13a1cee2538b2ecb26a2857d31393ef45c2e961421d5df516cb24faf2f741f"
+  "hash": "f82deca8b47db6918a56686b1ea40506e4c0c742aa6307bba0f56b19a2f0ed35"
 }

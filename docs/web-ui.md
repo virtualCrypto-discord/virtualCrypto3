@@ -201,7 +201,13 @@ without saying which reads as unbuilt, which this one has already been read as o
    (`:152`). `logout` clears the cookie (`:61`). `tests/login.rs` covers the redirect
    and its state, the callback in full, a state that does not match, and the logout.
    Nothing here was unread: this item was on the list without saying which it was.
-3. **The application list and detail** — **half done, and this said "done" for a day**.
+3. **The registration form** (`/applications/register`) now asks for the
+   subscription at registration: two checkboxes, both checked, for the claim
+   update and the grant decision. What is checked is what is sent — checked is
+   sent and unchecked is not, and both boxes checked sends both, which is also
+   what absent would get, but the form says what it means rather than saying
+   nothing and meaning it.
+4. **The application list and detail** — **half done, and this said "done" for a day**.
    The list is built (`web/src/pages/Application.svelte`) and `GET /oauth2/clients/@me`
    answers it. The **detail page is not**, and the old site had one: the Elm list links
    `/applications/<client_id>` (`Applications.elm` l.119), which is the same `:id` the
@@ -222,20 +228,20 @@ without saying which reads as unbuilt, which this one has already been read as o
    registration answered with. A page could keep that token and offer the edit, but
    that is a decision about storing an application's credentials in a page, and not
    something to assume from the shape of an endpoint.
-4. **The connect flow** (`/applications/:id/connect`) — **done**: the service's route,
+5. **The connect flow** (`/applications/:id/connect`) — **done**: the service's route,
    its refusals, the page and the round trip the browser makes (`5805529`), with what the
    Elm list said about the id recorded below.
-5. **The contract approval** (`/contract/:id`) — **closed: there was never anything to
+6. **The contract approval** (`/contract/:id`) — **closed: there was never anything to
    port**. The LiveView is one blob, eight lines, no assigns, the page beside it is
    static sample data, and the Elm has no contract route at all. Both sites shipped the
    same mockup.
-6. **`Mypage/Claim.elm` — the claims page — is not in this list and should be.** It is
+7. **`Mypage/Claim.elm` — the claims page — is not in this list and should be.** It is
    the Elm's `ClaimPage`: claims sent and claims received, paged, read from
    `GET /api/v2/users/@me/claims`, which is implemented and tested here (`v2_claims.rs`,
    `v2_claims_list.rs`) with the goldens the capture gave. `web/` has no page for it, so
    the API's own answers have nowhere to be seen.
-7. **The landing page**, which is prose plus a login button — **done**.
-8. **The documents** — link them rather than rebuild them; they are static prose
+8. **The landing page**, which is prose plus a login button — **done**.
+9. **The documents** — link them rather than rebuild them; they are static prose
    that already lives in `virtualcrypto-docs`.
 
 ## What the SPA will need that does not exist yet
@@ -634,8 +640,14 @@ user_id (string), discord_user_id (string|null),
 application_type, client_name, client_uri, discord_support_server_invite_slug,
 grant_types: string[], logo_uri,
 owner_discord_id (string|null), response_types: string[], webhook_url,
+subscribed_events: number[] (checked is sent, unchecked is not),
 public_key (hex)
 ```
+
+*The `subscribed_events` travel as numbers because the `type` values are numbers
+on the wire — the same reason docs/oauth2.md gives. Checked is sent and
+unchecked is not, and empty is nothing: what the read answers is the set the
+row holds. `client_secret_expires_at` is a number too — see below.*
 
 **`client_secret` is not null, and this said it was.** Registration stores one
 (`vc-core/src/application.rs` l.604) into `applications.client_secret`, and `details`

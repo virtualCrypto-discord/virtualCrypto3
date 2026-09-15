@@ -24,6 +24,11 @@
     discord_support_server_invite_slug: "",
   });
 
+  // The events the webhook wants, as the `type` values the deliveries carry.
+  // Checked is sent and unchecked is not, and what is checked is what is
+  // sent — a checkbox per event, because two options need no menu.
+  let subscribed = $state({ claimUpdates: true, grantDecisions: true });
+
   let token = $state<string | null>(null);
   let registered = $state<Registered | null>(null);
   let sending = $state(false);
@@ -68,7 +73,24 @@
     // `grant_types` and `response_types` are not here on purpose: registration writes
     // `response_types` as an empty list whatever it is given, and an application that
     // asks for nothing is what the Elixir's own default makes.
-    return { redirect_uris: uris, ...filled } as Registration;
+    //
+    // `subscribed_events` is what is checked, which is what is sent: checked is
+    // sent and unchecked is not, and both boxes checked sends both — which is
+    // also what absent would get, but the form says what it means rather than
+    // saying nothing and meaning it.
+    const events: number[] = [];
+
+    if (subscribed.claimUpdates) {
+      events.push(2);
+    }
+
+    if (subscribed.grantDecisions) {
+      events.push(3);
+    }
+
+    const body: Registration = { redirect_uris: uris, ...filled, subscribed_events: events };
+
+    return body;
   }
 
   async function submit(event: SubmitEvent) {
@@ -145,6 +167,23 @@
         <input bind:value={presented.discord_support_server_invite_slug} />
       </label>
     </p>
+
+    <fieldset>
+      <legend>通知イベント</legend>
+      <p>
+        <label>
+          <input type="checkbox" bind:checked={subscribed.claimUpdates} />
+          請求の更新
+        </label>
+      </p>
+      <p>
+        <label>
+          <input type="checkbox" bind:checked={subscribed.grantDecisions} />
+          発行許可の決定
+        </label>
+      </p>
+      <small>チェックしたイベントだけを受け取ります。</small>
+    </fieldset>
 
     <p><button type="submit" disabled={sending || token === null}>
       {sending ? "登録しています…" : "登録する"}

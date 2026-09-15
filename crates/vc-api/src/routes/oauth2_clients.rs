@@ -20,8 +20,8 @@ use vc_auth::AuthUser;
 
 use vc_core::application::check_application_type as check_application_type_again;
 use vc_core::application::{
-    Changes, MetadataError, NewApplication, check_application_type, check_grant_types,
-    check_logo_uri, check_response_types, check_slug, check_url,
+    Changes, MetadataError, NewApplication, check_application_type, check_event_types,
+    check_grant_types, check_logo_uri, check_response_types, check_slug, check_url,
 };
 
 use crate::discord_auth::resolve_token;
@@ -51,6 +51,10 @@ pub struct Details {
     pub owner_discord_id: Option<i64>,
     pub response_types: Vec<String>,
     pub webhook_url: Option<String>,
+    /// The event types the application wants delivered, as the `type` values
+    /// the delivery bodies carry. Checked is sent and unchecked is not, and
+    /// empty is nothing.
+    pub subscribed_events: Vec<i64>,
     /// The application's public key, as raw bytes — the rendering is what makes
     /// it hex, and doing it here would make the hex a thing two places know.
     pub public_key: Vec<u8>,
@@ -83,6 +87,7 @@ pub fn render(details: &Details) -> Value {
             .map(|discord_id| discord_id.to_string()),
         "response_types": details.response_types,
         "webhook_url": details.webhook_url,
+        "subscribed_events": details.subscribed_events,
         // Lowercase hex, and the same spelling as the delivery signature — an
         // application holds this and compares it with what it registered.
         "public_key": details
@@ -121,6 +126,7 @@ pub async fn details(
                   a.owner_discord_id,
                   a.response_types::text[] AS "response_types!",
                   a.webhook_url,
+                  a.subscribed_events AS "subscribed_events!",
                   a.public_key,
                   u.id AS user_id,
                   u.discord_id AS user_discord_id
@@ -159,6 +165,7 @@ pub async fn details(
         owner_discord_id: row.owner_discord_id,
         response_types: row.response_types,
         webhook_url: row.webhook_url,
+        subscribed_events: row.subscribed_events,
         public_key: row.public_key,
     }))
 }
@@ -225,6 +232,10 @@ pub struct Registration {
     pub webhook_url: Option<String>,
     pub discord_support_server_invite_slug: Option<String>,
     pub redirect_uris: Option<Vec<String>>,
+    /// The event types the application wants delivered, as the `type` values
+    /// the delivery bodies carry. Absent is everything — the default, which is
+    /// what an application that never names a subscription gets.
+    pub subscribed_events: Option<Vec<i64>>,
     /// The caller's Discord id, which the handler obtained by asking Discord about
     /// them — it is not taken from the request, and this is here to say so.
     #[serde(skip)]
@@ -352,6 +363,13 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
         check_slug(slug).map_err(metadata)?;
     }
 
+    let subscribed_events = match body.subscribed_events.as_deref() {
+        // Absent is everything, which is also what the column defaults to: an
+        // application that never names a subscription gets every event.
+        None => crate::developer::all_events().to_vec(),
+        Some(types) => check_event_types(types).map_err(metadata)?,
+    };
+
     let Some(redirect_uris) = body.redirect_uris else {
         return Err(refusal(
             StatusCode::BAD_REQUEST,
@@ -384,6 +402,7 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
         discord_support_server_invite_slug: body.discord_support_server_invite_slug,
         owner_discord_id: body.owner_discord_id,
         redirect_uris,
+        subscribed_events,
     })
 }
 
@@ -733,6 +752,19 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
         })
     }
 
+    fn events(body: &Map<String, Value>) -> Option<Vec<i64>> {
+        body.get("subscribed_events")?.as_array().map(|values| {
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_i64()
+                        .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
+                })
+                .collect::<Option<Vec<_>>>()
+        })?
+    }
+
     let changes = Changes {
         client_name: text(body, "client_name"),
         client_uri: text(body, "client_uri"),
@@ -743,7 +775,19 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
         grant_types: list(body, "grant_types"),
         response_types: list(body, "response_types"),
         redirect_uris: list(body, "redirect_uris"),
+        subscribed_events: events(body),
     };
+
+    // A value that is not a number is not a value the service knows: the menu
+    // sends what it was given, so a request naming one is refused here rather
+    // than stored as if it had named nothing.
+    if body.get("subscribed_events").is_some() && changes.subscribed_events.is_none() {
+        return Err(metadata(MetadataError::Events));
+    }
+
+    if let Some(types) = changes.subscribed_events.as_deref() {
+        check_event_types(types).map_err(metadata)?;
+    }
 
     // The same rules registration applies, to the fields that are here: an edit is
     // a registration of the parts it names.
@@ -973,6 +1017,7 @@ mod tests {
             owner_discord_id: Some(100_000_000_000_000_002),
             response_types: vec!["code".to_owned()],
             webhook_url: Some("https://app.example/hook".to_owned()),
+            subscribed_events: vec![2, 3],
             public_key: vec![0x00, 0xab, 0xff],
         }
     }
@@ -1023,7 +1068,7 @@ mod tests {
     /// Every field the shape promises, so that a misspelling is a failure here
     /// rather than three endpoints disagreeing about a name.
     #[test]
-    fn all_sixteen_fields_are_present() {
+    fn all_seventeen_fields_are_present() {
         let rendered = render(&details());
 
         for field in [
@@ -1042,6 +1087,7 @@ mod tests {
             "owner_discord_id",
             "response_types",
             "webhook_url",
+            "subscribed_events",
             "public_key",
         ] {
             assert!(rendered.get(field).is_some(), "{field} is missing");

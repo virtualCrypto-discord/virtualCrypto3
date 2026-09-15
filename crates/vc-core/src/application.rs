@@ -407,6 +407,8 @@ pub enum MetadataError {
     LogoScheme,
     Slug,
     ApplicationType,
+    /// `subscribed_events_must_be_known_event_types`.
+    Events,
 }
 
 impl MetadataError {
@@ -428,6 +430,7 @@ impl MetadataError {
                 "discord_support_server_invite_slug_must_construct_from_half_width_alphanumeric"
             }
             MetadataError::ApplicationType => "application_type_must_be_web_or_native",
+            MetadataError::Events => "subscribed_events_must_be_known_event_types",
         }
     }
 }
@@ -485,6 +488,40 @@ pub fn check_grant_types(types: &[String]) -> Result<Vec<String>, MetadataError>
     }
 
     Ok(deduplicated(types))
+}
+
+/// The event types an application wants delivered to its webhook, as the `type`
+/// values the delivery bodies carry.
+///
+/// One list, because two would drift and offer a value the other refuses — the
+/// same reason `RESPONSE_TYPES` is one list. `2` is a claim update and `3` is a
+/// grant decision; `1` is the handshake's PING, which is not a subscription but
+/// a check, so naming it here is refused rather than stored.
+pub const EVENT_TYPES: &[i64] = &[2, 3];
+
+/// `validate_event_types/1`: a subset of [`EVENT_TYPES`], as a set.
+///
+/// Empty passes, as `Enum.all?/2` on an empty list does — and it means nothing
+/// here rather than everything: checked is sent and unchecked is not, so a set
+/// with nothing checked wants nothing delivered.
+pub fn check_event_types(types: &[i64]) -> Result<Vec<i64>, MetadataError> {
+    if types.iter().any(|kind| !EVENT_TYPES.contains(kind)) {
+        return Err(MetadataError::Events);
+    }
+
+    Ok(deduplicated_i64(types))
+}
+
+fn deduplicated_i64(values: &[i64]) -> Vec<i64> {
+    let mut seen = Vec::new();
+
+    for value in values {
+        if !seen.contains(value) {
+            seen.push(*value);
+        }
+    }
+
+    seen
 }
 
 /// The order a set comes back in is not specified by `MapSet.to_list/1`, and for
@@ -591,6 +628,9 @@ pub struct NewApplication {
     /// about them.
     pub owner_discord_id: Option<i64>,
     pub redirect_uris: Vec<String>,
+    /// The event types the application wants delivered, as [`EVENT_TYPES`]
+    /// names them. Checked is sent and unchecked is not, and empty is nothing.
+    pub subscribed_events: Vec<i64>,
 }
 
 /// What registration wrote.
@@ -633,11 +673,11 @@ pub async fn register(
              (status, client_id, client_secret, response_types, grant_types,
               application_type, client_name, client_uri, logo_uri, webhook_url,
               discord_support_server_invite_slug, owner_discord_id,
-              private_key, public_key, inserted_at, updated_at)
+              private_key, public_key, subscribed_events, inserted_at, updated_at)
          VALUES (0, $1, $2, $14::text[]::openid_connect_response_types[],
                  $3::text[]::openid_connect_grant_types[],
                  $4::text::openid_connect_application_type,
-                 $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+                 $5, $6, $7, $8, $9, $10, $11, $12, $15::bigint[], $13, $13)
         RETURNING id",
         client_id,
         client_secret,
@@ -652,7 +692,8 @@ pub async fn register(
         private_key.to_vec(),
         public_key,
         crate::model::utc_now(),
-        &new.response_types
+        &new.response_types,
+        &new.subscribed_events
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -722,6 +763,9 @@ pub struct Changes {
     pub response_types: Option<Vec<String>>,
     /// Replaces the set wholesale when given.
     pub redirect_uris: Option<Vec<String>>,
+    /// Replaces the set wholesale when given, like `redirect_uris`: the screen
+    /// sends what is checked, which is the set the application keeps.
+    pub subscribed_events: Option<Vec<i64>>,
 }
 
 /// `PatchQuery.patch/3`: write the fields that were given, and nothing else.
@@ -746,7 +790,8 @@ pub async fn patch(
                   discord_support_server_invite_slug,
                   application_type::text AS "application_type!",
                   grant_types::text[] AS "grant_types!",
-                  response_types::text[] AS "response_types!"
+                  response_types::text[] AS "response_types!",
+                  subscribed_events AS "subscribed_events!: Vec<i64>"
              FROM applications WHERE id = $1"#,
         application_id
     )
@@ -772,7 +817,8 @@ pub async fn patch(
                 discord_support_server_invite_slug = $6,
                 application_type = $7::text::openid_connect_application_type,
                 grant_types = $8::text[]::openid_connect_grant_types[],
-                response_types = $9::text[]::openid_connect_response_types[]
+                response_types = $9::text[]::openid_connect_response_types[],
+                subscribed_events = $10
           WHERE id = $1",
         application_id,
         applied(&changes.client_name, &current.client_name),
@@ -791,7 +837,11 @@ pub async fn patch(
         &changes
             .response_types
             .clone()
-            .unwrap_or(current.response_types)
+            .unwrap_or(current.response_types),
+        &changes
+            .subscribed_events
+            .clone()
+            .unwrap_or(current.subscribed_events)
     )
     .execute(&mut *tx)
     .await?;
@@ -947,13 +997,6 @@ mod tests {
         assert_eq!(scopes(&[""]), Err(ScopeError::Invalid));
     }
 
-    /// The half a caller would not think to check, and the reason the rule is
-    /// two rules rather than a length.
-    #[test]
-    fn a_repeated_scope_is_refused() {
-        assert_eq!(scopes(&["openid", "openid"]), Err(ScopeError::Invalid));
-    }
-
     fn list(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
     }
@@ -987,6 +1030,30 @@ mod tests {
             check_grant_types(&list(&["password"])),
             Err(MetadataError::GrantTypes)
         );
+    }
+
+    /// The half a caller would not think to check, and the reason the rule is
+    /// two rules rather than a length.
+    #[test]
+    fn a_repeated_scope_is_refused() {
+        assert_eq!(scopes(&["openid", "openid"]), Err(ScopeError::Invalid));
+    }
+
+    #[test]
+    fn the_event_types_are_stored_as_a_set() {
+        assert_eq!(check_event_types(&[2, 3]), Ok(vec![2, 3]));
+        assert_eq!(
+            check_event_types(&[3, 2, 3]),
+            Ok(vec![3, 2]),
+            "named twice, stored once"
+        );
+        assert_eq!(check_event_types(&[]), Ok(vec![]), "empty is nothing");
+    }
+
+    #[test]
+    fn an_event_type_outside_the_set_is_refused() {
+        assert_eq!(check_event_types(&[1]), Err(MetadataError::Events));
+        assert_eq!(check_event_types(&[2, 9]), Err(MetadataError::Events));
     }
 
     #[test]

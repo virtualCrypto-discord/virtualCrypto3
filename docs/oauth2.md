@@ -365,6 +365,7 @@ is the field's name and the rule, spelled out:
 | `logo_uri` | `https`, or `data:` with an image mediatype and at most 2048 bytes | three, below |
 | `discord_support_server_invite_slug` | at least one `[0-9a-zA-Z]` | `..._must_construct_from_half_width_alphanumeric` |
 | `application_type` | `web` or `native` | `application_type_must_be_web_or_native` |
+| `subscribed_events` | a subset of `[2, 3]` — `2` a claim update, `3` a grant decision — as a set | `subscribed_events_must_be_known_event_types` |
 
 Four things in that table are worth more than the table.
 
@@ -396,7 +397,8 @@ never absent in practice.
 
 `Clients.render_application/1`, which the single read, the list and the client
 registration all go through — so an error here is an error in three endpoints at
-once. Sixteen fields, and the encodings are the part that is easy to get wrong:
+once. Seventeen fields, and the encodings are the part that is easy to get
+wrong:
 
 | Field | |
 | --- | --- |
@@ -407,10 +409,13 @@ once. Sixteen fields, and the encodings are the part that is easy to get wrong:
 | `discord_user_id` | **as a string**, and `null` when the account has none |
 | `owner_discord_id` | **as a string** |
 | `public_key` | the key as **lowercase hex** |
+| `subscribed_events` | the subscribed `type` values, as numbers — checked is sent, unchecked is not |
 | `application_type`, `client_name`, `client_uri`, `logo_uri`, `webhook_url`, `grant_types`, `response_types`, `discord_support_server_invite_slug` | as stored |
 
 Three numbers travel as strings and one travels as hex, which is why this is
-written down rather than inferred from the columns.
+written down rather than inferred from the columns. The subscription travels as
+numbers because the `type` values are numbers on the wire — a client matches
+what the delivery carries, not a name it would have to look up.
 
 **The list groups by application.** Its query returns a tuple per redirect URI —
 `{application, user, redirect_uri}` — and `ClientsJSON` groups those by the
@@ -418,6 +423,15 @@ application's id and maps the group, so an application with three redirect URIs 
 one entry with three, not three entries. Redirect URIs that are `nil` are filtered
 out of the group, which is how an application with none registered answers with an
 empty list rather than a list containing a null.
+
+**`subscribed_events` is the one field the Elixir never had.** There is no
+validator to read out of `application_metedata_validator.ex` for it, because the
+Elixir delivers every claim update to every application with a webhook. The rule
+is the list fields' rule — a subset, stored as a set — and the set it is a
+subset of is the `type` values the deliveries carry. Absent is everything, which
+is what the column defaults to: a registration that names none gets every
+event, and the handshake's `1` is not subscribable, because a PING is a check
+rather than an event — naming it is refused rather than stored.
 
 **Implementing it needs a fuller `Application` than exists here.** What is in
 `vc_core` carries an id, a client name and the grant types — the three fields

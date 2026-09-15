@@ -167,6 +167,11 @@ async fn the_address_registration_hands_out_is_readable(pool: PgPool) {
 
     assert_eq!(read.status, 200, "{:?}", read.body);
     assert_eq!(read.body["client_id"], registered["client_id"]);
+    assert_eq!(
+        read.body["subscribed_events"],
+        serde_json::json!([2, 3]),
+        "registered without naming any: everything, spelled out"
+    );
 }
 
 /// The response types a registration names are what the row gets.
@@ -211,4 +216,89 @@ async fn registration_stores_the_response_types_it_validated(pool: PgPool) {
     .expect("the application");
 
     assert_eq!(stored, vec!["code".to_owned()]);
+}
+
+/// The events a registration names are what the row gets, and what the read
+/// answers back: the subscription is the application's, from the start.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn registration_stores_the_events_it_named(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    insert_discord_auth(&pool, OWNER_DISCORD_ID, "a-discord-token").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/oauth2/clients")
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({
+                "client_name": "one",
+                "redirect_uris": ["https://example.test/callback"],
+                "subscribed_events": [3],
+            }))
+            .expect("encode body"),
+        ))
+        .expect("request");
+
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(request)
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 201);
+
+    let stored = sqlx::query_scalar!(
+        r#"SELECT subscribed_events AS "subscribed_events!" FROM applications"#
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the application");
+
+    assert_eq!(stored, [3]);
+}
+
+/// An event type nobody sends is refused at the door, the way an unknown scope
+/// is: a subscription to nothing the service emits is a subscription to
+/// nothing.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn registration_refuses_an_unknown_event(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    insert_discord_auth(&pool, OWNER_DISCORD_ID, "a-discord-token").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/oauth2/clients")
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({
+                "client_name": "one",
+                "redirect_uris": ["https://example.test/callback"],
+                "subscribed_events": [9],
+            }))
+            .expect("encode body"),
+        ))
+        .expect("request");
+
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(request)
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&bytes).expect("json body");
+
+    assert_eq!(body["error"], "invalid_client_metadata");
+    assert_eq!(
+        body["error_description"],
+        "subscribed_events_must_be_known_event_types"
+    );
 }

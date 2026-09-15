@@ -18,6 +18,21 @@
 
   const login = $derived(loginUrl(`/applications/${clientId}`));
 
+  // The `type` values the deliveries carry, by the name the screens use for
+  // them — the same two names the Discord screen and the registration form use.
+  // Checked is sent and unchecked is not, and empty is nothing: what the
+  // screen shows is the set the row holds, with no special case for
+  // everything.
+  function eventNames(subscribed: number[]): string {
+    if (subscribed.length === 0) {
+      return "（なし）";
+    }
+
+    return subscribed
+      .map((kind) => (kind === 2 ? "請求の更新" : kind === 3 ? "発行許可の決定" : `（不明: ${kind}）`))
+      .join("、");
+  }
+
   let found = $state<Application | null>(null);
   let loading = $state(true);
   let refused = $state<ApiError | null>(null);
@@ -116,6 +131,9 @@
 
       <dt>webhook</dt>
       <dd>{found.webhook_url ?? "—"}</dd>
+
+      <dt>通知イベント</dt>
+      <dd>{eventNames(found.subscribed_events)}</dd>
 
       <dt>クライアント URI</dt>
       <dd>{found.client_uri ?? "—"}</dd>

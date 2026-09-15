@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.client_id::text AS \"client_id!\",\n                  a.client_secret,\n                  a.application_type::text AS \"application_type!\",\n                  a.client_name,\n                  a.client_uri,\n                  a.discord_support_server_invite_slug,\n                  a.grant_types::text[] AS \"grant_types!\",\n                  a.logo_uri,\n                  a.owner_discord_id,\n                  a.response_types::text[] AS \"response_types!\",\n                  a.webhook_url,\n                  a.public_key,\n                  u.id AS user_id,\n                  u.discord_id AS user_discord_id\n             FROM applications a\n             JOIN users u ON u.application_id = a.id\n            WHERE a.id = $1",
+  "query": "SELECT a.client_id::text AS \"client_id!\",\n                  a.client_secret,\n                  a.application_type::text AS \"application_type!\",\n                  a.client_name,\n                  a.client_uri,\n                  a.discord_support_server_invite_slug,\n                  a.grant_types::text[] AS \"grant_types!\",\n                  a.logo_uri,\n                  a.owner_discord_id,\n                  a.response_types::text[] AS \"response_types!\",\n                  a.webhook_url,\n                  a.subscribed_events AS \"subscribed_events!\",\n                  a.public_key,\n                  u.id AS user_id,\n                  u.discord_id AS user_discord_id\n             FROM applications a\n             JOIN users u ON u.application_id = a.id\n            WHERE a.id = $1",
   "describe": {
     "columns": [
       {
@@ -106,6 +106,17 @@
       },
       {
         "ordinal": 11,
+        "name": "subscribed_events!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "subscribed_events"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "public_key",
         "type_info": "Bytea",
         "origin": {
@@ -116,7 +127,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "user_id",
         "type_info": "Int4",
         "origin": {
@@ -127,7 +138,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "user_discord_id",
         "type_info": "Int8",
         "origin": {
@@ -157,8 +168,9 @@
       true,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "352b2d76ae43bb4164841a43605be359be8f82b1c25bf9b81a66550e47deb15b"
+  "hash": "7347d7756d9244f5ceaab827480b078529784f4c6ca927d48c0a19561c48973c"
 }

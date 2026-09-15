@@ -119,6 +119,7 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
                 application_type: &new.application_type,
                 grant_types: &new.grant_types,
                 response_types: &new.response_types,
+                subscribed_events: &new.subscribed_events,
             },
         )]))),
         Err(refusal) => Ok(message(ephemeral(vec![developer::refusal(
@@ -231,6 +232,7 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
             application_type: &found.application_type,
             grant_types: &found.grant_types,
             response_types: &found.response_types,
+            subscribed_events: &found.subscribed_events,
         },
     )]))
 }
@@ -371,6 +373,7 @@ async fn edit_form(
                     application_type: &now.application_type,
                     grant_types: &now.grant_types,
                     response_types: &now.response_types,
+                    subscribed_events: &now.subscribed_events,
                 },
             ))),
             _ => Ok(registered(developer::refusal("変更", None))),
@@ -566,15 +569,18 @@ async fn edit_field(
 
 /// One field, as the request takes it.
 ///
-/// Two of these fields are sets and one is a single value, and the difference is the endpoint's:
-/// `grant_types` and `response_types` are read as arrays and `application_type` as a string. So
-/// a single choice is unwrapped here rather than sent as an array the endpoint would refuse.
+/// Three of these fields are sets and one is a single value, and the difference is the
+/// endpoint's: `grant_types`, `response_types` and `subscribed_events` are read as
+/// arrays and `application_type` as a string. So a single choice is unwrapped here
+/// rather than sent as an array the endpoint would refuse.
 fn edited(field: &str, values: Vec<Value>) -> Option<(String, Value)> {
     match field {
         "application_type" => values
             .first()
             .map(|value| (field.to_owned(), value.clone())),
-        "grant_types" | "response_types" => Some((field.to_owned(), Value::Array(values))),
+        "grant_types" | "response_types" | "subscribed_events" => {
+            Some((field.to_owned(), Value::Array(values)))
+        }
         // Anything else is a field with no menu, which means an id this module did not build.
         _ => None,
     }

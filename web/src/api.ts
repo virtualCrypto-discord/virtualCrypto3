@@ -142,6 +142,9 @@ export interface Application {
   owner_discord_id: string;
   response_types: string[];
   webhook_url: string | null;
+  /// The event types the webhook wants, as the `type` values the deliveries
+  /// carry. Checked is sent and unchecked is not, and empty is nothing.
+  subscribed_events: number[];
   public_key: string;
 }
 
@@ -207,6 +210,10 @@ export interface Registration {
   application_type?: string;
   grant_types?: string[];
   response_types?: string[];
+  /// The event types the webhook wants, as the `type` values the deliveries
+  /// carry: 2 for a claim update, 3 for a grant decision. Checked is sent and
+  /// unchecked is not, and empty is nothing.
+  subscribed_events?: number[];
 }
 
 /// What a registration answers with, and the one moment the secret is legible.
@@ -257,6 +264,11 @@ export function register(token: string, body: Registration): Promise<Registered>
 /// `redirect_uris` is the exception: it is a list, and supplying one replaces the set
 /// wholesale — an empty list is how they are all removed. There is no null for it,
 /// because there is no column to null.
+///
+/// `subscribed_events` is the same kind of exception for the same reason: a list
+/// that replaces the set wholesale, where an empty list means nothing — checked
+/// is sent and unchecked is not, so a set with nothing checked wants nothing
+/// delivered.
 export interface ApplicationChanges {
   client_name?: string | null;
   client_uri?: string | null;
@@ -265,6 +277,7 @@ export interface ApplicationChanges {
   discord_support_server_invite_slug?: string | null;
   application_type?: string | null;
   redirect_uris?: string[];
+  subscribed_events?: number[];
 }
 
 /// Edits the application the token is for. **The token has to be an application's**:

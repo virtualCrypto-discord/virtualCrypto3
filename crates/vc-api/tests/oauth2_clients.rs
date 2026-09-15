@@ -69,6 +69,11 @@ async fn an_application_is_read_back_whole(pool: PgPool) {
     assert_eq!(found.response_types, ["code"]);
     assert_eq!(found.application_type, "web");
     assert_eq!(found.client_secret.as_deref(), Some("a-secret"));
+    assert_eq!(
+        found.subscribed_events,
+        vec![2, 3],
+        "the column defaults to everything, spelled out"
+    );
 }
 
 /// The two halves together, which is where the encodings live: strings for the
@@ -170,6 +175,50 @@ async fn redirect_uris_are_replaced_wholesale(pool: PgPool) {
         2,
         "two, and not the one that was there before them"
     );
+}
+
+/// The subscription is replaced rather than added to, like the redirect URIs:
+/// an edit that sends one event leaves one, and what is not mentioned is left
+/// alone rather than cleared.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn subscribed_events_are_replaced_wholesale(pool: PgPool) {
+    let (application_id, _) = application(&pool).await;
+
+    vc_core::application::patch(
+        &pool,
+        application_id,
+        &vc_core::application::Changes {
+            subscribed_events: Some(vec![2]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("an edit");
+
+    let after = details(&pool, application_id)
+        .await
+        .expect("an answer")
+        .expect("the application");
+
+    assert_eq!(after.subscribed_events, [2]);
+
+    vc_core::application::patch(
+        &pool,
+        application_id,
+        &vc_core::application::Changes {
+            client_name: Some(Some("Renamed".to_owned())),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("another edit");
+
+    let kept = details(&pool, application_id)
+        .await
+        .expect("an answer")
+        .expect("the application");
+
+    assert_eq!(kept.subscribed_events, [2], "unmentioned, so untouched");
 }
 
 /// `Repo.update_all/2` applies no changeset and therefore no timestamp, so an edit

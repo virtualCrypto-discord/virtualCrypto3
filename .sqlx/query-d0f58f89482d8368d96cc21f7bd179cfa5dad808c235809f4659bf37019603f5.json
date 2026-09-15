@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT subscribed_events AS \"subscribed_events!\" FROM applications WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "subscribed_events!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "subscribed_events"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d0f58f89482d8368d96cc21f7bd179cfa5dad808c235809f4659bf37019603f5"
+}

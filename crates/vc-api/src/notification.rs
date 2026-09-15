@@ -305,8 +305,31 @@ async fn send_grant_decided(pool: &sqlx::PgPool, proxy: &Proxy, account_id: i32)
     .await;
 }
 
-/// One delivery to one application's webhook, if it named one.
+/// One delivery to one application's webhook, if it named one — and if the
+/// event is one it asked for.
+///
+/// Checked is sent and unchecked is not, and the column says which is which:
+/// an application that unchecked claim updates does not get woken for one.
+/// The check is here rather than in the callers because there are two of them
+/// and one rule: a claim update is type 2 and a grant decision is type 3, and
+/// the body says which before anything is signed.
 async fn send_to_application(pool: &sqlx::PgPool, proxy: &Proxy, application_id: i64, body: Value) {
+    let kind = body.get("type").and_then(Value::as_i64).unwrap_or_default();
+
+    let subscribed = sqlx::query_scalar!(
+        "SELECT subscribed_events AS \"subscribed_events!\" FROM applications WHERE id = $1",
+        application_id
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+
+    if !subscribed.contains(&kind) {
+        return;
+    }
+
     let Some(webhook) = vc_core::application::webhook_data(pool, application_id)
         .await
         .ok()
@@ -615,6 +638,20 @@ mod tests {
         assert_eq!(body["type"], 2);
         assert_eq!(body["data"][0]["status"], "approved");
         assert_ne!(body["type"], PING, "which is the handshake's");
+    }
+
+    #[test]
+    fn a_grant_decision_says_it_is_one() {
+        let body = grant_decided_body(900_000_000_000_000_001, &["vc.issue".to_owned()]);
+
+        assert_eq!(body["type"], 3);
+        assert_eq!(body["data"]["guild_id"], "900000000000000001");
+        assert_eq!(body["data"]["scopes"], json!(["vc.issue"]));
+        assert_ne!(body["type"], PING, "which is the handshake's");
+        assert_ne!(
+            body["type"], 2,
+            "which is the claim update's: a subscription tells them apart"
+        );
     }
 
     fn ping_body() -> Value {

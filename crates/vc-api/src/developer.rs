@@ -25,7 +25,7 @@
 
 use serde_json::Value;
 
-use vc_core::application::{APPLICATION_TYPES, GRANT_TYPES, RESPONSE_TYPES};
+use vc_core::application::{APPLICATION_TYPES, EVENT_TYPES, GRANT_TYPES, RESPONSE_TYPES};
 
 use crate::components::{
     ButtonStyle, action_row, button, container, section, select, select_many, select_option,
@@ -82,7 +82,8 @@ pub fn applications(applications: &[Value]) -> Value {
     )
 }
 
-/// What an application is now, field by field: the nine the endpoint lets an edit change.
+/// What an application is now, field by field: the nine the endpoint lets an edit change,
+/// and the events its webhook wants.
 ///
 /// They travel together because the screen shows all nine and each has its own control, and
 /// because a screen that names each as its own argument is a signature nobody reads.
@@ -96,6 +97,10 @@ pub struct Fields<'a> {
     pub application_type: &'a str,
     pub grant_types: &'a [String],
     pub response_types: &'a [String],
+    /// The `type` values the application wants delivered. Checked is sent and
+    /// unchecked is not, and the menu below sends what is checked — so what the
+    /// screen shows and what the row holds are the same set.
+    pub subscribed_events: &'a [i64],
 }
 
 /// One application, with what can be done to it.
@@ -218,6 +223,32 @@ pub fn application(
                 0,
                 RESPONSE_TYPES.len() as u8,
             )]),
+            // The events the webhook wants, as the `type` values the deliveries
+            // carry: 2 for a claim update, 3 for a grant decision. A string
+            // select is the one select a message may carry with options we
+            // choose, which is exactly what an enumerated field is — the same
+            // shape as the two menus above, and for the same reason. The set
+            // that comes back is the set that is stored: checked is sent,
+            // unchecked is not, and empty is nothing — which needs no
+            // enforcement, because Discord lets the menu come back empty.
+            text(format!(
+                "**通知イベント**（`subscribed_events`）\n{}",
+                event_listing(fields.subscribed_events)
+            )),
+            action_row(vec![select_many(
+                &crate::custom_id::ui::developer::custom_id_for_field(
+                    crate::custom_id::ui::developer::Screen::Edit,
+                    client_id,
+                    "subscribed_events",
+                ),
+                Some("イベントを選ぶ"),
+                EVENT_TYPES
+                    .iter()
+                    .map(|kind| select_option(&kind.to_string(), event_name(*kind), None))
+                    .collect(),
+                0,
+                EVENT_TYPES.len() as u8,
+            )]),
             // The secret is written on the screen rather than behind a button. The
             // button was mine, not the page's: every response here is ephemeral, so
             // revealing it on request shows it to the person already reading.
@@ -264,6 +295,38 @@ fn listing(values: &[String]) -> String {
         "（なし）".to_owned()
     } else {
         values.join(", ")
+    }
+}
+
+/// The default subscription: everything, spelled out — so an application that
+/// never names one gets every event, and no screen has to pretend an empty set
+/// is full.
+pub fn all_events() -> &'static [i64] {
+    EVENT_TYPES
+}
+
+/// The name a `type` value goes by on the screen, which is what the menu shows
+/// and what the line above it repeats back.
+fn event_name(kind: i64) -> &'static str {
+    match kind {
+        2 => "請求の更新",
+        3 => "発行許可の決定",
+        _ => "（不明）",
+    }
+}
+
+/// The subscription as a line of text. Checked is sent and unchecked is not,
+/// and empty is nothing — so the screen shows the set as it is, with no
+/// special case for everything.
+fn event_listing(subscribed: &[i64]) -> String {
+    if subscribed.is_empty() {
+        "（なし）".to_owned()
+    } else {
+        subscribed
+            .iter()
+            .map(|kind| event_name(*kind))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -479,6 +542,7 @@ mod tests {
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],
+                    subscribed_events: &[],
                 },
             ),
             connect_result("id", Some("no")),
@@ -525,6 +589,7 @@ mod tests {
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],
+                    subscribed_events: &[],
                 },
             ),
         ] {
