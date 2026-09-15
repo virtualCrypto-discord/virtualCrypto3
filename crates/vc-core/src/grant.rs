@@ -452,12 +452,14 @@ async fn write_grant(
     Ok(grant_id)
 }
 
-/// A guild saying yes without a browser in the way: what `/grant` writes from
-/// Discord, and what the application's own page writes for its owner.
+/// A guild saying yes without a browser in the way: what the application's own
+/// page writes for its owner.
 ///
 /// Not the Elixir's. There, a grant was only ever a side effect of redeeming an
 /// authorization code, which is why an application could not be allowed anything
-/// without a person opening an authorization URL.
+/// without a person opening an authorization URL. Discord's own yes goes through
+/// [`decide_request`], because it answers an ask; this one is the owner acting
+/// for a guild they administer, so the ask is theirs to skip.
 pub async fn allow_in_guild(
     pool: &PgPool,
     application_id: i64,
@@ -471,29 +473,46 @@ pub async fn allow_in_guild(
     write_grant(&mut connection, application_id, guild_id, &scopes, now).await
 }
 
-/// Take one scope back, leaving the grant and its other scopes alone.
+/// Take a permission back, by the code the guild was shown or the application's
+/// own id.
 ///
-/// The grant itself stays: it is what the guild's tokens hang off, and deleting it
-/// would revoke more than the permission being taken away. A guild token already
-/// issued loses the scope instead, because its scopes are read from here.
-pub async fn disallow_in_guild(
-    pool: &PgPool,
-    application_id: i64,
-    guild_id: i64,
-    scope: &str,
-) -> Result<bool> {
-    let deleted = sqlx::query!(
-        "DELETE FROM grant_scopes
-          WHERE scope = $3::text::virtual_crypto_scope_type
-            AND grant_id IN (SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2)",
-        application_id,
+/// A pending ask's `user_code` un-asks it: the row stays, decided as nothing,
+/// and the application's poll reads the ask as gone. A granted application's
+/// `client_id` drops the issuing scope instead, and a guild token already issued
+/// stops issuing because its scopes are read from the grant. `true` is either
+/// one having been there to take back.
+pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<bool> {
+    let unasked = sqlx::query!(
+        "UPDATE grant_requests SET status = 'approved', updated_at = $3
+          WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'",
         guild_id,
-        scope
+        code,
+        crate::model::utc_now()
     )
     .execute(pool)
     .await?;
 
-    Ok(deleted.rows_affected() > 0)
+    if unasked.rows_affected() > 0 {
+        return Ok(true);
+    }
+
+    let Ok(client_id) = Uuid::parse_str(code) else {
+        return Ok(false);
+    };
+
+    let ungranted = sqlx::query!(
+        "DELETE FROM grant_scopes
+          WHERE scope = 'vc.issue'::virtual_crypto_scope_type
+            AND grant_id IN (SELECT g.id FROM grants g
+                             JOIN applications a ON a.id = g.application_id
+                            WHERE a.client_id = $1 AND g.guild_id = $2)",
+        client_id,
+        guild_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(ungranted.rows_affected() > 0)
 }
 
 /// What a guild granted an application.
@@ -592,47 +611,78 @@ pub async fn resolve_token(
 
 /// An application asking a guild for a permission.
 ///
-/// Asking twice is the same ask, so a second request while one is pending keeps
-/// the request that is there. A decided one is not reused: a guild that said no
-/// may be asked again, and the ask is a new row.
+/// The ask names the scopes it wants, because the grant it may become is
+/// written from exactly those: an approval that granted something else would be
+/// a permission nobody asked for. Asking twice is the same ask, so a second
+/// request while one is pending keeps the request that is there — the codes
+/// with it, so the application's poll and the guild's screen keep agreeing.
+///
+/// `expires_in` is how long the ask lives, in seconds, and it is the caller's
+/// to name within reason: a device that will poll for ten minutes asks for ten
+/// minutes, and the guild's screen stops showing it after that.
 pub async fn request_grant(
     pool: &PgPool,
     application_id: i64,
     guild_id: i64,
+    scopes: &[String],
+    expires_in: i64,
     now: OffsetDateTime,
-) -> Result<i64> {
+) -> Result<GrantRequest> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
-    let id = sqlx::query_scalar!(
-        "INSERT INTO grant_requests (application_id, guild_id, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $3)
+    let row = sqlx::query!(
+        r#"INSERT INTO grant_requests (application_id, guild_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)
+         VALUES ($1, $2, $3, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $4, $5, $5)
          ON CONFLICT (application_id, guild_id) WHERE status = 'pending'
          DO UPDATE SET updated_at = EXCLUDED.updated_at
-         RETURNING id",
+         RETURNING id, scopes AS "scopes!: Vec<String>", device_code AS "device_code!: Uuid",
+                   user_code AS "user_code!: String", status AS "status!: String", expires_in AS "expires_in!: i64""#,
         application_id,
         guild_id,
+        scopes,
+        expires_in,
         at
     )
     .fetch_one(pool)
     .await?;
 
-    Ok(id)
+    Ok(GrantRequest {
+        id: row.id,
+        application_id,
+        guild_id,
+        scopes: row.scopes,
+        device_code: row.device_code,
+        user_code: row.user_code,
+        status: row.status,
+        expires_in: row.expires_in,
+    })
 }
 
-/// A pending request as the guild's command lists it: with the name to show, and
-/// the `client_id` an administrator was told to look for.
+/// A pending request as the guild's command lists it: the code the administrator
+/// types, the name to show, and the scopes being asked for — the three the
+/// approval is an answer to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRequest {
     pub id: i64,
     pub application_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
+    pub user_code: String,
+    pub scopes: Vec<String>,
 }
 
-/// What a guild has been asked for and not yet answered.
-pub async fn requests_in_guild(pool: &PgPool, guild_id: i64) -> Result<Vec<PendingRequest>> {
+/// What a guild has been asked for and not yet answered, and still alive:
+/// an ask older than its `expires_in` is not shown, because the application
+/// has already been told it is gone.
+pub async fn requests_in_guild(
+    pool: &PgPool,
+    guild_id: i64,
+    now: OffsetDateTime,
+) -> Result<Vec<PendingRequest>> {
     let rows = sqlx::query!(
-        r#"SELECT r.id, r.application_id, a.client_id::text AS "client_id!", a.client_name
+        r#"SELECT r.id, r.application_id, a.client_id::text AS "client_id!", a.client_name,
+                  r.user_code AS "user_code!: String", r.scopes AS "scopes!: Vec<String>",
+                  EXTRACT(EPOCH FROM (r.inserted_at + make_interval(secs => r.expires_in)))::bigint AS "expires_at!: i64"
              FROM grant_requests r
              JOIN applications a ON a.id = r.application_id
             WHERE r.guild_id = $1 AND r.status = 'pending'
@@ -642,33 +692,45 @@ pub async fn requests_in_guild(pool: &PgPool, guild_id: i64) -> Result<Vec<Pendi
     .fetch_all(pool)
     .await?;
 
+    let now = now.unix_timestamp();
+
     Ok(rows
         .into_iter()
+        .filter(|row| row.expires_at > now)
         .map(|row| PendingRequest {
             id: row.id,
             application_id: row.application_id,
             client_id: row.client_id,
             client_name: row.client_name,
+            user_code: row.user_code,
+            scopes: row.scopes,
         })
         .collect())
 }
 
-/// A request as the application that made it reads it.
+/// A request as the application that made it reads it: the codes it polls with
+/// and shows, the scopes it asked for, and how long the ask lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantRequest {
     pub id: i64,
     pub application_id: i64,
     pub guild_id: i64,
+    pub scopes: Vec<String>,
+    pub device_code: Uuid,
+    pub user_code: String,
     pub status: String,
+    pub expires_in: i64,
 }
 
 /// What an application has asked for, answered or not.
 pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantRequest>> {
     let rows = sqlx::query!(
-        "SELECT id, application_id, guild_id, status
-           FROM grant_requests
-          WHERE application_id = $1
-          ORDER BY id",
+        r#"SELECT id, application_id, guild_id, scopes AS "scopes!",
+                  device_code AS "device_code!: Uuid", user_code AS "user_code!",
+                  status AS "status!", expires_in AS "expires_in!"
+             FROM grant_requests
+            WHERE application_id = $1
+            ORDER BY id"#,
         application_id
     )
     .fetch_all(pool)
@@ -680,54 +742,105 @@ pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<Grant
             id: row.id,
             application_id: row.application_id,
             guild_id: row.guild_id,
+            scopes: row.scopes,
+            device_code: row.device_code,
+            user_code: row.user_code,
             status: row.status,
+            expires_in: row.expires_in,
         })
         .collect())
 }
 
 /// The guild's answer to a request: the status, and for a yes the grant itself.
 ///
+/// The grant is written from the ask's own scopes, never from anything the
+/// caller names: an approval that granted something else would be a permission
+/// nobody asked for. There is no no — `None` is a request that is not this
+/// guild's, not there, expired, or already answered, and all four are answered
+/// the same way, because an unapproved ask simply stays pending until it dies.
+///
 /// One transaction, because a request answered yes that granted nothing is a
-/// state the application reads as approval and acts on. `None` is a request that
-/// is not this guild's, not there, or already answered — the three the caller
-/// answers the same way.
+/// state the application reads as approval and acts on.
 pub async fn decide_request(
     pool: &PgPool,
-    request_id: i64,
+    user_code: &str,
     guild_id: i64,
-    approved: bool,
-    scopes: &[&str],
     now: OffsetDateTime,
 ) -> Result<Option<i64>> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
-    let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_string()).collect();
 
     let mut tx = pool.begin().await?;
 
-    let application_id = sqlx::query_scalar!(
-        "UPDATE grant_requests
-            SET status = $3, updated_at = $4
-          WHERE id = $1 AND guild_id = $2 AND status = 'pending'
-        RETURNING application_id",
-        request_id,
+    let decided = sqlx::query!(
+        r#"UPDATE grant_requests
+              SET status = 'approved', updated_at = $3
+            WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'
+              AND inserted_at + make_interval(secs => expires_in) > $3
+         RETURNING application_id, scopes AS "scopes!""#,
         guild_id,
-        if approved { "approved" } else { "denied" },
+        user_code,
         at
     )
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some(application_id) = application_id else {
+    let Some(decided) = decided else {
         return Ok(None);
     };
 
-    if approved {
-        write_grant(&mut tx, application_id, guild_id, &scopes, now).await?;
-    }
+    write_grant(
+        &mut tx,
+        decided.application_id,
+        guild_id,
+        &decided.scopes,
+        now,
+    )
+    .await?;
 
     tx.commit().await?;
 
-    Ok(Some(application_id))
+    Ok(Some(decided.application_id))
+}
+
+/// A device poll: what the application's `device_code` names, while it is still
+/// alive.
+///
+/// `None` is every way a poll can fail to name an ask: unknown, decided, or
+/// expired. A device must not learn which of those it was — an `invalid_grant`
+/// is the whole of the answer either way — so the three are one `None` here
+/// and the caller answers them as one.
+pub async fn poll_request(
+    pool: &PgPool,
+    application_id: i64,
+    device_code: Uuid,
+    now: OffsetDateTime,
+) -> Result<Option<GrantRequest>> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let row = sqlx::query!(
+        r#"SELECT id, application_id, guild_id, scopes AS "scopes!",
+                  device_code AS "device_code!: Uuid", user_code AS "user_code!",
+                  status AS "status!", expires_in AS "expires_in!"
+             FROM grant_requests
+            WHERE application_id = $1 AND device_code = $2
+              AND inserted_at + make_interval(secs => expires_in) > $3"#,
+        application_id,
+        device_code,
+        at
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| GrantRequest {
+        id: row.id,
+        application_id: row.application_id,
+        guild_id: row.guild_id,
+        scopes: row.scopes,
+        device_code: row.device_code,
+        user_code: row.user_code,
+        status: row.status,
+        expires_in: row.expires_in,
+    }))
 }
 
 /// `revoke_access_token/1`: forget an access token.

@@ -36,9 +36,9 @@ screen's `vc.issue`. The following hold additions, all from `docs/issue.md`:
 | Area | Rust test file | cases |
 | --- | --- | --- |
 | the issuing endpoint | `tests/v2_issue.rs` | 16: guild tokens that issue and record themselves as given, scopeless grants refused before and after the body, user/app/unknown/expired/scopeless tokens refused, empty and guildless grants, pool and amount failures, and the key that issues once |
-| `/grant` in Discord | `tests/interactions_grant.rs` | 11: the confirmation, allowing and dismissing, the list, approving and denying a request, one decision only, the administrator bit on the command and on the button, and the DM |
+| `/grant` in Discord | `tests/interactions_grant.rs` | 10: the list with the codes to type, approving by code, the grant carrying the asked scopes, an unknown code, revoking a pending code and a granted client id, a revoke that names nothing, the administrator bit, and the DM |
 | the application's grants | `tests/guild_grants.rs` | 11: the empty list, the list with names and scopes, allowing by an administrator, issuing with what was allowed, the member refused, the unreadable guild, the snowflake that is not one, revoking by scope, somebody else's application, an application token, and a missing scope |
-| the application's requests | `tests/grant_requests.rs` | 7: asking, the same ask twice, the list that reads the answer back, an answer that issues, a user token, a missing scope, and the snowflake that is not one |
+| the application's asks and the device poll | `tests/grant_requests.rs` | 11: asking with scopes, the device and user codes, an ask without scopes, an unknown scope, the same ask twice, the list that reads the answer back, the poll pending then answering with the guild token that issues, unknown and expired codes, a poll without credentials, a user token, a missing scope, and the snowflake that is not one |
 | the scope a consent screen may ask for | `tests/oauth2_preauthorize.rs` (2 of) | `vc.issue` passes `preauthorize`, and an approval records it on the code the exchange writes the grant from |
 
 The bulk path reproduces `transfer_bulk/3`'s batching rather than transferring

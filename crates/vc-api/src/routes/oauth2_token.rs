@@ -32,6 +32,7 @@ pub struct TokenForm {
     pub redirect_uri: Option<String>,
     pub code: Option<String>,
     pub refresh_token: Option<String>,
+    pub device_code: Option<String>,
     #[allow(dead_code)]
     pub scope: Option<String>,
     #[allow(dead_code)]
@@ -49,6 +50,9 @@ pub async fn token(
         Some("authorization_code") => exchange(&state, form).await,
         Some("refresh_token") => refresh(&state, form).await,
         Some("client_credentials") => credentials(&state, &headers, form).await,
+        Some("urn:ietf:params:oauth:grant-type:device_code") => {
+            device(&state, &headers, form).await
+        }
         Some(_) => unsupported(),
     }
 }
@@ -87,6 +91,86 @@ async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> 
     }
 
     unsupported()
+}
+
+/// `grant_type=urn:ietf:params:oauth:grant-type:device_code`: the device poll.
+///
+/// The application names the `device_code` its ask answered with, authenticated
+/// the way every direct call to this endpoint is — Basic with its own id and
+/// secret. What comes back depends on what the guild has done with the ask:
+///
+/// - still pending: `400 authorization_pending`, and the device keeps polling;
+/// - approved: the guild token, minted from the grant the approval wrote;
+/// - unknown, expired, or approved-but-revoked: `400 invalid_grant`, and the
+///   device must start over with a new ask.
+///
+/// The failures after the first are one answer on purpose: a `device_code` that
+/// never existed and one whose ask died are indistinguishable to anyone but the
+/// application that made it, and the application knows which of its own asks is
+/// which.
+async fn device(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Response {
+    let Some((client_id, client_secret)) = basic_auth(headers) else {
+        return invalid_client();
+    };
+
+    let verified = verify_secret(state.pool(), &client_id, &client_secret)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(application) = verified else {
+        return invalid_client();
+    };
+
+    let Some(device_code) = form.device_code.and_then(|code| code.parse().ok()) else {
+        return error("invalid_request", "device_code");
+    };
+
+    let polled = vc_core::grant::poll_request(
+        state.pool(),
+        application.id,
+        device_code,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .ok()
+    .flatten();
+
+    let Some(asked) = polled else {
+        return error("invalid_grant", "invalid_device_code");
+    };
+
+    if asked.status == "pending" {
+        return error("authorization_pending", "authorization_pending");
+    }
+
+    if asked.status != "approved" {
+        return error("invalid_grant", "invalid_device_code");
+    }
+
+    let Some(grant_id) = vc_core::grant::grant_for(state.pool(), application.id, asked.guild_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        // The ask is approved but the grant is gone: it was revoked between the
+        // two reads. The device must ask again rather than wait on an approval
+        // that no longer means anything.
+        return error("invalid_grant", "invalid_device_code");
+    };
+
+    let now = OffsetDateTime::now_utc();
+
+    let Ok(access_token) = create_access_token(state.pool(), grant_id, now).await else {
+        return invalid_client();
+    };
+
+    Json(json!({
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": EXPIRES_IN,
+    }))
+    .into_response()
 }
 
 /// The shape that answers with a row: a token for a grant in a guild.

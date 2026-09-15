@@ -1,13 +1,12 @@
-//! `/oauth2/clients/@me/grant-requests`: where an application asks a guild for a
-//! permission, and reads back what the guild said.
+//! `/oauth2/clients/@me/grant-requests`: where an application asks a guild for
+//! permission, the way a device asks in RFC 8628.
 //!
 //! Not the Elixir's. There the only way an application got a grant was a person
 //! redeeming an authorization code in a browser, so an application had no call of
 //! its own that could ask. This is that ask, for the flows that have no browser:
 //! the row it writes is the one `/grant list` shows the guild, and a guild's yes
-//! is the grant the code flow would have written — after which
-//! `client_credentials` with a `guild_id` answers with the token the endpoint
-//! wants.
+//! is the grant the code flow would have written — after which the device poll
+//! answers with the token the endpoint wants.
 //!
 //! The token is the application's own: `Kind::App` with `oauth2.register`, which
 //! is exactly the token registration answered with. A user token cannot ask a
@@ -27,20 +26,35 @@ use vc_auth::AuthUser;
 use crate::routes::oauth2_clients::{Refusal, internal, refusal, refused};
 use crate::state::AppState;
 
-/// What one request is, and what the application's own page will poll for.
+/// How long an ask lives when the application names none, in seconds:
+/// ten minutes, which is RFC 8628's own recommendation for the device flow.
+const DEFAULT_EXPIRES_IN: i64 = 600;
+
+/// The longest an ask may live, in seconds: an hour, after which the guild's
+/// screen would be showing an ask nobody remembers making.
+const MAX_EXPIRES_IN: i64 = 3600;
+
+/// What one request is: the guild, the scopes it is asked for, and how long the
+/// ask lives.
 #[derive(Deserialize)]
 pub struct GrantRequest {
     pub guild_id: String,
+    pub scopes: Option<Vec<String>>,
+    pub expires_in: Option<i64>,
 }
 
 /// `POST /oauth2/clients/@me/grant-requests`: ask a guild to let this
-/// application issue from its pool.
+/// application do what the scopes name.
 ///
 /// The guild is named but never checked — it cannot be, because this service has
 /// no proof the application belongs in any guild at all, and a wrong number in a
 /// request is the guild's non-answer rather than this one's refusal. `guild_id` is
 /// a string for the same reason every Discord id here is: a snowflake JSON's
 /// number cannot hold.
+///
+/// The scopes are required, and they are checked the way the consent screen
+/// checks its own: an approval grants exactly these, so an ask that names nothing
+/// the service knows is refused here rather than approved into nothing.
 pub async fn create(
     State(state): State<AppState>,
     user: AuthUser,
@@ -59,20 +73,47 @@ pub async fn create(
         );
     };
 
+    let Some(scopes) = body.scopes else {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "scopes are required",
+        );
+    };
+
+    if vc_core::application::check_scopes(&scopes.to_vec()).is_err() {
+        return refused(StatusCode::BAD_REQUEST, "invalid_scope", "unknown scope");
+    }
+
+    let expires_in = match body.expires_in {
+        None => DEFAULT_EXPIRES_IN,
+        Some(expires_in) if expires_in > 0 && expires_in <= MAX_EXPIRES_IN => expires_in,
+        Some(_) => {
+            return refused(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "expires_in must be between 1 and 3600",
+            );
+        }
+    };
+
     match vc_core::grant::request_grant(
         state.pool(),
         application,
         guild_id,
+        &scopes,
+        expires_in,
         OffsetDateTime::now_utc(),
     )
     .await
     {
-        Ok(id) => (
+        Ok(asked) => (
             StatusCode::CREATED,
             Json(serde_json::json!({
-                "id": id.to_string(),
-                "guild_id": guild_id.to_string(),
-                "status": "pending",
+                "device_code": asked.device_code.to_string(),
+                "user_code": asked.user_code,
+                "verification_uri": "discord",
+                "expires_in": asked.expires_in,
             })),
         )
             .into_response(),
@@ -81,7 +122,8 @@ pub async fn create(
 }
 
 /// `GET /oauth2/clients/@me/grant-requests`: what this application asked for,
-/// answered or not.
+/// answered or not — the application's own view of its asks, next to the poll
+/// that spends them.
 pub async fn index(State(state): State<AppState>, user: AuthUser) -> Response {
     let application = match own(&state, &user).await {
         Ok(application) => application,
@@ -94,9 +136,12 @@ pub async fn index(State(state): State<AppState>, user: AuthUser) -> Response {
                 .into_iter()
                 .map(|request| {
                     serde_json::json!({
-                        "id": request.id.to_string(),
+                        "device_code": request.device_code.to_string(),
+                        "user_code": request.user_code,
                         "guild_id": request.guild_id.to_string(),
+                        "scopes": request.scopes,
                         "status": request.status,
+                        "expires_in": request.expires_in,
                     })
                 })
                 .collect(),

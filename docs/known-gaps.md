@@ -35,7 +35,7 @@ carries it: the token a guild issues for is the `access_tokens` row the code flo
 has always handed out, and its guild-ness is what that row resolves to
 (`vc_core::grant::resolve_token`). The kind check `verify_claims/2` would grow is
 instead answered by the grant — see `docs/issue.md` for the endpoint, the scope,
-and the three ways a guild says yes. If `guild` tokens are ever issued *as* JWTs,
+and the ask a guild answers. If `guild` tokens are ever issued *as* JWTs,
 that check still has to grow with them.
 
 Behaviour that the Elixir service has and this rewrite does not implement yet,

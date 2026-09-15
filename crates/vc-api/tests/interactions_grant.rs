@@ -4,9 +4,12 @@
 //! Additions rather than ports — the Elixir had no command that allowed an
 //! application anything, because a grant was only ever a side effect of redeeming
 //! an authorization code. What they pin is the shape the commands beside it have:
-//! an ephemeral answer, a `custom_id` that carries the subject, and the
-//! administrator bit asked for twice — once when the command runs and once when
-//! its button is pressed.
+//! ephemeral answers, and the administrator bit asked for the way `/issue` asks
+//! for it.
+//!
+//! There are no buttons here on purpose: the approval names the application's
+//! own `user_code`, typed rather than pressed, so an approval always answers an
+//! ask — a permission nobody asked for cannot be written.
 
 mod support;
 
@@ -14,25 +17,38 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    DEFAULT_GUILD, DEFAULT_PERMISSIONS, Response, client_id_of, fake, insert_application,
-    interaction, state,
+    DEFAULT_GUILD, DEFAULT_PERMISSIONS, Response, fake, insert_application, interaction, state,
 };
-use vc_api::custom_id::ui::grant::{Action, custom_id};
 
 /// The administrator the interactions come from. The id is a Discord one, and the
 /// command never resolves it to an account.
 const ADMIN: i64 = 900_000_000_000_000_001;
 const NOT_ADMIN: &str = "0";
+const SCOPES: &[&str] = &["vc.issue"];
 
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
 }
 
-/// An application with a name, which is what the screens show.
+/// An application with a name, which is what the screens show, and its pending
+/// ask with the code the guild types.
 async fn fixture(pool: &PgPool) -> (i64, String) {
     let application = insert_application(pool, 900_000_000_000_000_002, "an application").await;
+    let asked = vc_core::grant::request_grant(
+        pool,
+        application,
+        DEFAULT_GUILD,
+        &SCOPES
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect::<Vec<_>>(),
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("an ask");
 
-    (application, client_id_of(pool, application).await)
+    (application, asked.user_code)
 }
 
 fn grant_from_guild(user: i64, permissions: &str, options: Value) -> Value {
@@ -48,21 +64,20 @@ fn list_options() -> Value {
     json!([{ "name": "list", "type": 1 }])
 }
 
-fn allow_options(client_id: &str) -> Value {
+fn approve_options(code: &str) -> Value {
     json!([{
-        "name": "allow",
+        "name": "approve",
         "type": 1,
-        "options": [{ "name": "client_id", "type": 3, "value": client_id }],
+        "options": [{ "name": "code", "type": 3, "value": code }],
     }])
 }
 
-fn press(user: i64, permissions: &str, action: Action, subject: i64) -> Value {
-    json!({
-        "type": 3,
-        "data": { "custom_id": custom_id(action, subject), "component_type": 2 },
-        "member": { "user": { "id": user.to_string() }, "permissions": permissions },
-        "guild_id": DEFAULT_GUILD.to_string(),
-    })
+fn revoke_options(code: &str) -> Value {
+    json!([{
+        "name": "revoke",
+        "type": 1,
+        "options": [{ "name": "code", "type": 3, "value": code }],
+    }])
 }
 
 /// What the one container says, which is everything a screen has to say.
@@ -92,98 +107,96 @@ async fn allowed(pool: &PgPool, application: i64, guild_id: i64) -> bool {
     .expect("the check")
 }
 
-async fn request_status(pool: &PgPool, request_id: i64) -> String {
-    sqlx::query_scalar!(
-        "SELECT status FROM grant_requests WHERE id = $1",
-        request_id
-    )
-    .fetch_one(pool)
-    .await
-    .expect("the request")
+async fn request_status(pool: &PgPool, application: i64) -> String {
+    vc_core::grant::requests_of(pool, application)
+        .await
+        .expect("the asks")[0]
+        .status
+        .clone()
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn the_confirmation_names_the_application(pool: PgPool) {
-    let (_, client_id) = fixture(&pool).await;
+async fn the_list_shows_the_code_to_type(pool: PgPool) {
+    let (_, user_code) = fixture(&pool).await;
 
     let response = interaction(
         router(pool),
-        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, allow_options(&client_id)),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(response.body["type"], json!(4), "a new ephemeral message");
     assert_eq!(
         texts(&response),
         [
-            format!("**an application**\n`{client_id}`"),
-            "このサーバーのプールからの発行を許可しますか？".to_string(),
+            "**発行の申請** (1件)\n`/grant approve code:` にコードを入れて承認します。".to_string(),
+            format!("**an application**\n`{user_code}`\n要求スコープ: vc.issue"),
         ]
     );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn allowing_writes_the_grant_and_its_scope(pool: PgPool) {
-    let (application, client_id) = fixture(&pool).await;
-
-    interaction(
-        router(pool.clone()),
-        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, allow_options(&client_id)),
-    )
-    .await;
+async fn approving_the_code_writes_the_grant(pool: PgPool) {
+    let (application, user_code) = fixture(&pool).await;
 
     let response = interaction(
         router(pool.clone()),
-        press(ADMIN, DEFAULT_PERMISSIONS, Action::Allow, application),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(response.body["type"], json!(7), "the screen is replaced");
     assert_eq!(texts(&response), ["発行を許可しました。"]);
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
+    assert_eq!(request_status(&pool, application).await, "approved");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn the_confirmation_can_be_dismissed(pool: PgPool) {
-    let (application, _) = fixture(&pool).await;
-
-    let response = interaction(
-        router(pool.clone()),
-        press(ADMIN, DEFAULT_PERMISSIONS, Action::Cancel, application),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(texts(&response), ["許可しませんでした。"]);
-    assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_application_that_is_not_there_is_refused(pool: PgPool) {
+async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
     fixture(&pool).await;
 
     let response = interaction(
         router(pool),
-        grant_from_guild(
-            ADMIN,
-            DEFAULT_PERMISSIONS,
-            allow_options("2f1c2f4e-9a11-4d2b-8c3e-5f6a7b8c9d0e"),
-        ),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options("deadbeef")),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
         texts(&response),
-        ["エラー: アプリケーションが見つかりません。"]
+        ["エラー: そのコードの申請はこのサーバーにありません。"]
     );
+}
+
+/// An approval answers the ask's own scopes, never anything else: the grant the
+/// device polls for is written from the request it made.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_grant_carries_the_asked_scopes(pool: PgPool) {
+    let (application, user_code) = fixture(&pool).await;
+
+    interaction(
+        router(pool.clone()),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
+    )
+    .await;
+
+    let scopes = sqlx::query_scalar!(
+        r#"SELECT s.scope::text AS "scope!" FROM grant_scopes s
+             JOIN grants g ON g.id = s.grant_id
+            WHERE g.application_id = $1 AND g.guild_id = $2"#,
+        application,
+        DEFAULT_GUILD
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("the scopes");
+
+    assert_eq!(scopes, ["vc.issue"]);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_list_with_nothing_pending_says_so(pool: PgPool) {
-    fixture(&pool).await;
+    insert_application(&pool, 900_000_000_000_000_002, "an application").await;
 
     let response = interaction(
         router(pool),
@@ -198,18 +211,21 @@ async fn a_list_with_nothing_pending_says_so(pool: PgPool) {
     );
 }
 
+/// Revoking by the pending code un-asks it: the application's poll reads the ask
+/// as gone.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn approving_a_request_writes_the_grant(pool: PgPool) {
-    let (application, client_id) = fixture(&pool).await;
+async fn revoking_a_pending_code_unasks_it(pool: PgPool) {
+    let (application, user_code) = fixture(&pool).await;
 
-    let request = vc_core::grant::request_grant(
-        &pool,
-        application,
-        DEFAULT_GUILD,
-        time::OffsetDateTime::now_utc(),
+    let response = interaction(
+        router(pool.clone()),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, revoke_options(&user_code)),
     )
-    .await
-    .expect("a request");
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(texts(&response), ["発行の許可を取り消しました。"]);
+    assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
 
     let listed = interaction(
         router(pool.clone()),
@@ -217,133 +233,70 @@ async fn approving_a_request_writes_the_grant(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(listed.status, 200, "body: {}", listed.body);
     assert_eq!(
         texts(&listed),
-        [
-            "**発行の申請** (1件)".to_string(),
-            format!("**an application**\n`{client_id}`"),
-        ]
+        ["発行を申請しているアプリケーションはありません。"]
     );
-
-    let response = interaction(
-        router(pool.clone()),
-        press(ADMIN, DEFAULT_PERMISSIONS, Action::Approve, request),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(response.body["type"], json!(7), "the list is redrawn");
-    assert_eq!(
-        texts(&response),
-        [
-            "発行を許可しました。".to_string(),
-            "発行を申請しているアプリケーションはありません。".to_string(),
-        ]
-    );
-    assert!(allowed(&pool, application, DEFAULT_GUILD).await);
-    assert_eq!(request_status(&pool, request).await, "approved");
 }
 
+/// Revoking by the granted `client_id` drops the issuing scope, and a guild
+/// token already issued stops issuing because its scopes are read from the
+/// grant.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn denying_a_request_leaves_it_ungranted(pool: PgPool) {
-    let (application, _) = fixture(&pool).await;
+async fn revoking_a_client_id_ungrants_it(pool: PgPool) {
+    use support::client_id_of;
 
-    let request = vc_core::grant::request_grant(
-        &pool,
-        application,
-        DEFAULT_GUILD,
-        time::OffsetDateTime::now_utc(),
-    )
-    .await
-    .expect("a request");
-
-    let response = interaction(
-        router(pool.clone()),
-        press(ADMIN, DEFAULT_PERMISSIONS, Action::Deny, request),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(
-        texts(&response),
-        [
-            "申請を拒否しました。".to_string(),
-            "発行を申請しているアプリケーションはありません。".to_string(),
-        ]
-    );
-    assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
-    assert_eq!(request_status(&pool, request).await, "denied");
-}
-
-/// A decided request is not decided again: the second press says so rather than
-/// writing a grant the guild did not answer for.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_request_is_answered_once(pool: PgPool) {
-    let (application, _) = fixture(&pool).await;
-
-    let request = vc_core::grant::request_grant(
-        &pool,
-        application,
-        DEFAULT_GUILD,
-        time::OffsetDateTime::now_utc(),
-    )
-    .await
-    .expect("a request");
+    let (application, user_code) = fixture(&pool).await;
+    let client_id = client_id_of(&pool, application).await;
 
     interaction(
         router(pool.clone()),
-        press(ADMIN, DEFAULT_PERMISSIONS, Action::Deny, request),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
     .await;
 
+    assert!(allowed(&pool, application, DEFAULT_GUILD).await);
+
     let response = interaction(
         router(pool.clone()),
-        press(ADMIN, DEFAULT_PERMISSIONS, Action::Approve, request),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, revoke_options(&client_id)),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert!(
-        texts(&response)
-            .iter()
-            .any(|text| text == "エラー: この申請はすでに処理されています。"),
-        "body: {}",
-        response.body
-    );
+    assert_eq!(texts(&response), ["発行の許可を取り消しました。"]);
     assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
-    assert_eq!(request_status(&pool, request).await, "denied");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_revoke_that_names_nothing_is_refused(pool: PgPool) {
+    fixture(&pool).await;
+
+    let response = interaction(
+        router(pool),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, revoke_options("deadbeef")),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        texts(&response),
+        ["エラー: そのコードの申請も許可もこのサーバーにありません。"]
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_command_needs_the_administrator_bit(pool: PgPool) {
-    let (_, client_id) = fixture(&pool).await;
+    let (_, user_code) = fixture(&pool).await;
 
     let response = interaction(
         router(pool),
-        grant_from_guild(ADMIN, NOT_ADMIN, allow_options(&client_id)),
+        grant_from_guild(ADMIN, NOT_ADMIN, approve_options(&user_code)),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), ["エラー: 実行には管理者権限が必要です。"]);
-}
-
-/// The permission is asked for again on the press, because the button outlives
-/// the message it came in: a person demoted in between still holds it.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn the_button_needs_the_administrator_bit(pool: PgPool) {
-    let (application, _) = fixture(&pool).await;
-
-    let response = interaction(
-        router(pool.clone()),
-        press(ADMIN, NOT_ADMIN, Action::Allow, application),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(texts(&response), ["エラー: 実行には管理者権限が必要です。"]);
-    assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

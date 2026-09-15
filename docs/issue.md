@@ -58,6 +58,7 @@ issued for a grant with no guild.
 
 It comes from the same places it always has:
 
+- the device poll below, once the guild approved the ask;
 - `grant_type=client_credentials` with basic auth and a `guild_id`, once the guild
   holds a grant for the application;
 - `grant_type=authorization_code`, once the consent below was approved with
@@ -67,21 +68,24 @@ A guild token already issued keeps working until it expires, and it reads the
 grant's scopes when it is used rather than carrying them — so taking a scope away
 takes issuing away with it.
 
-## How a guild says yes — three ways in
+## How a guild says yes — two ways in, one ask
 
 A guild token is what a grant makes spendable, and a grant with `vc.issue` is
-what the guild says yes to. There are three ways in, and they write the same
-grant.
+what the guild says yes to. The permission always starts with the application
+asking — `POST /oauth2/clients/@me/grant-requests {"guild_id": "...",
+"scopes": ["vc.issue"]}`, with the registration token — and the ask is what the
+approval answers. The grant is written from the ask's own scopes, never from
+anything the approver names: an approval that granted something else would be a
+permission nobody asked for.
 
-### 1. The consent screen
+The 201 answers the device flow's four values: `device_code` (what the poll
+names), `user_code` (what the administrator types, eight characters), and
+`expires_in` (how long the ask lives, ten minutes unless asked shorter).
+`verification_uri` is `"discord"`: there is no URI to open, because the
+approval happens in the guild — `/grant list` shows the pending asks with the
+codes to type.
 
-`/oauth2/authorize` already asks the guild and the caller whether they may act
-for it — the owner, or a member whose roles carry the administrator bit — and
-`scope=vc.issue` now passes its scope check alongside `openid`. Approving writes
-the authorization code whose exchange writes the grant's scopes, and the grant is
-`vc.issue`.
-
-### 2. The application's own page
+### 1. The application's own page
 
 The application's owner manages `/applications/{client_id}/grants`:
 
@@ -94,39 +98,63 @@ The application's owner manages `/applications/{client_id}/grants`:
   permission back. The grant stays and only its scope goes, so a guild token
   already issued stops issuing and nothing else changes.
 
-Adding a guild is the owner's act about a guild they may act for: the caller must
-own the application **and** be its guild's owner or administrator. Revoking asks
-nothing of the guild — an owner narrowing what their own application may do is
-not a decision the guild has to be asked about. A `client_id` that is not the
-caller's own is a 404, so this cannot be used to ask which client ids are real.
-The application's own page in the SPA manages this: the detail page lists the
+Adding a guild is the owner's own shortcut, and deliberately the only write
+that skips the ask: the owner *is* the guild's administrator here, so the ask
+would be theirs to answer anyway. A `client_id` that is not the caller's own is
+a 404, so this cannot be used to ask which client ids are real. The
+application's own page in the SPA manages this: the detail page lists the
 guilds, adds one by its id, and revokes with a button.
 
-### 3. Discord: `/grant`
+### 2. Discord: `/grant`
 
-For the guild that never opens a browser. `/grant` is guild-only and asks the
-administrator bit, like `/issue` beside it, and has two subcommands:
+For the guild that never opens a browser — and the only way a guild that is not
+the application's owner says yes. `/grant` is guild-only and asks the
+administrator bit, like `/issue` beside it:
 
-- `/grant allow <client_id>` shows what the application is — its name and the
-  id — and a confirmation. Pressing it writes the grant with `vc.issue`.
-- `/grant list` shows what the guild has been asked and not answered, from the
-  application's ask below, each with **許可する** and **拒否する**. Pressing
-  either decides the request and redraws the list.
+- `/grant list` shows what the guild has been asked and not answered: the name,
+  the `user_code` to type, and the scopes being asked for. Read-only on
+  purpose — the approval is typed, not pressed.
+- `/grant approve code:<user_code>` approves that ask and writes the grant from
+  its scopes. A code that names nothing pending here is refused the same way
+  whether it never existed, belongs to another guild, or already expired.
+- `/grant revoke code:<user_code|client_id>` takes a permission back: a pending
+  code un-asks it, and a granted `client_id` drops the issuing scope.
 
-The administrator is checked twice — when the command runs and when the button
-is pressed — because the button outlives the message it came in.
+There is no refusal anywhere in this command on purpose: an approval is the
+only decision, and an ask that is never approved simply stays pending until it
+expires.
 
-## How an application asks — the request
+## How the device gets its token — the poll
 
-`POST /oauth2/clients/@me/grant-requests {"guild_id": "..."}`, with the
-application token registration answered with. It writes a pending row, which is
-what `/grant list` shows the guild, and 201 answers with its id and `pending`.
+`POST /oauth2/token` with
+`grant_type=urn:ietf:params:oauth:grant-type:device_code` and the `device_code`,
+authenticated by Basic with the application's own id and secret:
 
-An ask while one is pending is the same ask: it answers with the row that is
-already there. A denied ask may be asked again, because the guild saying no ends
-the ask rather than the conversation — and `GET` on the same path reads back
-what was asked and what the guild said, which is what the application polls
-before it exchanges a guild token.
+- still pending: `400 {"error":"authorization_pending"}` — keep polling;
+- approved: `200` with the guild token, minted from the grant the approval
+  wrote;
+- unknown, expired, or approved-but-revoked: `400 {"error":"invalid_grant"}` —
+  ask again.
 
-A user token cannot ask a guild for a permission their application holds: the
-caller has to *be* the application the grant would be written for.
+A guild token already issued keeps working until it expires, and it reads the
+grant's scopes when it is used rather than carrying them — so taking a scope away
+takes issuing away with it.
+
+## The push next to the poll
+
+An application that named a `webhook_url` at registration does not have to
+poll blind: the approval also delivers a type-3 event —
+`{"type": 3, "data": {"guild_id": "...", "scopes": [...]}}` — signed the way
+every delivery is signed, with the application's own key. The token still comes
+from the poll; the push is the ping that says to poll now, the way CIBA's ping
+carries the `auth_req_id` and the tokens come from the token endpoint. An
+application without a webhook polls instead, which is why the push is a ping
+and not the decision itself.
+
+## The application's own view
+
+`GET /oauth2/clients/@me/grant-requests` reads back what the application asked
+— the codes, the guild, the scopes, the status — which is what a device shows
+its operator next to the code to type. A user token cannot ask a guild for a
+permission their application holds: the caller has to *be* the application the
+grant would be written for.

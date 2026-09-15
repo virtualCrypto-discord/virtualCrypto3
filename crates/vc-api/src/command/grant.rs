@@ -4,32 +4,35 @@
 //! No Elixir counterpart. There, a grant only ever appeared as a side effect of
 //! redeeming an authorization code, so allowing an application anything meant
 //! sending a person to an authorization URL. This command is that decision without
-//! the browser: `/grant allow <client_id>` for an application somebody named, and
-//! `/grant list` for the ones that asked with an API call.
+//! the browser: `/grant approve code:<user_code>` answers an ask the application
+//! made with an API call, `/grant list` shows the asks still waiting, and
+//! `/grant revoke code:<user_code|client_id>` takes a permission back.
+//!
+//! An approval is the only decision there is — there is no refusal, because an
+//! ask that is never approved simply stays pending until it expires. And every
+//! approval answers an ask: the code names the application's own request, with
+//! the scopes it asked for, so a permission nobody asked for cannot be written.
 //!
 //! What is mirrored is the shape of the commands beside it: one ephemeral,
 //! components-only answer, the administrator bit asked for the way `/issue` asks
-//! for it, and a `custom_id` that carries what the screen is about, because an
-//! ephemeral message cannot be fetched back.
+//! for it, and no buttons at all — the code is typed rather than pressed, so
+//! there is no `custom_id` space to keep.
 
 use serde_json::{Map, Value, json};
-use time::OffsetDateTime;
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_OK, CommandError, UPDATE_MESSAGE, as_int,
-    as_permissions, is_administrator, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_OK, CommandError, as_int, as_permissions,
+    is_administrator, value_text,
 };
-use crate::custom_id::ui::grant::{Action, custom_id, parse};
-use crate::error::ApiError;
 use crate::state::AppState;
 
-/// How many requests one screen shows. Discord allows five component rows in a
-/// message and each request is one row, so a sixth waits for the screen the next
-/// decision redraws. A guild with more than five pending requests is a guild whose
-/// administrator is looking at this anyway.
+/// How many requests one screen shows. Five fits in one message without
+/// scrolling it off the screen, and a sixth waits for the screen the next
+/// approval redraws. A guild with more than five pending requests is a guild
+/// whose administrator is looking at this anyway.
 const MAX_REQUESTS: usize = 5;
 
-/// `Command.handle/4` for `grant`: the subcommand picks a handler, and both of
+/// `Command.handle/4` for `grant`: the subcommand picks a handler, and all of
 /// them need the guild and the administrator bit.
 pub async fn handle(
     state: &AppState,
@@ -52,125 +55,93 @@ pub async fn handle(
         .ok_or_else(|| CommandError::missing("grant has no subcommand"))?;
 
     match subcommand {
-        "allow" => allow(state, options.get("sub_options")).await,
-        "list" => page(state, guild_id, CHANNEL_MESSAGE_WITH_SOURCE, None).await,
+        "approve" => approve(state, guild_id, options.get("sub_options")).await,
+        "revoke" => revoke(state, guild_id, options.get("sub_options")).await,
+        "list" => page(state, guild_id).await,
         _ => Err(CommandError::Unknown),
     }
 }
 
-/// `Interaction.Button.handle/4` for the grant screens: a confirmation accepted or
-/// dismissed, or one pending request answered.
+/// `/grant approve code:<user_code>`: the guild's yes to one ask.
 ///
-/// The presser is checked exactly as the command is: an ephemeral message is only
-/// visible to whoever asked for it, but the button in it outlives their
-/// permissions — a person demoted between the two would otherwise still be able to
-/// grant.
-pub async fn component(
-    state: &AppState,
-    custom_id: &str,
-    payload: &Value,
-) -> Result<Value, CommandError> {
-    let Some(guild_id) = payload.get("guild_id").and_then(as_int) else {
-        return Ok(render_error("エラー: DMでは実行できません。"));
-    };
-
-    if !administrator(payload)? {
-        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
-    }
-
-    let (action, subject) = parse(&crate::custom_id::parse(custom_id))
-        .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
-
-    match action {
-        Action::Allow => {
-            allow_in_guild(state, subject, guild_id).await?;
-
-            Ok(render_update("発行を許可しました。", Some(COLOR_OK)))
-        }
-        Action::Cancel => Ok(render_update("許可しませんでした。", None)),
-        // Both of the list's answers redraw it, so a request that is gone from the
-        // list is the whole of what the presser sees of it.
-        Action::Approve => {
-            let decided = decide(state, subject, guild_id, true).await?;
-
-            let notice = match decided {
-                true => "発行を許可しました。",
-                false => "エラー: この申請はすでに処理されています。",
-            };
-
-            page(state, guild_id, UPDATE_MESSAGE, Some(notice)).await
-        }
-        Action::Deny => {
-            let decided = decide(state, subject, guild_id, false).await?;
-
-            let notice = match decided {
-                true => "申請を拒否しました。",
-                false => "エラー: この申請はすでに処理されています。",
-            };
-
-            page(state, guild_id, UPDATE_MESSAGE, Some(notice)).await
-        }
-    }
-}
-
-/// `/grant allow <client_id>`: what the application is, and the confirmation.
-///
-/// The guild is not looked at here: what it is about to allow is written when the
-/// button in this screen is pressed, and the press is what the guild's permission
-/// is checked against.
-async fn allow(state: &AppState, sub_options: Option<&Value>) -> Result<Value, CommandError> {
-    let client_id = sub_options
-        .and_then(|options| options.get("client_id"))
-        .map(value_text)
-        .ok_or_else(|| CommandError::missing("grant allow has no client_id"))?;
-
-    let Some(application) =
-        vc_core::application::find_by_client_id(state.pool(), &client_id).await?
-    else {
-        return Ok(render_error("エラー: アプリケーションが見つかりません。"));
-    };
-
-    let name = name_of(application.client_name.as_deref());
-
-    Ok(json!({
-        "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": crate::components::ephemeral(vec![crate::components::container(
-            Some(COLOR_BRAND as u32),
-            vec![
-                crate::components::text(format!("**{name}**\n`{client_id}`")),
-                crate::components::text("このサーバーのプールからの発行を許可しますか？"),
-                crate::components::action_row(vec![
-                    crate::components::button(
-                        &custom_id(Action::Allow, application.id),
-                        "許可する",
-                        crate::components::ButtonStyle::Success,
-                    ),
-                    crate::components::button(
-                        &custom_id(Action::Cancel, application.id),
-                        "やめる",
-                        crate::components::ButtonStyle::Secondary,
-                    ),
-                ]),
-            ],
-        )]),
-    }))
-}
-
-/// `/grant list`, and the screen every decision redraws: what this guild has been
-/// asked for and not answered.
-async fn page(
+/// The code names the application's own request — the scopes it asked for, in
+/// the guild this command runs in — and the grant is written from exactly
+/// those. A code that names nothing pending here is answered the same way
+/// whether it never existed, belongs to another guild, or already expired:
+/// an unapproved ask is not something this command explains.
+async fn approve(
     state: &AppState,
     guild_id: i64,
-    response_type: i64,
-    notice: Option<&str>,
+    sub_options: Option<&Value>,
 ) -> Result<Value, CommandError> {
-    let requests = vc_core::grant::requests_in_guild(state.pool(), guild_id).await?;
+    let code = sub_options
+        .and_then(|options| options.get("code"))
+        .map(value_text)
+        .ok_or_else(|| CommandError::missing("grant approve has no code"))?;
+
+    let decided = vc_core::grant::decide_request(
+        state.pool(),
+        code.trim(),
+        guild_id,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await?;
+
+    match decided {
+        Some(application_id) => {
+            // The application's own account, which is what the ping names:
+            // the device asked, the guild answered, and this tells it to poll.
+            if let Ok(Some(account)) =
+                vc_core::user::application_user_id(state.pool(), application_id).await
+            {
+                state.notifier().notify_grant_decided(account);
+            }
+
+            Ok(render_ok("発行を許可しました。"))
+        }
+        None => Ok(render_error(
+            "エラー: そのコードの申請はこのサーバーにありません。",
+        )),
+    }
+}
+
+/// `/grant revoke code:<user_code|client_id>`: the permission back.
+///
+/// The code is either a pending ask's `user_code`, which revokes the ask's
+/// future, or a granted application's `client_id`, which takes the issuing
+/// scope back. Either way the scopes go and the rows stay: an approval lives
+/// on as history, and a guild token already issued stops issuing because its
+/// scopes are read from the grant.
+async fn revoke(
+    state: &AppState,
+    guild_id: i64,
+    sub_options: Option<&Value>,
+) -> Result<Value, CommandError> {
+    let code = sub_options
+        .and_then(|options| options.get("code"))
+        .map(value_text)
+        .ok_or_else(|| CommandError::missing("grant revoke has no code"))?;
+
+    let revoked = vc_core::grant::revoke_grant(state.pool(), code.trim(), guild_id).await?;
+
+    match revoked {
+        true => Ok(render_ok("発行の許可を取り消しました。")),
+        false => Ok(render_error(
+            "エラー: そのコードの申請も許可もこのサーバーにありません。",
+        )),
+    }
+}
+
+/// `/grant list`: what this guild has been asked for and not answered.
+///
+/// Read-only on purpose: the approval is a typed code rather than a pressed
+/// button, so this screen shows the codes to type and nothing to press.
+async fn page(state: &AppState, guild_id: i64) -> Result<Value, CommandError> {
+    let requests =
+        vc_core::grant::requests_in_guild(state.pool(), guild_id, time::OffsetDateTime::now_utc())
+            .await?;
 
     let mut children = Vec::new();
-
-    if let Some(notice) = notice {
-        children.push(crate::components::text(notice));
-    }
 
     if requests.is_empty() {
         children.push(crate::components::text(
@@ -178,28 +149,17 @@ async fn page(
         ));
     } else {
         children.push(crate::components::text(format!(
-            "**発行の申請** ({}件)",
+            "**発行の申請** ({}件)\n`/grant approve code:` にコードを入れて承認します。",
             requests.len()
         )));
 
         for request in requests.iter().take(MAX_REQUESTS) {
             children.push(crate::components::text(format!(
-                "**{}**\n`{}`",
+                "**{}**\n`{}`\n要求スコープ: {}",
                 name_of(request.client_name.as_deref()),
-                request.client_id,
+                request.user_code,
+                request.scopes.join(" "),
             )));
-            children.push(crate::components::action_row(vec![
-                crate::components::button(
-                    &custom_id(Action::Approve, request.id),
-                    "許可する",
-                    crate::components::ButtonStyle::Success,
-                ),
-                crate::components::button(
-                    &custom_id(Action::Deny, request.id),
-                    "拒否する",
-                    crate::components::ButtonStyle::Danger,
-                ),
-            ]));
         }
 
         if requests.len() > MAX_REQUESTS {
@@ -211,58 +171,12 @@ async fn page(
     }
 
     Ok(json!({
-        "type": response_type,
+        "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_BRAND as u32),
             children,
         )]),
     }))
-}
-
-/// The guild saying yes, by the two ways in: the confirmation's button and the
-/// list's.
-async fn allow_in_guild(
-    state: &AppState,
-    application_id: i64,
-    guild_id: i64,
-) -> Result<(), CommandError> {
-    vc_core::grant::allow_in_guild(
-        state.pool(),
-        application_id,
-        guild_id,
-        &[vc_core::application::ISSUE],
-        OffsetDateTime::now_utc(),
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// The guild's answer to a request, which writes the grant when it is a yes.
-/// `false` is a request that is not this guild's, not there, or already answered.
-async fn decide(
-    state: &AppState,
-    request_id: i64,
-    guild_id: i64,
-    approved: bool,
-) -> Result<bool, CommandError> {
-    let scopes: &[&str] = if approved {
-        &[vc_core::application::ISSUE]
-    } else {
-        &[]
-    };
-
-    let decided = vc_core::grant::decide_request(
-        state.pool(),
-        request_id,
-        guild_id,
-        approved,
-        scopes,
-        OffsetDateTime::now_utc(),
-    )
-    .await?;
-
-    Ok(decided.is_some())
 }
 
 /// `Command.continue_management_command?/2`'s question, as the interaction
@@ -284,13 +198,13 @@ fn name_of(client_name: Option<&str>) -> String {
         .to_string()
 }
 
-/// An ephemeral answer that replaces the screen it came from: a decision, whose
-/// own sentence is all there is left to say.
-fn render_update(content: &str, color: Option<i64>) -> Value {
+/// An ephemeral answer to a decision, whose own sentence is all there is left
+/// to say.
+fn render_ok(content: &str) -> Value {
     json!({
-        "type": UPDATE_MESSAGE,
+        "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
-            color.map(|color| color as u32),
+            Some(COLOR_OK as u32),
             vec![crate::components::text(content)],
         )]),
     })

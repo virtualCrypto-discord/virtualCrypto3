@@ -181,9 +181,9 @@ pub async fn send(
 
 /// The event body for a claim update: type 2, with the events as its data.
 ///
-/// Type 1 is the PING the handshake sends, and an application must ignore types
-/// it does not know — which is what its documentation says, and what makes adding
-/// a third type safe later.
+/// Type 1 is the PING the handshake sends, type 3 a grant decision, and an
+/// application must ignore types it does not know — which is what its
+/// documentation says, and what makes adding another type safe later.
 pub fn claim_update_body(events: &[Value]) -> Value {
     serde_json::json!({ "type": 2, "data": events })
 }
@@ -222,6 +222,20 @@ impl vc_core::notification::Notifier for WebhookNotifier {
             send_claim_update(&pool, &proxy, claimant_id, &events).await;
         });
     }
+
+    /// Fire and forget for the same reason: the guild already decided, and the
+    /// application's poll would learn it anyway — this is the ping that saves
+    /// the polling. The ping carries the guild and scopes, not the token: the
+    /// token comes from the poll, the way CIBA's ping carries the `auth_req_id`
+    /// and the tokens come from the token endpoint.
+    fn notify_grant_decided(&self, account_id: i32) {
+        let pool = self.pool.clone();
+        let proxy = std::sync::Arc::clone(&self.proxy);
+
+        tokio::spawn(async move {
+            send_grant_decided(&pool, &proxy, account_id).await;
+        });
+    }
 }
 
 /// One delivery, if there is anywhere to deliver it.
@@ -237,6 +251,62 @@ async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32,
         return;
     };
 
+    send_to_application(pool, proxy, application_id, claim_update_body(events)).await;
+}
+
+/// The event body for a grant decision: type 3, with the guild that answered
+/// and the scopes it granted.
+///
+/// Type 1 is the PING the handshake sends, type 2 a claim update, and an
+/// application must ignore types it does not know — which is what its
+/// documentation says, and what makes adding this one safe for applications
+/// written before it.
+pub fn grant_decided_body(guild_id: i64, scopes: &[String]) -> Value {
+    serde_json::json!({
+        "type": 3,
+        "data": {
+            "guild_id": guild_id.to_string(),
+            "scopes": scopes,
+        },
+    })
+}
+
+/// One grant decision, if there is anywhere to deliver it.
+///
+/// The account *is* the application's own, so unlike the claim path there is no
+/// lookup for which application to tell — only whether it named a webhook to be
+/// told at. An application without one polls instead, which is why this is a
+/// ping and not the decision itself: the poll is what the token comes from.
+async fn send_grant_decided(pool: &sqlx::PgPool, proxy: &Proxy, account_id: i32) {
+    let Some(application_id) = vc_core::user::application_id(pool, account_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+
+    let Ok(grants) = vc_core::grant::grants_of(pool, application_id).await else {
+        return;
+    };
+
+    // The decision just made is the grant most recently written, and the ping
+    // names the guild and scopes it carries.
+    let Some(granted) = grants.into_iter().max_by_key(|granted| granted.updated_at) else {
+        return;
+    };
+
+    send_to_application(
+        pool,
+        proxy,
+        application_id,
+        grant_decided_body(granted.guild_id, &granted.scopes),
+    )
+    .await;
+}
+
+/// One delivery to one application's webhook, if it named one.
+async fn send_to_application(pool: &sqlx::PgPool, proxy: &Proxy, application_id: i64, body: Value) {
     let Some(webhook) = vc_core::application::webhook_data(pool, application_id)
         .await
         .ok()
@@ -260,7 +330,6 @@ async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32,
         return;
     };
 
-    let body = claim_update_body(events);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_secs() as i64)

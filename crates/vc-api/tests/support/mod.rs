@@ -507,6 +507,24 @@ pub async fn client_id_of(pool: &PgPool, application: i64) -> String {
     .expect("a client id")
 }
 
+/// An application's `client_secret`, which is what its Basic header carries to
+/// the token endpoint. Tests read it back rather than inventing one, because
+/// `insert_application` leaves the column null and the secret check needs a row.
+pub async fn client_secret_of(pool: &PgPool, application: i64) -> String {
+    let secret = format!("secret-{application}");
+
+    sqlx::query!(
+        "UPDATE applications SET client_secret = $2 WHERE id = $1",
+        application,
+        secret
+    )
+    .execute(pool)
+    .await
+    .expect("a secret");
+
+    secret
+}
+
 pub async fn insert_discord_auth(pool: &PgPool, discord_user_id: i64, token: &str) {
     let at = utc_now();
     sqlx::query!(

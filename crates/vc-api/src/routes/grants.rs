@@ -9,10 +9,13 @@
 //! not confirmed to exist.
 //!
 //! Adding one asks Discord the question the consent screen asks — may this account
-//! act for this guild — and writes the same grant the code flow would have. Taking
-//! one away asks nothing of the guild, deliberately: an application's owner
-//! narrowing what their application may do is not a decision the guild has to be
-//! asked about.
+//! act for this guild — and writes the same grant the code flow would have. It is
+//! the owner's own shortcut, and deliberately the only write that skips the ask:
+//! the owner *is* the guild's administrator here, so the ask would be theirs to
+//! answer anyway. Discord's own yes always goes through an ask, because there the
+//! asker and the answerer are different people. Taking one away asks nothing of
+//! the guild either way: an application's owner narrowing what their application
+//! may do is not a decision the guild has to be asked about.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -141,13 +144,14 @@ pub async fn allow(
 ///
 /// The grant stays and only its scope goes, so a guild token that was already
 /// issued stops being able to issue and nothing else about the grant changes —
-/// which is what [`vc_core::grant::disallow_in_guild`] does and why.
+/// which is what [`vc_core::grant::revoke_grant`] does from the page's side,
+/// and why.
 pub async fn revoke(
     State(state): State<AppState>,
     user: AuthUser,
     Path((client_id, guild_id)): Path<(String, String)>,
 ) -> Response {
-    let application = match owned(&state, &user, &client_id).await {
+    let _ = match owned(&state, &user, &client_id).await {
         Ok((application, _)) => application,
         Err(refusal) => return refusal.response(),
     };
@@ -160,14 +164,9 @@ pub async fn revoke(
         );
     };
 
-    match vc_core::grant::disallow_in_guild(
-        state.pool(),
-        application,
-        guild_id,
-        vc_core::application::ISSUE,
-    )
-    .await
-    {
+    // The page names the guild, and the application's own id comes from the
+    // path: the revoke is the owner's, so the code is the `client_id` itself.
+    match vc_core::grant::revoke_grant(state.pool(), &client_id, guild_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         // Nothing to take back is the answer the caller wanted, which is what RFC
         // 7009 says about revocation too.

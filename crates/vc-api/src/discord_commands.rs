@@ -112,10 +112,13 @@ fn issue() -> Value {
 /// decides whether an application may issue from the guild's pool, which is what
 /// makes the issuing endpoint something the guild agreed to rather than something
 /// an application helped itself to.
+///
+/// There is no refusal here on purpose: an approval is the only decision, and an
+/// ask that is never approved simply stays pending until it expires.
 fn grant() -> Value {
     json!({
         "name": "grant",
-        "description": "アプリケーションにこのサーバーでの発行を許可します。管理者権限が必要です。",
+        "description": "申請コードを指定してこのサーバーでの発行を許可します。管理者権限が必要です。",
         "options": [
             {
                 "name": "list",
@@ -123,13 +126,26 @@ fn grant() -> Value {
                 "type": 1,
             },
             {
-                "name": "allow",
-                "description": "指定したアプリケーションに発行を許可します。",
+                "name": "approve",
+                "description": "申請コードの申請を承認し、発行を許可します。",
                 "type": 1,
                 "options": [
                     {
-                        "name": "client_id",
-                        "description": "許可するアプリケーションの client_id です。",
+                        "name": "code",
+                        "description": "承認する申請のコードです。/grant list で確認できます。",
+                        "type": 3,
+                        "required": true,
+                    },
+                ],
+            },
+            {
+                "name": "revoke",
+                "description": "このサーバーでの発行の許可を取り消します。",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "code",
+                        "description": "取り消す申請のコード、または許可済みの client_id です。",
                         "type": 3,
                         "required": true,
                     },

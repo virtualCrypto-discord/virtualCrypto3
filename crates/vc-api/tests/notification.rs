@@ -41,6 +41,11 @@ impl Notifier for Sink {
             .expect("the sink is not poisoned")
             .push((claimant_id, events.to_vec()));
     }
+
+    fn notify_grant_decided(&self, _account_id: i32) {
+        // Claims only: grant decisions go through the webhook path, which has
+        // its own test.
+    }
 }
 
 /// `VirtualCryptoTest.Notification.Setup.setup_claim/1`: a pending claim, with

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE grant_requests SET status = 'approved', updated_at = $3\n          WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3cbeb8541265ae31b177cd88d6657711ee75b55df9f55ff86b89d44e4e4857ab"
+}
