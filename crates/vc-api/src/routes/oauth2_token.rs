@@ -18,8 +18,8 @@ use time::OffsetDateTime;
 use vc_auth::issue::{app_scopes_are_valid, app_token, revoke_by_jti};
 use vc_core::application::{Application, verify_secret};
 use vc_core::grant::{
-    EXPIRES_IN, ExchangeError, create_access_token, create_refresh_token, exchange_code,
-    exchange_refresh_token, grant_for, revoke_access_token, revoke_refresh_token,
+    EXPIRES_IN, ExchangeError, create_access_token, exchange_code, exchange_refresh_token,
+    revoke_access_token, revoke_refresh_token,
 };
 
 use crate::state::AppState;
@@ -35,8 +35,6 @@ pub struct TokenForm {
     pub device_code: Option<String>,
     #[allow(dead_code)]
     pub scope: Option<String>,
-    #[allow(dead_code)]
-    pub guild_id: Option<String>,
 }
 
 /// `POST /oauth2/token`.
@@ -57,12 +55,13 @@ pub async fn token(
     }
 }
 
-/// `grant_type=client_credentials`, which is two shapes rather than one: with a
-/// `guild_id` it answers with a row in `access_tokens`, and with a `scope` it
-/// answers with a signed JWT. Neither is written yet — see docs/oauth2.md for
-/// what each needs.
+/// `grant_type=client_credentials`, which answers with a signed JWT for the
+/// application itself — the scope shape, and the only one left. The guild shape
+/// is gone: it minted a guild token for a grant nobody asked to exist, and the
+/// device poll below is what mints one now, only once the guild approved the
+/// ask. See `docs/oauth2.md`.
 ///
-/// The credentials are read first because both shapes refuse a client that
+/// The credentials are read first because every shape refuses a client that
 /// presents none the same way, and that much is worth answering correctly now:
 /// `invalid_client`, which is what the Elixir answers for a header it cannot
 /// parse.
@@ -79,12 +78,6 @@ async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> 
     let Some(application) = verified else {
         return invalid_client();
     };
-
-    // In this order, as the Elixir's clauses are: a request that carries both a
-    // guild and a scope gets the guild's answer.
-    if let Some(guild_id) = form.guild_id {
-        return granted_in_guild(state, &application, &guild_id).await;
-    }
 
     if let Some(scope) = form.scope {
         return scoped(state, &application, &scope).await;
@@ -171,50 +164,6 @@ async fn device(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Respo
         "expires_in": EXPIRES_IN,
     }))
     .into_response()
-}
-
-/// The shape that answers with a row: a token for a grant in a guild.
-async fn granted_in_guild(state: &AppState, application: &Application, guild_id: &str) -> Response {
-    let Ok(guild_id) = guild_id.parse::<i64>() else {
-        return error("invalid_request", "guild_id");
-    };
-
-    let granted = grant_for(state.pool(), application.id, guild_id)
-        .await
-        .ok()
-        .flatten();
-
-    let Some(grant_id) = granted else {
-        return invalid_client();
-    };
-
-    let now = OffsetDateTime::now_utc();
-
-    let Ok(access_token) = create_access_token(state.pool(), grant_id, now).await else {
-        return invalid_client();
-    };
-
-    let mut body = json!({
-        "access_token": access_token,
-        "token_type": "Bearer",
-        // The constant here, where the Elixir subtracts the clock from the row it
-        // has just written. The two agree to within the second it takes to say so.
-        "expires_in": EXPIRES_IN,
-    });
-
-    if application
-        .grant_types
-        .iter()
-        .any(|grant| grant == "refresh_token")
-    {
-        let Ok(refresh_token) = create_refresh_token(state.pool(), grant_id, now).await else {
-            return invalid_client();
-        };
-
-        body["refresh_token"] = json!(refresh_token);
-    }
-
-    Json(body).into_response()
 }
 
 /// The shape that answers with a signed JWT, for the application itself rather

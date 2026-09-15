@@ -8,37 +8,25 @@
 //! own application, and a 404 for one that is not theirs so that somebody else's is
 //! not confirmed to exist.
 //!
-//! Adding one asks Discord the question the consent screen asks — may this account
-//! act for this guild — and writes the same grant the code flow would have. It is
-//! the owner's own shortcut, and deliberately the only write that skips the ask:
-//! the owner *is* the guild's administrator here, so the ask would be theirs to
-//! answer anyway. Discord's own yes always goes through an ask, because there the
-//! asker and the answerer are different people. Taking one away asks nothing of
-//! the guild either way: an application's owner narrowing what their application
-//! may do is not a decision the guild has to be asked about.
+//! Read and revoke only, on purpose: writing a grant is the guild's decision —
+//! through an ask the application makes and the guild answers in Discord, or
+//! through the consent screen — and a user token calling this endpoint is the
+//! application's owner, not the guild. Taking one away asks nothing of the guild:
+//! an application's owner narrowing what their application may do is not a
+//! decision the guild has to be asked about.
 
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
 
 use vc_auth::AuthUser;
 
-use crate::permissions::GuildAccess;
 use crate::routes::connect::owned_by_client_id;
 use crate::routes::oauth2_clients::{Refusal, internal, refusal, refused};
 use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
-
-/// What the two writes take. The guild id is a string, like every Discord id this
-/// service accepts, because one is a snowflake JSON's number cannot hold.
-#[derive(Deserialize)]
-pub struct Guild {
-    pub guild_id: String,
-}
 
 /// `GET /applications/{id}/grants`
 pub async fn index(
@@ -47,7 +35,7 @@ pub async fn index(
     Path(client_id): Path<String>,
 ) -> Response {
     let application = match owned(&state, &user, &client_id).await {
-        Ok((application, _)) => application,
+        Ok(application) => application,
         Err(refusal) => return refusal.response(),
     };
 
@@ -81,64 +69,6 @@ pub async fn index(
     Json(Value::Array(rendered)).into_response()
 }
 
-/// `POST /applications/{id}/grants`: the guild's permission, written by its own
-/// administrator.
-///
-/// The consent screen reaches the same write through a code exchange; this is the
-/// same decision taken from the application's page, so the permission question is
-/// the same one — [`crate::permissions::guild_access`] — and the guild is one the
-/// caller may act for or the answer is a refusal.
-pub async fn allow(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(client_id): Path<String>,
-    Json(body): Json<Guild>,
-) -> Response {
-    let (application, account_id) = match owned(&state, &user, &client_id).await {
-        Ok(found) => found,
-        Err(refusal) => return refusal.response(),
-    };
-
-    let Ok(guild_id) = body.guild_id.parse::<i64>() else {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "the guild id must be a Discord id, as a string",
-        );
-    };
-
-    match crate::permissions::guild_access(&state, guild_id, account_id).await {
-        GuildAccess::Permitted => {}
-        GuildAccess::Unknown => {
-            return refused(StatusCode::NOT_FOUND, "not_found", "no such guild");
-        }
-        GuildAccess::Denied => {
-            return refused(StatusCode::FORBIDDEN, "forbidden", "permission_denied");
-        }
-    }
-
-    let written = vc_core::grant::allow_in_guild(
-        state.pool(),
-        application,
-        guild_id,
-        &[vc_core::application::ISSUE],
-        OffsetDateTime::now_utc(),
-    )
-    .await;
-
-    match written {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "guild_id": guild_id.to_string(),
-                "scopes": [vc_core::application::ISSUE],
-            })),
-        )
-            .into_response(),
-        Err(_) => internal("the grant could not be written").response(),
-    }
-}
-
 /// `DELETE /applications/{id}/grants/{guild_id}`: the issuing permission, taken
 /// back.
 ///
@@ -152,7 +82,7 @@ pub async fn revoke(
     Path((client_id, guild_id)): Path<(String, String)>,
 ) -> Response {
     let _ = match owned(&state, &user, &client_id).await {
-        Ok((application, _)) => application,
+        Ok(application) => application,
         Err(refusal) => return refusal.response(),
     };
 
@@ -183,7 +113,7 @@ pub async fn revoke(
 /// required because this is application management, and an application that is not
 /// this account's is a **404** — the same nothing that a client id which does not
 /// exist is, so that this endpoint cannot be used to ask which client ids are real.
-async fn owned(state: &AppState, user: &AuthUser, client_id: &str) -> Result<(i64, i32), Refusal> {
+async fn owned(state: &AppState, user: &AuthUser, client_id: &str) -> Result<i64, Refusal> {
     if user.kind != vc_auth::Kind::User {
         return Err(refusal(
             StatusCode::UNAUTHORIZED,
@@ -218,7 +148,7 @@ async fn owned(state: &AppState, user: &AuthUser, client_id: &str) -> Result<(i6
     };
 
     match owned_by_client_id(state.pool(), &owned, client_id).await {
-        Ok(Some((application, _))) => Ok((application, account_id)),
+        Ok(Some((application, _))) => Ok(application),
         Ok(None) => Err(
             refusal(StatusCode::NOT_FOUND, "not_found", "no such application")
                 .as_ref()

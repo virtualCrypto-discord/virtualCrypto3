@@ -3,7 +3,6 @@
 
   import {
     ApiError,
-    allowGuild,
     applications,
     exchangeToken,
     grants,
@@ -23,11 +22,10 @@
   let loading = $state(true);
   let refused = $state<ApiError | null>(null);
 
-  // The guilds this application may issue in, and the guild id being added. The
-  // request paths are `/applications/.../grants` — the application's own grants,
-  // named by its client id the way every one of this page's other calls names it.
+  // The guilds this application may issue in. The request path is
+  // `/applications/.../grants` — the application's own grants, named by its
+  // client id the way every one of this page's other calls names it.
   let grantsList = $state<Grant[] | null>(null);
-  let grantGuildId = $state("");
   let grantBusy = $state(false);
   let grantError = $state<string | null>(null);
 
@@ -58,32 +56,6 @@
 
   async function reloadGrants(token: string) {
     grantsList = await grants(token, clientId);
-  }
-
-  async function addGuild() {
-    const id = grantGuildId.trim();
-
-    if (id === "") {
-      return;
-    }
-
-    grantBusy = true;
-    grantError = null;
-
-    try {
-      const token = (await exchangeToken()).access_token;
-      await allowGuild(token, clientId, id);
-      grantGuildId = "";
-      await reloadGrants(token);
-    } catch (thrown) {
-      if (thrown instanceof ApiError) {
-        grantError = thrown.message;
-      } else {
-        throw thrown;
-      }
-    } finally {
-      grantBusy = false;
-    }
   }
 
   async function removeGuild(guildId: string) {
@@ -162,11 +134,12 @@
   </section>
 
   <!-- The guilds this application may issue in — which nothing else on this page
-       shows, and which is what an application's whole reason for being here is. A
-       permission is added with the guild's id, and taken away with its button. The
-       service asks Discord whether the caller may act for the guild when adding;
-       taking one away asks nothing, because an owner narrowing what their own
-       application may do is not a decision the guild has to be asked about. -->
+       shows, and which is what an application's whole reason for being here is.
+       Writing one is the guild's decision, through an ask the application makes
+       and the guild answers in Discord — so this page lists and takes away, and
+       never adds. Taking one away asks nothing of the guild, because an owner
+       narrowing what their own application may do is not a decision the guild
+       has to be asked about. -->
   <section>
     <h2>発行を許可したサーバー</h2>
 
@@ -188,26 +161,7 @@
       </ul>
     {/if}
 
-    <!-- Text the whole way, for the reason the connect page's ids stay text: a guild
-         id is a snowflake, and JavaScript's number cannot hold one. -->
-    <form
-      onsubmit={(event) => {
-        event.preventDefault();
-        void addGuild();
-      }}
-    >
-      <p>
-        <label>
-          サーバー ID<br />
-          <input bind:value={grantGuildId} inputmode="numeric" autocomplete="off" />
-        </label>
-        <small>あなたが管理者の Discord サーバーです。`/grant allow` と同じ許可です。</small>
-      </p>
-
-      <p><button type="submit" disabled={grantBusy || grantGuildId.trim() === ""}>
-        {grantBusy ? "送信しています…" : "許可する"}
-      </button></p>
-    </form>
+    <p><small>許可はギルドの管理者が Discord の `/grant approve` で行います。</small></p>
 
     {#if grantError}
       <p class="error">{grantError}</p>
@@ -252,16 +206,6 @@
 
   button {
     font: inherit;
-  }
-
-  input {
-    width: 100%;
-    box-sizing: border-box;
-    font: inherit;
-  }
-
-  label {
-    display: block;
   }
 
   small {

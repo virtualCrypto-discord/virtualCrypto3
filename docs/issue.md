@@ -49,19 +49,16 @@ Both values are numbers written as strings, the way this API carries numbers.
 ## The guild token
 
 It is not a JWT, and that is where the Elixir was going rather than where it
-was: the code flow and `client_credentials` with a `guild_id` have always
-answered with an `access_tokens` row's own id. `Authz.md` calls `guild` a kind
-of access token; here the kind is what the token resolves to, and
-`vc_core::grant::resolve_token` is what resolves it — the `access_tokens` row,
-its grant, and the grant's scopes, refused when the row is expired, revoked, or
-issued for a grant with no guild.
+was: the code flow has always answered with an `access_tokens` row's own id.
+`Authz.md` calls `guild` a kind of access token; here the kind is what the
+token resolves to, and `vc_core::grant::resolve_token` is what resolves it —
+the `access_tokens` row, its grant, and the grant's scopes, refused when the
+row is expired, revoked, or issued for a grant with no guild.
 
 It comes from the same places it always has:
 
 - the device poll below, once the guild approved the ask;
-- `grant_type=client_credentials` with basic auth and a `guild_id`, once the guild
-  holds a grant for the application;
-- `grant_type=authorization_code`, once the consent below was approved with
+- `grant_type=authorization_code`, once the consent screen was approved with
   `scope=vc.issue`.
 
 A guild token already issued keeps working until it expires, and it reads the
@@ -87,23 +84,16 @@ codes to type.
 
 ### 1. The application's own page
 
-The application's owner manages `/applications/{client_id}/grants`:
-
-- `GET` lists the guilds the application may issue in — the guild id, the name
-  Discord knows it by (`null` when Discord cannot be asked), the scopes, and the
-  time of the last decision.
-- `POST {"guild_id": "..."}` asks the guild's permission the consent screen's
-  way, and writes it — 201 with the guild and its scope.
-- `DELETE /applications/{client_id}/grants/{guild_id}` takes the issuing
-  permission back. The grant stays and only its scope goes, so a guild token
-  already issued stops issuing and nothing else changes.
-
-Adding a guild is the owner's own shortcut, and deliberately the only write
-that skips the ask: the owner *is* the guild's administrator here, so the ask
-would be theirs to answer anyway. A `client_id` that is not the caller's own is
-a 404, so this cannot be used to ask which client ids are real. The
-application's own page in the SPA manages this: the detail page lists the
-guilds, adds one by its id, and revokes with a button.
+The application's owner reads `/applications/{client_id}/grants`: the guilds
+the application may issue in — the guild id, the name Discord knows it by
+(`null` when Discord cannot be asked), the scopes, and the time of the
+decision — and takes one back with
+`DELETE /applications/{client_id}/grants/{guild_id}`. The grant stays and only
+its scope goes, so a guild token already issued stops issuing and nothing else
+changes. A `client_id` that is not the caller's own is a 404, so this cannot be
+used to ask which client ids are real. Writing is not here on purpose: a grant
+is the guild's decision, and a user token calling this endpoint is the
+application's owner, not the guild.
 
 ### 2. Discord: `/grant`
 

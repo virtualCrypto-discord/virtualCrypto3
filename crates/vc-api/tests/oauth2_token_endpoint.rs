@@ -110,6 +110,21 @@ async fn a_code_we_did_not_issue_is_a_bad_request(pool: PgPool) {
 async fn credentials_without_basic_auth_are_refused(pool: PgPool) {
     let app = vc_api::router(state(pool, fake()));
 
+    let (status, body) = form(app, "grant_type=client_credentials&scope=vc.pay").await;
+
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "invalid_client");
+}
+
+/// The guild shape of `client_credentials` is gone: a guild token for a grant
+/// nobody asked to exist was the thing it minted, and the device poll is what
+/// mints one now. A request still naming `guild_id` is refused before it ever
+/// reaches a shape — the credentials do not verify, and `invalid_client` is
+/// what that has always meant.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn credentials_with_a_guild_id_are_unsupported(pool: PgPool) {
+    let app = vc_api::router(state(pool, fake()));
+
     let (status, body) = form(app, "grant_type=client_credentials&guild_id=1").await;
 
     assert_eq!(status, 400);

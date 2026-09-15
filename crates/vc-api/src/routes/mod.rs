@@ -71,10 +71,7 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
         // Not under `/oauth2`: this is a call a page makes about an application it
         // names, rather than a registration endpoint about the caller.
         .route("/applications/{id}/connect", post(connect::connect))
-        .route(
-            "/applications/{id}/grants",
-            get(grants::index).post(grants::allow),
-        )
+        .route("/applications/{id}/grants", get(grants::index))
         .route(
             "/applications/{id}/grants/{guild_id}",
             delete(grants::revoke),

@@ -152,7 +152,7 @@ Four grants, and the shape they answer in is not the same for all of them.
 | --- | --- |
 | `grant_type=authorization_code` with `client_id`, `redirect_uri` and `code` **in the body** | the exchange's own JSON |
 | `grant_type=refresh_token` with `refresh_token` | the same |
-| `grant_type=client_credentials` with basic auth and `guild_id` | a guild-scoped token |
+| `grant_type=urn:ietf:params:oauth:grant-type:device_code` with basic auth and `device_code` | a guild-scoped token, once the guild approved the ask |
 | `grant_type=client_credentials` with basic auth and `scope` | the application's own scopes |
 | any other `grant_type` | 400 `unsupported_grant_type` |
 | no `grant_type` at all | 400 `invalid_request`, `grant_type_parameter_missing` |
@@ -165,8 +165,8 @@ the token but accepts it nowhere — its `verify_claims/2` refuses any kind but
 refusing an unknown kind. The token is the `access_tokens` row's own id; its
 grant carries both the guild (so the endpoint spends that guild's pool and no
 other's) and its scopes (so taking `vc.issue` away stops it issuing). See
-`docs/issue.md` for the endpoint, the `vc.issue` scope, and the three ways a
-guild grants it — the consent screen, the application's own page, and `/grant`.
+`docs/issue.md` for the endpoint, the `vc.issue` scope, and the ask a guild
+answers — in Discord, or through the consent screen.
 
 Three things in it are worth knowing before writing any of it.
 
@@ -181,12 +181,12 @@ credentials are checked against `vc.pay`, `vc.claim` and `oauth2.register` — n
 duplicates, and nothing outside that set. A set of one is not a set of all, so
 neither check can be reused for the other.
 
-**A `client_credentials` request with neither `guild_id` nor `scope` answers
-`unsupported_grant_type`.** Not because the grant is unsupported — it is
-supported twice over — but because both clauses for it name one of those two
-parameters, so a request with neither matches the catch-all clause instead. It is
-a quirk of how the clauses are written, and worth reproducing rather than
-correcting, since a client that sees it can act on it.
+**A `client_credentials` request with only a `scope` missing answers
+`unsupported_grant_type`.** The grant's one clause names `scope`, so a request
+without it matches the catch-all instead — the guild shape's clause is gone, and
+a `guild_id` alone no longer names anything either. It is a quirk of how the
+clauses are written, and worth reproducing rather than correcting, since a
+client that sees it can act on it.
 
 Errors are `400` with `{ "error", "error_description" }`, except on the
 credentials path, which answers `{ "error" }` alone.
@@ -272,16 +272,11 @@ table and a different question.
 
 The first piece is `create_access_token`, which is one insert.
 
-## The two `client_credentials` shapes are two mechanisms
+## The `client_credentials` guild shape is gone
 
-They share a name and a grant type, and that is all. The Elixir answers them with
-different code, different tokens and different ways of computing the same field.
-
-**With `guild_id`** it verifies the secret, finds the grant for (application,
-guild), and issues a row in `access_tokens` — the opaque, revocable token the
-code exchange also issues. A refresh token comes with it if the application takes
-them, created if the grant has none and **replaced** if it has one. `expires_in`
-is computed from the clock.
+It shared a name and a grant type with the scope shape, and that was all. The
+Elixir answered them with different code, different tokens and different ways of
+computing the same field — and only one of them survives here:
 
 **With `scope`** it verifies the secret, resolves the *application's user id*, and
 calls `Guardian.issue_token_for_app/2` — so this one is a **signed JWT**, with
@@ -289,13 +284,20 @@ calls `Guardian.issue_token_for_app/2` — so this one is a **signed JWT**, with
 against `vc.pay`, `vc.claim` and `oauth2.register`. `expires_in` is the token's
 `exp` minus now.
 
-So one grant type answers with a database row and the other with a JWT, and
-`vc_auth::Kind::App` already exists here for the second. Anything that treats
-"client credentials" as one thing will be wrong about half of it.
+**With `guild_id`** it verified the secret, found the grant for (application,
+guild), and issued a row in `access_tokens` — the opaque, revocable token the
+code exchange also issues. That shape wrote a guild token for a grant nobody had
+asked to exist: the guild never said yes to anything, because there was no ask.
+It is replaced by the device poll — `grant_type=device_code` with the
+`device_code` the ask answered with — which mints the same row, but only once
+the guild approved the ask it names. See `docs/issue.md`.
 
-**A `client_credentials` request with neither parameter answers
-`unsupported_grant_type`**, because both clauses name one of them and a request
-with neither matches the catch-all instead. See the table above.
+**A `client_credentials` request with only a `guild_id` answers
+`invalid_client`.** The guild shape's clause is gone, so the request is refused
+before it ever reaches a shape — the credentials do not verify against anything
+that mints, and `invalid_client` is what that has always meant. A client that
+sees it asks again through `grant-requests`. A request with neither parameter
+answers `unsupported_grant_type`, because the grant's one clause names `scope`.
 
 ### What it needs that does not exist
 

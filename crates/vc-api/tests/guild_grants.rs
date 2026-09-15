@@ -6,37 +6,26 @@
 //! side effect of redeeming an authorization code. The shape follows
 //! `tests/connect.rs` next door: the `client_id` in the path, the caller's own
 //! application, and a 404 for one that is not theirs.
+//!
+//! Read and revoke only, on purpose: writing a grant is the guild's decision,
+//! through an ask the application makes and the guild answers in Discord, or
+//! through the consent screen. This endpoint lists what the guild decided and
+//! takes it back — it never writes one.
 
 mod support;
-
-use std::sync::Arc;
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    FakeDiscord, Response, account_of, client_id_of, fake, get, insert_application, insert_grant,
-    insert_user, mint, mint_app, state,
+    Response, account_of, client_id_of, fake, get, insert_application, insert_grant, insert_user,
+    mint, mint_app, state,
 };
 use tower::ServiceExt;
 
 const OWNER: i32 = 1;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
-const STRANGER_DISCORD_ID: i64 = 500_000_000_000_000_003;
 const A_CLIENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 const GUILD: i64 = 900_000_000_000_000_001;
-
-/// The owner of a guild whose administrator bit they carry: `with_member` reads
-/// the owner out of the guild, and the role grants the bit `may_act_for_guild`
-/// asks for.
-fn administrator() -> Arc<FakeDiscord> {
-    FakeDiscord::with_member(OWNER_DISCORD_ID, &["7"], &[(7, 0x8)])
-}
-
-/// An administrator in name only: the guild knows a member, but this account is
-/// neither the owner nor an administrator of it.
-fn stranger() -> Arc<FakeDiscord> {
-    FakeDiscord::with_member(STRANGER_DISCORD_ID, &["7"], &[(7, 0x1)])
-}
 
 async fn request(
     app: axum::Router,
@@ -97,7 +86,7 @@ fn grants_uri(client_id: &str) -> String {
 }
 
 /// An empty list rather than nothing: an application that has been granted
-/// nothing holds nothing, which the page reads as "add one".
+/// nothing holds nothing, which the page reads as "nothing to take back".
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_application_with_no_grants_answers_an_empty_list(pool: PgPool) {
     let (_, client_id, token) = fixture(&pool).await;
@@ -119,80 +108,24 @@ async fn the_list_names_the_guilds_and_their_scopes(pool: PgPool) {
     insert_grant(&pool, application, GUILD, &["vc.issue"]).await;
 
     let response = get(
-        vc_api::router(state(
-            pool,
-            FakeDiscord::with_member(OWNER_DISCORD_ID, &[], &[]),
-        )),
+        vc_api::router(state(pool, fake())),
         &grants_uri(&client_id),
         Some(&token),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(
-        response.body,
-        json!([{
-            "guild_id": GUILD.to_string(),
-            "guild_name": "TestGuild",
-            "scopes": ["vc.issue"],
-            "updated_at": response.body[0]["updated_at"],
-        }])
-    );
+    assert_eq!(response.body[0]["guild_id"], GUILD.to_string());
+    assert_eq!(response.body[0]["scopes"], json!(["vc.issue"]));
 }
 
-/// The guild's own permission, written by its administrator — this is what
-/// `describe` asks the consent screen for, asked by the application's own page.
+/// What the guild decided issues: the issuance endpoint's own answer, with the
+/// guild token the device poll would hand the application.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_administrator_may_allow_their_guild(pool: PgPool) {
-    let (application, client_id, token) = fixture(&pool).await;
-
-    let response = request(
-        vc_api::router(state(pool.clone(), administrator())),
-        "POST",
-        grants_uri(&client_id),
-        Some(&token),
-        json!({ "guild_id": GUILD.to_string() }),
-    )
-    .await;
-
-    assert_eq!(response.status, 201, "body: {}", response.body);
-    assert_eq!(
-        response.body,
-        json!({ "guild_id": GUILD.to_string(), "scopes": ["vc.issue"] })
-    );
-
-    let granted = sqlx::query!(
-        r#"SELECT count(*) AS "count!" FROM grant_scopes s
-             JOIN grants g ON g.id = s.grant_id
-            WHERE g.application_id = $1 AND g.guild_id = $2
-              AND s.scope = 'vc.issue'::virtual_crypto_scope_type"#,
-        application,
-        GUILD
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("the grant");
-
-    assert_eq!(granted.count, 1);
-}
-
-/// What was allowed issues: the issuance endpoint's own answer, with the guild
-/// token the code flow would hand the application.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_allowed_guild_issues(pool: PgPool) {
-    let (application, client_id, token) = fixture(&pool).await;
+async fn a_granted_guild_issues(pool: PgPool) {
+    let (application, _, _) = fixture(&pool).await;
     support::insert_currency(&pool, 1, "nyan", "nyan", GUILD, 500).await;
-
-    let allowed = request(
-        vc_api::router(state(pool.clone(), administrator())),
-        "POST",
-        grants_uri(&client_id),
-        Some(&token),
-        json!({ "guild_id": GUILD.to_string() }),
-    )
-    .await;
-
-    assert_eq!(allowed.status, 201, "body: {}", allowed.body);
+    insert_grant(&pool, application, GUILD, &["vc.issue"]).await;
 
     let guild_token = support::mint_guild_token(&pool, application, GUILD).await;
 
@@ -206,59 +139,6 @@ async fn an_allowed_guild_issues(pool: PgPool) {
     .await;
 
     assert_eq!(issued.status, 201, "body: {}", issued.body);
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn somebody_who_may_not_act_for_the_guild_is_refused(pool: PgPool) {
-    let (_, client_id, token) = fixture(&pool).await;
-
-    let response = request(
-        vc_api::router(state(pool, stranger())),
-        "POST",
-        grants_uri(&client_id),
-        Some(&token),
-        json!({ "guild_id": GUILD.to_string() }),
-    )
-    .await;
-
-    assert_eq!(response.status, 403, "body: {}", response.body);
-    assert_eq!(response.body["error"], "forbidden");
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_guild_nobody_can_read_is_not_found(pool: PgPool) {
-    let (_, client_id, token) = fixture(&pool).await;
-
-    let response = request(
-        vc_api::router(state(pool, fake())),
-        "POST",
-        grants_uri(&client_id),
-        Some(&token),
-        // The plain fake answers an empty member, and no owner can be read: the
-        // guild is one nothing can be asked about, which is `Unknown`.
-        json!({ "guild_id": GUILD.to_string() }),
-    )
-    .await;
-
-    assert_eq!(response.status, 404, "body: {}", response.body);
-    assert_eq!(response.body["error"], "not_found");
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_guild_id_that_is_not_a_snowflake_is_400(pool: PgPool) {
-    let (_, client_id, token) = fixture(&pool).await;
-
-    let response = request(
-        vc_api::router(state(pool, fake())),
-        "POST",
-        grants_uri(&client_id),
-        Some(&token),
-        json!({ "guild_id": "not-a-snowflake" }),
-    )
-    .await;
-
-    assert_eq!(response.status, 400, "body: {}", response.body);
-    assert_eq!(response.body["error"], "invalid_request");
 }
 
 /// Taking the permission back keeps the grant and drops the scope, which is also
