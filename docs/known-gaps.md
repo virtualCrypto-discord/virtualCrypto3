@@ -62,7 +62,9 @@ jobs: [
 passed — the signed tokens, the access and refresh tokens, the authorization codes
 nobody redeemed, and the idempotency keys (`vc_core::purge`). The codes and the
 refresh tokens are an addition to the Elixir's three purge jobs, on the same
-`expires` and for the same reason.
+`expires` and for the same reason: its list naming three of the five tables that
+carry the column looks like a job written in a hurry rather than a decision to keep
+the other two.
 
 What is **not** here, and what an earlier version of this file did not say at all —
 which is what made a gap read as a feature:
