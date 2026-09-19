@@ -428,6 +428,64 @@ pub mod ui {
         }
     }
 
+    /// The menu `/help` offers and the button that goes back to its list.
+    ///
+    /// A head byte of its own, for the developer space's reason: the dispatcher's
+    /// generic string-select arm belongs to the claim list, so an id that did not
+    /// say which space it was would be read as one of that list's — and a menu
+    /// choice is the one thing `/help` has that is sent as a string select.
+    pub mod help {
+        use super::UiError;
+
+        const HEAD: u8 = 0xF3;
+
+        /// Which of the two components an id belongs to.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Screen {
+            /// The menu a command is chosen from.
+            Select,
+            /// The button that goes back to the list of commands.
+            Index,
+        }
+
+        /// The head this space writes, so a test and a screen agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        fn id(screen: Screen) -> u8 {
+            match screen {
+                Screen::Select => 1,
+                Screen::Index => 2,
+            }
+        }
+
+        /// There is nothing after the id: what the choice *is* arrives as the
+        /// select's own values, so this id only has to say what was pressed.
+        fn custom_id(screen: Screen) -> String {
+            crate::custom_id::encode(0, &[HEAD, id(screen)])
+        }
+
+        pub fn select() -> String {
+            custom_id(Screen::Select)
+        }
+
+        pub fn index() -> String {
+            custom_id(Screen::Index)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<Screen, UiError> {
+            match source {
+                [head, id, ..] if *head == HEAD => match id {
+                    1 => Ok(Screen::Select),
+                    2 => Ok(Screen::Index),
+                    other => Err(UiError::Unknown(u16::from(*other))),
+                },
+                _ => Err(UiError::Head),
+            }
+        }
+    }
+
     pub mod modal {
         use super::{UiError, parse_id};
 
@@ -599,6 +657,43 @@ mod tests {
         assert_eq!(
             ui::contract::parse(&[ui::contract::head(), 99, b'1']),
             Err(UiError::Unknown(99))
+        );
+    }
+
+    /// `/help`'s two components, which carry nothing but which they are.
+    #[test]
+    fn a_help_component_survives_the_round_trip() {
+        assert_eq!(
+            ui::help::parse(&parse(&ui::help::select())),
+            Ok(ui::help::Screen::Select)
+        );
+        assert_eq!(
+            ui::help::parse(&parse(&ui::help::index())),
+            Ok(ui::help::Screen::Index)
+        );
+
+        // The limit is a hundred characters, and this is two: asserted anyway,
+        // because an id that grew a payload should have to say so here.
+        assert!(ui::help::select().chars().count() <= 100);
+    }
+
+    /// Its own head, which is what keeps a choice on `/help` out of the claim
+    /// list's select arm — that arm is the fallback every string select reaches,
+    /// so an id without one would be read as a claim's.
+    #[test]
+    fn another_spaces_head_is_not_helps() {
+        assert_eq!(ui::help::parse(&[0xF0, 1]), Err(UiError::Head));
+        assert_eq!(
+            ui::help::parse(&[ui::developer::head(), 1]),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::help::parse(&[ui::contract::head(), 1]),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::help::parse(&[ui::help::head(), 9]),
+            Err(UiError::Unknown(9))
         );
     }
 }

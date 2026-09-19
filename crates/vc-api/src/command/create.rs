@@ -131,29 +131,33 @@ fn option_display(options: &Map<String, Value>, name: &str) -> String {
     options.get(name).map(value_text).unwrap_or_default()
 }
 
-/// `Command.name_unit_check/2`. Both regexes match anywhere in the string rather
-/// than being anchored, so a name needs a run of two alphanumerics and a unit
-/// needs one lowercase letter.
+/// `Command.name_unit_check/2`: what a currency's name and unit may be, which is
+/// the sentence a refusal carries — two to sixteen alphanumerics, and one to ten
+/// lowercase letters.
+///
+/// The Elixir's regexes were unanchored, so they matched anywhere in the string:
+/// `funyua!` was a name, a name of forty characters was one too, and `u1` was a
+/// unit. The sentence is what somebody reads before typing one, so the sentence
+/// is what is checked.
 fn name_unit_check(name: &str, unit: &str) -> bool {
-    has_alphanumeric_run(name, 2) && unit.chars().any(|character| character.is_ascii_lowercase())
+    is_name(name) && is_unit(unit)
 }
 
-fn has_alphanumeric_run(value: &str, length: usize) -> bool {
-    let mut run = 0;
+/// Two to sixteen characters, every one of them a letter or a digit.
+fn is_name(name: &str) -> bool {
+    let length = name.chars().count();
 
-    for character in value.chars() {
-        if character.is_ascii_alphanumeric() {
-            run += 1;
+    (2..=16).contains(&length)
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+}
 
-            if run >= length {
-                return true;
-            }
-        } else {
-            run = 0;
-        }
-    }
+/// One to ten characters, every one of them a lowercase letter.
+fn is_unit(unit: &str) -> bool {
+    let length = unit.chars().count();
 
-    false
+    (1..=10).contains(&length) && unit.chars().all(|character| character.is_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -161,12 +165,34 @@ mod tests {
     use super::name_unit_check;
 
     #[test]
-    fn a_name_needs_two_alphanumerics_and_a_unit_one_lowercase_letter() {
+    fn a_name_is_two_to_sixteen_alphanumerics_and_a_unit_one_to_ten_lowercase_letters() {
         assert!(name_unit_check("funyua", "a"));
         assert!(name_unit_check("nyan123", "unit"));
+        assert!(name_unit_check("ab", "a"), "the shortest name");
+        assert!(name_unit_check("0123456789abcdef", "a"), "the longest name");
+        assert!(name_unit_check("funyua", "abcdefghij"), "the longest unit");
 
         assert!(!name_unit_check(" ", "a"));
-        assert!(!name_unit_check("a", "a"));
+        assert!(!name_unit_check("a", "a"), "one character is too short");
+        assert!(
+            !name_unit_check("0123456789abcdefg", "a"),
+            "seventeen is too long"
+        );
+        assert!(
+            !name_unit_check("funyua!", "a"),
+            "a mark is not an alphanumeric"
+        );
+        assert!(!name_unit_check("ふにゅあ", "a"), "and neither is kana");
+
         assert!(!name_unit_check("funyua", "AA"));
+        assert!(!name_unit_check("funyua", ""), "a unit needs a letter");
+        assert!(
+            !name_unit_check("funyua", "u1"),
+            "a digit is not a lowercase letter"
+        );
+        assert!(
+            !name_unit_check("funyua", "abcdefghijk"),
+            "eleven is too long"
+        );
     }
 }

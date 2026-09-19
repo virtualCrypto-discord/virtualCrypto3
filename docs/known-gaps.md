@@ -2,9 +2,8 @@
 
 ## Where the contract comes from
 
-`https://github.com/virtualCrypto-discord/virtualcrypto-docs` is the official
-specification (`docs/api/Rest.md`, `Authz.md`, `Webhook.md`). Two clauses there
-shape how everything is verified:
+Two clauses of the specification this service was written against shape how
+everything is verified:
 
 - *"未知のフィールドは無視しなければなりません(レスポンスへのフィールドの追加や、
   リクエストへの Optional なフィールドの追加は破壊的な変更とみなされません)"* —

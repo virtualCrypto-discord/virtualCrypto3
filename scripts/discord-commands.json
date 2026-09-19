@@ -38,8 +38,8 @@
     "name": "create",
     "description": "新しい通貨を作成します",
     "options": [
-      { "name": "name", "description": "新しい通貨の通貨名です。2~32文字までの英数字です。", "type": 3, "required": true },
-      { "name": "unit", "description": "新しい通貨の単位です。1~10文字の英子文字です。", "type": 3, "required": true },
+      { "name": "name", "description": "新しい通貨の通貨名です。2〜16文字の英数字です。", "type": 3, "required": true },
+      { "name": "unit", "description": "新しい通貨の単位です。1〜10文字の英小文字です。", "type": 3, "required": true },
       { "name": "amount", "description": "通貨の初期発行枚数です。あなたの所持金となります。", "type": 4, "required": true }
     ],
     "dm_permission": false,

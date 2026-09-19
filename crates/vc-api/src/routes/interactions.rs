@@ -176,6 +176,18 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         };
     }
 
+    // And `/help`'s menu, which needs its own head for the same reason: the arm
+    // below hands every string select to the claim list.
+    if let Some(custom_id) = custom_id
+        && crate::custom_id::ui::help::parse(&crate::custom_id::parse(custom_id)).is_ok()
+    {
+        return match crate::command::help::component(state, custom_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     // No grant component space: `/grant` answers with text and takes a typed
     // code, so there are no buttons to dispatch.
     match (component_type, custom_id) {

@@ -262,8 +262,9 @@ without saying which reads as unbuilt, which this one has already been read as o
    `v2_claims_list.rs`) with the goldens the capture gave. `web/` has no page for it, so
    the API's own answers have nowhere to be seen.
 8. **The landing page**, which is prose plus a login button — **done**.
-9. **The documents** — link them rather than rebuild them; they are static prose
-   that already lives in `virtualcrypto-docs`.
+9. **The documents** — **built**: the prose lives in `crates/vc-api/src/docs/`,
+   which draws both `/help` in Discord and `/document/*` on the site. One source
+   for the two, so they cannot come to say different things.
 
 ## What the SPA will need that does not exist yet
 

@@ -66,6 +66,9 @@ pub async fn handle(
         // there is no autocomplete to port. The path is the command and its subcommand, so
         // every `/application` subcommand that takes a `client_id` comes through here.
         ("client_id", ["application", _]) => applications(state, &query, me).await?,
+        // `/help command:<名前>`: the commands that exist, which is the list the
+        // screens are built from rather than a second copy of the names.
+        ("command", ["help"]) => commands(&query),
         // `AutoComplete.handle/5` has no clause for anything else, so it raises.
         _ => {
             return Err(CommandError::missing(
@@ -78,6 +81,21 @@ pub async fn handle(
         "type": super::AUTOCOMPLETE_RESULT,
         "data": { "choices": choices },
     }))
+}
+
+/// The commands `/help` can show, as choices.
+///
+/// The name is both the label and the value: what the screen is looked up by is
+/// the name, and a second word for it here would be a second thing to keep in
+/// step. The list comes from [`crate::docs::showings`], so a command cannot be
+/// registered and unofferable.
+fn commands(query: &str) -> Vec<Value> {
+    crate::docs::showings()
+        .into_iter()
+        .filter(|showing| query.is_empty() || showing.name.contains(query))
+        .take(LIMIT as usize)
+        .map(|showing| json!({ "name": showing.name, "value": showing.name }))
+        .collect()
 }
 
 /// The caller's own applications, as choices.

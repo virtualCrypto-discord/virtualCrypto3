@@ -209,8 +209,8 @@ pub async fn create(
 
 /// `Query.Currency.reset_pool_amount/0`: every pool gets a day's allowance.
 ///
-/// The published rule (`About.md` in `virtualcrypto-docs`) is 0.5% of the total
-/// issuance a day, up to 3.5% of it. What the Elixir's SQL actually measures is
+/// The rule as published is 0.5% of the total issuance a day, up to 3.5% of it.
+/// What the Elixir's SQL actually measures is
 /// **the supply in users' hands** — `SUM(assets.amount)` per currency — and not
 /// the creator's initial grant, so a currency whose users hold more gets more; a
 /// currency nobody holds is not in the join at all and is left alone. The

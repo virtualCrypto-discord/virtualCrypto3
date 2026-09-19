@@ -14,6 +14,7 @@ pub mod contract;
 pub mod create;
 pub mod delete;
 pub mod grant;
+pub mod help;
 pub mod info;
 pub mod issue;
 pub mod pay;
@@ -186,7 +187,7 @@ pub async fn handle(
     payload: &Value,
 ) -> Result<Value, CommandError> {
     match name {
-        "help" => Ok(help(state)),
+        "help" => Ok(help::command(state, options)),
         "invite" => Ok(invite(state)),
         "application" => application::handle(state, options, payload).await,
         "bal" => bal::handle(state, payload).await,
@@ -202,24 +203,6 @@ pub async fn handle(
     }
 }
 
-/// `Command.handle/4` for `help`, rendered by `InteractionsJSON.help/1`.
-pub fn help(state: &AppState) -> Value {
-    let links = state.links();
-
-    let description = format!(
-        "VirtualCryptoはDiscord上でサーバーに独自の通貨を作成できるBotです。\n\
-         [コマンドの使い方の詳細]({site}/document/commands)\n\
-         [公式サイト]({site})\n\
-         [Botの招待]({bot})\n\
-         [サポートサーバーの招待]({support})",
-        site = links.site_url,
-        bot = links.invite_url,
-        support = links.support_guild_invite_url,
-    );
-
-    embed(description, links.logo_url())
-}
-
 /// `Command.handle/4` for `invite`, rendered by `InteractionsJSON.invite/1`.
 pub fn invite(state: &AppState) -> Value {
     let links = state.links();
@@ -233,7 +216,11 @@ pub fn invite(state: &AppState) -> Value {
     embed(description, links.logo_url())
 }
 
-/// The ephemeral, brand-coloured message both commands share.
+/// The ephemeral, brand-coloured message `/invite` answers with.
+///
+/// `/help` was the other caller and is [`crate::docs::discord`]'s screen now,
+/// which is a container of its own: this is what is left of the shape they had
+/// in common.
 ///
 /// It was an embed with a title, a description and a thumbnail. A section is the shape for text
 /// with something beside it, so the title and the description are its text and the logo is its

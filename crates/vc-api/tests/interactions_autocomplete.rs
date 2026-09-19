@@ -210,3 +210,41 @@ async fn a_client_id_query_narrows_to_the_name_that_matches(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(values(&response), vec![other_id]);
 }
+
+/// `/help command:<名前>` offers every command, and they are the registered ones:
+/// the suggestions and the screens are the same list read twice.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_help_option_offers_every_registered_command(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        autocomplete_payload("help", json!([focused("command", "")]), 12),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(8));
+
+    let every: Vec<String> = vc_api::discord_commands::commands()
+        .iter()
+        .map(|command| command["name"].as_str().expect("a name").to_owned())
+        .collect();
+
+    assert_eq!(values(&response), every);
+}
+
+/// What is typed narrows it, and the order is the registration order rather than
+/// alphabetical: that is the order the list and the menu show too.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_help_query_narrows_to_the_names_that_contain_it(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        autocomplete_payload("help", json!([focused("command", "c")]), 12),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        values(&response),
+        ["application", "contract", "create", "claim"]
+    );
+}

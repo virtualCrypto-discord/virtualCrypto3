@@ -15,7 +15,10 @@
      and it sends the browser to `/login` itself when the consent screen is
      reached without one. A button here would be a second way in for nobody. -->
 
-<!-- An ordinary link: it reloads, and the API answers it with this document. -->
+<!-- An ordinary link: it reloads, and the API answers it with this document.
+     The documentation is the service's own, rendered from the same content the
+     bot's `/help` answers with. -->
+<p><a href="/document">使い方</a></p>
 
 <style>
   h1 {

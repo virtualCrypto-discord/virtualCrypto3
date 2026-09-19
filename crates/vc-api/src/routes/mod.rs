@@ -1,4 +1,5 @@
 pub mod connect;
+pub mod documentation;
 pub mod grant_requests;
 pub mod grants;
 pub mod guild_token;
@@ -40,6 +41,10 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
             post(interactions::index),
         )
         .merge(v2::router())
+        // The document the site's pages are drawn from. Under `/api` because it
+        // is read rather than visited, and because the scope already says what a
+        // caller has to accept.
+        .merge(documentation::router())
         .layer(middleware::from_fn(require_json_accept));
 
     Router::new()

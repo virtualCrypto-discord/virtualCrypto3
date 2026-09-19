@@ -66,10 +66,24 @@ fn with_type(mut command: Value) -> Value {
     command
 }
 
+/// `/help`, and the option that opens one command rather than the list.
+///
+/// The option is named `command` and not `name`: `name` is the currency option
+/// three commands share, and [`crate::command::autocomplete`] answers it with
+/// currencies for *any* command that has one.
 fn help() -> Value {
     json!({
         "name": "help",
         "description": "ヘルプを表示します。",
+        "options": [
+            {
+                "name": "command",
+                "description": "使い方を表示するコマンドです。",
+                "type": 3,
+                "required": false,
+                "autocomplete": true,
+            },
+        ],
         "contexts": [0, 1],
         "integration_types": [0, 1],
     })
@@ -245,13 +259,13 @@ fn create() -> Value {
         "options": [
             {
                 "name": "name",
-                "description": "新しい通貨の通貨名です。2~32文字までの英数字です。",
+                "description": "新しい通貨の通貨名です。2〜16文字の英数字です。",
                 "type": 3,
                 "required": true,
             },
             {
                 "name": "unit",
-                "description": "新しい通貨の単位です。1~10文字の英子文字です。",
+                "description": "新しい通貨の単位です。1〜10文字の英小文字です。",
                 "type": 3,
                 "required": true,
             },

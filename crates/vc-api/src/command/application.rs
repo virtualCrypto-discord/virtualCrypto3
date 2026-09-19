@@ -10,7 +10,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, get_user};
 use crate::components::ephemeral;
 use crate::developer;
 use crate::routes::oauth2_clients::{
@@ -44,7 +44,7 @@ pub async fn handle(
             show(state, client_id_of(sub_options)?, payload).await?,
         )),
         "register" => register(state, payload).await,
-        "help" => Ok(message(help())),
+        "help" => Ok(message(help(state))),
         // The rest are registered and not written yet. Saying so is better than the answer
         // an unknown subcommand gets, because this command exists and a person pressing it
         // deserves to know which part is missing.
@@ -267,29 +267,37 @@ async fn list(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
     Ok(ephemeral(vec![developer::applications(&owned)]))
 }
 
-fn help() -> Value {
-    ephemeral(vec![crate::components::container(
-        None,
-        vec![
-            crate::components::text(
-                "**/application**\n\n\
-             `list` 自分が持つアプリケーション\n\
-             `show <client_id>` アプリケーションの詳細と設定\n\
-             `register` 新しいアプリケーションを登録\n\n\
-             設定の変更と Bot の接続は `show` の画面から行います。\n\
-             `client_id` は入力しながら候補から選べます。",
+/// `/application help`: the command's own screen, drawn from the one document
+/// every help surface reads, with the way into the developer screens under it.
+///
+/// The prose is not written here. It is [`crate::docs`]'s, so this screen and
+/// `/help command:application` cannot come to say different things about the
+/// same command — which is what happened to the paragraph this replaced.
+fn help(state: &AppState) -> Value {
+    let Some(showing) = crate::docs::showing_of("application") else {
+        return ephemeral(vec![crate::components::text(
+            "`/help command:application` をご覧ください。",
+        )]);
+    };
+
+    let mut children = crate::docs::discord::command(&showing, state.links());
+
+    children.push(crate::components::action_row(vec![
+        crate::components::button(
+            // A packed id, like every other: `"dev:list"` is a readable string that
+            // `custom_id::parse` cannot decode, so this button failed whenever it was
+            // pressed.
+            &crate::custom_id::ui::developer::custom_id(
+                crate::custom_id::ui::developer::Screen::List,
             ),
-            crate::components::action_row(vec![crate::components::button(
-                // A packed id, like every other: `"dev:list"` is a readable string that
-                // `custom_id::parse` cannot decode, so this button failed whenever it was
-                // pressed.
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::List,
-                ),
-                "アプリケーション",
-                crate::components::ButtonStyle::Primary,
-            )]),
-        ],
+            "アプリケーション",
+            crate::components::ButtonStyle::Primary,
+        ),
+    ]));
+
+    ephemeral(vec![crate::components::container(
+        Some(COLOR_BRAND as u32),
+        children,
     )])
 }
 
@@ -768,22 +776,5 @@ mod tests {
             body.get("client_uri").is_none(),
             "a field the form does not ask for is absent, which means untouched: {body:?}"
         );
-    }
-
-    #[test]
-    fn help_is_an_ephemeral_component_message_that_names_the_subcommands() {
-        let screen = help();
-
-        assert_eq!(screen["flags"], json!(32832));
-        assert_eq!(screen["content"], Value::Null);
-
-        // Every screen is one container, and the copy is somewhere inside it: asserting on
-        // the whole thing as text is what keeps this from breaking each time the tree
-        // gains a level, which it has twice.
-        let body = screen["components"].to_string();
-
-        for subcommand in ["list", "show", "register"] {
-            assert!(body.contains(subcommand), "{subcommand} is not in {body}");
-        }
     }
 }

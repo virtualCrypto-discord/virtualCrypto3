@@ -97,13 +97,13 @@ async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
 
     let response = interaction(
         router(pool.clone()),
-        from_guild(json!(10000), "u1", "funyu1", sender),
+        from_guild(json!(10000), "ua", "funyu1", sender),
     )
     .await;
 
-    assert_ok(&response, "u1");
+    assert_ok(&response, "ua");
 
-    let currency = currency_by_unit(&pool, "u1").await.expect("the currency");
+    let currency = currency_by_unit(&pool, "ua").await.expect("the currency");
     assert_eq!(currency.name.as_deref(), Some("funyu1"));
     // The pool is a two-hundredth of the grant, rounded up.
     assert_eq!(currency.pool_amount, Some((10000 + 199) / 200));
@@ -123,7 +123,7 @@ async fn create_succeeds_in_another_guild(pool: PgPool) {
         router(pool.clone()),
         from_guild_in(
             json!(10000),
-            "u2",
+            "ub",
             "funyu2",
             sender,
             FREE_GUILD,
@@ -132,9 +132,9 @@ async fn create_succeeds_in_another_guild(pool: PgPool) {
     )
     .await;
 
-    assert_ok(&response, "u2");
+    assert_ok(&response, "ub");
 
-    let currency = currency_by_unit(&pool, "u2").await.expect("the currency");
+    let currency = currency_by_unit(&pool, "ub").await.expect("the currency");
     assert_eq!(currency.pool_amount, Some((10000 + 199) / 200));
     assert_eq!(get_amount(&pool, sender, currency.id).await, 10000);
 }
@@ -149,7 +149,7 @@ async fn create_rejects_a_currency_name_that_is_taken(pool: PgPool) {
         router(pool),
         from_guild_in(
             json!(10000),
-            "u3",
+            "uc",
             &money.name,
             100_000_000_000_000_103,
             FREE_GUILD,
@@ -201,7 +201,7 @@ async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
         router(pool),
         from_guild_in(
             json!("9007199254740992"),
-            "u5",
+            "ue",
             "funyu5",
             100_000_000_000_000_105,
             FREE_GUILD,
@@ -224,7 +224,7 @@ async fn create_needs_the_administrator_bit(pool: PgPool) {
         router(pool),
         from_guild_in(
             json!(10000),
-            "u6",
+            "uf",
             "funyu6",
             100_000_000_000_000_106,
             1_234_567_890_123_456_789,
@@ -244,7 +244,7 @@ async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
         router(pool),
         from_guild_in(
             json!(10000),
-            "u7",
+            "ug",
             "funyu7",
             100_000_000_000_000_107,
             money.guild,
@@ -256,20 +256,25 @@ async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
     assert_error(&response, "このギルドではすでに通貨が作成されています。");
 }
 
+/// The unit's letters and length are the sentence's too. The regexes took any
+/// lowercase letter anywhere in it, so `u1` was a unit and so was one of eleven
+/// characters.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn create_rejects_a_unit_that_is_not_lowercase(pool: PgPool) {
+async fn create_rejects_a_unit_that_is_not_one_to_ten_lowercase_letters(pool: PgPool) {
     setup_money(&pool).await;
 
-    let response = interaction(
-        router(pool),
-        from_guild(json!(10000), "AA", "funyu8", 100_000_000_000_000_108),
-    )
-    .await;
+    for unit in ["AA", "u1", "abcdefghijk"] {
+        let response = interaction(
+            router(pool.clone()),
+            from_guild(json!(10000), unit, "funyu8", 100_000_000_000_000_108),
+        )
+        .await;
 
-    assert_error(
-        &response,
-        "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
-    );
+        assert_error(
+            &response,
+            "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+        );
+    }
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -286,4 +291,25 @@ async fn create_rejects_a_name_without_enough_alphanumerics(pool: PgPool) {
         &response,
         "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
     );
+}
+
+/// The name's length is the sentence's, not the regexes' — they matched anywhere
+/// in the string, so a name of any length and any punctuation around it went
+/// through.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn create_rejects_a_name_that_is_too_long_or_has_a_mark_in_it(pool: PgPool) {
+    setup_money(&pool).await;
+
+    for (unit, name) in [("ua", "0123456789abcdefg"), ("ub", "funyua!")] {
+        let response = interaction(
+            router(pool.clone()),
+            from_guild(json!(10000), unit, name, 100_000_000_000_000_110),
+        )
+        .await;
+
+        assert_error(
+            &response,
+            "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+        );
+    }
 }

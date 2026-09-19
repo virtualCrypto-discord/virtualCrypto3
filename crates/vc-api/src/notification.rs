@@ -6,10 +6,10 @@
 //!
 //! ## What an application is told to expect
 //!
-//! Its own documentation — `docs/api/Webhook.md` — promises the same thing this
-//! service verifies on its own interaction endpoint: an ed25519 signature over
-//! the timestamp and the body concatenated as bytes, in `X-Signature-Ed25519` as
-//! **hex, lowercase**, and the timestamp in `X-Signature-Timestamp`.
+//! The same thing this service verifies on its own interaction endpoint: an
+//! ed25519 signature over the timestamp and the body concatenated as bytes, in
+//! `X-Signature-Ed25519` as **hex, lowercase**, and the timestamp in
+//! `X-Signature-Timestamp`.
 //!
 //! The key is the **application's**, not this service's. Each application
 //! carries a keypair — `applications.public_key` and `private_key`, both NOT NULL

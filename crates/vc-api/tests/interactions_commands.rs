@@ -21,6 +21,11 @@ fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
 }
 
+/// `/help`: every command, the sentence Discord's picker shows for it, and the
+/// menu that opens one.
+///
+/// The list is the registration payload's, not a copy of it: a command that is
+/// registered and missing here would be a command nobody can find out about.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn help(pool: PgPool) {
     let response = interaction(
@@ -30,34 +35,178 @@ async fn help(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-
-    let description = format!(
-        "VirtualCryptoはDiscord上でサーバーに独自の通貨を作成できるBotです。\n\
-         [コマンドの使い方の詳細]({SITE_URL}/document/commands)\n\
-         [公式サイト]({SITE_URL})\n\
-         [Botの招待]({BOT_INVITE_URL})\n\
-         [サポートサーバーの招待]({SUPPORT_GUILD_INVITE_URL})"
-    );
-
-    assert_eq!(
-        response.body["data"]["components"],
-        json!([{
-            "type": 17,
-            "accent_color": 0x0062_21ED,
-            "components": [{
-                "type": 9,
-                "components": [
-                    { "type": 10, "content": "**VirtualCrypto**" },
-                    { "type": 10, "content": description },
-                ],
-                "accessory": {
-                    "type": 11,
-                    "media": { "url": "https://vcrypto.sumidora.com/static/images/logo.jpg" },
-                },
-            }],
-        }])
-    );
+    assert_eq!(response.body["type"], 4, "a message: {}", response.body);
     assert_eq!(response.body["data"]["flags"], json!(32832));
+
+    let rendered = response.body["data"].to_string();
+
+    for command in vc_api::discord_commands::commands() {
+        let name = command["name"].as_str().expect("a name");
+        let description = command["description"].as_str().expect("a description");
+
+        assert!(
+            rendered.contains(&format!("**/{name}**")),
+            "{name} is not in {rendered}"
+        );
+        assert!(
+            rendered.contains(description),
+            "what Discord says about {name} is not in {rendered}"
+        );
+    }
+
+    // The four that ask for the administrator bit say so, which is read off the
+    // registration payload rather than written down a second time.
+    assert!(rendered.contains("**/issue**（管理者）"), "{rendered}");
+
+    // The menu carries the id the dispatcher reads, and the addresses are the
+    // deployment's.
+    assert_eq!(
+        select_id(&response.body["data"]),
+        vc_api::custom_id::ui::help::select()
+    );
+    assert!(
+        rendered.contains(&format!("{SITE_URL}/document/commands")),
+        "{rendered}"
+    );
+    assert!(rendered.contains(BOT_INVITE_URL), "{rendered}");
+    assert!(rendered.contains(SUPPORT_GUILD_INVITE_URL), "{rendered}");
+}
+
+/// `/help command:<名前>`: the same screen the menu opens, reached by typing.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn help_opens_one_command(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        execute_from_guild(
+            json!({
+                "name": "help",
+                "options": [{ "name": "command", "type": 3, "value": "pay" }],
+            }),
+            12,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("**/pay**"), "{rendered}");
+    assert!(rendered.contains("## 使い方"), "{rendered}");
+    assert!(
+        rendered.contains("/pay unit:<通貨の単位> user:<送信先> amount:<枚数>"),
+        "{rendered}"
+    );
+
+    // The options are the registered ones, requiredness and all.
+    assert!(rendered.contains("送信先のユーザーです。"), "{rendered}");
+    assert!(rendered.contains("（必須）"), "{rendered}");
+
+    // And the prose, which is the part Discord's own description has no room for.
+    assert!(
+        rendered.contains("送信先がまだVirtualCryptoを使ったことがなくても送れます。"),
+        "{rendered}"
+    );
+}
+
+/// A name that is not a command is answered with the list and one sentence about
+/// it: the menu offers the real ones, and a typed value can be anything.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn help_says_when_a_name_is_not_a_command(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        execute_from_guild(
+            json!({
+                "name": "help",
+                "options": [{ "name": "command", "type": 3, "value": "nope" }],
+            }),
+            12,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains("`nope` というコマンドはありません。"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("**/bal**"), "and the list: {rendered}");
+}
+
+/// A choice from the menu redraws the message it was made on: the screen is one
+/// message a person moves through, and a message per choice would leave a trail.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_menu_opens_the_command_it_names(pool: PgPool) {
+    let chosen = interaction(
+        router(pool),
+        chose_multi(&vc_api::custom_id::ui::help::select(), &["claim"], 12),
+    )
+    .await;
+
+    assert_eq!(chosen.status, 200, "body: {}", chosen.body);
+    assert_eq!(
+        chosen.body["type"], 7,
+        "a change to the message: {}",
+        chosen.body
+    );
+
+    let rendered = chosen.body["data"].to_string();
+
+    assert!(rendered.contains("**/claim**"), "{rendered}");
+    assert!(rendered.contains("/claim make user:<請求先>"), "{rendered}");
+}
+
+/// And the button goes back to the list, which is where somebody who opened the
+/// wrong command wants to be.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_back_button_shows_the_list_again(pool: PgPool) {
+    let pressed = interaction(
+        router(pool),
+        pressed(&vc_api::custom_id::ui::help::index(), 12),
+    )
+    .await;
+
+    assert_eq!(pressed.status, 200, "body: {}", pressed.body);
+    assert_eq!(pressed.body["type"], 7);
+
+    let rendered = pressed.body["data"].to_string();
+
+    assert!(rendered.contains("## コマンド"), "{rendered}");
+    assert!(rendered.contains("**/bal**"), "{rendered}");
+}
+
+/// `/application help` is the screen `/help command:application` shows, with the
+/// way into the developer screens under it: the prose is written once and both
+/// read it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_help_is_the_help_commands_screen(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        execute_from_guild(
+            json!({ "name": "application", "options": [{ "name": "help", "type": 1 }] }),
+            12,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("**/application**"), "{rendered}");
+    assert!(
+        rendered.contains("`register` 新しいアプリケーションを登録します。"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&vc_api::custom_id::ui::developer::custom_id(
+            vc_api::custom_id::ui::developer::Screen::List
+        )),
+        "the way into the developer screens: {rendered}"
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
