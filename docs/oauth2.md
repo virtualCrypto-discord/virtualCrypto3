@@ -366,7 +366,7 @@ is the field's name and the rule, spelled out:
 | `logo_uri` | `https`, or `data:` with an image mediatype and at most 2048 bytes | three, below |
 | `discord_support_server_invite_slug` | at least one `[0-9a-zA-Z]` | `..._must_construct_from_half_width_alphanumeric` |
 | `application_type` | `web` or `native` | `application_type_must_be_web_or_native` |
-| `subscribed_events` | a subset of `[2, 3]` — `2` a claim update, `3` a grant decision — as a set | `subscribed_events_must_be_known_event_types` |
+| `subscribed_events` | a subset of `[2, 3, 4]` — `2` a claim update, `3` a grant decision, `4` a contract decision — as a set | `subscribed_events_must_be_known_event_types` |
 
 Four things in that table are worth more than the table.
 
@@ -433,6 +433,12 @@ subset of is the `type` values the deliveries carry. Absent is everything, which
 is what the column defaults to: a registration that names none gets every
 event, and the handshake's `1` is not subscribable, because a PING is a check
 rather than an event — naming it is refused rather than stored.
+
+**The type set grows, and only the default grows with it.** Migration `0005`
+added `4` — a contract decision, `docs/contracts.md` — to `EVENT_TYPES` and to the
+column's default, and left every existing row alone: an application that wrote
+`{2, 3}` asked for two kinds of event, and a fourth one it never named is not
+something to send it. It asks for `4` with an edit.
 
 **Implementing it needs a fuller `Application` than exists here.** What is in
 `vc_core` carries an id, a client name and the grant types — the three fields

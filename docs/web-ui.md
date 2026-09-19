@@ -156,7 +156,9 @@ that order — the same rule as the rest of this document.
 
 **What is left, in one place**: the **claims page** (the item below the contract flow,
 which this list had missed until the Elm was read), and the **documents** (another
-repository's prose). The contract flow is closed: neither site implemented it.
+repository's prose). The contract flow was closed — neither site implemented it — and
+the feature itself has since been built as an addition rather than a port
+(`docs/contracts.md`), with a page below and a command in Discord.
 
 `/invite` and `/support` are built: `web::invite` and `web::support` redirect from
 `Links::invite_url` and `Links::support_guild_invite_url`, which `vc-server` already
@@ -235,6 +237,11 @@ without saying which reads as unbuilt, which this one has already been read as o
    port**. The LiveView is one blob, eight lines, no assigns, the page beside it is
    static sample data, and the Elm has no contract route at all. Both sites shipped the
    same mockup.
+
+   **The feature itself is an addition rather than a port** (`docs/contracts.md`):
+   `/contracts` in this SPA and `/contract list` in Discord, drawn from what the
+   service answers, with the buttons a contract takes. Nothing of the mockup's
+   markup or sample data is in either.
 7. **`Mypage/Claim.elm` — the claims page — is not in this list and should be.** It is
    the Elm's `ClaimPage`: claims sent and claims received, paged, read from
    `GET /api/v2/users/@me/claims`, which is implemented and tested here (`v2_claims.rs`,

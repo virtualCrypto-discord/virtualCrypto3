@@ -145,6 +145,16 @@ The set it wrote was what it wanted, and a new type it never named is not it —
 the alternative would be sending something new to everyone who once accepted
 everything, which is the one thing an explicit set must not mean.
 
+## Where it is answered
+
+Two screens draw the same set, in the same words: **`/contracts`** in the SPA,
+for a user with a browser, and **`/contract list`** in Discord — one of the
+commands that runs in a DM as well as in a guild, because a contract is between an
+application and a user and no guild is being asked anything. Both show who is
+asking, what the caller's part is, how far the rest has come and how long it
+lasts, and both offer only the answers that contract takes: 承認する and 拒否する
+while it is waiting, 取り消す once it is theirs to take back.
+
 ## What is deliberately not here
 
 - **Claims and issuing are not rebuilt on contracts.** The claim flow is a ported
