@@ -1,11 +1,6 @@
 <script lang="ts">
-  import { loginUrl } from "../api";
-
-  // Where to come back to. The old site resumed the request that failed, which a
-  // SPA cannot see; what it can see is the page it is on, and that is the honest
-  // answer to "continue".
-  const here = window.location.pathname + window.location.search;
-  const login = loginUrl(here === "/" ? undefined : here);
+  // Nothing to do here: the page is prose. The block is what makes the file a
+  // module, which is what the shell's import of it resolves against.
 </script>
 
 <!--
@@ -16,7 +11,9 @@
 <h1>VirtualCrypto</h1>
 <p>Discord のサーバーで使う通貨を扱うためのサービスです。</p>
 
-<p><a class="login" href={login}>Discord でログイン</a></p>
+<!-- No login here on purpose: the only flow that needs a session is OAuth2's,
+     and it sends the browser to `/login` itself when the consent screen is
+     reached without one. A button here would be a second way in for nobody. -->
 
 <!-- An ordinary link: it reloads, and the API answers it with this document. -->
 
@@ -25,13 +22,4 @@
     margin-bottom: 0.5rem;
   }
 
-  .login {
-    display: inline-block;
-    padding: 0.5rem 1rem;
-    border-radius: 0.5rem;
-    background: #5865f2;
-    color: white;
-    text-decoration: none;
-    font-weight: 600;
-  }
 </style>

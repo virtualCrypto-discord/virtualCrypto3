@@ -1,5 +1,6 @@
 <script lang="ts">
   import Landing from "./pages/Landing.svelte";
+  import Verification from "./pages/Verification.svelte";
 
   // The shell. The pages land here as they arrive, starting with the landing page,
   // which is where the way in is.

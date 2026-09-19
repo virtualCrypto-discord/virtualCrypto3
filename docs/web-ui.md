@@ -155,14 +155,15 @@ that order — the same rule as the rest of this document.
 ## The SPA is the session's own
 
 Everything the SPA had for managing an application — the list, its detail page,
-the connect flow, the registration form, the verification warning, and the
-contracts page this document's contract item described — **has been deleted**. Not
+the connect flow, the registration form, the account page, and the contracts page
+this document's contract item described — **has been deleted**. Not
 ported away, not deferred: removed, because every one of those operations is a
 command or an endpoint that Discord can do, and a screen that only repeats a
-command is a second place for the same rules to be got wrong. What is left is the way
-in: the landing page with its login, and nothing else. The account page went too —
-what an account holds is `/bal` in Discord, and a page that only repeats a command
-is the thing this section is about.
+command is a second place for the same rules to be got wrong. What is left is the
+landing page the old site had, and the verification warning — and nothing that
+manages anything. The login link went with the rest: the only flow that needs a
+session is OAuth2's, and the consent screen sends a browser without one to
+`/login` itself, so a button on the landing page was a second way in for nobody.
 
 ## The requirements, in the order they matter
 
