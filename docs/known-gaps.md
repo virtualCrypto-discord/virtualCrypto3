@@ -311,13 +311,21 @@ simplifying:
 An application that cannot tell a real signature from rubbish fails the second and
 is refused. Two results must both be `:ok`; a wrong answer is
 `verification_failed`, a proxy that could not be reached is
-`internal_server_error`. The two requests are **shuffled** so that the order is not
-something to guess at.
+`internal_server_error`. This service draws the same line in its own words —
+`webhook_verification_failed` for the application's failure, `server_error` for its
+own — and a silence with no proxy in the way is the application's, because there is
+then nothing between this service and the webhook for it to belong to.
+
+The two requests are **shuffled** so that the order is not something to guess at.
+**This service does not shuffle them yet**: `verify` sends the real PING first, so
+an application can pass by answering the first request `200` and the second `401`
+without verifying anything.
 
 The handshake is also rate-limited **per requester** — one per three seconds,
 twenty per hour, fifty per day — answering `retry_after_3_seconds`,
-`retry_after_1_hour` or `retry_after_1_day`. Nothing here has a rate limiter for
-that; the per-user one on the interaction endpoint is a different thing.
+`retry_after_1_hour` or `retry_after_1_day`. `rate_limit::VerificationLimiter` is
+that limiter, charged to the account that would be asking twice, by registration
+and by the edit.
 
 The client certificate lives in this module's own configuration under `:ssl`,
 which is the mTLS the worker demands. And a notification is **fire-and-forget**:

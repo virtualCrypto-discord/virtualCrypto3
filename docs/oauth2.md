@@ -35,10 +35,11 @@ The order matters, and each step is a different refusal:
    not register** — `bot: true` is `user_verification_failed`;
 4. the redirect URIs are checked, and only `http` and `https` schemes pass:
    `invalid_redirect_uri` / `redirect_uri_scheme_must_be_http_or_https`;
-5. the webhook URL is verified by handshake — `webhook_verification_failed`
-   otherwise. **This is the part that is not built**: the handshake goes through
-   the Cloudflare Workers proxy with mutual TLS, which is the same missing piece
-   the claim notifications need.
+5. the webhook URL is verified by handshake, and a failure is answered by whose it
+   is: an application that answers wrongly — or that does not answer when this
+   service asked it directly, which is what happens where no proxy is configured
+   — is `webhook_verification_failed`, while a proxy that does not answer at all
+   is `server_error`, because reaching applications is this service's own job.
 6. the application is created, and a fresh `app` token with the
    `oauth2.register` scope is issued as the registration access token.
 
@@ -541,15 +542,18 @@ can call the handshake, and the notifier can be built from the same value.
 
 **And a registration without a webhook must not need one.** The Elixir's
 `if webhook_url do … else :ok end` means an application that registers none is
-registered without a handshake — so "no proxy configured" is only a problem for a
-registration that asked for a webhook.
+registered without a handshake — so a service with no proxy is not one that cannot
+register webhooks: it asks the webhook directly, as `Direct` says.
 
-When it is a problem, which refusal it is matters, and the distinction is the one
-`Handshake` already draws: a handshake that ran and came back wrong is
-`verification_failed`, and the application is at fault. A handshake that could not
-be attempted, because this service has no proxy, is **the service's fault** and
-belongs in the five-hundreds — malformed client metadata is not what happened, and
-saying so would send a user to look at their own request.
+Which refusal a handshake earns is whose failure the silence was, and the
+distinction is the one `Handshake` already draws: a handshake that ran and came
+back wrong is `webhook_verification_failed`, and the application is at fault. One
+that was not answered when this service asked the webhook directly is the
+application's fault too — the URL it named is what is silent. One that was not
+answered through the proxy is **the service's fault** and belongs in the
+five-hundreds (`server_error`), because reaching applications is this service's own
+job: answering that as the application's mistake would send its owner to look at
+the one place the problem is not.
 
 ## The edit (`PATCH /oauth2/clients/@me`)
 

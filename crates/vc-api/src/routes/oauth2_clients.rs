@@ -505,6 +505,31 @@ mod registration_tests {
 
         assert_eq!(status(&response), 400);
     }
+
+    /// A webhook that did not answer is the application's own URL being silent,
+    /// and a proxy that did not answer is this service's way to applications
+    /// failing: the same silence, and two different mistakes to go and look at.
+    #[test]
+    fn a_silence_is_the_applications_only_when_it_was_asked_directly() {
+        let answered_wrongly = unverified(Handshake::Failed, true);
+
+        assert_eq!(answered_wrongly.status, StatusCode::BAD_REQUEST);
+        assert_eq!(answered_wrongly.error, "webhook_verification_failed");
+
+        let direct = unverified(Handshake::Unreachable, false);
+
+        assert_eq!(direct.status, StatusCode::BAD_REQUEST);
+        assert_eq!(direct.error, "webhook_verification_failed");
+
+        let through_a_proxy = unverified(Handshake::Unreachable, true);
+
+        assert_eq!(through_a_proxy.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(through_a_proxy.error, "server_error");
+        assert_eq!(
+            through_a_proxy.description, None,
+            "this service's own faults are not described to the caller"
+        );
+    }
 }
 
 /// `POST /oauth2/clients`: register an application.
@@ -620,11 +645,13 @@ pub async fn create(
         .to_bytes();
 
     if let Some(webhook_url) = new.webhook_url.as_deref() {
-        // With no proxy configured the handshake goes straight at the webhook: a development
-        // machine has no proxy, and a registration that names a webhook has to be verifiable
-        // there for the application flow to be exercised at all.
+        // With no proxy configured the handshake goes straight at the webhook: a
+        // development machine has no proxy, and a registration that names a
+        // webhook has to be verifiable there for the application flow to be
+        // exercised at all.
+        let proxy = state.webhook_proxy();
         let direct = crate::notification::Direct::default();
-        let transport: &dyn crate::notification::Transport = match state.webhook_proxy() {
+        let transport: &dyn crate::notification::Transport = match proxy {
             Some(proxy) => proxy.as_ref(),
             None => &direct,
         };
@@ -640,12 +667,10 @@ pub async fn create(
             .map(|since| since.as_secs() as i64)
             .unwrap_or_default();
 
-        if verify(transport, webhook_url, &private_key, at).await != Handshake::Passed {
-            return Err(refusal(
-                StatusCode::BAD_REQUEST,
-                "webhook_verification_failed",
-                "the webhook did not verify",
-            ));
+        let handshake = verify(transport, webhook_url, &private_key, at).await;
+
+        if handshake != Handshake::Passed {
+            return Err(unverified(handshake, proxy.is_some()));
         }
     }
 
@@ -698,12 +723,35 @@ fn rate_limited(too_soon: TooSoon) -> Refusal {
     }
 }
 
+/// What a handshake that did not pass is answered as.
+///
+/// A webhook that answered wrongly is the application's to fix, and so is one that
+/// did not answer at all when this service asked it **directly**: the URL the
+/// application named is what is silent.
+///
+/// A silence through the proxy is not the application's. That worker is this
+/// service's own way of reaching applications, so failing to reach it is a
+/// deployment this service cannot deliver through — and answering it as
+/// `webhook_verification_failed` would send the application's owner to look at the
+/// one place the problem is not.
+fn unverified(handshake: Handshake, through_proxy: bool) -> Box<Refusal> {
+    if handshake == Handshake::Unreachable && through_proxy {
+        return Box::new(internal("the webhook proxy did not answer"));
+    }
+
+    refusal(
+        StatusCode::BAD_REQUEST,
+        "webhook_verification_failed",
+        "the webhook did not verify",
+    )
+}
+
 /// A refusal that is this service's fault rather than the caller's.
 ///
 /// A registration can fail because Discord is unreachable, because the database
-/// will not take the write, or because this service has no proxy — and none of
-/// those is something the caller can act on, so none of them is answered as though
-/// the request were wrong.
+/// will not take the write, or because the webhook proxy it verifies through did
+/// not answer — and none of those is something the caller can act on, so none of
+/// them is answered as though the request were wrong.
 pub fn internal(why: &'static str) -> Refusal {
     tracing::error!(why, "a registration could not be completed");
 
@@ -946,8 +994,9 @@ pub async fn apply(
     // would be a handshake nobody could answer.
     if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
         // No proxy is a direct handshake, as in registration.
+        let proxy = state.webhook_proxy();
         let direct = crate::notification::Direct::default();
-        let transport: &dyn crate::notification::Transport = match state.webhook_proxy() {
+        let transport: &dyn crate::notification::Transport = match proxy {
             Some(proxy) => proxy.as_ref(),
             None => &direct,
         };
@@ -978,12 +1027,10 @@ pub async fn apply(
             .map(|since| since.as_secs() as i64)
             .unwrap_or_default();
 
-        if verify(transport, webhook_url, &private_key, at).await != Handshake::Passed {
-            return Err(refusal(
-                StatusCode::BAD_REQUEST,
-                "webhook_verification_failed",
-                "the webhook did not verify",
-            ));
+        let handshake = verify(transport, webhook_url, &private_key, at).await;
+
+        if handshake != Handshake::Passed {
+            return Err(unverified(handshake, proxy.is_some()));
         }
     }
 

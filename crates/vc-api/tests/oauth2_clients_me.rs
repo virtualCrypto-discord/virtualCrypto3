@@ -302,3 +302,61 @@ async fn registration_refuses_an_unknown_event(pool: PgPool) {
         "subscribed_events_must_be_known_event_types"
     );
 }
+
+/// A URL that closes what is sent to it, which is a webhook that answers
+/// nothing: the two PINGs fail rather than wait for a timeout to pass.
+async fn refusing_hook() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a port");
+    let address = listener.local_addr().expect("the address");
+
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            drop(socket);
+        }
+    });
+
+    format!("http://{address}/hook")
+}
+
+/// A webhook that does not answer is refused as the webhook's failure. These
+/// tests have no proxy, so the handshake is asked straight at the URL the
+/// application named — which is what is silent here, and what its owner has to
+/// go and look at.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_webhook_that_does_not_answer_is_refused(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    insert_discord_auth(&pool, OWNER_DISCORD_ID, "a-discord-token").await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/oauth2/clients")
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({
+                "client_name": "one",
+                "redirect_uris": ["https://example.test/callback"],
+                "webhook_url": refusing_hook().await,
+            }))
+            .expect("encode body"),
+        ))
+        .expect("request");
+
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(request)
+        .await
+        .expect("router response");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&bytes).expect("json body");
+
+    assert_eq!(body["error"], "webhook_verification_failed");
+}
