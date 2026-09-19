@@ -7,6 +7,12 @@
 #
 #   MIX_ENV=test mix run capture_v2_golden.exs
 #
+# and with GOLDEN_DIR pointing at this repository's crate when the script is run
+# from somewhere else (the upstream clone, say):
+#
+#   MIX_ENV=test GOLDEN_DIR=/path/to/virtualCrypto3/crates/vc-api/tests/golden \
+#     mix run capture_v2_golden.exs
+#
 # NOTE: Discord.Api.OAuth2.get_user_info/1 is patched in this clone to return a
 # fixed payload; /users/@me otherwise performs a live Discord API call.
 
@@ -15,7 +21,7 @@ alias VirtualCrypto.Exterior.User.Discord, as: DiscordUser
 
 Ecto.Adapters.SQL.Sandbox.mode(Repo, :auto)
 
-out_dir = Path.expand("/path/to/virtualCrypto3/crates/vc-api/tests/golden")
+out_dir = Path.expand(System.get_env("GOLDEN_DIR", "crates/vc-api/tests/golden"))
 File.mkdir_p!(out_dir)
 
 user1_discord = 100_000_000_000_000_001

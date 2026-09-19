@@ -4,13 +4,14 @@
 # Run inside the upstream clone AFTER capture_v2_golden.exs (it reuses that
 # fixture) and with both oauth2.ex patches applied:
 #
-#   MIX_ENV=test mix run capture_v2_golden_extra.exs
+#   MIX_ENV=test GOLDEN_DIR=/path/to/virtualCrypto3/crates/vc-api/tests/golden \
+#     mix run capture_v2_golden_extra.exs
 
 alias VirtualCrypto.Repo
 
 Ecto.Adapters.SQL.Sandbox.mode(Repo, :auto)
 
-out_dir = Path.expand("/path/to/virtualCrypto3/crates/vc-api/tests/golden")
+out_dir = Path.expand(System.get_env("GOLDEN_DIR", "crates/vc-api/tests/golden"))
 File.mkdir_p!(out_dir)
 
 discord_id = 100_000_000_000_000_001
