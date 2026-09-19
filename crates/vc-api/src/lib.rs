@@ -13,6 +13,7 @@ pub mod notification;
 pub mod permissions;
 pub mod rate_limit;
 pub mod routes;
+pub mod scheduler;
 pub mod session;
 pub mod state;
 

@@ -67,8 +67,9 @@ balance until it comes back.
    locked money to a Discord user: the receiver it names at the time, or the one
    the contract fixed. Nothing else about the money is the application's to do.
 5. **The contract ends** when a party refuses, when a party withdraws, or —
-   for a temporary contract — when its deadline passes, after which nothing may
-   be spent and each party may take back what is left.
+   for a temporary contract — when its deadline passes: nothing may be spent
+   after it, and the service settles the contract itself rather than waiting for
+   anyone to come back for their money.
 
 **A withdrawal ends the contract, and everyone's remainder goes home.** A
 contract is the agreement of exactly the parties it names: one of them leaving
@@ -82,12 +83,21 @@ what makes it temporary: the delegation is for the period, not for as long as th
 party feels like it. After the deadline it is over, and withdrawal is how the
 remainder comes back.
 
-**Nothing runs on a clock.** This service has no scheduler (see
-`docs/known-gaps.md`), so a deadline is a comparison rather than an event:
-spending is refused once `expires_at` has passed, and the refund happens when a
-party withdraws. A party who never withdraws leaves their remainder locked, which
-is the user's own to fix — the contract says when it ended, and the web and
-Discord both say what is left.
+**The clock settles what it runs out on.** `vc_api::scheduler` ticks — a minute by
+default, `VCRYPTO_SETTLE_INTERVAL_SECS` to change it, `0` to turn it off — and
+every contract still standing whose `expires_at` has passed is settled: each
+party's remainder is refunded, the contract becomes `expired` rather than
+`canceled` (the deadline did it, not anyone in it), and the application is told
+over its webhook, the way it is told about a decision.
+
+Settling is what a party's own withdrawal would have done, so the two race safely:
+the contract row is locked first, and whichever runs second finds a contract that
+is already over and does nothing. Spending is refused from the deadline onwards
+whether or not the tick has run yet, so no money moves in the gap.
+
+A deployment may also turn the clock off — a test that settles by hand does — and
+then a deadline is only a comparison until somebody withdraws, which is what this
+document said before the scheduler existed.
 
 ## Who may do what
 
@@ -166,4 +176,8 @@ while it is waiting, 取り消す once it is theirs to take back.
   it early. Amounts are what the parties agreed to, and a party can withdraw or
   wait out the deadline; an application that wants different terms writes a
   different contract.
-- **Nothing refunds on a timer**, for the reason above: no scheduler.
+- **Two jobs run on the clock.** Settling expired contracts, and deleting the rows
+  whose `expires` has passed (`vc_core::purge`). The rest of what the Elixir runs
+  on timers — refilling each pool daily, re-verifying applications whose webhook
+  has gone quiet — is **not** implemented here, and `docs/known-gaps.md` is where
+  that is named rather than implied to exist.

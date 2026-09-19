@@ -416,7 +416,7 @@ pub async fn approve(
         return Err(ContractError::InvalidStatus);
     }
 
-    if expired(contract.expires_at, now) {
+    if has_expired(contract.expires_at, now) {
         return Err(ContractError::Expired);
     }
 
@@ -522,9 +522,15 @@ pub async fn refuse(
     .await
     .map_err(ContractError::Database)?;
 
-    cancel(&mut tx, contract_id, contract.currency_id, now)
-        .await
-        .map_err(ContractError::Database)?;
+    end(
+        &mut tx,
+        contract_id,
+        contract.currency_id,
+        Ended::Canceled,
+        now,
+    )
+    .await
+    .map_err(ContractError::Database)?;
 
     tx.commit().await.map_err(ContractError::Database)?;
 
@@ -549,7 +555,9 @@ pub async fn withdraw(
 
     let contract = lock_contract(&mut tx, contract_id).await?;
 
-    if contract.status == "canceled" {
+    // One that is already over has nothing left to take back: a settled expiry has
+    // sent the remainders home, and a cancellation did the same.
+    if contract.status != "pending" && contract.status != "active" {
         return Err(ContractError::InvalidStatus);
     }
 
@@ -574,9 +582,15 @@ pub async fn withdraw(
     .await
     .map_err(ContractError::Database)?;
 
-    cancel(&mut tx, contract_id, contract.currency_id, now)
-        .await
-        .map_err(ContractError::Database)?;
+    end(
+        &mut tx,
+        contract_id,
+        contract.currency_id,
+        Ended::Canceled,
+        now,
+    )
+    .await
+    .map_err(ContractError::Database)?;
 
     tx.commit().await.map_err(ContractError::Database)?;
 
@@ -620,7 +634,7 @@ pub async fn pay(
         return Err(ContractError::InvalidStatus);
     }
 
-    if expired(contract.expires_at, now) {
+    if has_expired(contract.expires_at, now) {
         return Err(ContractError::Expired);
     }
 
@@ -782,7 +796,7 @@ async fn currency_of(pool: &PgPool, contract_id: i64) -> std::result::Result<i64
     .ok_or(ContractError::NotFound)
 }
 
-fn expired(expires_at: Option<PrimitiveDateTime>, now: PrimitiveDateTime) -> bool {
+fn has_expired(expires_at: Option<PrimitiveDateTime>, now: PrimitiveDateTime) -> bool {
     expires_at.is_some_and(|expires| expires <= now)
 }
 
@@ -853,12 +867,35 @@ async fn lock_party(
     }))
 }
 
+/// Why a contract is over, which is what its status records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// A party refused it, or took their part back.
+    Canceled,
+    /// Its deadline passed with it still standing.
+    Expired,
+}
+
+impl Ended {
+    fn status(self) -> &'static str {
+        match self {
+            Ended::Canceled => "canceled",
+            Ended::Expired => "expired",
+        }
+    }
+}
+
 /// The end of a contract: what is left of every party's lock goes back to them,
-/// and the contract joins the ones that are over.
-async fn cancel(
+/// and the contract joins the ones that are over, for the reason given.
+///
+/// One statement per thing rather than one per party: the refund is an upsert
+/// over however many parties still hold something, so a contract with fifty of
+/// them costs what one with one costs.
+async fn end(
     tx: &mut PgConnection,
     contract_id: i64,
     currency_id: i64,
+    ended: Ended,
     now: PrimitiveDateTime,
 ) -> std::result::Result<(), sqlx::Error> {
     sqlx::query!(
@@ -887,12 +924,77 @@ async fn cancel(
     .await?;
 
     sqlx::query!(
-        "UPDATE contracts SET status = 'canceled', updated_at = $2 WHERE id = $1",
+        "UPDATE contracts SET status = $2, updated_at = $3 WHERE id = $1",
         contract_id,
+        ended.status(),
         now
     )
     .execute(&mut *tx)
     .await?;
 
     Ok(())
+}
+
+/// The contracts whose deadline has passed and that nobody has settled yet.
+///
+/// What the clock asks for: a contract still standing — `pending` or `active` —
+/// whose time is up. The ones already over are not looked at again, which is what
+/// the partial index behind this query is for.
+pub async fn expired(
+    pool: &PgPool,
+    now: OffsetDateTime,
+) -> std::result::Result<Vec<i64>, ContractError> {
+    let ids = sqlx::query_scalar!(
+        "SELECT id FROM contracts
+          WHERE status IN ('pending', 'active')
+            AND expires_at IS NOT NULL AND expires_at <= $1
+          ORDER BY id",
+        at(now)
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(ContractError::Database)?;
+
+    Ok(ids)
+}
+
+/// The end of a contract that ran out of time: what is left of every party's lock
+/// goes home, and the contract is marked `expired` rather than `canceled` — the
+/// deadline did it, not anyone in it.
+///
+/// Answers whether it did anything, which is what tells the caller to say so.
+/// Idempotent and safe against a race with a party: the contract row is locked
+/// first, so a withdrawal and a settlement cannot both move the same remainder,
+/// and the second of the two finds a contract that is already over.
+pub async fn settle(
+    pool: &PgPool,
+    contract_id: i64,
+    now: OffsetDateTime,
+) -> std::result::Result<bool, ContractError> {
+    let now = at(now);
+    let mut tx = pool.begin().await.map_err(ContractError::Database)?;
+
+    let contract = lock_contract(&mut tx, contract_id).await?;
+
+    if contract.status != "pending" && contract.status != "active" {
+        return Ok(false);
+    }
+
+    if !has_expired(contract.expires_at, now) {
+        return Ok(false);
+    }
+
+    end(
+        &mut tx,
+        contract_id,
+        contract.currency_id,
+        Ended::Expired,
+        now,
+    )
+    .await
+    .map_err(ContractError::Database)?;
+
+    tx.commit().await.map_err(ContractError::Database)?;
+
+    Ok(true)
 }

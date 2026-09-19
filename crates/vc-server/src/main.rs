@@ -100,6 +100,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
     );
 
+    // The clock, which the state does not carry because it is not asked anything:
+    // a contract whose deadline has passed is settled here, so the parties' money
+    // comes home without any of them having to come back for it, and the
+    // application that wrote it is told. `VCRYPTO_SETTLE_INTERVAL_SECS=0` turns it
+    // off.
+    tokio::spawn(vc_api::scheduler::run(
+        state.clone(),
+        vc_api::scheduler::interval(),
+    ));
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 

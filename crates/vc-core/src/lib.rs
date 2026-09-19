@@ -14,6 +14,7 @@ pub mod metadata;
 pub mod model;
 pub mod notification;
 pub mod payment;
+pub mod purge;
 pub mod transfer;
 pub mod user;
 

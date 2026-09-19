@@ -42,6 +42,30 @@ Behaviour that the Elixir service has and this rewrite does not implement yet,
 listed here so it cannot be forgotten. Everything here is deliberately deferred;
 nothing is dropped by accident.
 
+## The jobs that ran on a clock
+
+`vc_api::scheduler` does two things: it settles expired contracts, and it deletes
+the rows whose `expires` has passed (`vc_core::purge`). What is left of what the
+Elixir runs on timers is **not implemented here, and was not written down at all
+before this note** — which is the part worth saying plainly, because a gap that is
+not recorded reads as a feature that is present.
+
+- **The pool refills itself, daily.** The published rule (`About.md` in
+  `virtualcrypto-docs`): a currency is created with an initial issuance, the pool
+  gets 0.5% of the total issuance with it, and **every day another 0.5% is added,
+  up to 3.5% of the total** — seven days' worth, which is what the cap is for.
+  `vc_core::currency::create` implements the first half alone (`((creator_amount
+  + 199) / 200).max(5)`), so a guild's pool here is whatever it was on the day the
+  currency was made and never grows. What has to be read out of the Elixir before
+  this is ported: what "the total issuance" is measured on — the creator's initial
+  grant, or the sum of everything outstanding — and what the job does about days
+  it was not running, because a pool that refills only from the day a scheduler
+  happens to exist is wrong in a way nobody can see.
+- **The pool refill is the gap, and the purge is not.** `tests/golden/README.md`
+  recorded that the Elixir removes expired `user_access_tokens` rows on a timer;
+  that one is done, together with the two other tables that carry an `expires`
+  (`payments_idempotency`, `authorization_codes`).
+
 ## Discord lookups are cached in the process
 
 `Discord.Api.Cached` wraps the raw API and remembers `get_user` and `get_guild`
