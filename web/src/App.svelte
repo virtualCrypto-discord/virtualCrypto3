@@ -1,11 +1,5 @@
 <script lang="ts">
   import Account from "./pages/Account.svelte";
-  import Application from "./pages/Application.svelte";
-  import Contracts from "./pages/Contracts.svelte";
-  import Connect from "./pages/Connect.svelte";
-  import ApplicationDetail from "./pages/ApplicationDetail.svelte";
-  import Verification from "./pages/Verification.svelte";
-  import Register from "./pages/Register.svelte";
   import Landing from "./pages/Landing.svelte";
 
   // The shell. The pages land here as they arrive, starting with the landing page,
@@ -20,17 +14,6 @@
   // document, so these paths are reachable directly.
   let path = $state(window.location.pathname);
 
-  // The connect page is at `/applications/<client_id>/connect`, which is a shape rather
-  // than a path, so it is matched as one. `/applications` and `/applications/register`
-  // are compared as wholes and have no slash after the segment, so the branches cannot
-  // be confused for each other.
-  let connectClientId = $derived(path.match(/^\/applications\/([^/]+)\/connect$/)?.[1] ?? null);
-
-  // One segment, and the branches above are tried first: `/applications/register` is
-  // the same shape as an application's own page, and it is compared as a whole path
-  // before this is reached.
-  let detailClientId = $derived(path.match(/^\/applications\/([^/]+)$/)?.[1] ?? null);
-
   window.addEventListener("popstate", () => {
     path = window.location.pathname;
   });
@@ -41,20 +24,6 @@
     <Landing />
   {:else if path === "/me"}
     <Account />
-  {:else if path === "/contracts"}
-    <Contracts />
-  {:else if path === "/applications"}
-    <Application />
-  {:else if path === "/applications/register"}
-    <Register />
-  {:else if path === "/applications/verification"}
-    <!-- Before the branch below, which is the same shape: the old site's router had
-         these two in this order for the same reason. -->
-    <Verification />
-  {:else if connectClientId !== null}
-    <Connect clientId={connectClientId} />
-  {:else if detailClientId !== null}
-    <ApplicationDetail clientId={detailClientId} />
   {:else}
     <h1>見つかりません</h1>
     <p>このページはまだありません。</p>

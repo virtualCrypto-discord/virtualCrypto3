@@ -152,6 +152,17 @@ What is known, and what has to be checked before it is built:
 Whoever builds this should start by finding the registration and reading the surface, in
 that order — the same rule as the rest of this document.
 
+## The SPA is the session's own
+
+Everything the SPA had for managing an application — the list, its detail page,
+the connect flow, the registration form, the verification warning, and the
+contracts page this document's contract item described — **has been deleted**. Not
+ported away, not deferred: removed, because every one of those operations is a
+command or an endpoint that Discord can do, and a screen that only repeats a
+command is a second place for the same rules to be got wrong. What is left is what
+a browser session needs: the landing page with the way in, and the account page
+with what the session holds.
+
 ## The requirements, in the order they matter
 
 **What is left, in one place**: the **claims page** (the item below the contract flow,
@@ -239,9 +250,9 @@ without saying which reads as unbuilt, which this one has already been read as o
    same mockup.
 
    **The feature itself is an addition rather than a port** (`docs/contracts.md`):
-   `/contracts` in this SPA and `/contract list` in Discord, drawn from what the
-   service answers, with the buttons a contract takes. Nothing of the mockup's
-   markup or sample data is in either.
+   `/contract list` in Discord, drawn from what the service answers, with the
+   buttons a contract takes. Nothing of the mockup's markup or sample data is in
+   it, and there is no page for it — the SPA is the session's own (see below).
 7. **`Mypage/Claim.elm` — the claims page — is not in this list and should be.** It is
    the Elm's `ClaimPage`: claims sent and claims received, paged, read from
    `GET /api/v2/users/@me/claims`, which is implemented and tested here (`v2_claims.rs`,

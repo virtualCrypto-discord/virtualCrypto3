@@ -20,7 +20,6 @@
 
 <!-- An ordinary link: it reloads, and the API answers it with this document. -->
 <p><a href="/me">アカウント</a></p>
-<p><a href="/applications">アプリケーション</a></p>
 
 <style>
   h1 {
