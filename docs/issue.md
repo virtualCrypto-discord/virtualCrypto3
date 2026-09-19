@@ -141,6 +141,13 @@ carries the `auth_req_id` and the tokens come from the token endpoint. An
 application without a webhook polls instead, which is why the push is a ping
 and not the decision itself.
 
+A revoke travels as the same event: the `scopes` are what the grant has left,
+empty once the issuing scope is the one taken away. That is the one thing the
+poll's answer does not carry — it names no scopes — so the ping is what tells a
+device what its token may still do. Un-asking a pending code is not a decision
+and pings nothing: the ask minted no token, and the poll already answers that it
+is gone.
+
 Which events reach the webhook is the application's own choice, named at
 registration and changed with an edit: `subscribed_events` names the `type`
 values it wants — `2` for a claim update, `3` for a grant decision — and it is

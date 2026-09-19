@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),\n                           ARRAY[]::text[]) AS \"scopes!\"\n             FROM grants g\n             LEFT JOIN grant_scopes s ON s.grant_id = g.id\n            WHERE g.application_id = $1 AND g.guild_id = $2\n            GROUP BY g.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scopes!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "78bddcad6298fa864b3cdae5aa5a04b54ce1087317be9de1a9c93f00a0c7cb05"
+}

@@ -42,7 +42,7 @@ impl Notifier for Sink {
             .push((claimant_id, events.to_vec()));
     }
 
-    fn notify_grant_decided(&self, _account_id: i32) {
+    fn notify_grant_decided(&self, _application_id: i64, _guild_id: i64) {
         // Claims only: grant decisions go through the webhook path, which has
         // its own test.
     }

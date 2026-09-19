@@ -12,10 +12,16 @@ pub trait Notifier: Send + Sync {
     /// that claimant.
     fn notify_claim_update(&self, claimant_id: i32, events: &[Value]);
 
-    /// A guild answered an application's ask: the application's own account, and
-    /// the decision. The application asked with `grant-requests`, and this is
-    /// the push half of that — CIBA's ping to the device flow's poll.
-    fn notify_grant_decided(&self, account_id: i32);
+    /// A guild decided an application's ask: the application, and the guild that
+    /// decided. The application asked with `grant-requests`, and this is the
+    /// push half of that — CIBA's ping to the device flow's poll.
+    ///
+    /// A yes and a taking-back travel the same way: an approval carries the
+    /// scopes granted, a revoke what remains (empty when nothing does). The
+    /// poll's answer carries no scopes, so the ping is what says what the grant
+    /// still lets the device do — and a token already issued stops being able
+    /// to do it, because its scopes are read from the grant.
+    fn notify_grant_decided(&self, application_id: i64, guild_id: i64);
 }
 
 /// Drops every event. A claim transition still completes; nothing is delivered.
@@ -28,5 +34,5 @@ pub struct NoopNotifier;
 impl Notifier for NoopNotifier {
     fn notify_claim_update(&self, _claimant_id: i32, _events: &[Value]) {}
 
-    fn notify_grant_decided(&self, _account_id: i32) {}
+    fn notify_grant_decided(&self, _application_id: i64, _guild_id: i64) {}
 }

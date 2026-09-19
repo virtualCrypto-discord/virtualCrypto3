@@ -14,11 +14,13 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    Response, account_of, client_id_of, fake, get, insert_application, insert_grant, insert_user,
-    mint, mint_app, state,
+    Recorded, Response, account_of, client_id_of, fake, get, insert_application, insert_grant,
+    insert_user, mint, mint_app, state, state_with_notifier,
 };
 use tower::ServiceExt;
 
@@ -182,6 +184,52 @@ async fn revoking_takes_the_scope_and_leaves_the_grant(pool: PgPool) {
     .await;
 
     assert_eq!(issued.status, 403, "body: {}", issued.body);
+}
+
+/// The owner's revoke is a decision, and the application is told about it the
+/// way the guild's approval tells it: a device that named a webhook learns the
+/// permission is gone without polling for the difference.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn revoking_pings_the_application(pool: PgPool) {
+    let (application, client_id, token) = fixture(&pool).await;
+    insert_grant(&pool, application, GUILD, &["vc.issue"]).await;
+    let notified = Arc::new(Recorded::default());
+
+    let response = request(
+        vc_api::router(state_with_notifier(pool.clone(), fake(), notified.clone())),
+        "DELETE",
+        format!("{}/{}", grants_uri(&client_id), GUILD),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+
+    assert_eq!(response.status, 204, "body: {}", response.body);
+    assert_eq!(
+        notified.decisions(),
+        [(application, GUILD)],
+        "the application, and the guild it may no longer issue in"
+    );
+}
+
+/// Nothing to take back is nothing to tell: a guild the application holds no
+/// grant in is not a decision anyone made.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn revoking_what_was_never_granted_pings_nobody(pool: PgPool) {
+    let (_, client_id, token) = fixture(&pool).await;
+    let notified = Arc::new(Recorded::default());
+
+    let response = request(
+        vc_api::router(state_with_notifier(pool.clone(), fake(), notified.clone())),
+        "DELETE",
+        format!("{}/{}", grants_uri(&client_id), GUILD),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+
+    assert_eq!(response.status, 204, "body: {}", response.body);
+    assert!(notified.decisions().is_empty(), "nothing was decided");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

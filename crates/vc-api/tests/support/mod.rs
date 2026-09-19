@@ -368,8 +368,8 @@ pub fn state_with_limiter(
     )
 }
 
-/// A state whose claim transitions report to `notifier`, which is how the
-/// notification tests watch what would be delivered.
+/// A state whose notifications are asked of `notifier` instead of being
+/// dropped, which is how a test watches what would be delivered.
 pub fn state_with_notifier(
     pool: PgPool,
     discord: Arc<FakeDiscord>,
@@ -389,6 +389,39 @@ pub fn state_with_notifier(
         // Unlimited by default, so the other tests are not held to it.
         Arc::new(RateLimiter::new(0, vc_api::rate_limit::DEFAULT_WINDOW)),
     )
+}
+
+/// The grant decisions a notifier was asked to deliver, which is how a test
+/// watches a decision without a webhook to deliver it to. The claim deliveries'
+/// counterpart is the sink in `tests/notification.rs`, which asserts on the
+/// events rather than on the call.
+#[derive(Default)]
+pub struct Recorded {
+    decisions: Mutex<Vec<(i64, i64)>>,
+}
+
+impl Recorded {
+    /// The decisions so far, in order: the application, and the guild that
+    /// decided what it may do there.
+    pub fn decisions(&self) -> Vec<(i64, i64)> {
+        self.decisions
+            .lock()
+            .expect("the sink is not poisoned")
+            .clone()
+    }
+}
+
+impl Notifier for Recorded {
+    fn notify_claim_update(&self, _claimant_id: i32, _events: &[Value]) {
+        // Decisions only: a test that watches claims has its own sink.
+    }
+
+    fn notify_grant_decided(&self, application_id: i64, guild_id: i64) {
+        self.decisions
+            .lock()
+            .expect("the sink is not poisoned")
+            .push((application_id, guild_id));
+    }
 }
 
 /// The URLs from `config/test.exs`, which the help and invite responses embed

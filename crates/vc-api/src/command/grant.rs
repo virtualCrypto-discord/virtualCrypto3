@@ -89,13 +89,9 @@ async fn approve(
 
     match decided {
         Some(application_id) => {
-            // The application's own account, which is what the ping names:
-            // the device asked, the guild answered, and this tells it to poll.
-            if let Ok(Some(account)) =
-                vc_core::user::application_user_id(state.pool(), application_id).await
-            {
-                state.notifier().notify_grant_decided(account);
-            }
+            state
+                .notifier()
+                .notify_grant_decided(application_id, guild_id);
 
             Ok(render_ok("発行を許可しました。"))
         }
@@ -111,7 +107,13 @@ async fn approve(
 /// future, or a granted application's `client_id`, which takes the issuing
 /// scope back. Either way the scopes go and the rows stay: an approval lives
 /// on as history, and a guild token already issued stops issuing because its
-/// scopes are read from the grant.
+/// scopes are read from the grant. A granted revoke pings the same way an
+/// approval does, carrying the scopes as they stand (empty now) — a pending
+/// ask's revoke pings nothing, because there is no token the ask has minted
+/// and nothing the poll has yet answered with.
+///
+/// A pending ask is un-asked rather than refused: there is no refusal, because
+/// an ask that is never approved simply stays pending until it expires.
 async fn revoke(
     state: &AppState,
     guild_id: i64,
@@ -125,8 +127,15 @@ async fn revoke(
     let revoked = vc_core::grant::revoke_grant(state.pool(), code.trim(), guild_id).await?;
 
     match revoked {
-        true => Ok(render_ok("発行の許可を取り消しました。")),
-        false => Ok(render_error(
+        Some(vc_core::grant::Revoked::Grant(application_id)) => {
+            state
+                .notifier()
+                .notify_grant_decided(application_id, guild_id);
+
+            Ok(render_ok("発行の許可を取り消しました。"))
+        }
+        Some(vc_core::grant::Revoked::Ask(_)) => Ok(render_ok("発行の許可を取り消しました。")),
+        None => Ok(render_error(
             "エラー: そのコードの申請も許可もこのサーバーにありません。",
         )),
     }

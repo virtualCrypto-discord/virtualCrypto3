@@ -219,27 +219,34 @@ impl vc_core::notification::Notifier for WebhookNotifier {
         let events = events.to_vec();
 
         tokio::spawn(async move {
-            send_claim_update(&pool, &proxy, claimant_id, &events).await;
+            send_claim_update(&pool, &*proxy, claimant_id, &events).await;
         });
     }
 
     /// Fire and forget for the same reason: the guild already decided, and the
     /// application's poll would learn it anyway — this is the ping that saves
-    /// the polling. The ping carries the guild and scopes, not the token: the
-    /// token comes from the poll, the way CIBA's ping carries the `auth_req_id`
-    /// and the tokens come from the token endpoint.
-    fn notify_grant_decided(&self, account_id: i32) {
+    /// the polling. The ping carries the guild and the scopes as they stand, not
+    /// the token: the token comes from the poll, the way CIBA's ping carries
+    /// the `auth_req_id` and the tokens come from the token endpoint. A revoke
+    /// carries what remains — empty when nothing does — so the device learns
+    /// its token is dead without reading the diff.
+    fn notify_grant_decided(&self, application_id: i64, guild_id: i64) {
         let pool = self.pool.clone();
         let proxy = std::sync::Arc::clone(&self.proxy);
 
         tokio::spawn(async move {
-            send_grant_decided(&pool, &proxy, account_id).await;
+            send_grant_decided(&pool, &*proxy, application_id, guild_id).await;
         });
     }
 }
 
 /// One delivery, if there is anywhere to deliver it.
-async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32, events: &[Value]) {
+async fn send_claim_update(
+    pool: &sqlx::PgPool,
+    transport: &dyn Transport,
+    claimant_id: i32,
+    events: &[Value],
+) {
     // The application the claimant acts for, if it acts for one. An account that
     // is nobody's application has nowhere to be told, which is the Elixir's
     // `:nop` rather than a failure.
@@ -251,7 +258,7 @@ async fn send_claim_update(pool: &sqlx::PgPool, proxy: &Proxy, claimant_id: i32,
         return;
     };
 
-    send_to_application(pool, proxy, application_id, claim_update_body(events)).await;
+    send_to_application(pool, transport, application_id, claim_update_body(events)).await;
 }
 
 /// The event body for a grant decision: type 3, with the guild that answered
@@ -271,36 +278,46 @@ pub fn grant_decided_body(guild_id: i64, scopes: &[String]) -> Value {
     })
 }
 
-/// One grant decision, if there is anywhere to deliver it.
+/// One grant decision, if the guild's answer still stands as a grant.
 ///
-/// The account *is* the application's own, so unlike the claim path there is no
-/// lookup for which application to tell — only whether it named a webhook to be
-/// told at. An application without one polls instead, which is why this is a
+/// The ping names the guild and the scopes *as they stand* — what an approval
+/// wrote, or what a revoke left behind (empty when nothing does). A revoke
+/// deletes the scopes, not the grant row, so there is always a row to read:
+/// empty scopes are the revoke's own shape, not an absence. The one exception
+/// is a grant nobody wrote or one explicitly deleted, in which case there is
+/// nothing to say about and the ping stays unsent — the call sites revoke
+/// scopes, never rows, so this is a guard rather than a branch anyone takes.
+///
+/// An application without a webhook polls instead, which is why this is a
 /// ping and not the decision itself: the poll is what the token comes from.
-async fn send_grant_decided(pool: &sqlx::PgPool, proxy: &Proxy, account_id: i32) {
-    let Some(application_id) = vc_core::user::application_id(pool, account_id)
-        .await
-        .ok()
-        .flatten()
-    else {
-        return;
-    };
+async fn send_grant_decided(
+    pool: &sqlx::PgPool,
+    transport: &dyn Transport,
+    application_id: i64,
+    guild_id: i64,
+) {
+    let scopes = sqlx::query_scalar!(
+        r#"SELECT COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
+                           ARRAY[]::text[]) AS "scopes!"
+             FROM grants g
+             LEFT JOIN grant_scopes s ON s.grant_id = g.id
+            WHERE g.application_id = $1 AND g.guild_id = $2
+            GROUP BY g.id"#,
+        application_id,
+        guild_id
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
 
-    let Ok(grants) = vc_core::grant::grants_of(pool, application_id).await else {
-        return;
-    };
-
-    // The decision just made is the grant most recently written, and the ping
-    // names the guild and scopes it carries.
-    let Some(granted) = grants.into_iter().max_by_key(|granted| granted.updated_at) else {
-        return;
-    };
+    let Some(scopes) = scopes else { return };
 
     send_to_application(
         pool,
-        proxy,
+        transport,
         application_id,
-        grant_decided_body(granted.guild_id, &granted.scopes),
+        grant_decided_body(guild_id, &scopes),
     )
     .await;
 }
@@ -313,7 +330,12 @@ async fn send_grant_decided(pool: &sqlx::PgPool, proxy: &Proxy, account_id: i32)
 /// The check is here rather than in the callers because there are two of them
 /// and one rule: a claim update is type 2 and a grant decision is type 3, and
 /// the body says which before anything is signed.
-async fn send_to_application(pool: &sqlx::PgPool, proxy: &Proxy, application_id: i64, body: Value) {
+async fn send_to_application(
+    pool: &sqlx::PgPool,
+    transport: &dyn Transport,
+    application_id: i64,
+    body: Value,
+) {
     let kind = body.get("type").and_then(Value::as_i64).unwrap_or_default();
 
     let subscribed = sqlx::query_scalar!(
@@ -360,7 +382,7 @@ async fn send_to_application(pool: &sqlx::PgPool, proxy: &Proxy, application_id:
 
     let delivery = delivery(&body, &private_key, url, now);
 
-    if let Err(error) = send(proxy, &delivery).await {
+    if let Err(error) = send(transport, &delivery).await {
         tracing::warn!(application_id, %error, "could not reach the webhook proxy");
     }
 }
@@ -744,5 +766,126 @@ mod tests {
     #[test]
     fn two_fresh_keypairs_are_not_the_same_key() {
         assert_ne!(fresh_keypair(), fresh_keypair());
+    }
+
+    /// An application's webhook that keeps what it is sent, which is how a test
+    /// reads a delivery back: the body an application would have verified.
+    async fn recording_hook() -> (String, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        let hook = move |body: String| {
+            let sender = sender.clone();
+
+            async move {
+                sender
+                    .send(serde_json::from_str(&body).expect("a json body"))
+                    .expect("the test is still listening");
+
+                axum::http::StatusCode::OK
+            }
+        };
+
+        let app = axum::Router::new().route("/hook", axum::routing::post(hook));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let address = listener.local_addr().expect("the address");
+
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        (format!("http://{address}/hook"), receiver)
+    }
+
+    /// The application a delivery is for: one that named this hook, subscribed
+    /// to grant decisions by the column's default, holding a seed a delivery can
+    /// be signed with — thirty-two bytes, because anything else is not an
+    /// ed25519 seed and the delivery is dropped rather than signed with a guess.
+    async fn application_at(pool: &sqlx::PgPool, url: &str) -> i64 {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+
+        sqlx::query_scalar!(
+            r#"INSERT INTO applications
+                 (client_id, client_name, owner_discord_id, inserted_at, updated_at,
+                  public_key, private_key, webhook_url)
+               VALUES (gen_random_uuid(), 'an application', 900000000000000002, now(), now(),
+                       $1, $2, $3)
+               RETURNING id"#,
+            signing.verifying_key().to_bytes().to_vec(),
+            signing.to_bytes().to_vec(),
+            url
+        )
+        .fetch_one(pool)
+        .await
+        .expect("an application")
+    }
+
+    /// The next delivery, waited for: a body that never arrives should fail the
+    /// test rather than hang the suite.
+    async fn next_delivery(
+        delivered: &mut tokio::sync::mpsc::UnboundedReceiver<Value>,
+        url: &str,
+    ) -> Value {
+        tokio::time::timeout(std::time::Duration::from_secs(10), delivered.recv())
+            .await
+            .unwrap_or_else(|_| panic!("nothing was delivered to {url}"))
+            .expect("a body")
+    }
+
+    /// The ping carries the scopes *as they stand*, which is what makes a revoke
+    /// worth pinging: the poll's answer carries none of them, so a device that
+    /// reads this learns what its token can still do without asking for the
+    /// difference. An approval and a taking-back are the same ping for the same
+    /// reason.
+    #[sqlx::test(migrations = "../vc-core/migrations")]
+    async fn a_decision_is_pinged_with_the_scopes_as_they_stand(pool: sqlx::PgPool) {
+        const GUILD: i64 = 900_000_000_000_000_001;
+
+        let (url, mut delivered) = recording_hook().await;
+        let application = application_at(&pool, &url).await;
+        let client_id = sqlx::query_scalar!(
+            r#"SELECT client_id::text AS "client_id!" FROM applications WHERE id = $1"#,
+            application
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the client id");
+
+        vc_core::grant::allow_in_guild(
+            &pool,
+            application,
+            GUILD,
+            &["vc.issue"],
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("a grant");
+
+        send_grant_decided(&pool, &Direct::default(), application, GUILD).await;
+
+        assert_eq!(
+            next_delivery(&mut delivered, &url).await,
+            json!({
+                "type": 3,
+                "data": { "guild_id": GUILD.to_string(), "scopes": ["vc.issue"] },
+            }),
+            "the approval's own scopes"
+        );
+
+        vc_core::grant::revoke_grant(&pool, &client_id, GUILD)
+            .await
+            .expect("a revoke");
+
+        send_grant_decided(&pool, &Direct::default(), application, GUILD).await;
+
+        assert_eq!(
+            next_delivery(&mut delivered, &url).await,
+            json!({
+                "type": 3,
+                "data": { "guild_id": GUILD.to_string(), "scopes": [] },
+            }),
+            "and none of them once the issuing scope is taken back"
+        );
     }
 }

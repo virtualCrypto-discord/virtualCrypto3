@@ -473,46 +473,68 @@ pub async fn allow_in_guild(
     write_grant(&mut connection, application_id, guild_id, &scopes, now).await
 }
 
+/// What taking a permission back did: which application, or nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Revoked {
+    /// A pending ask's `user_code` un-asked it: the application keeps nothing
+    /// to poll for.
+    Ask(i64),
+    /// A granted application's `client_id` dropped the issuing scope: the
+    /// grant row stays and the scope is gone.
+    Grant(i64),
+}
+
 /// Take a permission back, by the code the guild was shown or the application's
 /// own id.
 ///
 /// A pending ask's `user_code` un-asks it: the row stays, decided as nothing,
 /// and the application's poll reads the ask as gone. A granted application's
 /// `client_id` drops the issuing scope instead, and a guild token already issued
-/// stops issuing because its scopes are read from the grant. `true` is either
-/// one having been there to take back.
-pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<bool> {
+/// stops issuing because its scopes are read from the grant. `None` is neither
+/// having been there to take back.
+pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<Option<Revoked>> {
     let unasked = sqlx::query!(
-        "UPDATE grant_requests SET status = 'approved', updated_at = $3
-          WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'",
+        r#"UPDATE grant_requests SET status = 'approved', updated_at = $3
+          WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'
+        RETURNING application_id"#,
         guild_id,
         code,
         crate::model::utc_now()
     )
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
 
-    if unasked.rows_affected() > 0 {
-        return Ok(true);
+    if let Some(unasked) = unasked {
+        return Ok(Some(Revoked::Ask(unasked.application_id)));
     }
 
     let Ok(client_id) = Uuid::parse_str(code) else {
-        return Ok(false);
+        return Ok(None);
     };
 
     let ungranted = sqlx::query!(
-        "DELETE FROM grant_scopes
-          WHERE scope = 'vc.issue'::virtual_crypto_scope_type
-            AND grant_id IN (SELECT g.id FROM grants g
-                             JOIN applications a ON a.id = g.application_id
-                            WHERE a.client_id = $1 AND g.guild_id = $2)",
+        r#"WITH ungranted AS (
+             DELETE FROM grant_scopes
+              WHERE scope = 'vc.issue'::virtual_crypto_scope_type
+                AND grant_id IN (SELECT g.id FROM grants g
+                                  JOIN applications a ON a.id = g.application_id
+                                 WHERE a.client_id = $1 AND g.guild_id = $2)
+            RETURNING grant_id
+           )
+           SELECT g.application_id FROM grants g
+             JOIN applications a ON a.id = g.application_id
+            WHERE a.client_id = $1 AND g.guild_id = $2
+              AND EXISTS (SELECT 1 FROM ungranted)"#,
         client_id,
         guild_id
     )
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
 
-    Ok(ungranted.rows_affected() > 0)
+    match ungranted {
+        Some(row) => Ok(row.application_id.map(Revoked::Grant)),
+        None => Ok(None),
+    }
 }
 
 /// What a guild granted an application.

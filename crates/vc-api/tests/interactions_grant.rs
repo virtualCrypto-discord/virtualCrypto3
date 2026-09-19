@@ -13,11 +13,14 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    DEFAULT_GUILD, DEFAULT_PERMISSIONS, Response, fake, insert_application, interaction, state,
+    DEFAULT_GUILD, DEFAULT_PERMISSIONS, Recorded, Response, fake, insert_application, interaction,
+    state, state_with_notifier,
 };
 
 /// The administrator the interactions come from. The id is a Discord one, and the
@@ -28,6 +31,12 @@ const SCOPES: &[&str] = &["vc.issue"];
 
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
+}
+
+/// The same router, with the decisions told to `notified` rather than to
+/// nobody.
+fn router_with(pool: PgPool, notified: Arc<Recorded>) -> Router {
+    vc_api::router(state_with_notifier(pool, fake(), notified))
 }
 
 /// An application with a name, which is what the screens show, and its pending
@@ -212,13 +221,15 @@ async fn a_list_with_nothing_pending_says_so(pool: PgPool) {
 }
 
 /// Revoking by the pending code un-asks it: the application's poll reads the ask
-/// as gone.
+/// as gone. It is not a decision, so the application is not told about it —
+/// there is no token the ask minted, and nothing to say about one.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn revoking_a_pending_code_unasks_it(pool: PgPool) {
     let (application, user_code) = fixture(&pool).await;
+    let notified = Arc::new(Recorded::default());
 
     let response = interaction(
-        router(pool.clone()),
+        router_with(pool.clone(), notified.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, revoke_options(&user_code)),
     )
     .await;
@@ -226,9 +237,10 @@ async fn revoking_a_pending_code_unasks_it(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), ["発行の許可を取り消しました。"]);
     assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
+    assert!(notified.decisions().is_empty(), "nothing was decided");
 
     let listed = interaction(
-        router(pool.clone()),
+        router_with(pool.clone(), notified.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
@@ -266,6 +278,41 @@ async fn revoking_a_client_id_ungrants_it(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), ["発行の許可を取り消しました。"]);
     assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
+}
+
+/// A decision is told to the application that asked, and the yes and the
+/// taking-back travel the same way: a device that named a webhook learns what
+/// its token may still do without polling for the difference.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_decision_pings_the_application(pool: PgPool) {
+    let (application, user_code) = fixture(&pool).await;
+    let notified = Arc::new(Recorded::default());
+
+    interaction(
+        router_with(pool.clone(), notified.clone()),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
+    )
+    .await;
+
+    assert_eq!(
+        notified.decisions(),
+        [(application, DEFAULT_GUILD)],
+        "the approval"
+    );
+
+    let client_id = support::client_id_of(&pool, application).await;
+
+    interaction(
+        router_with(pool.clone(), notified.clone()),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, revoke_options(&client_id)),
+    )
+    .await;
+
+    assert_eq!(
+        notified.decisions(),
+        [(application, DEFAULT_GUILD), (application, DEFAULT_GUILD)],
+        "and the taking-back"
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
