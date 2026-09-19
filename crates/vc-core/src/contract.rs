@@ -65,6 +65,10 @@ pub struct Party {
 pub struct Contract {
     pub id: i64,
     pub application_id: i64,
+    /// What the application calls itself, which is what a screen showing the
+    /// contract has to name: a user deciding whether to trust it needs to know
+    /// who is asking, and an id is not a name.
+    pub client_name: Option<String>,
     pub unit: Option<String>,
     pub guild_id: Option<i64>,
     /// When set, the only Discord user the locked money may be paid to.
@@ -189,10 +193,11 @@ pub async fn find(
 ) -> std::result::Result<Option<Contract>, ContractError> {
     let row = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, c.receiver_discord_id, c.expires_at,
-                c.status AS \"status!\", currencies.unit, currencies.guild_id
+        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
+           JOIN applications ON applications.id = c.application_id
           WHERE c.id = $1",
         contract_id
     )
@@ -213,10 +218,11 @@ pub async fn of_application(
 ) -> std::result::Result<Vec<Contract>, ContractError> {
     let rows = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, c.receiver_discord_id, c.expires_at,
-                c.status AS \"status!\", currencies.unit, currencies.guild_id
+        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
+           JOIN applications ON applications.id = c.application_id
           WHERE c.application_id = $1
           ORDER BY c.id DESC",
         application_id
@@ -235,10 +241,11 @@ pub async fn of_party(
 ) -> std::result::Result<Vec<Contract>, ContractError> {
     let rows = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, c.receiver_discord_id, c.expires_at,
-                c.status AS \"status!\", currencies.unit, currencies.guild_id
+        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
+           JOIN applications ON applications.id = c.application_id
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1
           ORDER BY c.id DESC",
@@ -292,6 +299,7 @@ async fn read_all(
 struct ContractRow {
     id: i64,
     application_id: i64,
+    client_name: Option<String>,
     receiver_discord_id: Option<i64>,
     expires_at: Option<PrimitiveDateTime>,
     status: String,
@@ -355,6 +363,7 @@ fn with_parties(row: ContractRow, parties: Vec<Party>) -> Contract {
     Contract {
         id: row.id,
         application_id: row.application_id,
+        client_name: row.client_name,
         unit: row.unit,
         guild_id: row.guild_id,
         receiver_discord_id: row.receiver_discord_id,

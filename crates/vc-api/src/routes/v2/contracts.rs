@@ -362,6 +362,7 @@ fn rendered(contracts: &[Contract]) -> Value {
 fn render(contract: &Contract) -> Value {
     json!({
         "id": contract.id.to_string(),
+        "client_name": contract.client_name,
         "unit": contract.unit,
         "guild_id": contract.guild_id.map(|guild| guild.to_string()).unwrap_or_default(),
         "status": contract.status,

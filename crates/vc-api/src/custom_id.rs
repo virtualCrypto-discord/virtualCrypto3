@@ -348,6 +348,86 @@ pub mod ui {
         }
     }
 
+    /// The buttons a contract's own screen offers: answering it, or taking the
+    /// delegation back.
+    ///
+    /// Not from the Elixir — its contract page is a mockup with no `phx-click` on
+    /// either of its buttons — so what this mirrors is the shape of the spaces
+    /// beside it, and a head byte of its own for the developer space's reason:
+    /// these ids carry a contract id after the action, and a parser that only
+    /// accepts its own head refuses every other space's bytes rather than reading
+    /// them as its own.
+    pub mod contract {
+        use super::UiError;
+
+        const HEAD: u8 = 0xF2;
+
+        /// The head this space writes, so a test and a screen agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        /// Which of the three things a party can do about a contract.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Action {
+            Approve,
+            Refuse,
+            Withdraw,
+        }
+
+        fn id(action: Action) -> u8 {
+            match action {
+                Action::Approve => 1,
+                Action::Refuse => 2,
+                Action::Withdraw => 3,
+            }
+        }
+
+        /// The string a button carries: the action, then the contract it is about.
+        ///
+        /// The id travels as its own text rather than packed into bits, as the
+        /// developer space's `client_id` does: it is at most nineteen digits, the
+        /// limit is a hundred characters, and the readable form is one a test can
+        /// write down and a person can recognise in a log.
+        pub fn custom_id(action: Action, contract_id: i64) -> String {
+            let mut data = vec![HEAD, id(action)];
+            data.extend_from_slice(contract_id.to_string().as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<(Action, i64), UiError> {
+            let [head, id, rest @ ..] = source else {
+                return Err(UiError::Head);
+            };
+
+            if *head != HEAD {
+                return Err(UiError::Head);
+            }
+
+            let action = match id {
+                1 => Action::Approve,
+                2 => Action::Refuse,
+                3 => Action::Withdraw,
+                other => return Err(UiError::Unknown(u16::from(*other))),
+            };
+
+            // The packing left-aligns the last group, so a decoded payload comes
+            // back padded with NULs — the module above says so. A number never
+            // contains one, which is what makes cutting them the inverse of what
+            // went in.
+            let trimmed = rest
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&rest[..0], |end| &rest[..=end]);
+
+            let text = String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head)?;
+            let contract_id = text.parse().map_err(|_| UiError::Head)?;
+
+            Ok((action, contract_id))
+        }
+    }
+
     pub mod modal {
         use super::{UiError, parse_id};
 
@@ -486,5 +566,39 @@ mod tests {
     #[test]
     fn an_unknown_id_is_rejected() {
         assert_eq!(ui::button::parse(&[0xF0, 99]), Err(UiError::Unknown(99)));
+    }
+
+    /// The action and the contract both survive, which is the whole reason they
+    /// travel here: Discord sends the `custom_id` back and nothing else.
+    #[test]
+    fn a_contract_button_survives_the_round_trip() {
+        let encoded = ui::contract::custom_id(ui::contract::Action::Withdraw, 12_345);
+        let (action, contract_id) = ui::contract::parse(&parse(&encoded)).expect("a known action");
+
+        assert_eq!(action, ui::contract::Action::Withdraw);
+        assert_eq!(contract_id, 12_345);
+    }
+
+    /// Its own head is what keeps it out of the other spaces, and theirs out of
+    /// it — `0xF1` is the developer screens' and `0xF0` everything else.
+    #[test]
+    fn another_spaces_head_is_not_a_contracts() {
+        assert_eq!(ui::contract::parse(&[0xF0, 1, b'7']), Err(UiError::Head));
+        assert_eq!(
+            ui::contract::parse(&[ui::developer::head(), 1, b'7']),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::contract::parse(&[ui::contract::head(), 1, b'7']),
+            Ok((ui::contract::Action::Approve, 7))
+        );
+    }
+
+    #[test]
+    fn an_unknown_contract_action_is_rejected() {
+        assert_eq!(
+            ui::contract::parse(&[ui::contract::head(), 99, b'1']),
+            Err(UiError::Unknown(99))
+        );
     }
 }

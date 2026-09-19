@@ -42,6 +42,7 @@ pub fn commands() -> Vec<Value> {
         application(),
         issue(),
         grant(),
+        contract(),
         pay(),
         info(),
         create(),
@@ -105,6 +106,28 @@ fn issue() -> Value {
         "contexts": [0],
         "integration_types": [0, 1],
         "default_member_permissions": "0",
+    })
+}
+
+/// `/contract`: the contracts a user is named in.
+///
+/// In a guild and in a DM both, unlike `/grant` beside it: a contract is between
+/// an application and the *user*, so there is no administrator to ask and no guild
+/// to be in. The currency it names still belongs to one, and the screen says
+/// which.
+fn contract() -> Value {
+    json!({
+        "name": "contract",
+        "description": "あなたが対象になっている契約を表示し、承認・拒否・取り消しができます。",
+        "options": [
+            {
+                "name": "list",
+                "description": "承認待ちの契約と、参加中の契約の一覧を表示します。",
+                "type": 1,
+            },
+        ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -527,6 +550,7 @@ mod tests {
                 "application",
                 "issue",
                 "grant",
+                "contract",
                 "pay",
                 "info",
                 "create",

@@ -10,6 +10,7 @@ pub mod application;
 pub mod autocomplete;
 mod bal;
 pub mod claim;
+pub mod contract;
 pub mod create;
 pub mod delete;
 pub mod grant;
@@ -190,6 +191,7 @@ pub async fn handle(
         "application" => application::handle(state, options, payload).await,
         "bal" => bal::handle(state, payload).await,
         "claim" => claim::handle(state, options, payload).await,
+        "contract" => contract::handle(state, options, payload).await,
         "create" => create::handle(state, options, payload).await,
         "delete" => delete::handle(state, options, payload).await,
         "grant" => grant::handle(state, options, payload).await,

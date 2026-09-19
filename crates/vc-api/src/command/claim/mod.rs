@@ -49,7 +49,10 @@ fn sub_option<'a>(sub_options: Option<&'a Value>, name: &str) -> Result<&'a Valu
 
 /// `Interactions.Util.format_date_time/1`: Discord renders `<t:unix>` in the
 /// reader's own timezone.
-fn format_date_time(value: PrimitiveDateTime) -> String {
+///
+/// Shared with the contract screen, which has a deadline to say the same way and
+/// would otherwise have a second copy of this format.
+pub(super) fn format_date_time(value: PrimitiveDateTime) -> String {
     format!("<t:{}>", value.assume_utc().unix_timestamp())
 }
 
