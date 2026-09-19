@@ -121,6 +121,9 @@ pub async fn balances(
 /// Approving twice is not a second decision, and it is answered the same way:
 /// the money is already locked, and there is nothing to do but say what the
 /// contract looks like now.
+///
+/// A decision is also what the application is told about, so approving twice
+/// tells it once.
 pub async fn approve(
     State(state): State<AppState>,
     user: Limited,
@@ -128,11 +131,19 @@ pub async fn approve(
 ) -> Result<Json<Value>, ApiError> {
     let account = account(&user)?;
 
-    contract::approve(state.pool(), id, account, OffsetDateTime::now_utc())
+    let decided = contract::approve(state.pool(), id, account, OffsetDateTime::now_utc())
         .await
         .map_err(contract_error)?;
 
-    Ok(Json(render(&find(&state, id).await?)))
+    let contract = find(&state, id).await?;
+
+    if decided {
+        state
+            .notifier()
+            .notify_contract_decided(contract.application_id, id);
+    }
+
+    Ok(Json(render(&contract)))
 }
 
 /// `POST /api/v2/contracts/{id}/refusal`: a party saying no before they have
@@ -147,11 +158,19 @@ pub async fn refuse(
 ) -> Result<Json<Value>, ApiError> {
     let account = account(&user)?;
 
-    contract::refuse(state.pool(), id, account, OffsetDateTime::now_utc())
+    let decided = contract::refuse(state.pool(), id, account, OffsetDateTime::now_utc())
         .await
         .map_err(contract_error)?;
 
-    Ok(Json(render(&find(&state, id).await?)))
+    let contract = find(&state, id).await?;
+
+    if decided {
+        state
+            .notifier()
+            .notify_contract_decided(contract.application_id, id);
+    }
+
+    Ok(Json(render(&contract)))
 }
 
 /// `DELETE /api/v2/contracts/{id}/approval`: a party taking the delegation back.
@@ -166,11 +185,19 @@ pub async fn withdraw(
 ) -> Result<Json<Value>, ApiError> {
     let account = account(&user)?;
 
-    contract::withdraw(state.pool(), id, account, OffsetDateTime::now_utc())
+    let decided = contract::withdraw(state.pool(), id, account, OffsetDateTime::now_utc())
         .await
         .map_err(contract_error)?;
 
-    Ok(Json(render(&find(&state, id).await?)))
+    let contract = find(&state, id).await?;
+
+    if decided {
+        state
+            .notifier()
+            .notify_contract_decided(contract.application_id, id);
+    }
+
+    Ok(Json(render(&contract)))
 }
 
 /// `POST /api/v2/contracts/{id}/payments`: the application spending what the

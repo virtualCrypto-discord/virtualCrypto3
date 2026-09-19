@@ -71,7 +71,7 @@ async fn an_application_is_read_back_whole(pool: PgPool) {
     assert_eq!(found.client_secret.as_deref(), Some("a-secret"));
     assert_eq!(
         found.subscribed_events,
-        vec![2, 3],
+        vec![2, 3, 4],
         "the column defaults to everything, spelled out"
     );
 }

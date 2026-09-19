@@ -494,10 +494,16 @@ pub fn check_grant_types(types: &[String]) -> Result<Vec<String>, MetadataError>
 /// values the delivery bodies carry.
 ///
 /// One list, because two would drift and offer a value the other refuses — the
-/// same reason `RESPONSE_TYPES` is one list. `2` is a claim update and `3` is a
-/// grant decision; `1` is the handshake's PING, which is not a subscription but
-/// a check, so naming it here is refused rather than stored.
-pub const EVENT_TYPES: &[i64] = &[2, 3];
+/// same reason `RESPONSE_TYPES` is one list. `2` is a claim update, `3` a grant
+/// decision and `4` a contract decision; `1` is the handshake's PING, which is
+/// not a subscription but a check, so naming it here is refused rather than
+/// stored.
+///
+/// A new type is a new choice for an application, not a gift: one that wrote
+/// `{2, 3}` asked for those two, and `4` is delivered to it only once it says
+/// so. The column's default is what a registration that names none gets, and it
+/// is the whole set.
+pub const EVENT_TYPES: &[i64] = &[2, 3, 4];
 
 /// `validate_event_types/1`: a subset of [`EVENT_TYPES`], as a set.
 ///

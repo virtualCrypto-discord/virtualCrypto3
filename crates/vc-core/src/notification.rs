@@ -22,6 +22,16 @@ pub trait Notifier: Send + Sync {
     /// still lets the device do — and a token already issued stops being able
     /// to do it, because its scopes are read from the grant.
     fn notify_grant_decided(&self, application_id: i64, guild_id: i64);
+
+    /// A party decided something about a contract: the application that wrote
+    /// it, and which contract. The application asked for the users' currency,
+    /// and this is what tells it the answer — including the last one, which is
+    /// the only moment "everyone is in" is true.
+    ///
+    /// Like the grant decision, the delivery carries the state as it stands
+    /// rather than the decision alone, so the same event serves a single
+    /// approval and the one that completes the set.
+    fn notify_contract_decided(&self, application_id: i64, contract_id: i64);
 }
 
 /// Drops every event. A claim transition still completes; nothing is delivered.
@@ -36,4 +46,6 @@ impl Notifier for NoopNotifier {
     fn notify_claim_update(&self, _claimant_id: i32, _events: &[Value]) {}
 
     fn notify_grant_decided(&self, _application_id: i64, _guild_id: i64) {}
+
+    fn notify_contract_decided(&self, _application_id: i64, _contract_id: i64) {}
 }

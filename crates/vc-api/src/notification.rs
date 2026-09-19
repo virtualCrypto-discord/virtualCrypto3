@@ -240,6 +240,18 @@ impl vc_core::notification::Notifier for WebhookNotifier {
             send_grant_decided(&pool, &*transport, application_id, guild_id).await;
         });
     }
+
+    /// Fire and forget for the same reason again: the parties have decided, and
+    /// the application can read the contract whenever it likes — this is the
+    /// ping that saves it from asking.
+    fn notify_contract_decided(&self, application_id: i64, contract_id: i64) {
+        let pool = self.pool.clone();
+        let transport = std::sync::Arc::clone(&self.transport);
+
+        tokio::spawn(async move {
+            send_contract_decided(&pool, &*transport, application_id, contract_id).await;
+        });
+    }
 }
 
 /// One delivery, if there is anywhere to deliver it.
@@ -320,6 +332,75 @@ async fn send_grant_decided(
         transport,
         application_id,
         grant_decided_body(guild_id, &scopes),
+    )
+    .await;
+}
+
+/// The event body for a contract decision: type 4, with the contract and its
+/// parties as they stand.
+///
+/// Type 1 is the PING, 2 a claim update and 3 a grant decision, and an
+/// application must ignore types it does not know — which is what makes adding
+/// this one safe for applications written before it.
+///
+/// A party approving and the last party approving are **this one event with
+/// different state**: the first arrives with `status: "pending"` and one more
+/// approved party in the list, the second with `"active"`. That is how the claim
+/// update carries its state, and it means an application that only cares about
+/// "everyone is in" reads a field rather than joining two kinds of event.
+pub fn contract_decided_body(contract: &vc_core::contract::Contract) -> Value {
+    serde_json::json!({
+        "type": 4,
+        "data": {
+            "contract": {
+                "id": contract.id.to_string(),
+                "unit": contract.unit,
+                "guild_id": contract.guild_id.map(|guild| guild.to_string()),
+                "status": contract.status,
+                "receiver_discord_id": contract.receiver_discord_id.map(|id| id.to_string()),
+                "expires_at": contract.expires_at.map(crate::routes::v2::claims::format_timestamp),
+                "remaining": contract.remaining.to_string(),
+            },
+            "parties": contract
+                .parties
+                .iter()
+                .map(|party| {
+                    serde_json::json!({
+                        "discord_id": party.discord_id.to_string(),
+                        "amount": party.amount.to_string(),
+                        "remaining": party.remaining.to_string(),
+                        "status": party.status,
+                    })
+                })
+                .collect::<Vec<Value>>(),
+        },
+    })
+}
+
+/// One contract decision, if there is still a contract to say anything about.
+///
+/// The read is here rather than at the call site for the grant path's reason:
+/// what an application receives is what the contract *is* when the delivery is
+/// made, not what it was when the decision was.
+async fn send_contract_decided(
+    pool: &sqlx::PgPool,
+    transport: &dyn Transport,
+    application_id: i64,
+    contract_id: i64,
+) {
+    let Ok(found) = vc_core::contract::find(pool, contract_id).await else {
+        return;
+    };
+
+    let Some(contract) = found else {
+        return;
+    };
+
+    send_to_application(
+        pool,
+        transport,
+        application_id,
+        contract_decided_body(&contract),
     )
     .await;
 }

@@ -391,20 +391,30 @@ pub fn state_with_notifier(
     )
 }
 
-/// The grant decisions a notifier was asked to deliver, which is how a test
-/// watches a decision without a webhook to deliver it to. The claim deliveries'
-/// counterpart is the sink in `tests/notification.rs`, which asserts on the
-/// events rather than on the call.
+/// What a notifier was asked to deliver, which is how a test watches a decision
+/// without a webhook to deliver it to. The claim deliveries' counterpart is the
+/// sink in `tests/notification.rs`, which asserts on the events rather than on
+/// the call.
 #[derive(Default)]
 pub struct Recorded {
-    decisions: Mutex<Vec<(i64, i64)>>,
+    grants: Mutex<Vec<(i64, i64)>>,
+    contracts: Mutex<Vec<(i64, i64)>>,
 }
 
 impl Recorded {
-    /// The decisions so far, in order: the application, and the guild that
+    /// The grant decisions so far, in order: the application, and the guild that
     /// decided what it may do there.
-    pub fn decisions(&self) -> Vec<(i64, i64)> {
-        self.decisions
+    pub fn grant_decisions(&self) -> Vec<(i64, i64)> {
+        self.grants
+            .lock()
+            .expect("the sink is not poisoned")
+            .clone()
+    }
+
+    /// The contract decisions so far, in order: the application, and the
+    /// contract a party decided something about.
+    pub fn contract_decisions(&self) -> Vec<(i64, i64)> {
+        self.contracts
             .lock()
             .expect("the sink is not poisoned")
             .clone()
@@ -417,10 +427,17 @@ impl Notifier for Recorded {
     }
 
     fn notify_grant_decided(&self, application_id: i64, guild_id: i64) {
-        self.decisions
+        self.grants
             .lock()
             .expect("the sink is not poisoned")
             .push((application_id, guild_id));
+    }
+
+    fn notify_contract_decided(&self, application_id: i64, contract_id: i64) {
+        self.contracts
+            .lock()
+            .expect("the sink is not poisoned")
+            .push((application_id, contract_id));
     }
 }
 

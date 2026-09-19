@@ -206,7 +206,7 @@ async fn revoking_pings_the_application(pool: PgPool) {
 
     assert_eq!(response.status, 204, "body: {}", response.body);
     assert_eq!(
-        notified.decisions(),
+        notified.grant_decisions(),
         [(application, GUILD)],
         "the application, and the guild it may no longer issue in"
     );
@@ -229,7 +229,7 @@ async fn revoking_what_was_never_granted_pings_nobody(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 204, "body: {}", response.body);
-    assert!(notified.decisions().is_empty(), "nothing was decided");
+    assert!(notified.grant_decisions().is_empty(), "nothing was decided");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

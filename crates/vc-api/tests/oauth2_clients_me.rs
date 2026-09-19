@@ -169,7 +169,7 @@ async fn the_address_registration_hands_out_is_readable(pool: PgPool) {
     assert_eq!(read.body["client_id"], registered["client_id"]);
     assert_eq!(
         read.body["subscribed_events"],
-        serde_json::json!([2, 3]),
+        serde_json::json!([2, 3, 4]),
         "registered without naming any: everything, spelled out"
     );
 }

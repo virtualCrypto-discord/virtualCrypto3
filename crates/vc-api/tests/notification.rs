@@ -46,6 +46,11 @@ impl Notifier for Sink {
         // Claims only: grant decisions go through the webhook path, which has
         // its own test.
     }
+
+    fn notify_contract_decided(&self, _application_id: i64, _contract_id: i64) {
+        // The same, and a contract decision's own test is
+        // `tests/contract_notification.rs`.
+    }
 }
 
 /// `VirtualCryptoTest.Notification.Setup.setup_claim/1`: a pending claim, with

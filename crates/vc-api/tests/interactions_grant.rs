@@ -237,7 +237,7 @@ async fn revoking_a_pending_code_unasks_it(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), ["発行の許可を取り消しました。"]);
     assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
-    assert!(notified.decisions().is_empty(), "nothing was decided");
+    assert!(notified.grant_decisions().is_empty(), "nothing was decided");
 
     let listed = interaction(
         router_with(pool.clone(), notified.clone()),
@@ -295,7 +295,7 @@ async fn a_decision_pings_the_application(pool: PgPool) {
     .await;
 
     assert_eq!(
-        notified.decisions(),
+        notified.grant_decisions(),
         [(application, DEFAULT_GUILD)],
         "the approval"
     );
@@ -309,7 +309,7 @@ async fn a_decision_pings_the_application(pool: PgPool) {
     .await;
 
     assert_eq!(
-        notified.decisions(),
+        notified.grant_decisions(),
         [(application, DEFAULT_GUILD), (application, DEFAULT_GUILD)],
         "and the taking-back"
     );
