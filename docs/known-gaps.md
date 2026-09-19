@@ -42,33 +42,6 @@ Behaviour that the Elixir service has and this rewrite does not implement yet,
 listed here so it cannot be forgotten. Everything here is deliberately deferred;
 nothing is dropped by accident.
 
-## Notifications for claim status changes
-
-When a claim is approved or denied, Elixir calls
-`VirtualCrypto.Notification.Dispatcher.notify_claim_update/2`, which resolves the
-claimant to their application and POSTs an Ed25519-signed event to the
-application's `webhook_url` through the Cloudflare Workers proxy (mutual TLS,
-`X-Signature-Ed25519` / `X-Signature-Timestamp` headers, `X-Forward` target).
-
-The Rust service builds and dispatches that event — `vc_core::notification::Notifier`
-is the seam, the payload matches `format_claim_for_notification/1`, and
-`tests/notification.rs` pins it against the same assertions the Elixir suite
-makes. **What is still missing is transport**: the server runs with
-`NoopNotifier`, so nothing actually reaches an application. That half needs the
-OAuth2/application side of the domain, which does not exist here yet:
-
-- the `applications` row's `webhook_url`, `public_key` and `private_key`;
-- `VirtualCrypto.Exterior.User.Resolver` to turn the claimant into an application;
-- an HTTP client able to present the webhook proxy's client certificate
-  (`VCRYPTO_WEBHOOK_PROXY_CERT` / `VCRYPTO_WEBHOOK_PROXY_KEY`);
-- the `Hammer` rate limits on webhook verification (1 per 3s, 20 per hour,
-  50 per day, per requester);
-- `verify/4`, the webhook-URL verification handshake used when an application is
-  registered or patched.
-
-Because it is entangled with the OAuth2 provider milestone, it is scheduled
-there rather than in the claim endpoints.
-
 ## Discord lookups are cached in the process
 
 `Discord.Api.Cached` wraps the raw API and remembers `get_user` and `get_guild`
@@ -300,10 +273,12 @@ the private half and the application verifies with the public one. That is also
 why the fixture in `tests/oauth2_preauthorize.rs` has to write both, which the
 runtime taught us rather than the schema.
 
-What is missing here is three things and not two: an implementation of `Notifier`
-that posts through the worker, the worker's URL, and **the client certificate and
-key it will demand**. And something that re-verifies applications periodically —
-there is no scheduler in this service at all.
+The delivery is implemented: `WebhookNotifier` signs with the application's
+private key and posts through the worker where one is configured, and straight at
+the application's own `webhook_url` where there is none — the same choice the
+handshake makes. What is missing here is the re-verification: `verify` runs when
+a webhook is registered or edited, and nothing runs it afterwards, because there
+is no scheduler in this service at all.
 
 ### What a delivery is, and what the handshake checks
 

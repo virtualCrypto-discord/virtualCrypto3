@@ -26,9 +26,10 @@ pub trait Notifier: Send + Sync {
 
 /// Drops every event. A claim transition still completes; nothing is delivered.
 ///
-/// The webhook transport is not implemented — it needs the application side of
-/// the domain, which does not exist here yet — so this is what the server runs
-/// with. See `docs/known-gaps.md`.
+/// What a state with no transport to deliver through carries, which is the
+/// tests' default. The server runs `WebhookNotifier` instead: an application's
+/// webhook through the proxy where one is configured, and straight at its own
+/// `webhook_url` where there is none.
 pub struct NoopNotifier;
 
 impl Notifier for NoopNotifier {

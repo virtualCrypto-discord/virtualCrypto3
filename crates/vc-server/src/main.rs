@@ -52,18 +52,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = vc_core::db::connect(&database_url, 10).await?;
 
-    // The webhook transport, when there is a proxy to send through. With none —
-    // in development, or before the certificates exist — nothing is delivered and
-    // claims still complete, which is what the no-op is for.
+    // Deliveries go through the proxy where there is one, and straight at the
+    // application's own webhook where there is not — the same choice the
+    // handshake makes, so a machine that can register a webhook can be told about
+    // a decision through it. There is no notifier that drops events: a
+    // deployment with nowhere to deliver to is a deployment that cannot register
+    // a webhook in the first place.
     let proxy = webhook_proxy().map(Arc::new);
 
-    let notifier: Arc<dyn vc_core::notification::Notifier> = match proxy.clone() {
-        Some(proxy) => Arc::new(vc_api::notification::WebhookNotifier::new(
-            pool.clone(),
-            proxy,
-        )),
-        None => Arc::new(vc_core::notification::NoopNotifier),
+    let transport: Arc<dyn vc_api::notification::Transport> = match proxy.clone() {
+        Some(proxy) => proxy,
+        None => Arc::new(vc_api::notification::Direct::default()),
     };
+
+    let notifier: Arc<dyn vc_core::notification::Notifier> = Arc::new(
+        vc_api::notification::WebhookNotifier::new(pool.clone(), transport),
+    );
 
     let state = AppState::new(
         pool,
@@ -82,8 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
         vc_api::state::Outbound {
-            proxy: proxy.clone(),
-            notifier: notifier.clone(),
+            proxy,
+            notifier,
             handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
         // A loose per-user allowance; `RATE_LIMIT_PER_MINUTE=0` turns it off.

@@ -196,16 +196,18 @@ pub const PING: i64 = 1;
 #[derive(Clone)]
 pub struct WebhookNotifier {
     pool: sqlx::PgPool,
-    proxy: std::sync::Arc<Proxy>,
+    transport: std::sync::Arc<dyn Transport>,
 }
 
 impl WebhookNotifier {
-    /// The proxy is taken as an `Arc` rather than built into one, because the
-    /// state holds the same one: the handshake a registration performs and the
-    /// deliveries an application receives go through one proxy, and there is no
-    /// reason for two.
-    pub fn new(pool: sqlx::PgPool, proxy: std::sync::Arc<Proxy>) -> Self {
-        Self { pool, proxy }
+    /// The transport is taken as an `Arc` rather than built here, because the
+    /// deliveries are spawned — and as a trait object because reaching an
+    /// application is the one thing that differs between deployments: `Proxy`
+    /// where a worker is configured, `Direct` where there is none. Both are what
+    /// the handshake beside it chooses between, so a service that can verify a
+    /// webhook is also one that can deliver to it.
+    pub fn new(pool: sqlx::PgPool, transport: std::sync::Arc<dyn Transport>) -> Self {
+        Self { pool, transport }
     }
 }
 
@@ -215,11 +217,11 @@ impl vc_core::notification::Notifier for WebhookNotifier {
     /// that never answers must not stop it.
     fn notify_claim_update(&self, claimant_id: i32, events: &[Value]) {
         let pool = self.pool.clone();
-        let proxy = std::sync::Arc::clone(&self.proxy);
+        let transport = std::sync::Arc::clone(&self.transport);
         let events = events.to_vec();
 
         tokio::spawn(async move {
-            send_claim_update(&pool, &*proxy, claimant_id, &events).await;
+            send_claim_update(&pool, &*transport, claimant_id, &events).await;
         });
     }
 
@@ -232,10 +234,10 @@ impl vc_core::notification::Notifier for WebhookNotifier {
     /// its token is dead without reading the diff.
     fn notify_grant_decided(&self, application_id: i64, guild_id: i64) {
         let pool = self.pool.clone();
-        let proxy = std::sync::Arc::clone(&self.proxy);
+        let transport = std::sync::Arc::clone(&self.transport);
 
         tokio::spawn(async move {
-            send_grant_decided(&pool, &*proxy, application_id, guild_id).await;
+            send_grant_decided(&pool, &*transport, application_id, guild_id).await;
         });
     }
 }
@@ -472,6 +474,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     use serde_json::json;
+    use vc_core::notification::Notifier;
 
     /// A keypair, as the application would hold it: the seed it signs with and
     /// the public half it verifies with.
@@ -886,6 +889,39 @@ mod tests {
                 "data": { "guild_id": GUILD.to_string(), "scopes": [] },
             }),
             "and none of them once the issuing scope is taken back"
+        );
+    }
+
+    /// The notifier delivers over the transport it was given rather than through
+    /// a proxy of its own: `Direct` here, which is what a machine with no proxy
+    /// runs with — the same fallback the handshake makes, so a webhook that could
+    /// be verified is also one that can be told about a decision.
+    #[sqlx::test(migrations = "../vc-core/migrations")]
+    async fn the_notifier_delivers_over_its_transport(pool: sqlx::PgPool) {
+        const GUILD: i64 = 900_000_000_000_000_001;
+
+        let (url, mut delivered) = recording_hook().await;
+        let application = application_at(&pool, &url).await;
+
+        vc_core::grant::allow_in_guild(
+            &pool,
+            application,
+            GUILD,
+            &["vc.issue"],
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("a grant");
+
+        WebhookNotifier::new(pool.clone(), std::sync::Arc::new(Direct::default()))
+            .notify_grant_decided(application, GUILD);
+
+        assert_eq!(
+            next_delivery(&mut delivered, &url).await,
+            json!({
+                "type": 3,
+                "data": { "guild_id": GUILD.to_string(), "scopes": ["vc.issue"] },
+            })
         );
     }
 }

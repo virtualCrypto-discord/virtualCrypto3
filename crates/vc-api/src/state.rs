@@ -45,13 +45,16 @@ impl Signing {
     }
 }
 
-/// What this service sends with: the proxy that reaches applications, and the
-/// notifier built on it.
+/// What this service sends with: the proxy that reaches applications, when one is
+/// configured, and the notifier that delivers through it.
 ///
-/// The two travel together because one is how the other works. `proxy` is `None`
-/// when none is configured, which is development and any deployment that has not
-/// been given the certificate — and the webhook handshake a registration performs
-/// is the one thing that needs it rather than the notifier the deliveries use.
+/// The two travel together because they answer the same question — how a webhook
+/// is reached — and they answer it the same way. `proxy` is `None` when none is
+/// configured, which is development and any deployment that has not been given
+/// the certificate; that is not a service which tells nobody, it is one with no
+/// worker in the way, and both the handshake a registration performs and the
+/// deliveries an application receives go straight at its own `webhook_url`
+/// instead. See [`crate::notification::Direct`].
 #[derive(Clone)]
 pub struct Outbound {
     pub proxy: Option<Arc<Proxy>>,

@@ -54,7 +54,10 @@ It goes together with
 `VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` is the mTLS client the
 webhook handshake goes through — the Cloudflare Worker in front of an application's
 webhook requires a client certificate, which is why the pair is required together
-rather than separately. `#` in the PEM values is read as a newline.
+rather than separately. `#` in the PEM values is read as a newline. Without the
+pair there is no proxy at all, and both the webhook handshake and the deliveries
+go straight at each application's own `webhook_url` — the development path,
+where a machine has no worker to reach applications through.
 
 ## The schema
 
