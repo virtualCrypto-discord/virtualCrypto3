@@ -42,29 +42,43 @@ Behaviour that the Elixir service has and this rewrite does not implement yet,
 listed here so it cannot be forgotten. Everything here is deliberately deferred;
 nothing is dropped by accident.
 
-## The jobs that ran on a clock
+## The jobs that run on a clock
 
-`vc_api::scheduler` does two things: it settles expired contracts, and it deletes
-the rows whose `expires` has passed (`vc_core::purge`). What is left of what the
-Elixir runs on timers is **not implemented here, and was not written down at all
-before this note** — which is the part worth saying plainly, because a gap that is
-not recorded reads as a feature that is present.
+The Elixir's scheduler is Quantum (`lib/virtualCrypto/scheduler.ex`), and its jobs
+are four, from `config/config.exs`:
 
-- **The pool refills itself, daily.** The published rule (`About.md` in
-  `virtualcrypto-docs`): a currency is created with an initial issuance, the pool
-  gets 0.5% of the total issuance with it, and **every day another 0.5% is added,
-  up to 3.5% of the total** — seven days' worth, which is what the cap is for.
-  `vc_core::currency::create` implements the first half alone (`((creator_amount
-  + 199) / 200).max(5)`), so a guild's pool here is whatever it was on the day the
-  currency was made and never grows. What has to be read out of the Elixir before
-  this is ported: what "the total issuance" is measured on — the creator's initial
-  grant, or the sum of everything outstanding — and what the job does about days
-  it was not running, because a pool that refills only from the day a scheduler
-  happens to exist is wrong in a way nobody can see.
-- **The pool refill is the gap, and the purge is not.** `tests/golden/README.md`
-  recorded that the Elixir removes expired `user_access_tokens` rows on a timer;
-  that one is done, together with the two other tables that carry an `expires`
-  (`payments_idempotency`, `authorization_codes`).
+```elixir
+jobs: [
+  {"@daily",    &VirtualCrypto.Money.reset_pool_amount/0},
+  {"* * * * *", &VirtualCrypto.Auth.purge_user_access_tokens/0},
+  {"* * * * *", &VirtualCrypto.Auth.purge_access_tokens/0},
+  {"* * * * *", &VirtualCryptoWeb.IdempotencyLayer.Payments.purge_idempotency_keys/0}
+]
+```
+
+`vc_api::scheduler` runs three of them: the pool refill once a UTC day
+(`vc_core::currency::reset_pool_amount`, the Elixir's SQL read out of
+`money/query-service/currency.ex`), and the purge of the rows whose `expires` has
+passed — the signed tokens, the access and refresh tokens, the authorization codes
+nobody redeemed, and the idempotency keys (`vc_core::purge`). The codes and the
+refresh tokens are an addition to the Elixir's three purge jobs, on the same
+`expires` and for the same reason.
+
+What is **not** here, and what an earlier version of this file did not say at all —
+which is what made a gap read as a feature:
+
+- **The pool refill measures the supply in users' hands**, `SUM(assets.amount)` per
+  currency, and not the creator's initial grant, and its allowance is rounded on
+  the way into the column rather than truncated (`(supplied + 199) / 200` read as
+  `SUM` of `bigint`, which is numeric, is the Elixir's own arithmetic). A currency
+  whose users hold nothing is left alone. What this service cannot reproduce is the
+  *timing*: a restart after the day's refill adds it again, because nothing in the
+  database says the day was paid — the Elixir keeps its schedule in memory too,
+  and a marker column is a schema this service shares with it.
+- **Re-verifying applications whose webhook has gone quiet.** The Elixir checks a
+  webhook at registration and patched edits; whether anything re-runs that
+  periodically, and what a failed re-check would do, is not in its scheduler's job
+  list and not in its source as read so far.
 
 ## Discord lookups are cached in the process
 

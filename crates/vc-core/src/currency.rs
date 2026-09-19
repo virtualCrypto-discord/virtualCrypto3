@@ -207,6 +207,56 @@ pub async fn create(
     Ok(())
 }
 
+/// `Query.Currency.reset_pool_amount/0`: every pool gets a day's allowance.
+///
+/// The published rule (`About.md` in `virtualcrypto-docs`) is 0.5% of the total
+/// issuance a day, up to 3.5% of it. What the Elixir's SQL actually measures is
+/// **the supply in users' hands** — `SUM(assets.amount)` per currency — and not
+/// the creator's initial grant, so a currency whose users hold more gets more; a
+/// currency nobody holds is not in the join at all and is left alone. The
+/// allowance is `(supplied + 199) / 200` and the ceiling `(supplied * 7 + 199) /
+/// 200`, both floored at 5 and 35; the division is numeric, as Postgres reads a
+/// `SUM` of `bigint`, so the value is rounded on the way into the column rather
+/// than truncated — which is the Elixir's arithmetic and not the ceiling its
+/// `+199` suggests.
+///
+/// One statement over every currency, and an increment rather than a target: it
+/// is run once a day, so running it twice is running two days' worth. That is
+/// what the schedule is for, and it is why this takes no `now` — nothing in the
+/// data says when it last ran.
+pub async fn reset_pool_amount(pool: &PgPool) -> std::result::Result<u64, sqlx::Error> {
+    let updated = sqlx::query!(
+        r#"WITH supplied_amounts AS (
+             SELECT currency_id, SUM(amount) AS supplied_amount
+               FROM assets GROUP BY currency_id
+           ), schedules AS (
+             SELECT currency_id,
+                    CASE WHEN (supplied_amounts.supplied_amount + 199) / 200 < 5
+                         THEN 5
+                         ELSE (supplied_amounts.supplied_amount + 199) / 200
+                    END AS increasing_pool_amount,
+                    CASE WHEN (supplied_amounts.supplied_amount * 7 + 199) / 200 < 35
+                         THEN 35
+                         ELSE (supplied_amounts.supplied_amount * 7 + 199) / 200
+                    END AS pool_amount_limit
+               FROM supplied_amounts
+           )
+           UPDATE currencies
+              SET pool_amount = CASE
+                  WHEN schedules.increasing_pool_amount + currencies.pool_amount
+                       > schedules.pool_amount_limit
+                  THEN schedules.pool_amount_limit
+                  ELSE schedules.increasing_pool_amount + currencies.pool_amount
+              END
+             FROM schedules
+            WHERE schedules.currency_id = currencies.id"#
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(updated.rows_affected())
+}
+
 /// The guild's currency unit, for the confirmation the delete modal asks for.
 pub async fn unit_for_guild(
     pool: &PgPool,

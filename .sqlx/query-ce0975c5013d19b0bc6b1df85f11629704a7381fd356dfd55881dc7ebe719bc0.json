@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH supplied_amounts AS (\n             SELECT currency_id, SUM(amount) AS supplied_amount\n               FROM assets GROUP BY currency_id\n           ), schedules AS (\n             SELECT currency_id,\n                    CASE WHEN (supplied_amounts.supplied_amount + 199) / 200 < 5\n                         THEN 5\n                         ELSE (supplied_amounts.supplied_amount + 199) / 200\n                    END AS increasing_pool_amount,\n                    CASE WHEN (supplied_amounts.supplied_amount * 7 + 199) / 200 < 35\n                         THEN 35\n                         ELSE (supplied_amounts.supplied_amount * 7 + 199) / 200\n                    END AS pool_amount_limit\n               FROM supplied_amounts\n           )\n           UPDATE currencies\n              SET pool_amount = CASE\n                  WHEN schedules.increasing_pool_amount + currencies.pool_amount\n                       > schedules.pool_amount_limit\n                  THEN schedules.pool_amount_limit\n                  ELSE schedules.increasing_pool_amount + currencies.pool_amount\n              END\n             FROM schedules\n            WHERE schedules.currency_id = currencies.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "ce0975c5013d19b0bc6b1df85f11629704a7381fd356dfd55881dc7ebe719bc0"
+}

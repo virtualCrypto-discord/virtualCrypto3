@@ -176,8 +176,8 @@ while it is waiting, 取り消す once it is theirs to take back.
   it early. Amounts are what the parties agreed to, and a party can withdraw or
   wait out the deadline; an application that wants different terms writes a
   different contract.
-- **Two jobs run on the clock.** Settling expired contracts, and deleting the rows
-  whose `expires` has passed (`vc_core::purge`). The rest of what the Elixir runs
-  on timers — refilling each pool daily, re-verifying applications whose webhook
-  has gone quiet — is **not** implemented here, and `docs/known-gaps.md` is where
-  that is named rather than implied to exist.
+- **Three jobs run on the clock.** Settling expired contracts, deleting the rows
+  whose `expires` has passed (`vc_core::purge`), and refilling each pool once a day
+  (`vc_core::currency::reset_pool_amount`). `docs/known-gaps.md` is where the
+  Elixir's job list and what this service does and does not reproduce of it are
+  written down.

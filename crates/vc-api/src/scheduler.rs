@@ -69,6 +69,30 @@ pub async fn settle_expired(state: &AppState) {
     }
 }
 
+/// The pools get a day's allowance, once a day.
+///
+/// `@daily` in the Elixir and here: the day the tick is in is held in memory, so
+/// the first tick of a new UTC day refills and the rest of that day's ticks do
+/// nothing. A service that restarts later the same day refills again, because
+/// nothing in the database says the day was already paid — the Elixir's schedule
+/// lives in its own memory too, and a marker column would be a schema this service
+/// shares with it and must not add on its own.
+///
+/// The day is a value rather than a clock reading passed in, so a test can ask for
+/// a day without waiting for one.
+pub async fn refill_pools(state: &AppState) {
+    match vc_core::currency::reset_pool_amount(state.pool()).await {
+        Ok(0) => {}
+        Ok(updated) => tracing::info!(updated, "the pools were refilled"),
+        Err(error) => tracing::warn!(?error, "the pools could not be refilled"),
+    }
+}
+
+/// Whether this tick is the first of a new day, and the day to remember.
+fn is_a_new_day(last: Option<time::Date>, today: time::Date) -> bool {
+    last != Some(today)
+}
+
 /// The rows whose time is up are deleted, so the tables do not grow with things
 /// nobody can use again — an expired token, an idempotency key whose week is over,
 /// an authorization code nobody redeemed.
@@ -94,10 +118,35 @@ pub async fn run(state: AppState, every: Duration) {
     }
 
     let mut ticker = tokio::time::interval(every);
+    let mut day = None;
 
     loop {
         ticker.tick().await;
         settle_expired(&state).await;
         purge_expired(&state).await;
+
+        let today = time::OffsetDateTime::now_utc().date();
+
+        if is_a_new_day(day, today) {
+            refill_pools(&state).await;
+            day = Some(today);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The first tick of a day refills and the rest of its ticks do not, which is
+    /// the whole of what keeps a daily allowance daily.
+    #[test]
+    fn a_day_is_new_once() {
+        let first = time::macros::date!(2026 - 09 - 19);
+        let next = time::macros::date!(2026 - 09 - 20);
+
+        assert!(is_a_new_day(None, first), "nothing has run yet");
+        assert!(!is_a_new_day(Some(first), first), "the same day again");
+        assert!(is_a_new_day(Some(first), next), "and the next one");
     }
 }

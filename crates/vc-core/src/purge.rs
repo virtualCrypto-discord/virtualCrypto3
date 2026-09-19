@@ -8,20 +8,28 @@
 //! row is what says the week is up.
 //!
 //! What a row is, per table: a signed token (`user_access_tokens`), an
-//! idempotency key (`payments_idempotency`), or an authorization code nobody
-//! redeemed (`authorization_codes`). All three are meaningless once `expires` has
-//! passed — the verifiers refuse them by comparison — so deleting them is what
+//! idempotency key (`payments_idempotency`), an authorization code nobody
+//! redeemed (`authorization_codes`), a grant's access token and its refresh token
+//! (`access_tokens`, `refresh_tokens`). Every one is meaningless once `expires`
+//! has passed — the verifiers refuse them by comparison — so deleting them is what
 //! keeps the tables the size of what is still usable.
+//!
+//! The Elixir's cron names three of those jobs: the signed tokens, the access
+//! tokens, and the idempotency keys. The codes and the refresh tokens go with
+//! them, which is an addition: they carry the same `expires`, nothing refuses them
+//! by anything else, and left alone they are rows that only ever grow.
 
 use sqlx::PgPool;
 use time::PrimitiveDateTime;
 
 /// One statement per table rather than one per row, and a single call, so the
 /// cost is the same whether nothing has expired or everything has.
-const EXPIRING: [&str; 3] = [
+const EXPIRING: [&str; 5] = [
     "DELETE FROM user_access_tokens WHERE expires < $1",
     "DELETE FROM payments_idempotency WHERE expires < $1",
     "DELETE FROM authorization_codes WHERE expires < $1",
+    "DELETE FROM access_tokens WHERE expires < $1",
+    "DELETE FROM refresh_tokens WHERE expires < $1",
 ];
 
 /// How many rows went, which is what a caller logs: zero is the common answer and
