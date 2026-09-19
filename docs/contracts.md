@@ -164,11 +164,10 @@ caller's part of it is, how far the rest has come and how long it lasts, and
 offers only the answers that contract takes: 承認する and 拒否する while it is
 waiting, 取り消す once it is theirs to take back.
 
-**There is no page for it.** The SPA is the session's own — logging in, and what
-the account holds — and nothing that manages anything: every operation is one a
-command can do, so a screen that only repeats a command is a screen to keep in
-step for no reason. A contract is answerable from Discord, and that is the whole
-of its surface.
+**There is no page for it.** The SPA is the login and nothing else: every
+operation this service has is one a command can do, so a screen that only repeats
+a command is a screen to keep in step for no reason. A contract is answerable from
+Discord, and that is the whole of its surface.
 
 ## What is deliberately not here
 

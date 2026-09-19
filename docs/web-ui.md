@@ -159,9 +159,10 @@ the connect flow, the registration form, the verification warning, and the
 contracts page this document's contract item described — **has been deleted**. Not
 ported away, not deferred: removed, because every one of those operations is a
 command or an endpoint that Discord can do, and a screen that only repeats a
-command is a second place for the same rules to be got wrong. What is left is what
-a browser session needs: the landing page with the way in, and the account page
-with what the session holds.
+command is a second place for the same rules to be got wrong. What is left is the way
+in: the landing page with its login, and nothing else. The account page went too —
+what an account holds is `/bal` in Discord, and a page that only repeats a command
+is the thing this section is about.
 
 ## The requirements, in the order they matter
 
@@ -252,7 +253,8 @@ without saying which reads as unbuilt, which this one has already been read as o
    **The feature itself is an addition rather than a port** (`docs/contracts.md`):
    `/contract list` in Discord, drawn from what the service answers, with the
    buttons a contract takes. Nothing of the mockup's markup or sample data is in
-   it, and there is no page for it — the SPA is the session's own (see below).
+   it, and there is no page for it — the SPA is the login and nothing else (see
+   below).
 7. **`Mypage/Claim.elm` — the claims page — is not in this list and should be.** It is
    the Elm's `ClaimPage`: claims sent and claims received, paged, read from
    `GET /api/v2/users/@me/claims`, which is implemented and tested here (`v2_claims.rs`,

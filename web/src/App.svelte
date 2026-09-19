@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Account from "./pages/Account.svelte";
   import Landing from "./pages/Landing.svelte";
 
   // The shell. The pages land here as they arrive, starting with the landing page,
@@ -9,9 +8,8 @@
   // route, because a client library sends the browser to it and it has to work
   // without script.
 
-  // Which page to show, read from the address bar so that a reload or a shared
-  // link lands where it says. The API answers every unclaimed path with this
-  // document, so these paths are reachable directly.
+  // The one page there is: the way in. The API answers every unclaimed path with
+  // this document, so a reload or a shared link lands here.
   let path = $state(window.location.pathname);
 
   window.addEventListener("popstate", () => {
@@ -22,8 +20,6 @@
 <main>
   {#if path === "/"}
     <Landing />
-  {:else if path === "/me"}
-    <Account />
   {:else}
     <h1>見つかりません</h1>
     <p>このページはまだありません。</p>
