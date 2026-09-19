@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO applications\n             (client_id, client_name, inserted_at, updated_at, public_key, private_key)\n           VALUES (gen_random_uuid(), $1, now(), now(), '\\x00'::bytea, '\\x00'::bytea)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e533f5d79d31345f5e6acaa734c53b90b2ac3928284126c6b50ee53ab49db448"
+}

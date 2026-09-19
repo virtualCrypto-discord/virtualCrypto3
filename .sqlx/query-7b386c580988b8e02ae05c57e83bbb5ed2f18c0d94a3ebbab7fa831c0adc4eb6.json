@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (id, status, discord_id, inserted_at, updated_at)\n         VALUES ($1, 0, $2, $3, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b386c580988b8e02ae05c57e83bbb5ed2f18c0d94a3ebbab7fa831c0adc4eb6"
+}

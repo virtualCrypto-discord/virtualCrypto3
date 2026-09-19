@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(a.amount), 0)::bigint AS \"total!\"\n           FROM assets a\n           JOIN users u ON u.id = a.user_id\n          WHERE u.contract_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b90b03a27dc25e9ac18144a83694507289db89ca4021879e934b86dbbff6931d"
+}

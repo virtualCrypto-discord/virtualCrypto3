@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO job_runs (name, ran_on) VALUES ($1, $2)\n        ON CONFLICT (name) DO UPDATE SET ran_on = EXCLUDED.ran_on\n        WHERE job_runs.ran_on < EXCLUDED.ran_on\n        RETURNING name AS \"name!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "job_runs",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8ea8d0a7e97422c89716ddb52d6e5b0d7475d68685bb7945c1e3774c468661fe"
+}

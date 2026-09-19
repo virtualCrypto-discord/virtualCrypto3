@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE access_tokens SET expires = $1 WHERE token_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamp",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c62fd9da782ed4c5220f74e0280fa74bdea5721e0757af41592b358c1c8bcba"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at)\n         VALUES ($1, 'https://app.example/callback', now()::timestamp(0), now()::timestamp(0))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "62f7bb919d9918d037ce3f869f9530d07afac2b39f2315bf1113f7e1b6f11fb3"
+}

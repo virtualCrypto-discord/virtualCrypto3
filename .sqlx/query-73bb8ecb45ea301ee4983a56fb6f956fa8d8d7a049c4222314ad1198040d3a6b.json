@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO applications\n             (status, client_id, client_secret, grant_types, client_name,\n              public_key, private_key, inserted_at, updated_at)\n           VALUES (0, $1, 'secret', $2::text[]::openid_connect_grant_types[],\n                   'An Application', '\\x00'::bytea, '\\x00'::bytea,\n                   now()::timestamp(0), now()::timestamp(0))\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "73bb8ecb45ea301ee4983a56fb6f956fa8d8d7a049c4222314ad1198040d3a6b"
+}

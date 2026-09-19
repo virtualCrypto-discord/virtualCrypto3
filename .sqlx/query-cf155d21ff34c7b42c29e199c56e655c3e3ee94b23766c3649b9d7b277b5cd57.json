@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT grant_id, expires FROM refresh_tokens WHERE token_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "grant_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "grant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "expires",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "expires"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "cf155d21ff34c7b42c29e199c56e655c3e3ee94b23766c3649b9d7b277b5cd57"
+}

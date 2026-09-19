@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contracts SET expires_at = now() - interval '1 day' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "99dafcbf33cd7f0981f97fe8a5d5ee5e7bdfe1def2654b8271ab259dc18b812f"
+}

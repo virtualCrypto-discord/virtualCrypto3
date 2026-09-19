@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (status, application_id, inserted_at, updated_at)\n         VALUES (NULL, $1, now(), now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d3657f0897dc8d05573207759ef70c0ab86552060b26f9433fa6fb6f857ba3ee"
+}

@@ -10,6 +10,7 @@ pub mod error;
 pub mod grant;
 pub mod idempotency;
 pub mod issue;
+pub mod job;
 pub mod metadata;
 pub mod model;
 pub mod notification;

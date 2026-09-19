@@ -56,9 +56,11 @@ jobs: [
 ]
 ```
 
-`vc_api::scheduler` runs three of them: the pool refill once a UTC day
-(`vc_core::currency::reset_pool_amount`, the Elixir's SQL read out of
-`money/query-service/currency.ex`), and the purge of the rows whose `expires` has
+`vc_api::scheduler` runs three of them: the pool refill once a UTC day — the day
+claimed in `job_runs` (`vc_core::job::claim_day`) rather than remembered in the
+process — with the arithmetic of `vc_core::currency::reset_pool_amount`, the
+Elixir's SQL read out of `money/query-service/currency.ex`; and the purge of the
+rows whose `expires` has
 passed — the signed tokens, the access and refresh tokens, the authorization codes
 nobody redeemed, and the idempotency keys (`vc_core::purge`). The codes and the
 refresh tokens are an addition to the Elixir's three purge jobs, on the same
@@ -73,10 +75,15 @@ which is what made a gap read as a feature:
   currency, and not the creator's initial grant, and its allowance is rounded on
   the way into the column rather than truncated (`(supplied + 199) / 200` read as
   `SUM` of `bigint`, which is numeric, is the Elixir's own arithmetic). A currency
-  whose users hold nothing is left alone. What this service cannot reproduce is the
-  *timing*: a restart after the day's refill adds it again, because nothing in the
-  database says the day was paid — the Elixir keeps its schedule in memory too,
-  and a marker column is a schema this service shares with it.
+  whose users hold nothing is left alone. The *timing* is the database's rather
+  than the process's: `job_runs` holds the day the refill last ran, claimed in one
+  statement, so a restart — or a second scheduler behind the same database — cannot
+  buy another day's allowance. It is a table of this service's own, which the
+  Elixir's Ecto neither knows nor needs; what the shared schema cannot carry is a
+  marker *column*, which is why the day is not on `currencies` and why the claim is
+  asked every tick rather than remembered in two places. The behaviour is locked by
+  tests (`crates/vc-api/tests/pool_refill.rs`): the allowance, the ceiling, a
+  currency nobody holds, and a day claimed once.
 - **Re-verifying applications whose webhook has gone quiet.** The Elixir checks a
   webhook at registration and patched edits; whether anything re-runs that
   periodically, and what a failed re-check would do, is not in its scheduler's job

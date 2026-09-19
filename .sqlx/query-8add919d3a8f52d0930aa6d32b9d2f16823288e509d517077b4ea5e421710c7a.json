@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT grant_id, expires, inserted_at FROM access_tokens WHERE token_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "grant_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "grant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "expires",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "expires"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "inserted_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "access_tokens",
+            "name": "inserted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "8add919d3a8f52d0930aa6d32b9d2f16823288e509d517077b4ea5e421710c7a"
+}

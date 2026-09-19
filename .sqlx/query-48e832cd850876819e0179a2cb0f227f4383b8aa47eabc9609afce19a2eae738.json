@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO grants (application_id, guild_id, inserted_at, updated_at)\n         VALUES ($1, 42, now()::timestamp(0), now()::timestamp(0))\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grants",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "48e832cd850876819e0179a2cb0f227f4383b8aa47eabc9609afce19a2eae738"
+}

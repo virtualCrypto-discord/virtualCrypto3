@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pool_amount FROM currencies WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pool_amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "pool_amount"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a6424cc3dfe6d8ee34942986b87a758e985a0eac10ba6c4bfdae7edb3eff79e0"
+}

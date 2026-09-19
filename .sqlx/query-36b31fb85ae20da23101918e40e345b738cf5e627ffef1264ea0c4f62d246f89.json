@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO applications\n             (status, client_id, client_secret, response_types, grant_types,\n              application_type, client_name, client_uri, webhook_url,\n              public_key, private_key, inserted_at, updated_at)\n           VALUES (0, $1, 'a-secret',\n                   ARRAY['code']::openid_connect_response_types[],\n                   ARRAY['authorization_code']::openid_connect_grant_types[],\n                   'web', 'An Application', 'https://app.example',\n                   'https://app.example/hook',\n                   '\\x01abff'::bytea, '\\x00'::bytea,\n                   now()::timestamp(0), now()::timestamp(0))\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "36b31fb85ae20da23101918e40e345b738cf5e627ffef1264ea0c4f62d246f89"
+}

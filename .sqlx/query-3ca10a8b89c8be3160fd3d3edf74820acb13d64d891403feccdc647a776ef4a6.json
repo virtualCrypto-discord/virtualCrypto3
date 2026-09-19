@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE discord_users SET updated_at = $1 WHERE discord_user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamp",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ca10a8b89c8be3160fd3d3edf74820acb13d64d891403feccdc647a776ef4a6"
+}

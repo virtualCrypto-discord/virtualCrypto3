@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO applications\n                 (client_id, client_name, owner_discord_id, inserted_at, updated_at,\n                  public_key, private_key, webhook_url)\n               VALUES (gen_random_uuid(), 'an application', 900000000000000002, now(), now(),\n                       $1, $2, $3)\n               RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "eec9f736e18be281e5339f25561673a78c2f1c7e38524d5bf0c5393fabc234c6"
+}

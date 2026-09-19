@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT redirect_uri, application_id, guild_id, scopes::text[] AS \"scopes!\",\n                  expires, inserted_at\n             FROM authorization_codes WHERE code = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "redirect_uri",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "authorization_codes",
+            "name": "redirect_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "application_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "authorization_codes",
+            "name": "application_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "authorization_codes",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "scopes!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "expires",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "authorization_codes",
+            "name": "expires"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "inserted_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "authorization_codes",
+            "name": "inserted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "81ffa9efe1e9da6062a5cc394967757d5414eb1bfce8e0171c03b3507cec79f8"
+}

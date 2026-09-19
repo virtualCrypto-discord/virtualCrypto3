@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT token, refresh_token, expires, updated_at\n           FROM discord_users WHERE discord_user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "discord_users",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "refresh_token",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "discord_users",
+            "name": "refresh_token"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expires",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "discord_users",
+            "name": "expires"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "discord_users",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "5f4f7c59800817ef96f67ffe245b1ab8e9d77505aaca6dcb56f5be9c5dafa9e5"
+}

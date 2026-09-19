@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at)\n             VALUES ($1, $2, now()::timestamp(0), now()::timestamp(0))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71fcf2f00b97ae18ac4ad28c9bcf62d6a9d6c626c819e3f5307e4c92dea6c8e6"
+}

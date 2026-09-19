@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM grant_scopes s\n           JOIN grants g ON g.id = s.grant_id\n          WHERE g.application_id = $1 AND g.guild_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e1f3e1cc5a39f2f6a6790500200c7ee9f8398de9d9b468dd4d6782b02a2e6047"
+}

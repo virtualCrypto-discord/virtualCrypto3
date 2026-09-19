@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n            SET webhook_url = $2, private_key = $3, public_key = $4, subscribed_events = $5\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Bytea",
+        "Bytea",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4283305586d21f5ac0684bda66be1efa03125c247e7f2a05b3d8ed08b543b246"
+}

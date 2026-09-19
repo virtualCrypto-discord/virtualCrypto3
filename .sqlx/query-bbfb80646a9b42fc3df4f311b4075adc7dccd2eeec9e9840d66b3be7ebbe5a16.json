@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT response_types::text[] AS \"response_types!\" FROM applications",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "response_types!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bbfb80646a9b42fc3df4f311b4075adc7dccd2eeec9e9840d66b3be7ebbe5a16"
+}

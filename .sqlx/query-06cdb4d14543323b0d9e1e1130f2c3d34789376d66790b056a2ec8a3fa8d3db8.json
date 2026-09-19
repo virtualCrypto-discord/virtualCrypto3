@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.scope::text AS \"scope!\" FROM grant_scopes s\n             JOIN grants g ON g.id = s.grant_id\n            WHERE g.application_id = $1 AND g.guild_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "06cdb4d14543323b0d9e1e1130f2c3d34789376d66790b056a2ec8a3fa8d3db8"
+}
