@@ -865,6 +865,52 @@ async fn first_page(pool: &PgPool, account: i32) -> vc_core::claim::ClaimPage {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
+async fn list_narrows_to_the_user_the_filter_names(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    // The same list twice: once as the command opens it, and once with one of the
+    // two names on it. Two of the caller's three pending claims name the other
+    // user; the third is between the caller and themselves.
+    let every = interaction(router(pool.clone()), list_from_guild(money.user1)).await;
+    let narrowed = interaction(
+        router(pool.clone()),
+        execute_from_guild(
+            json!({
+                "name": "claim",
+                "options": [{
+                    "name": "list",
+                    "options": [{ "name": "user", "value": money.user2.to_string() }],
+                }],
+            }),
+            money.user1,
+        ),
+    )
+    .await;
+
+    assert_eq!(every.status, 200, "body: {}", every.body);
+    assert_eq!(narrowed.status, 200, "body: {}", narrowed.body);
+
+    assert_eq!(
+        claims_on(every.body["data"].to_string().as_str()),
+        3,
+        "the caller's pending claims: {}",
+        every.body["data"]
+    );
+    assert_eq!(
+        claims_on(narrowed.body["data"].to_string().as_str()),
+        2,
+        "the ones that name the other user: {}",
+        narrowed.body["data"]
+    );
+}
+
+/// How many claims a rendered list holds: one line per claim says its state.
+fn claims_on(rendered: &str) -> usize {
+    rendered.matches("状態　:").count()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
 async fn list_reports_an_empty_page(pool: PgPool) {
     setup_claim(&pool).await;
 

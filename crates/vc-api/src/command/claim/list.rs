@@ -91,9 +91,27 @@ pub async fn handle(
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
 
     let statuses = statuses(sub_options);
-    let related_user = sub_options
-        .and_then(|options| options.get("related_user"))
-        .and_then(as_int);
+    // The option Discord sends is `user` — the name the registration carries, and
+    // the one the screen shows — and what it holds is a Discord id, which the
+    // filter is not about: `related_user_id` is a virtualCrypto user, so it is
+    // resolved the way the API resolves its own `related_discord_user_id`.
+    //
+    // This read `related_user` and passed a Discord id where an account id was
+    // wanted, so the filter was offered, typed, and ignored. A Discord user with
+    // no account here has no claims, and the filter matches nobody rather than
+    // showing everything: an unfiltered list is the one answer that would be
+    // wrong.
+    let related_user = match sub_options
+        .and_then(|options| options.get("user"))
+        .and_then(as_int)
+    {
+        Some(discord_id) => {
+            let account = vc_core::user::find_by_discord_id(state.pool(), discord_id).await?;
+
+            Some(account.map_or(-1, |account| i64::from(account.id)))
+        }
+        None => None,
+    };
 
     // The command opens on the first page; the buttons move from there.
     let options = ListOptions {
