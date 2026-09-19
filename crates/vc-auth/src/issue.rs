@@ -94,7 +94,7 @@ async fn issue(
 /// The scopes a `client_credentials` token may carry, which are **not** the
 /// browser flow's: that one allows `openid` and nothing else, and neither check
 /// can be reused for the other.
-pub const APP_SCOPES: &[&str] = &["vc.pay", "vc.claim", "oauth2.register"];
+pub const APP_SCOPES: &[&str] = &["vc.pay", "vc.claim", "vc.contract", "oauth2.register"];
 
 /// Whether a `client_credentials` request's scopes are acceptable: no repeats,
 /// and nothing outside [`APP_SCOPES`].

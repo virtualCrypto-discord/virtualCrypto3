@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO contract_parties (contract_id, discord_id, amount, inserted_at, updated_at)\n         SELECT $1, t.discord_id, t.amount, $4, $4\n           FROM UNNEST($2::bigint[], $3::bigint[]) AS t(discord_id, amount)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "80f1590b1e57a81e58869f5bcfadaf9797c489248a9486180173139f4d11a597"
+}

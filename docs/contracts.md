@@ -16,6 +16,17 @@ refuse it — and everything else is read out of the conventions this service
 already has: an application asks, someone answers, the answer is pushed to the
 application's webhook, and a token kind or a scope decides who may ask.
 
+**Its tables are replaced, not grown.** The Elixir's schema has three: `contracts`
+(`intermediary_id` → applications), `contractors` (a contract's users) and
+`deposit_agreements` (a user's amount per currency, deposited and executed), with
+`users.contract_id` beside them. Nothing ever wrote any of them — they are empty,
+and two carry foreign keys that point at the wrong tables
+(`deposit_agreements.contractor_id` → contracts rather than contractors,
+`currency_id` → users rather than currencies), so the sketch was never exercised
+either. Since this service shares that database, migration `0004` drops them and
+creates the two below, so that a database which had the sketch and one that never
+did end up with the same schema.
+
 ## What a contract is
 
 | Field | |

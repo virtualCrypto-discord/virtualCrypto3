@@ -3,6 +3,7 @@
 pub mod application;
 pub mod balance;
 pub mod claim;
+pub mod contract;
 pub mod currency;
 pub mod db;
 pub mod error;

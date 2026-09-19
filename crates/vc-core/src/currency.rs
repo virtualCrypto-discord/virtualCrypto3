@@ -242,6 +242,9 @@ pub async fn delete(pool: &PgPool, guild_id: i64) -> std::result::Result<(), sql
         "DELETE FROM currency_given_histories WHERE currency_id = $1",
         "DELETE FROM currency_payment_histories WHERE currency_id = $1",
         "DELETE FROM claims WHERE currency_id = $1",
+        // The parties go with the contract's row, which cascades: a currency
+        // that is deleted is one whose locked money is deleted with it.
+        "DELETE FROM contracts WHERE currency_id = $1",
     ] {
         sqlx::query(statement)
             .bind(currency_id)

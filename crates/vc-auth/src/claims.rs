@@ -10,6 +10,10 @@ pub const SCOPE_VC_CLAIM: &str = "vc.claim";
 /// pool. It is carried by a guild token and by nothing else: an `app` token that
 /// asked for it would have no guild to issue in.
 pub const SCOPE_VC_ISSUE: &str = "vc.issue";
+/// The scope an application carries to write contracts: it is the right to ask
+/// users to lock their currency with it, and nothing more — what lets it
+/// actually spend is each user's own approval.
+pub const SCOPE_VC_CONTRACT: &str = "vc.contract";
 
 /// The claim set Guardian emits. Field names and value types are part of the
 /// contract with tokens already in the wild, so they must not change.
@@ -56,6 +60,8 @@ pub struct Scopes {
     pub vc_claim: bool,
     /// Read from the same claim as the rest, and carried by a guild token.
     pub vc_issue: bool,
+    /// Carried by an `app` token, like `vc_pay` and `vc_claim`.
+    pub vc_contract: bool,
 }
 
 impl Scopes {
@@ -67,6 +73,7 @@ impl Scopes {
             vc_pay: has(SCOPE_VC_PAY),
             vc_claim: has(SCOPE_VC_CLAIM),
             vc_issue: has(SCOPE_VC_ISSUE),
+            vc_contract: has(SCOPE_VC_CONTRACT),
         }
     }
 }

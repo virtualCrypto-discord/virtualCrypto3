@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contract_parties SET remaining = 0, updated_at = $2\n          WHERE contract_id = $1 AND remaining > 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "758eb64e9d0d2a907a31f46325876a32ee5686904bd2e06c2b42b80ad920b3c5"
+}

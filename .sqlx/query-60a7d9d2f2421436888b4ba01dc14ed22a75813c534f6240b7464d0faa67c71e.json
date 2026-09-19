@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)\n         SELECT u.id, $2, p.remaining, $3, $3\n           FROM contract_parties p\n           JOIN users u ON u.discord_id = p.discord_id\n          WHERE p.contract_id = $1 AND p.remaining > 0\n         ON CONFLICT (user_id, currency_id)\n         DO UPDATE SET amount = assets.amount + EXCLUDED.amount,\n                       updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "60a7d9d2f2421436888b4ba01dc14ed22a75813c534f6240b7464d0faa67c71e"
+}

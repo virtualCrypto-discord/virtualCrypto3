@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency_payment_histories\n             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at)\n         SELECT t.amount, t.sender_id, $3, $4, $5, $5, $5\n           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "497798a594c4bff02ec4a3801217d2f2f6fd39f5a0388df1d385394d24df1070"
+}
