@@ -60,6 +60,11 @@
     <code>{account?.discord_user_id ?? "—"}</code>
   </p>
 
+  <!-- Linked from here because a page nobody links is a page nobody finds: a
+       contract is the account's own, so this is where somebody would look for it,
+       and Discord's `/contract list` draws the same set. -->
+  <p><a href="/contracts">契約</a></p>
+
   {#if holdings.length === 0}
     <p>通貨を持っていません。</p>
   {:else}

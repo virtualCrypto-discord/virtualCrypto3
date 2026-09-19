@@ -13,9 +13,14 @@
 /// What the API answers with when it refuses, which is the OAuth2 shape on every
 /// endpoint, not only on `/oauth2/token`:
 /// `{"error": "invalid_token", "error_description": "..."}`.
+///
+/// The v2 endpoints use both fields, and the difference is theirs: a body or a
+/// name that is wrong is an `error_description`, and a state that refused is an
+/// `error_info` — `{"error": "conflict", "error_info": "not_enough_amount"}`.
 export interface ApiErrorBody {
   error: string;
   error_description?: string;
+  error_info?: string;
 }
 
 export class ApiError extends Error {
@@ -341,6 +346,79 @@ export function connect(
     headers: { ...authorize(token), "Content-Type": "application/json" },
     body: JSON.stringify(connection),
   }) as Promise<void>;
+}
+
+/// One user a contract names, and what their part of it is.
+///
+/// `discord_id` is a string like every Discord id here: a snowflake JSON's number
+/// cannot hold exactly.
+export interface ContractParty {
+  discord_id: string;
+  /// What approving locks.
+  amount: string;
+  /// What the application has not spent of it.
+  remaining: string;
+  /// `pending`, `approved`, `refused`, or `withdrawn`.
+  status: string;
+}
+
+/// An application's proposal to operate the caller's currency, as
+/// `/api/v2/users/@me/contracts` answers it.
+///
+/// `client_name` is what the application calls itself — a user deciding whether to
+/// trust it needs to know who is asking, and an id is not a name. `expires_at` is
+/// `null` for a permanent contract, which is the kind a party may take back at any
+/// time.
+export interface Contract {
+  id: string;
+  client_name: string | null;
+  unit: string | null;
+  guild_id: string;
+  status: string;
+  receiver_discord_id: string | null;
+  expires_at: string | null;
+  remaining: string;
+  parties: ContractParty[];
+}
+
+/// The contracts the caller is named in.
+///
+/// A user token's: being named is what makes a contract theirs to answer, and the
+/// same set is what `/contract list` draws in Discord.
+export function contracts(token: string): Promise<Contract[]> {
+  return request("/api/v2/users/@me/contracts", {
+    headers: authorize(token),
+  }) as Promise<Contract[]>;
+}
+
+/// 承認する: the caller's amount leaves their balance and becomes what the
+/// application may spend. Answers the contract as it stands after it, which is
+/// what a page draws next; approving twice answers the same thing without locking
+/// anything a second time.
+export function approveContract(token: string, id: string): Promise<Contract> {
+  return request(`/api/v2/contracts/${encodeURIComponent(id)}/approval`, {
+    method: "POST",
+    headers: authorize(token),
+  }) as Promise<Contract>;
+}
+
+/// 拒否する: the contract can never be what it was written as, so it is over and
+/// whoever had already locked their amount takes back what is left.
+export function refuseContract(token: string, id: string): Promise<Contract> {
+  return request(`/api/v2/contracts/${encodeURIComponent(id)}/refusal`, {
+    method: "POST",
+    headers: authorize(token),
+  }) as Promise<Contract>;
+}
+
+/// 取り消す: taking the delegation back. Allowed while a permanent contract stands
+/// and after a temporary one has run out; the endpoint refuses it in between, and
+/// says so.
+export function withdrawContract(token: string, id: string): Promise<Contract> {
+  return request(`/api/v2/contracts/${encodeURIComponent(id)}/approval`, {
+    method: "DELETE",
+    headers: authorize(token),
+  }) as Promise<Contract>;
 }
 
 /// A guild the application may issue in, as `/applications/{id}/grants` answers

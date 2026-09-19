@@ -27,7 +27,7 @@
   // The events the webhook wants, as the `type` values the deliveries carry.
   // Checked is sent and unchecked is not, and what is checked is what is
   // sent — a checkbox per event, because two options need no menu.
-  let subscribed = $state({ claimUpdates: true, grantDecisions: true });
+  let subscribed = $state({ claimUpdates: true, grantDecisions: true, contractDecisions: true });
 
   let token = $state<string | null>(null);
   let registered = $state<Registered | null>(null);
@@ -86,6 +86,10 @@
 
     if (subscribed.grantDecisions) {
       events.push(3);
+    }
+
+    if (subscribed.contractDecisions) {
+      events.push(4);
     }
 
     const body: Registration = { redirect_uris: uris, ...filled, subscribed_events: events };
@@ -180,6 +184,12 @@
         <label>
           <input type="checkbox" bind:checked={subscribed.grantDecisions} />
           発行許可の決定
+        </label>
+      </p>
+      <p>
+        <label>
+          <input type="checkbox" bind:checked={subscribed.contractDecisions} />
+          契約の決定
         </label>
       </p>
       <small>チェックしたイベントだけを受け取ります。</small>

@@ -19,7 +19,7 @@
   const login = $derived(loginUrl(`/applications/${clientId}`));
 
   // The `type` values the deliveries carry, by the name the screens use for
-  // them — the same two names the Discord screen and the registration form use.
+  // them — the same names the Discord screen and the registration form use.
   // Checked is sent and unchecked is not, and empty is nothing: what the
   // screen shows is the set the row holds, with no special case for
   // everything.
@@ -28,8 +28,14 @@
       return "（なし）";
     }
 
+    const names: Record<number, string> = {
+      2: "請求の更新",
+      3: "発行許可の決定",
+      4: "契約の決定",
+    };
+
     return subscribed
-      .map((kind) => (kind === 2 ? "請求の更新" : kind === 3 ? "発行許可の決定" : `（不明: ${kind}）`))
+      .map((kind) => names[kind] ?? `（不明: ${kind}）`)
       .join("、");
   }
 

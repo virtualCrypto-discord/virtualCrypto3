@@ -1,6 +1,7 @@
 <script lang="ts">
   import Account from "./pages/Account.svelte";
   import Application from "./pages/Application.svelte";
+  import Contracts from "./pages/Contracts.svelte";
   import Connect from "./pages/Connect.svelte";
   import ApplicationDetail from "./pages/ApplicationDetail.svelte";
   import Verification from "./pages/Verification.svelte";
@@ -40,6 +41,8 @@
     <Landing />
   {:else if path === "/me"}
     <Account />
+  {:else if path === "/contracts"}
+    <Contracts />
   {:else if path === "/applications"}
     <Application />
   {:else if path === "/applications/register"}
