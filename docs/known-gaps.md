@@ -316,10 +316,10 @@ is refused. Two results must both be `:ok`; a wrong answer is
 own — and a silence with no proxy in the way is the application's, because there is
 then nothing between this service and the webhook for it to belong to.
 
-The two requests are **shuffled** so that the order is not something to guess at.
-**This service does not shuffle them yet**: `verify` sends the real PING first, so
-an application can pass by answering the first request `200` and the second `401`
-without verifying anything.
+The two requests are **shuffled** so that the order is not something to guess at,
+and `verify` draws which PING goes first for that reason: an application that
+answers `200` to the first request and `401` to the second, checking nothing,
+passes only the handshakes whose real PING happened to be the one that went first.
 
 The handshake is also rate-limited **per requester** — one per three seconds,
 twenty per hour, fifty per day — answering `retry_after_3_seconds`,

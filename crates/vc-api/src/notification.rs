@@ -396,19 +396,21 @@ pub enum Handshake {
     Passed,
     /// It answered, and something about the answer was wrong.
     Failed,
-    /// The proxy never said what the application answered.
+    /// The answer never came: the proxy did not report one, or the webhook
+    /// itself did not answer.
     Unreachable,
 }
 
 /// `_verify/3`'s two answers, decided.
 ///
-/// Two requests, and each asks a different question. The first is a PING signed
-/// with the application's real key, and must come back `200` carrying the PING
-/// back — an application that answers webhooks at all. The second is the same
-/// PING signed with a keypair generated for the occasion, and must come back
-/// `401` — an application that *checks* them.
+/// Two requests, and each asks a different question. The one signed with the
+/// application's real key must come back `200` carrying the PING back — an
+/// application that answers webhooks at all. The one signed with a keypair
+/// generated for the occasion must come back `401` — an application that
+/// *checks* them. Which of the two goes first is [`verify`]'s to draw; here they
+/// are named for what they are.
 ///
-/// That second request is the whole point of doing this twice. An application
+/// The fresh-key request is the whole point of doing this twice. An application
 /// that answers `200` to both is not verifying anything and would accept a
 /// forgery from anyone; one that answers `401` to both cannot answer at all. Both
 /// look fine to a single request.
@@ -422,7 +424,7 @@ pub fn handshake(real: Option<(u16, &Value)>, wrong_key: Option<(u16, &Value)>) 
 
 /// A keypair generated for one handshake, and used for nothing else.
 ///
-/// The second request of a handshake is signed with this rather than with the
+/// One of a handshake's two requests is signed with this rather than with the
 /// application's key, because its whole purpose is to be a signature the
 /// application should refuse. It is generated rather than fixed: a constant one
 /// would let an application pass by recognising it instead of by verifying.
@@ -436,17 +438,35 @@ pub fn fresh_keypair() -> [u8; 32] {
 /// The handshake an application must pass before it is registered, and
 /// periodically afterwards.
 ///
-/// Two requests, as the Elixir sends them. The second is signed with a keypair
-/// generated here and used for nothing else, because its whole purpose is to be a
-/// signature the application should refuse.
+/// Two requests, as the Elixir sends them. One is signed with a keypair generated
+/// here and used for nothing else, because its whole purpose is to be a signature
+/// the application should refuse — and the two go in an order drawn for the
+/// occasion, because a fixed one is an order an application can answer without
+/// verifying anything: `200` to whichever comes first and `401` to the second
+/// passes a handshake whose real PING was first, and checking no signature at all.
 pub async fn verify(
     transport: &dyn Transport,
     url: &str,
     private_key: &[u8; 32],
     at: i64,
 ) -> Handshake {
-    let real = send_ping(transport, url, private_key, at).await;
-    let wrong = send_ping(transport, url, &fresh_keypair(), at).await;
+    let fresh = fresh_keypair();
+    let real_first = getrandom::u32()
+        .expect("the operating system's randomness")
+        .is_multiple_of(2);
+
+    let (first, second) = if real_first {
+        (private_key, &fresh)
+    } else {
+        (&fresh, private_key)
+    };
+
+    let one = send_ping(transport, url, first, at).await;
+    let two = send_ping(transport, url, second, at).await;
+
+    // Which of the two was the real PING and which the one that must be refused,
+    // said out of the order they arrived in.
+    let (real, wrong) = if real_first { (one, two) } else { (two, one) };
 
     handshake(
         real.as_ref().map(|(status, body)| (*status, body)),
@@ -542,6 +562,43 @@ mod tests {
         format!("http://{address}/hook")
     }
 
+    /// A webhook that answers the handshake's *order* rather than its requests:
+    /// `200` and the PING back for whichever request arrives first, `401` for the
+    /// one after it. It checks no signature at all — which is what a fixed order
+    /// would let through.
+    async fn order_answering_hook() -> String {
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let hook = move |_body: String| {
+            let first = seen
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                .is_multiple_of(2);
+
+            async move {
+                if first {
+                    (
+                        axum::http::StatusCode::OK,
+                        axum::Json(json!({ "type": PING })),
+                    )
+                } else {
+                    (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({})))
+                }
+            }
+        };
+
+        let app = axum::Router::new().route("/hook", axum::routing::post(hook));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let address = listener.local_addr().expect("the address");
+
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        format!("http://{address}/hook")
+    }
+
     /// No proxy is a direct handshake, which is the whole point of this: a machine with no proxy
     /// could not register an application that names a webhook at all, and so could not exercise
     /// the application flow.
@@ -554,6 +611,35 @@ mod tests {
             verify(&Direct::default(), &url, &signing.to_bytes(), 1_700_000_000).await,
             Handshake::Passed,
             "{url}"
+        );
+    }
+
+    /// An application that verifies nothing cannot pass by learning the handshake's
+    /// shape: the two requests go in an order drawn for the occasion, so answering
+    /// `200` to the first and `401` to the second survives only the handshakes where
+    /// the real PING happened to be the first.
+    ///
+    /// Thirty-two of them are what makes this a test rather than a coin toss: a
+    /// fixed order would please this application every time, while a shuffled one
+    /// leaves it a chance of one in four billion of passing them all.
+    #[tokio::test]
+    async fn an_application_that_answers_the_order_is_not_let_through() {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let url = order_answering_hook().await;
+        let direct = Direct::default();
+
+        let mut passed = 0;
+
+        for _ in 0..32 {
+            if verify(&direct, &url, &signing.to_bytes(), 1_700_000_000).await == Handshake::Passed
+            {
+                passed += 1;
+            }
+        }
+
+        assert!(
+            passed < 32,
+            "an application that verifies nothing passed every handshake"
         );
     }
 
