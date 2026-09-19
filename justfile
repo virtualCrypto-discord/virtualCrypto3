@@ -40,8 +40,13 @@ test:
 # The committed offline query data has to match the queries and the schema. A
 # deployment builds with SQLX_OFFLINE, so data that has drifted is a build that
 # succeeds here and fails there — or worse, one that succeeds with the wrong SQL.
+#
+# `--all-targets`, because the data is prepared for every target: without it the
+# check reads only the library and the binaries, and every query that lives in a
+# test — the fixtures, the pool refill's, most of `tests/` — is reported as data
+# nobody uses, with the advice to re-run the command that put it there.
 sqlx-check:
-	cargo sqlx prepare --workspace --check
+	cargo sqlx prepare --workspace --check -- --all-targets
 
 # Verify the sqlx baseline reproduces the Ecto schema and is idempotent.
 baseline-check:
