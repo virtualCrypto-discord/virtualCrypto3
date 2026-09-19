@@ -449,6 +449,39 @@ pub async fn approve(
     .await
     .map_err(ContractError::Database)?;
 
+    // The payer's account is down by the amount, so the contract's account is up
+    // by it: a lock is a transfer, not a deletion, and the currency's supply is
+    // the same before and after.
+    //
+    // The account is opened here rather than at creation because this is when a
+    // contract first holds anything. `ON CONFLICT DO NOTHING` is what makes two
+    // parties approving at once open one account between them.
+    sqlx::query!(
+        "INSERT INTO users (status, contract_id, inserted_at, updated_at)
+         VALUES (NULL, $1, $2, $2)
+         ON CONFLICT (contract_id) DO NOTHING",
+        contract_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ContractError::Database)?;
+
+    sqlx::query!(
+        "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)
+         SELECT u.id, $2, $3, $4, $4 FROM users u WHERE u.contract_id = $1
+         ON CONFLICT (user_id, currency_id)
+         DO UPDATE SET amount = assets.amount + EXCLUDED.amount,
+                       updated_at = EXCLUDED.updated_at",
+        contract_id,
+        contract.currency_id,
+        party.amount,
+        now
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ContractError::Database)?;
+
     sqlx::query!(
         "UPDATE contract_parties
             SET status = 'approved', remaining = amount, updated_at = $2
@@ -697,6 +730,19 @@ pub async fn pay(
         .map_err(ContractError::Database)?;
 
     sqlx::query!(
+        "UPDATE assets SET amount = amount - $1, updated_at = $4
+          WHERE currency_id = $2
+            AND user_id = (SELECT id FROM users WHERE contract_id = $3)",
+        amount,
+        contract.currency_id,
+        contract_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ContractError::Database)?;
+
+    sqlx::query!(
         "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)
          VALUES ($1, $2, $3, $4, $4)
          ON CONFLICT (user_id, currency_id)
@@ -898,6 +944,21 @@ async fn end(
     ended: Ended,
     now: PrimitiveDateTime,
 ) -> std::result::Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE assets
+            SET amount = amount - (SELECT COALESCE(SUM(p.remaining), 0)
+                                     FROM contract_parties p
+                                    WHERE p.contract_id = $1),
+                updated_at = $3
+          WHERE currency_id = $2
+            AND user_id = (SELECT id FROM users WHERE contract_id = $1)",
+        contract_id,
+        currency_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query!(
         "INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)
          SELECT u.id, $2, p.remaining, $3, $3

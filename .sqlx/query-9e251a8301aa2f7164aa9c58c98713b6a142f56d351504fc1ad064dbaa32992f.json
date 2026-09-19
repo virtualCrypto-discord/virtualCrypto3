@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assets\n            SET amount = amount - (SELECT COALESCE(SUM(p.remaining), 0)\n                                     FROM contract_parties p\n                                    WHERE p.contract_id = $1),\n                updated_at = $3\n          WHERE currency_id = $2\n            AND user_id = (SELECT id FROM users WHERE contract_id = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e251a8301aa2f7164aa9c58c98713b6a142f56d351504fc1ad064dbaa32992f"
+}

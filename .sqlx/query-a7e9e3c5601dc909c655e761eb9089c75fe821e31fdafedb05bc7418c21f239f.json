@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (status, contract_id, inserted_at, updated_at)\n         VALUES (NULL, $1, $2, $2)\n         ON CONFLICT (contract_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a7e9e3c5601dc909c655e761eb9089c75fe821e31fdafedb05bc7418c21f239f"
+}
