@@ -634,3 +634,73 @@ async fn a_key_another_request_is_holding_answers_come_back(pool: PgPool) {
     assert_eq!(charged.status, 201, "body: {}", charged.body);
     assert_eq!(charged.body["remaining"], "75");
 }
+
+/// The same collision at a stronger isolation level, where the database does not
+/// let the insert wait: the row it conflicts with is newer than this transaction's
+/// snapshot, so it is refused (`40001`) instead of being shown the answer. It is
+/// answered exactly as the wait running out is — come back — and the transaction
+/// holds no claim either way.
+///
+/// The pool the request runs on is built here rather than taken from the harness,
+/// because what differs is a *session's* default isolation, which is a property of
+/// the connection.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_claim_the_isolation_level_refuses_answers_come_back(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    // The harness's own connection, so this lands on the test's database, with one
+    // setting changed.
+    let options = sqlx::postgres::PgConnectOptions::clone(&pool.connect_options())
+        .options([("default_transaction_isolation", "repeatable read")]);
+    let other_level = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(options)
+        .await
+        .expect("a pool at another level");
+
+    // The claim, held by a transaction that commits it: the row is then there for
+    // good and answers nothing, which is the state a request at this level cannot
+    // be shown.
+    let mut holder = pool.begin().await.expect("a transaction");
+    sqlx::query!(
+        "INSERT INTO payments_idempotency
+             (user_id, idempotency_key, expires, inserted_at, updated_at)
+         VALUES ($1, $2, now() + interval '7 days', now(), now())",
+        i64::from(fixture.account),
+        KEY.as_bytes().to_vec()
+    )
+    .execute(&mut *holder)
+    .await
+    .expect("a claim nobody answers");
+
+    let uri = format!("/api/v2/contracts/{}/payments", fixture.contract);
+
+    let charge = send(
+        vc_api::router(state(other_level, fake())),
+        "POST",
+        &uri,
+        &fixture.token,
+        Some(key_header(KEY)),
+        json!({
+            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "amount": "25",
+        }),
+    );
+
+    let release = async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        holder.commit().await.expect("the claim is committed");
+    };
+
+    let (refused, ()) = tokio::join!(charge, release);
+
+    assert_eq!(refused.status, 409, "body: {}", refused.body);
+    assert_eq!(refused.body["error"], "processing");
+    assert_eq!(idempotency_status(&refused).as_deref(), Some("Duplicate"));
+    assert_eq!(
+        remaining(&pool, &fixture).await,
+        QUOTA.to_string(),
+        "and nothing was charged"
+    );
+}

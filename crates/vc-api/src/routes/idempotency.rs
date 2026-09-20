@@ -200,9 +200,11 @@ async fn claim_in(
                 Ok(Slot::Existing {
                     http_status: None, ..
                 }) => Ok(Idempotency::Answered(processing())),
-                // The wait ran out, so whoever holds the key is still at it: the
-                // request is told to come back rather than left sitting on the row.
-                Err(error) if waited_too_long(&error) => Ok(Idempotency::Answered(processing())),
+                // The claim lost to whoever holds the key, which the database
+                // reports in one of two ways — and each of them leaves this
+                // transaction holding nothing, so "come back" is all that is left
+                // to say.
+                Err(error) if claim_lost(&error) => Ok(Idempotency::Answered(processing())),
                 Err(error) => Err(db(error)),
             }
         }
@@ -229,17 +231,28 @@ fn processing() -> Response {
     )
 }
 
-/// Whether the claim gave up waiting for another transaction to let go of the row.
+/// Whether the claim lost to another transaction rather than failing on its own.
 ///
-/// PostgreSQL reports it as `lock_not_available` (`55P03`), which is what the
-/// `lock_timeout` around the claim produces — and only that, since nothing else in
-/// the transaction runs under it.
-fn waited_too_long(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .and_then(|error| error.code())
-        .as_deref()
-        == Some("55P03")
+/// Two codes, and they are one situation at two isolation levels:
+///
+/// - `lock_not_available` (`55P03`) is the `lock_timeout` above running out while
+///   the row is held by another transaction — what happens at `READ COMMITTED`,
+///   where the insert waits and is then told to stop waiting.
+/// - `serialization_failure` (`40001`) is the blocked insert being refused
+///   outright, because the row it conflicts with was committed after this
+///   transaction's snapshot — what happens at `REPEATABLE READ` and above, where
+///   the insert cannot be shown the row it must not duplicate.
+///
+/// Neither is this request's failure to report, and neither leaves it holding
+/// anything: the insert did not land.
+fn claim_lost(error: &sqlx::Error) -> bool {
+    matches!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03" | "40001")
+    )
 }
 
 /// The response, carrying what the layer did with the key.

@@ -279,9 +279,11 @@ Three things follow from it, and all three are pinned by tests:
   a request still waiting is answered `409 processing`, so a slow write costs its
   retries a second rather than holding them behind it. Measured at `READ
   COMMITTED`, which is what this service runs; under `REPEATABLE READ` or
-  `SERIALIZABLE` the blocked insert is answered with a serialization failure
-  instead, which aborts the whole transaction: nothing is written, no claim
-  survives, and the same key may be used again.
+  `SERIALIZABLE` the blocked insert is refused outright (`40001`, because the row
+  it conflicts with is newer than its snapshot) instead of being shown the answer.
+  That is answered the same way — `409 processing` — so a client sees one answer
+  at every isolation level, and the refused transaction holds no claim either:
+  nothing was written, and the row is not whose this request said it was.
 - `409 processing` is not "the request is over, come back tomorrow": it is what a
   request is told when it has waited a second for a key another one is using
   (`CLAIM_WAIT`), or when it finds a row left by a version of this service that
