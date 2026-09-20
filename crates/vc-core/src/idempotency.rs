@@ -2,9 +2,25 @@
 //!
 //! The key is scoped per user, stored as `bytea`, and expires after seven days
 //! (truncated to whole seconds, like every other timestamp in the schema).
+//!
+//! **The claim lives in the caller's transaction, and that is the design.** The
+//! row that says "this key is in use" is inserted by the same transaction that
+//! performs the write and stores the answer, so claim, write and answer are one
+//! commit. A process that dies mid-request takes the claim down with it, and a key
+//! can never be left claimed with nothing recorded under it — the state a retry
+//! can do nothing with.
+//!
+//! Two concurrent requests with one key serialize on the unique index: the second
+//! blocks inside its `INSERT` until the first commits, and then reads the stored
+//! answer, or until the first rolls back, and then takes the key itself. Measured,
+//! not assumed: at `READ COMMITTED` — what this service runs — that is exactly
+//! what happens, and the answer the second one reads is the first one's. Under
+//! `REPEATABLE READ` or `SERIALIZABLE` the blocked insert is instead answered with
+//! a serialization failure, which aborts its transaction: nothing is written, no
+//! claim survives, and the caller may retry with the same key.
 
 use serde_json::{Value, json};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 use crate::model::utc_now;
 
@@ -13,18 +29,22 @@ const LIFETIME: time::Duration = time::Duration::days(7);
 
 #[derive(Debug)]
 pub enum Slot {
-    /// A row already existed (or a concurrent insert won the race), so its stored
-    /// response — if it has one yet — is what the client must see.
+    /// A row was already there, so its stored response — if it has one yet — is
+    /// what the client must see. `http_status` is `None` for a row whose claim is
+    /// still being held by another transaction (which cannot happen at the
+    /// isolation level this service runs at, because the insert would have waited
+    /// for it) or for one left by a version of this service that claimed outside
+    /// the transaction.
     Existing {
         http_status: Option<i32>,
         body: Option<Value>,
     },
-    /// This request owns the key and registers the response when it finishes.
+    /// This request owns the key, and the transaction it is in owns the claim.
     Created,
 }
 
 async fn find(
-    pool: &PgPool,
+    tx: &mut PgConnection,
     key: &[u8],
     user_id: i32,
 ) -> std::result::Result<Option<Slot>, sqlx::Error> {
@@ -34,7 +54,7 @@ async fn find(
         key,
         i64::from(user_id)
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
     Ok(row.map(|row| Slot::Existing {
@@ -43,18 +63,16 @@ async fn find(
     }))
 }
 
-/// `get_or_insert_idempotency_entry/2`: reuse the row when there is one, otherwise
-/// claim the key.
-pub async fn get_or_insert(
-    pool: &PgPool,
+/// `get_or_insert_idempotency_entry/2`, inside the caller's transaction: reuse the
+/// row when there is one, otherwise claim the key — and if another transaction is
+/// holding it, wait there rather than here.
+pub async fn claim_in(
+    tx: &mut PgConnection,
     key: &[u8],
     user_id: i32,
 ) -> std::result::Result<Slot, sqlx::Error> {
-    if let Some(slot) = find(pool, key, user_id).await? {
-        return Ok(slot);
-    }
-
     let now = utc_now();
+
     let inserted = sqlx::query_scalar!(
         "INSERT INTO payments_idempotency
              (user_id, idempotency_key, expires, inserted_at, updated_at)
@@ -66,24 +84,28 @@ pub async fn get_or_insert(
         now + LIFETIME,
         now
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
     if inserted.is_some() {
         return Ok(Slot::Created);
     }
 
-    // A concurrent request inserted between the two statements.
-    Ok(find(pool, key, user_id).await?.unwrap_or(Slot::Existing {
-        http_status: None,
-        body: None,
-    }))
+    // The insert did nothing, so a row is there — and by the time this statement
+    // runs, whatever transaction was holding it has committed or gone.
+    Ok(find(&mut *tx, key, user_id)
+        .await?
+        .unwrap_or(Slot::Existing {
+            http_status: None,
+            body: None,
+        }))
 }
 
 /// `register_response/2`: store the finished response so a replay can return it,
-/// including when it is an error.
-pub async fn register(
-    pool: &PgPool,
+/// including when it is an error — in the same transaction as the write, so the
+/// two cannot come apart.
+pub async fn register_in(
+    tx: &mut PgConnection,
     key: &[u8],
     user_id: i32,
     http_status: i32,
@@ -99,34 +121,7 @@ pub async fn register(
         http_status,
         utc_now()
     )
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
-/// Give the key back, because the request that claimed it did not happen.
-///
-/// A claim is a promise to answer, and a request whose transaction rolled back has
-/// nothing to answer with: storing the failure would make the key unretryable for
-/// a week — the caller's next attempt at the same operation would be answered with
-/// a stale error rather than attempted — when what the key protects against is a
-/// second *write*, and there was no first one.
-///
-/// Only the request that claimed the key may do this, and only once it knows the
-/// write did not happen. A failure whose effect is unknown is the other case, and
-/// is answered by registering it instead.
-pub async fn release(
-    pool: &PgPool,
-    key: &[u8],
-    user_id: i32,
-) -> std::result::Result<(), sqlx::Error> {
-    sqlx::query!(
-        "DELETE FROM payments_idempotency WHERE idempotency_key = $1 AND user_id = $2",
-        key,
-        i64::from(user_id)
-    )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     Ok(())

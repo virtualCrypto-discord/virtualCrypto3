@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::transfer::TransferError;
 
@@ -15,10 +15,6 @@ pub enum PayError {
 
 /// `Money.pay/1`: send currency from one account to a discord user, creating the
 /// receiver's account when they have none.
-///
-/// The currency is resolved before the receiver, matching the order inside
-/// `Query.Asset.Transfer.transfer/4`, so an unknown unit is reported before any
-/// user is created.
 pub async fn pay(
     pool: &PgPool,
     sender_id: i32,
@@ -28,6 +24,26 @@ pub async fn pay(
 ) -> Result<(), PayError> {
     let mut tx = pool.begin().await.map_err(PayError::Database)?;
 
+    pay_in(&mut tx, sender_id, receiver_discord_id, unit, amount).await?;
+
+    tx.commit().await.map_err(PayError::Database)?;
+
+    Ok(())
+}
+
+/// The same payment, on a transaction the caller owns — which is what lets the
+/// idempotency layer's claim, this write and the stored answer be one commit.
+///
+/// The currency is resolved before the receiver, matching the order inside
+/// `Query.Asset.Transfer.transfer/4`, so an unknown unit is reported before any
+/// user is created.
+pub async fn pay_in(
+    tx: &mut PgConnection,
+    sender_id: i32,
+    receiver_discord_id: i64,
+    unit: &str,
+    amount: i64,
+) -> Result<(), PayError> {
     let known = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
         .fetch_optional(&mut *tx)
         .await
@@ -37,11 +53,11 @@ pub async fn pay(
         return Err(PayError::NotFoundCurrency);
     }
 
-    let receiver = crate::user::insert_if_not_exists(&mut tx, receiver_discord_id)
+    let receiver = crate::user::insert_if_not_exists(&mut *tx, receiver_discord_id)
         .await
         .map_err(PayError::Database)?;
 
-    crate::transfer::transfer(&mut tx, sender_id, receiver.id, amount, unit)
+    crate::transfer::transfer(&mut *tx, sender_id, receiver.id, amount, unit)
         .await
         .map_err(|error| match error {
             TransferError::InvalidAmount => PayError::InvalidAmount,
@@ -50,8 +66,6 @@ pub async fn pay(
             TransferError::NotEnoughAmount => PayError::NotEnoughAmount,
             TransferError::Database(error) => PayError::Database(error),
         })?;
-
-    tx.commit().await.map_err(PayError::Database)?;
 
     Ok(())
 }
@@ -116,11 +130,27 @@ pub struct BulkPayment {
 /// `Money.create_payments/3`: resolve the receivers, then hand the batch to
 /// [`crate::transfer::transfer_bulk`], which writes it in a fixed number of
 /// statements.
+pub async fn pay_bulk(
+    pool: &PgPool,
+    sender_id: i32,
+    payments: &[BulkPayment],
+) -> Result<(), PayError> {
+    let mut tx = pool.begin().await.map_err(PayError::Database)?;
+
+    pay_bulk_in(&mut tx, sender_id, payments).await?;
+
+    tx.commit().await.map_err(PayError::Database)?;
+
+    Ok(())
+}
+
+/// The same batch, on a transaction the caller owns — the shape the idempotency
+/// layer needs, and the shape a batch written from anywhere else would want too.
 ///
 /// The currency is checked before the receivers are resolved, so an unknown unit
 /// is reported without creating any accounts.
-pub async fn pay_bulk(
-    pool: &PgPool,
+pub async fn pay_bulk_in(
+    tx: &mut PgConnection,
     sender_id: i32,
     payments: &[BulkPayment],
 ) -> Result<(), PayError> {
@@ -131,8 +161,6 @@ pub async fn pay_bulk(
     if payments.iter().any(|payment| payment.amount <= 0) {
         return Err(PayError::InvalidAmount);
     }
-
-    let mut tx = pool.begin().await.map_err(PayError::Database)?;
 
     let mut units: Vec<String> = payments
         .iter()
@@ -167,7 +195,7 @@ pub async fn pay_bulk(
     discord_ids.sort();
     discord_ids.dedup();
 
-    let receivers = crate::user::resolve_ids(&mut tx, &discord_ids)
+    let receivers = crate::user::resolve_ids(&mut *tx, &discord_ids)
         .await
         .map_err(PayError::Database)?;
 
@@ -182,7 +210,7 @@ pub async fn pay_bulk(
         })
         .collect();
 
-    crate::transfer::transfer_bulk(&mut tx, sender_id, &entries)
+    crate::transfer::transfer_bulk(&mut *tx, sender_id, &entries)
         .await
         .map_err(|error| match error {
             TransferError::InvalidAmount => PayError::InvalidAmount,
@@ -191,8 +219,6 @@ pub async fn pay_bulk(
             TransferError::NotEnoughAmount => PayError::NotEnoughAmount,
             TransferError::Database(error) => PayError::Database(error),
         })?;
-
-    tx.commit().await.map_err(PayError::Database)?;
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::model::utc_now;
 
@@ -36,6 +36,24 @@ pub async fn issue(
 ) -> std::result::Result<Issued, IssueError> {
     let mut tx = pool.begin().await.map_err(IssueError::Database)?;
 
+    let issued = issue_in(&mut tx, guild_id, receiver_discord_id, amount).await?;
+
+    tx.commit().await.map_err(IssueError::Database)?;
+
+    Ok(issued)
+}
+
+/// The same issue, on a transaction the caller owns — which is what lets the
+/// idempotency layer's claim, this write and the stored answer be one commit.
+///
+/// The currency is read with a lock, so the pool check and the decrement cannot
+/// interleave with another issue.
+pub async fn issue_in(
+    tx: &mut PgConnection,
+    guild_id: i64,
+    receiver_discord_id: i64,
+    amount: Option<i64>,
+) -> std::result::Result<Issued, IssueError> {
     let currency = sqlx::query!(
         "SELECT id, unit, pool_amount FROM currencies WHERE guild_id = $1 FOR UPDATE",
         guild_id
@@ -60,7 +78,7 @@ pub async fn issue(
         Some(_) => return Err(IssueError::InvalidAmount),
     };
 
-    let receiver = crate::user::insert_if_not_exists(&mut tx, receiver_discord_id)
+    let receiver = crate::user::insert_if_not_exists(&mut *tx, receiver_discord_id)
         .await
         .map_err(IssueError::Database)?;
 
@@ -102,8 +120,6 @@ pub async fn issue(
     .execute(&mut *tx)
     .await
     .map_err(IssueError::Database)?;
-
-    tx.commit().await.map_err(IssueError::Database)?;
 
     Ok(Issued {
         amount,

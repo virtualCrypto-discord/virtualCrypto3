@@ -697,14 +697,42 @@ pub async fn pay(
     amount: i64,
     now: OffsetDateTime,
 ) -> std::result::Result<Payed, ContractError> {
+    let mut tx = pool.begin().await.map_err(ContractError::Database)?;
+
+    let payed = pay_in(
+        &mut tx,
+        contract_id,
+        application_id,
+        receiver_discord_id,
+        party_discord_id,
+        amount,
+        now,
+    )
+    .await?;
+
+    tx.commit().await.map_err(ContractError::Database)?;
+
+    Ok(payed)
+}
+
+/// The same charge, on a transaction the caller owns — which is what lets the
+/// idempotency layer's claim, the charge and the stored answer be one commit.
+pub async fn pay_in(
+    tx: &mut PgConnection,
+    contract_id: i64,
+    application_id: i64,
+    receiver_discord_id: i64,
+    party_discord_id: Option<i64>,
+    amount: i64,
+    now: OffsetDateTime,
+) -> std::result::Result<Payed, ContractError> {
     if amount <= 0 {
         return Err(ContractError::InvalidAmount);
     }
 
     let now = at(now);
-    let mut tx = pool.begin().await.map_err(ContractError::Database)?;
 
-    let contract = lock_contract(&mut tx, contract_id).await?;
+    let contract = lock_contract(&mut *tx, contract_id).await?;
 
     if contract.application_id != application_id {
         return Err(ContractError::NotFound);
@@ -802,7 +830,7 @@ pub async fn pay(
     .await
     .map_err(ContractError::Database)?;
 
-    let receiver = crate::user::insert_if_not_exists(&mut tx, receiver_discord_id)
+    let receiver = crate::user::insert_if_not_exists(&mut *tx, receiver_discord_id)
         .await
         .map_err(ContractError::Database)?;
 
@@ -866,8 +894,6 @@ pub async fn pay(
     .execute(&mut *tx)
     .await
     .map_err(ContractError::Database)?;
-
-    tx.commit().await.map_err(ContractError::Database)?;
 
     Ok(Payed {
         amount,

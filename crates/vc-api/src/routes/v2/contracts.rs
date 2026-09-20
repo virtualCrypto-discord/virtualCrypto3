@@ -23,7 +23,7 @@ use time::OffsetDateTime;
 use vc_auth::AuthUser;
 
 use crate::error::ApiError;
-use crate::routes::idempotency::{self, Idempotency};
+use crate::routes::idempotency;
 use crate::routes::limited::Limited;
 use crate::routes::pagination::{self, QueryParams};
 use crate::routes::v2::claims::format_timestamp;
@@ -269,44 +269,32 @@ pub async fn pay(
 
     // The unit the answer carries is read here, and not for the answer's sake: it
     // is what leaves the charge with **one** fallible step, the transaction
-    // itself. A failure after the key is claimed is then a transaction that rolled
-    // back — nothing happened — and the layer gives the key back instead of
-    // storing the failure, which is what lets a caller retry a blip with the key
-    // it already chose. A read made *after* the charge would be the other kind of
-    // failure, the one whose effect is unknown, and that one has to be stored.
+    // itself. Everything else the answer needs is then already in hand, so a
+    // request that fails after the key is claimed is one that rolled back — and
+    // the layer's transaction takes the claim with it, leaving the key free.
     let unit = find(&state, id).await?.unit;
 
-    let claimed =
-        match idempotency::claim(&state, &headers, account, user.scopes.vc_contract).await? {
-            Idempotency::None => None,
-            Idempotency::Claimed(key) => Some(key),
-            Idempotency::Answered(response) => return Ok(response),
-        };
-
-    idempotency::answer(
-        &state,
-        claimed,
-        account,
-        charge(&state, application, id, &payment, &unit).await,
-    )
+    idempotency::guard(&state, &headers, account, user.scopes.vc_contract, |tx| {
+        Box::pin(async move { charge(tx, application, id, payment, unit).await })
+    })
     .await
 }
 
-/// The charge itself, as the pair an answer is: what the idempotency layer
-/// stores and what the caller is given.
+/// The charge itself, as the pair an answer is: what the idempotency layer stores
+/// and what the caller is given.
 ///
 /// A domain refusal is `Ok` here rather than an `Err`, because a refusal *is* an
 /// answer — the one a replay has to return instead of charging again. An `Err` is
 /// the transaction failing, which is not an answer and did not happen.
 async fn charge(
-    state: &AppState,
+    tx: &mut sqlx::PgConnection,
     application: i64,
     id: i64,
-    payment: &Payment,
-    unit: &Option<String>,
+    payment: Payment,
+    unit: Option<String>,
 ) -> Result<(StatusCode, Value), ApiError> {
-    let payed = match contract::pay(
-        state.pool(),
+    let payed = match contract::pay_in(
+        tx,
         id,
         application,
         payment.receiver_discord_id,
@@ -333,7 +321,7 @@ async fn charge(
             // across all of them is not any single one's.
             "remaining": payed.remaining.to_string(),
             "party_remaining": payed.party_remaining.map(|remaining| remaining.to_string()),
-            "unit": unit.clone(),
+            "unit": unit,
         }),
     ))
 }

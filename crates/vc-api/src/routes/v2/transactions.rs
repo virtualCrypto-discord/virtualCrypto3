@@ -3,9 +3,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde_json::{Value, json};
-use vc_auth::AuthUser;
 
-use crate::routes::idempotency::{self, Idempotency};
+use crate::routes::idempotency;
 use crate::routes::limited::Limited;
 use vc_core::payment::PayError;
 
@@ -32,16 +31,16 @@ pub async fn post(
 
     let asked = asked(&body)?;
 
-    let claimed =
-        match idempotency::claim(&state, &headers, operator_id, user.scopes.vc_pay).await? {
-            Idempotency::None => None,
-            Idempotency::Claimed(key) => Some(key),
-            Idempotency::Answered(response) => return Ok(response),
-        };
+    // Before the key, like the body: the scope is part of what the caller is, and
+    // a request that is not allowed to pay must not spend a key either.
+    if !user.scopes.vc_pay {
+        return Err(ApiError::InsufficientScope);
+    }
 
-    let answered = paid(&state, &user, operator_id, asked).await;
-
-    idempotency::answer(&state, claimed, operator_id, answered).await
+    idempotency::guard(&state, &headers, operator_id, user.scopes.vc_pay, |tx| {
+        Box::pin(async move { paid(tx, operator_id, asked).await })
+    })
+    .await
 }
 
 /// What the body asked for: one payment, or a list of them.
@@ -138,33 +137,21 @@ fn bulk_asked(body: &Value) -> Result<Vec<vc_core::payment::BulkPayment>, ApiErr
     Ok(payments)
 }
 
-/// The money, once the body has been read: the scope the caller needs, and then
-/// the payment.
+/// The money, once the body has been read, on the transaction the layer owns.
 async fn paid(
-    state: &AppState,
-    user: &AuthUser,
+    tx: &mut sqlx::PgConnection,
     operator_id: i32,
     asked: Asked,
 ) -> Result<(StatusCode, Value), ApiError> {
-    if !user.scopes.vc_pay {
-        return Err(ApiError::InsufficientScope);
-    }
-
     let answered = match asked {
         Asked::Single {
             unit,
             receiver_discord_id,
             amount,
-        } => vc_core::payment::pay(
-            state.pool(),
-            operator_id,
-            receiver_discord_id,
-            &unit,
-            amount,
-        )
-        .await
-        .map(|()| (StatusCode::CREATED, json!({}))),
-        Asked::Bulk(payments) => vc_core::payment::pay_bulk(state.pool(), operator_id, &payments)
+        } => vc_core::payment::pay_in(tx, operator_id, receiver_discord_id, &unit, amount)
+            .await
+            .map(|()| (StatusCode::CREATED, json!({}))),
+        Asked::Bulk(payments) => vc_core::payment::pay_bulk_in(tx, operator_id, &payments)
             .await
             .map(|()| (StatusCode::CREATED, json!({}))),
     };

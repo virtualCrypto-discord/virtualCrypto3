@@ -157,14 +157,19 @@ succeeded replays as its own `201` and its own numbers, and **a charge that was
 refused replays as the refusal**, because "the quota is gone" is an answer a retry
 has to get rather than a second attempt at.
 
-**A charge that did not happen gives the key back.** If the transaction failed —
-the database, say — then nothing moved, and the key is released rather than stored:
-a key that kept the failure would leave the caller unable to attempt the same
-operation again for a week, answered with a stale error instead of a try, when what
-the key exists for is to stop a *second* charge and there was not a first one. That
-is also why the unit the answer carries is read before the charge rather than after
-it: it leaves the transaction as the only step that can fail, so a failure is
-always one that rolled back rather than one whose effect is unknown.
+**The claim, the charge and the answer are one commit.** The key's row is inserted
+by the same transaction that performs the charge and stores the answer, so they
+cannot come apart: a charge that failed rolls back with its claim (nothing moved,
+and the key is the caller's to use again, rather than a failure it is stuck behind
+for a week), and a process that dies mid-request takes the claim down with it
+instead of leaving a row that says "in flight" about a request that is over.
+
+Two requests with one key at the same time serialize on the key's own unique
+index: the second waits inside its insert until the first commits — and then reads
+the first one's answer — or until the first rolls back, and then charges itself.
+That ordering is a property of the transaction, not of this service's timing, and
+it is why the unit the answer carries is read before the charge as well: the
+charge is left as the only step that can fail.
 
 The response header says which of the three things happened:
 `Idempotency-Status: OK` for the request that did the work, `Duplicate` for one

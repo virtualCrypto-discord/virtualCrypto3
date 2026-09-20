@@ -565,3 +565,33 @@ async fn escrow(pool: &PgPool, contract: i64) -> i64 {
     .await
     .expect("the escrow")
 }
+
+/// Two requests with one key, at the same time: the second waits on the first
+/// rather than racing it, and what it is answered with is the first one's answer.
+/// One charge, one answer — whichever order they happen to finish in.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_charges_with_one_key_write_once(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let (first, second) = tokio::join!(
+        charge(&pool, &fixture, 25, Some(key_header(KEY))),
+        charge(&pool, &fixture, 25, Some(key_header(KEY))),
+    );
+
+    assert_eq!(first.status, 201, "body: {}", first.body);
+    assert_eq!(second.status, 201, "body: {}", second.body);
+    assert_eq!(first.body, second.body, "one answer for both of them");
+
+    let mut statuses = [
+        idempotency_status(&first).unwrap_or_default(),
+        idempotency_status(&second).unwrap_or_default(),
+    ];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        ["Duplicate".to_owned(), "OK".to_owned()],
+        "one did the work, and the other read it back"
+    );
+
+    assert_eq!(remaining(&pool, &fixture).await, "75", "charged once");
+}

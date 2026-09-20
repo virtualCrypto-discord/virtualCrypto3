@@ -257,32 +257,31 @@ who can fix it is looking at the status. All three are pinned by tests on the
 claim list and on the contract lists, which share the reader — so they are
 behaviour rather than an accident of a column.
 
-### A key is spent by a write, and only by a write
+### The claim is in the write's transaction
 
-The Elixir's idempotency plug claims the key and *then* calls the controller, and
-it stored whatever the controller rendered — so a request the controller refused,
-or one whose transaction failed, kept a key whose caller could not attempt that
-operation again. Two shapes of that are gone here, and both are the difference
-between "the request did something" and "the request answered something":
+The Elixir's idempotency plug claims the key and *then* calls the controller, in a
+transaction of its own — so a process that died between claiming and answering left
+a row with nothing under it, and a retry was answered `409 processing` about a
+request that was over until the purge took it a week later. This service claims
+inside the write's transaction instead: the row, the write and the answer are one
+commit, which makes that state unreachable rather than rare. A transaction that
+rolls back — the database failing, a serialization failure — takes its claim with
+it, so the caller may use the same key again.
 
-- **A request that never became a write does not spend the key.** The body is read
+Three things follow from it, and all three are pinned by tests:
+
+- A request that never became a write does not spend the key: the body is read
   before the key is claimed, so a value that does not parse is refused without
-  touching it, and the corrected request under the same key is the write rather
-  than a replay of the typo.
-- **A write that did not happen gives the key back.** A transaction that rolled
-  back is released (`vc_core::idempotency::release`) rather than stored, so a
-  caller can retry a database blip with the key it already chose instead of being
-  answered with a stale 500 for a week. What a claimed key stores is the answers
-  the endpoint produced — success and refusal alike.
-
-The payment, issuing and contract-charging endpoints all end in
-`routes/idempotency.rs`'s `answer`, which is where the three cases are written
-down. What is *not* fixed, and cannot be from inside a request: a process that
-dies between claiming the key and answering leaves a row with nothing under it, so
-a retry is told `409 processing` until the purge takes it (seven days). The
-alternative — letting a retry take over an unanswered claim after a grace period —
-is at-least-once for the write as well, which is the wrong side of the trade for
-money.
+  touching it.
+- Two requests with one key at the same time serialize on the key's unique index —
+  the second waits inside its insert and then reads the first one's answer, or
+  takes the key over if the first rolled back. Measured at `READ COMMITTED`, which
+  is what this service runs; under `REPEATABLE READ` or `SERIALIZABLE` the blocked
+  insert is answered with a serialization failure instead, which aborts the whole
+  transaction: nothing is written, no claim survives, and the same key may be used
+  again.
+- `409 processing` is left for one case only: a row claimed by a version of this
+  service that claimed outside the transaction. Nothing new writes one.
 
 ### The currency command is `/issue` here, where the Elixir's was `/give`
 

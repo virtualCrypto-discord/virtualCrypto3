@@ -1,40 +1,129 @@
 //! The `Idempotency-Key` layer, as the endpoints that write share it.
 //!
-//! It arrived with the payment endpoint, and the issuing endpoint needs the same
-//! thing for the same reason: a client that retries a request that already
-//! succeeded must not pay or issue twice. One copy rather than two, because the
-//! two would drift the first time either was touched — the headers, the stored
-//! body and the `Idempotency-Status` values are one behaviour, not two.
+//! It arrived with the payment endpoint, and the issuing and charging endpoints
+//! need the same thing for the same reason: a client that retries a request that
+//! already succeeded must not pay, issue or charge twice. One copy rather than
+//! three, because the three would drift the first time any was touched — the
+//! headers, the stored body and the `Idempotency-Status` values are one behaviour.
+//!
+//! **The claim, the write and the answer are one commit.** [`guard`] opens the
+//! transaction, claims the key in it, runs the write on the same connection and
+//! registers the answer before committing — so a key can never be left claimed
+//! with nothing recorded under it (the state a retry can do nothing with), and a
+//! write that failed takes its claim down with it, leaving the key free to be used
+//! again. That is also what makes the three endpoints one shape rather than three
+//! that each have to remember the order.
+
+use std::future::Future;
+use std::pin::Pin;
 
 use axum::Json;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
+use sqlx::PgConnection;
 
 use vc_core::idempotency::Slot;
 
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// What the header says to do, decided before the body is looked at.
-pub enum Idempotency {
+/// What the header says to do.
+enum Idempotency {
     /// No key: no idempotency layer at all.
     None,
-    /// This request owns the key and registers its answer when it has one.
+    /// This request owns the key, and the transaction owns the claim.
     Claimed(Vec<u8>),
     /// Answer with this instead of running the request.
     Answered(Response),
 }
 
+/// A write, on the transaction the layer owns: the answer it produced, or the
+/// failure that rolled it back.
+///
+/// Boxed because the future borrows the connection for as long as it runs, which
+/// is the one place the borrow cannot be spelled without it.
+pub type Writing<'a> =
+    Pin<Box<dyn Future<Output = Result<(StatusCode, Value), ApiError>> + Send + 'a>>;
+
+/// Run a write under its key: claim the key, run the write, store the answer, and
+/// commit all three together.
+///
+/// `allowed` is whether the caller's token may do the thing at all — the payment
+/// endpoint's scope for paying, the issuing endpoint's for issuing, the contract
+/// endpoint's for charging. A key from a token that may not is refused here.
+///
+/// What the caller has already settled — who they are, what they are asking for,
+/// anything the answer needs — it settles *before* this, because a request that
+/// never becomes a write must not spend the key.
+pub async fn guard<F>(
+    state: &AppState,
+    headers: &HeaderMap,
+    identity: i32,
+    allowed: bool,
+    write: F,
+) -> Result<Response, ApiError>
+where
+    F: for<'a> FnOnce(&'a mut PgConnection) -> Writing<'a>,
+{
+    let mut tx = state.pool().begin().await.map_err(db)?;
+
+    let claimed = match claim_in(&mut tx, headers, identity, allowed).await? {
+        Idempotency::None => None,
+        Idempotency::Claimed(key) => Some(key),
+        Idempotency::Answered(response) => {
+            // The key already had an answer: nothing is written, and the read the
+            // claim made is all this transaction is for.
+            tx.rollback().await.map_err(db)?;
+
+            return Ok(response);
+        }
+    };
+
+    let (status, body) = match write(&mut tx).await {
+        Ok(answer) => answer,
+        Err(failure) => {
+            // The claim rolls back with the write: it did not happen, and the key
+            // is free for the caller to use again — which is what a caller retrying
+            // a database blip needs, rather than a stored error it cannot get past.
+            tx.rollback().await.map_err(db)?;
+
+            return Err(failure);
+        }
+    };
+
+    if let Some(key) = claimed.as_ref() {
+        vc_core::idempotency::register_in(
+            &mut tx,
+            key,
+            identity,
+            i32::from(status.as_u16()),
+            body.clone(),
+        )
+        .await
+        .map_err(db)?;
+    }
+
+    tx.commit().await.map_err(db)?;
+
+    Ok(with_idempotency(
+        status,
+        body,
+        if claimed.is_some() {
+            "OK"
+        } else {
+            "Not Requested"
+        },
+    ))
+}
+
 /// `VirtualCryptoWeb.IdempotencyLayer.Payments`: claim the key, or answer as the
 /// key's earlier request was answered.
 ///
-/// `allowed` is whether the caller's token may do the thing at all — the payment
-/// endpoint's scope for paying, the issuing endpoint's for issuing. A key from a
-/// token that may not is refused here, before anything is parsed, which is where
-/// the plug sits in the Elixir.
-pub async fn claim(
-    state: &AppState,
+/// The header is read first and the database second, so a key that cannot be read
+/// at all — malformed, or several of them — is refused without touching the row.
+async fn claim_in(
+    tx: &mut PgConnection,
     headers: &HeaderMap,
     identity: i32,
     allowed: bool,
@@ -56,10 +145,13 @@ pub async fn claim(
                 return Err(ApiError::InsufficientScope);
             }
 
-            match vc_core::idempotency::get_or_insert(state.pool(), &key, identity)
+            match vc_core::idempotency::claim_in(tx, &key, identity)
                 .await
                 .map_err(db)?
             {
+                // A row with nothing under it: another transaction's claim (which
+                // the insert above would have waited for), or one left by a version
+                // of this service that claimed outside the transaction.
                 Slot::Existing {
                     http_status: None, ..
                 } => Ok(Idempotency::Answered(with_idempotency(
@@ -89,83 +181,6 @@ pub async fn claim(
             "",
         ))),
     }
-}
-
-/// `register_response/2`, once the request has produced something to remember.
-pub async fn register(
-    state: &AppState,
-    key: &[u8],
-    identity: i32,
-    status: StatusCode,
-    body: &Value,
-) -> Result<(), ApiError> {
-    vc_core::idempotency::register(
-        state.pool(),
-        key,
-        identity,
-        i32::from(status.as_u16()),
-        body.clone(),
-    )
-    .await
-    .map_err(db)
-}
-
-/// The answer to a request that has run, given what it produced.
-///
-/// Three cases, and the difference between them is what the write did rather than
-/// what status it produced:
-///
-/// - **`Ok`** — the endpoint answered. Success or refusal, it is stored under a
-///   claimed key, because a replay has to get that answer rather than a second
-///   attempt at a write that already happened.
-/// - **`Err`, claimed** — the request failed without happening: the transaction
-///   rolled back, nothing moved, and the key is **given back** (`release`). A key
-///   that stored the failure would be unretryable for a week — the caller's next
-///   attempt at the same operation answered with a stale error instead of
-///   attempted — when what the key exists for is to stop a second write, and there
-///   was not a first one.
-/// - **`Err`, no key** — answered exactly as it would have been without this layer:
-///   a failure is the endpoint's to report, and the header is not the layer's to
-///   add.
-///
-/// What this costs is the case it cannot see: a failure whose effect is *unknown*
-/// must be registered rather than released, or a retry could write twice. Each
-/// handler answers that by making its failures unambiguous — the contract
-/// endpoint reads what it needs for the answer before it charges, so the only way
-/// it can fail is a rolled-back transaction.
-pub async fn answer(
-    state: &AppState,
-    claimed: Option<Vec<u8>>,
-    identity: i32,
-    answered: Result<(StatusCode, Value), ApiError>,
-) -> Result<Response, ApiError> {
-    let (status, body) = match answered {
-        Ok(answer) => answer,
-        Err(failure) => {
-            if let Some(key) = claimed.as_ref() {
-                release(state, key, identity).await?;
-            }
-
-            return Err(failure);
-        }
-    };
-
-    match claimed {
-        Some(key) => {
-            register(state, &key, identity, status, &body).await?;
-
-            Ok(with_idempotency(status, body, "OK"))
-        }
-        None => Ok(with_idempotency(status, body, "Not Requested")),
-    }
-}
-
-/// `IdempotencyLayer`'s counterpart to [`claim`]: the key goes back, and the next
-/// request that names it is a request again rather than a replay.
-pub async fn release(state: &AppState, key: &[u8], identity: i32) -> Result<(), ApiError> {
-    vc_core::idempotency::release(state.pool(), key, identity)
-        .await
-        .map_err(db)
 }
 
 /// The response, carrying what the layer did with the key.

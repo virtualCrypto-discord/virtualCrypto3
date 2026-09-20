@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::error::ApiError;
 use crate::routes::guild_token::GuildToken;
-use crate::routes::idempotency::{self, Idempotency};
+use crate::routes::idempotency;
 use crate::state::AppState;
 use vc_core::issue::IssueError;
 
@@ -35,24 +35,18 @@ pub async fn post(
 ) -> Result<Response, ApiError> {
     let asked = asked(&body)?;
 
-    let claimed = match idempotency::claim(
+    // Before the key, like the body: the scope is part of what the caller is, and
+    // a request that is not allowed to issue must not spend a key either.
+    if !guild.scopes.vc_issue {
+        return Err(ApiError::InsufficientScope);
+    }
+
+    idempotency::guard(
         &state,
         &headers,
         guild.account_id,
         guild.scopes.vc_issue,
-    )
-    .await?
-    {
-        Idempotency::None => None,
-        Idempotency::Claimed(key) => Some(key),
-        Idempotency::Answered(response) => return Ok(response),
-    };
-
-    idempotency::answer(
-        &state,
-        claimed,
-        guild.account_id,
-        issued(&state, &guild, asked).await,
+        |tx| Box::pin(async move { issued(tx, guild.guild_id, asked).await }),
     )
     .await
 }
@@ -85,29 +79,19 @@ fn asked(body: &Value) -> Result<(i64, i64), ApiError> {
     Ok((receiver_discord_id, amount))
 }
 
-/// The issue itself, once the body has been read.
+/// The issue itself, once the body has been read, on the transaction the layer
+/// owns.
 async fn issued(
-    state: &AppState,
-    guild: &GuildToken,
+    tx: &mut sqlx::PgConnection,
+    guild_id: i64,
     asked: (i64, i64),
 ) -> Result<(StatusCode, Value), ApiError> {
     let (receiver_discord_id, amount) = asked;
 
-    if !guild.scopes.vc_issue {
-        return Err(ApiError::InsufficientScope);
-    }
-
     // The amount is required where the command may leave it out. There an omitted
     // amount is `:all`, and the person who typed it is looking at the pool; here it
     // would be a bot that forgot a field draining the guild.
-    match vc_core::issue::issue(
-        state.pool(),
-        guild.guild_id,
-        receiver_discord_id,
-        Some(amount),
-    )
-    .await
-    {
+    match vc_core::issue::issue_in(tx, guild_id, receiver_discord_id, Some(amount)).await {
         Ok(issued) => Ok((
             StatusCode::CREATED,
             json!({
