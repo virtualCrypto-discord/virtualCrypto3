@@ -88,10 +88,19 @@ pub struct Contract {
 }
 
 /// What a payment moved, and what is left to move.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Payed {
     pub amount: i64,
+    /// What the application may still spend in total: the parties' remainders
+    /// summed, which is what a contract holds.
     pub remaining: i64,
+    /// What the party this payment named has left, when it named one.
+    ///
+    /// Two different numbers, and a payment that names a party is the only thing
+    /// that makes them different: `remaining` is the contract's, and this is the
+    /// party's. An application billing per person reads this one — it is the
+    /// answer to "how much of this subscriber's quota is left".
+    pub party_remaining: Option<i64>,
 }
 
 /// One party, and what they hold of the contract's currency.
@@ -863,6 +872,10 @@ pub async fn pay(
     Ok(Payed {
         amount,
         remaining: total - amount,
+        // What the named party had, less what this payment took from them: the
+        // draw above took exactly the amount out of their remainder, whether it
+        // was drawn from all of them or from the one named.
+        party_remaining: party_discord_id.map(|_| spendable - amount),
     })
 }
 

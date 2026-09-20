@@ -212,6 +212,11 @@ async fn one_payment_of_two_parties_is_two_rows(pool: PgPool) {
     let charged = charge(&pool, &fixture, 120).await;
 
     assert_eq!(charged.status, 201, "body: {}", charged.body);
+    assert_eq!(
+        charged.body["party_remaining"],
+        Value::Null,
+        "a draw across the parties is no single one's"
+    );
 
     let listed = statement(&pool, &fixture, &fixture.token).await;
     let rows = listed.body.as_array().expect("an array");

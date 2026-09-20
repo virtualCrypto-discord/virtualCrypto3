@@ -217,7 +217,10 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts",
         summary: "そのアプリケーションが作った契約の一覧です。",
         access: "アプリケーションのトークン + `vc.contract`",
-        notes: &["`limit` を付けるとページになり、続きは `link` ヘッダーが示します。"],
+        notes: &[
+            "`limit` を付けるとページになり、続きは `link` ヘッダーが示します。",
+            "負の `limit` は 400 `invalid_limit` です。",
+        ],
     },
     Endpoint {
         method: "POST",
@@ -272,6 +275,7 @@ const ENDPOINTS: &[Endpoint] = &[
         notes: &[
             "`receiver_discord_id` と `amount` を送ります。成功は 201 です。",
             "`party_discord_id` を送ると、その対象者の分だけから引きます。",
+            "`remaining` は契約全体、`party_remaining` は指名した対象者の残りです（指名しなければ `null`）。",
             "`Idempotency-Key` に対応しています。同じ鍵の再送は、最初の答えを返します。",
         ],
     },

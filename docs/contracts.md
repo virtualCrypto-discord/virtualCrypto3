@@ -65,11 +65,15 @@ balance until it comes back.
    the contract for.
 4. **The application spends.** `POST /api/v2/contracts/{id}/payments` moves
    locked money to a Discord user: the receiver it names at the time, or the one
-   the contract fixed. **`party_discord_id`, when it is sent, says whose use the
-   charge is for** — that party's remainder becomes the only thing the payment may
-   draw on, which is what an application billing several people under one contract
-   needs, because without it the draw is oldest-approval-first across all of them
-   and "whose use was this" has no answer. And a payment whose receiver *is* the
+   the contract fixed. The answer carries **two remainders**, and only a payment
+   that names a party makes them differ: `remaining` is what the contract as a
+   whole holds, and `party_remaining` is what the party that was named has left
+   (`null` when none was, because a draw across all of them is no single one's).
+   **`party_discord_id`, when it is sent, says whose use the charge is for** —
+   that party's remainder becomes the only thing the payment may draw on, which is
+   what an application billing several people under one contract needs, because
+   without it the draw is oldest-approval-first across all of them and "whose use
+   was this" has no answer. And a payment whose receiver *is* the
    party it draws on is a **return** rather than a spend: it is allowed even where
    the receiver is fixed, and it is the correction an application has for a use it
    should not have billed. Nothing else about the money is the application's to do.
@@ -142,7 +146,11 @@ Two rules make the key mean one thing.
 **A request that never becomes a charge does not spend it.** A body that does not
 parse, or a token that is not an application's, is refused *before* the key is
 claimed, so a client whose body was malformed fixes it and sends the same key
-again — and that request is the charge, rather than a replay of its own typo.
+again — and that request is the charge, rather than a replay of its own typo. The
+payment and issuing endpoints arrange the same two the same way, which is the one
+place this port does not follow the Elixir: its plug claims the key and then hands
+an unread body to the controller, so a request the controller refused left its key
+claimed with nothing recorded under it.
 
 **Once the key is claimed, the request ends with an answer.** What is stored is
 the answer, whatever it turned out to be: a charge that succeeded replays as its

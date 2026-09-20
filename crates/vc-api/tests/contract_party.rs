@@ -209,7 +209,14 @@ async fn a_charge_draws_on_the_party_it_names(pool: PgPool) {
     .await;
 
     assert_eq!(charged.status, 201, "body: {}", charged.body);
-    assert_eq!(charged.body["remaining"], "120");
+    assert_eq!(
+        charged.body["remaining"], "120",
+        "the contract, which is both parties' rest"
+    );
+    assert_eq!(
+        charged.body["party_remaining"], "20",
+        "and the party it named, which is the one a per-person biller wants"
+    );
 
     assert_eq!(remainder(&pool, &fixture, BOB_DISCORD_ID).await, 20);
     assert_eq!(
@@ -283,6 +290,10 @@ async fn a_return_gives_a_party_their_remainder_back(pool: PgPool) {
 
     assert_eq!(returned.status, 201, "body: {}", returned.body);
     assert_eq!(returned.body["remaining"], "90", "out of the contract now");
+    assert_eq!(
+        returned.body["party_remaining"], "40",
+        "and what the party may still be billed for"
+    );
     assert_eq!(balance(&pool, ALICE).await, 930, "hers came back");
     assert_eq!(
         remainder(&pool, &fixture, ALICE_DISCORD_ID).await,

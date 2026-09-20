@@ -320,7 +320,12 @@ async fn charge(
         StatusCode::CREATED,
         json!({
             "amount": payed.amount.to_string(),
+            // Two numbers, and only a payment that named a party makes them
+            // differ: `remaining` is the whole contract's, and `party_remaining`
+            // is that one party's — `null` when no party was named, because a draw
+            // across all of them is not any single one's.
             "remaining": payed.remaining.to_string(),
+            "party_remaining": payed.party_remaining.map(|remaining| remaining.to_string()),
             "unit": unit,
         }),
     ))
