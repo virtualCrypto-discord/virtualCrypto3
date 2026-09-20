@@ -137,13 +137,24 @@ and the header means here what `docs/oauth2.md` and the claim endpoints mean by
 it. The key belongs to **the application** — its own account is the one it is
 scoped by — so two applications may use the same one without meeting.
 
-What is stored is the answer, whatever it turned out to be: a charge that
-succeeded replays as its own `201` and its own numbers, and **a charge that was
-refused replays as the refusal**, because "the quota is gone" is an answer a retry
-has to get rather than a second attempt at. The response header says which of the
-three things happened: `Idempotency-Status: OK` for the request that did the work,
-`Duplicate` for one that read it back, `Not Requested` for a request that carried
-no key. A key that is being used right now answers `409 processing` and asks to be
+Two rules make the key mean one thing.
+
+**A request that never becomes a charge does not spend it.** A body that does not
+parse, or a token that is not an application's, is refused *before* the key is
+claimed, so a client whose body was malformed fixes it and sends the same key
+again — and that request is the charge, rather than a replay of its own typo.
+
+**Once the key is claimed, the request ends with an answer.** What is stored is
+the answer, whatever it turned out to be: a charge that succeeded replays as its
+own `201` and its own numbers, and **a charge that was refused replays as the
+refusal**, because "the quota is gone" is an answer a retry has to get rather
+than a second attempt at. And if the charge failed rather than refused — the
+database, say — the failure is stored too: a replay must not be handed the chance
+to charge again under a key whose first attempt may have gone through.
+
+The response header says which of the three things happened:
+`Idempotency-Status: OK` for the request that did the work, `Duplicate` for one
+that read it back, `Not Requested` for a request that carried no key. A key that is being used right now answers `409 processing` and asks to be
 retried; a key that is not the quoted string the specification asks for is a `400`
 before anything is claimed.
 

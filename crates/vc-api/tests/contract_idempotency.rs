@@ -34,6 +34,8 @@ const KEY: &str = "a-charge-key";
 struct Fixture {
     token: String,
     contract: i64,
+    /// The account the application is, which is what its keys are scoped by.
+    account: i32,
 }
 
 async fn fixture(pool: &PgPool) -> Fixture {
@@ -85,7 +87,11 @@ async fn fixture(pool: &PgPool) -> Fixture {
 
     assert_eq!(approved.status, 200, "body: {}", approved.body);
 
-    Fixture { token, contract }
+    Fixture {
+        token,
+        contract,
+        account,
+    }
 }
 
 async fn send(
@@ -270,6 +276,97 @@ async fn a_key_does_not_make_a_scopeless_token_able_to_charge(pool: PgPool) {
     assert_eq!(response.status, 403, "body: {}", response.body);
     assert_eq!(response.body["error"], "insufficient_scope");
     assert_eq!(idempotency_status(&response), None);
+}
+
+/// A request that never became a charge does not spend the key: the body it
+/// could not read is fixed and sent again under the same one, and that request is
+/// the charge rather than a replay of the typo.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_body_that_does_not_parse_does_not_spend_the_key(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let malformed = send(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{}/payments", fixture.contract),
+        &fixture.token,
+        Some(key_header(KEY)),
+        json!({
+            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "amount": "ten",
+        }),
+    )
+    .await;
+
+    assert_eq!(malformed.status, 400, "body: {}", malformed.body);
+    assert_eq!(
+        malformed.body["error_description"],
+        "invalid_format_of_amount"
+    );
+    assert_eq!(idempotency_status(&malformed), None, "nothing was claimed");
+    assert_eq!(
+        claimed(&pool, &fixture, KEY).await,
+        0,
+        "and no row was left behind"
+    );
+
+    let corrected = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(corrected.status, 201, "body: {}", corrected.body);
+    assert_eq!(idempotency_status(&corrected).as_deref(), Some("OK"));
+    assert_eq!(corrected.body["remaining"], "75");
+    assert_eq!(claimed(&pool, &fixture, KEY).await, 1, "now it is claimed");
+}
+
+/// And neither does a caller who is not an application: being refused for what
+/// they are must not spend it either.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_token_that_is_not_an_applications_does_not_spend_the_key(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let alice = mint(&pool, ALICE, &[]).await;
+
+    let refused = send(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{}/payments", fixture.contract),
+        &alice,
+        Some(key_header(KEY)),
+        json!({
+            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "amount": "25",
+        }),
+    )
+    .await;
+
+    assert_eq!(refused.status, 403, "body: {}", refused.body);
+    assert_eq!(
+        claimed_by(&pool, ALICE, KEY).await,
+        0,
+        "the key the caller would have used is untouched"
+    );
+
+    let charged = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(charged.status, 201, "body: {}", charged.body);
+    assert_eq!(charged.body["remaining"], "75");
+}
+
+/// The rows a key has in the layer's own table, which is what says whether a
+/// request claimed it: one that answered before claiming left none.
+async fn claimed(pool: &PgPool, fixture: &Fixture, key: &str) -> i64 {
+    claimed_by(pool, fixture.account, key).await
+}
+
+async fn claimed_by(pool: &PgPool, account: i32, key: &str) -> i64 {
+    sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM payments_idempotency
+          WHERE idempotency_key = $1 AND user_id = $2",
+        key.as_bytes().to_vec(),
+        i64::from(account)
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the layer's table")
 }
 
 /// A key that is not the quoted token the specification asks for is refused

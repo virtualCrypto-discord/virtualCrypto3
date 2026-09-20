@@ -239,6 +239,13 @@ pub async fn withdraw(
 /// two applications may use the same one; a refusal is stored as well, because
 /// "the quota is gone" is an answer a retry must get rather than a second
 /// attempt at.
+///
+/// Two rules make the key mean one thing:
+///
+/// - a request that never becomes a charge does not spend it (below), and
+/// - once it is claimed, the request ends with an answer (below) — including the
+///   answer "this failed", which is what a replay must get rather than the
+///   chance to charge again.
 pub async fn pay(
     State(state): State<AppState>,
     user: Limited,
@@ -249,6 +256,17 @@ pub async fn pay(
     let account = i32::try_from(user.subject)
         .map_err(|_| ApiError::Internal("the token's subject is not an account id".into()))?;
 
+    // **Who is asking, and what they are asking for, before the key is claimed.**
+    //
+    // A request that never becomes a charge must not spend the key: a client
+    // whose body did not parse fixes it and sends the same key again, and that
+    // request has to be the charge rather than a replay of its own typo. The
+    // key's own refusals — malformed, several of them, a token without the
+    // scope, a key already answered — are still the layer's to answer first,
+    // which is what `claim` below is for.
+    let application = application(&state, &user).await?;
+    let payment = payment(&body)?;
+
     let claimed =
         match idempotency::claim(&state, &headers, account, user.scopes.vc_contract).await? {
             Idempotency::None => None,
@@ -256,7 +274,15 @@ pub async fn pay(
             Idempotency::Answered(response) => return Ok(response),
         };
 
-    let (status, body) = paid(&state, &user, id, &body).await?;
+    // **A claimed key ends with an answer, never with a hole.** A row that says
+    // nothing is a retry told to retry forever, so even the failure of the
+    // charge itself is stored — which is also the conservative side of an
+    // unknown: a replay must not let a second charge happen under a key whose
+    // first attempt may have gone through.
+    let (status, body) = match charge(&state, application, id, &payment).await {
+        Ok(answer) => answer,
+        Err(failure) => failure.parts(),
+    };
 
     if let Some(key) = claimed {
         idempotency::register(&state, &key, account, status, &body).await?;
@@ -272,17 +298,14 @@ pub async fn pay(
 ///
 /// A domain refusal is `Ok` here rather than an `Err`, because a refusal *is* an
 /// answer — the one a replay has to return instead of charging again. What stays
-/// an error is the database failing, which is not an answer and must not be
-/// handed back later as though it were.
-async fn paid(
+/// an error is the database failing, whose parts the caller stores like any
+/// other answer rather than handing a replay the chance to charge twice.
+async fn charge(
     state: &AppState,
-    user: &AuthUser,
+    application: i64,
     id: i64,
-    body: &Value,
+    payment: &Payment,
 ) -> Result<(StatusCode, Value), ApiError> {
-    let application = application(state, user).await?;
-    let payment = payment(body)?;
-
     let payed = match contract::pay(
         state.pool(),
         id,
