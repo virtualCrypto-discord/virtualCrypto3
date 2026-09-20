@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT history.id, sender.discord_id AS \"discord_id!\", history.amount AS \"amount!\",\n                receiver.discord_id AS \"receiver_discord_id!\", history.\"time\" AS \"time!\"\n           FROM currency_payment_histories history\n           JOIN users sender ON sender.id = history.sender_id\n           JOIN users receiver ON receiver.id = history.receiver_id\n          WHERE history.contract_id = $1\n            AND ($2::bigint IS NULL OR history.id < $2)\n            AND ($3::bigint IS NULL OR history.id <= $3)\n          ORDER BY history.id DESC\n          LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_payment_histories",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "amount!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_payment_histories",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "receiver_discord_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "time!",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "currency_payment_histories",
+            "name": "time"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e231223bd16d8afede19a333f308c754467de8729551d2d901b45e1302a5433e"
+}

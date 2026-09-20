@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency_payment_histories\n             (amount, sender_id, receiver_id, currency_id, time, inserted_at, updated_at)\n         SELECT 5, alice.id, receiver.id, 1, now(), now(), now()\n           FROM users alice, users receiver\n          WHERE alice.discord_id = $1 AND receiver.discord_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6428ea88bd64e5871730ec7c55a129e5c88e119ed603722054c678fd272e9c07"
+}

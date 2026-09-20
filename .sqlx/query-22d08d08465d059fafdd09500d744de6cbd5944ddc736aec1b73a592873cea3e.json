@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT remaining FROM contract_parties\n              WHERE contract_id = $1 AND discord_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "remaining",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contract_parties",
+            "name": "remaining"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "22d08d08465d059fafdd09500d744de6cbd5944ddc736aec1b73a592873cea3e"
+}
