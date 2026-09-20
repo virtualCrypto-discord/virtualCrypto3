@@ -373,11 +373,11 @@ async fn an_unquoted_key_is_rejected(pool: PgPool) {
     );
 }
 
-/// An answer that is an error is stored like any other, because a claimed key
-/// with nothing recorded under it is a retry told to retry forever — the layer
-/// saying "still in flight" about a request that is over.
+/// A body that cannot become a payment does not spend the key: the client fixes
+/// the value, sends the same key again, and that request is the payment rather
+/// than a replay of its own typo.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_answer_that_is_an_error_is_stored_under_its_key(pool: PgPool) {
+async fn a_body_that_does_not_parse_does_not_spend_the_key(pool: PgPool) {
     fixture(&pool).await;
     let token = mint(&pool, USER1, &["vc.pay"]).await;
 
@@ -388,16 +388,66 @@ async fn an_answer_that_is_an_error_is_stored_under_its_key(pool: PgPool) {
         malformed.body["error_description"],
         "invalid_format_of_convert_amount"
     );
+    assert_eq!(idempotency_status(&malformed), None, "nothing was claimed");
     assert_eq!(
-        idempotency_status(&malformed),
-        Some("OK"),
-        "the refusal was stored rather than the key left behind"
+        claimed(&pool, USER1, KEY).await,
+        0,
+        "and no row was left behind"
     );
 
-    let retried = pay_with_key(&pool, &token, "ten", KEY).await;
+    let corrected = pay_with_key(&pool, &token, "20", KEY).await;
 
-    assert_eq!(retried.status, 400, "body: {}", retried.body);
-    assert_eq!(retried.body, malformed.body, "the first answer, verbatim");
-    assert_eq!(idempotency_status(&retried), Some("Duplicate"));
-    assert_eq!(amount(&pool, USER1).await, 199_500, "nothing moved");
+    assert_eq!(corrected.status, 201, "body: {}", corrected.body);
+    assert_eq!(idempotency_status(&corrected), Some("OK"));
+    assert_eq!(amount(&pool, USER1).await, 199_500 - 20);
+    assert_eq!(amount(&pool, USER2).await, 1_000 + 20);
+    assert_eq!(claimed(&pool, USER1, KEY).await, 1, "now it is claimed");
+}
+
+/// An answer that is an error *is* stored once the key is claimed — the failure
+/// the payment itself hits is the endpoint's answer, not a request that never
+/// became one. The table the payment reads is dropped rather than the failure
+/// simulated, so this is the real path.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_failure_is_stored_under_its_key(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+
+    sqlx::query("DROP TABLE assets CASCADE")
+        .execute(&pool)
+        .await
+        .expect("the table a payment reads");
+
+    let failed = pay_with_key(&pool, &token, "20", KEY).await;
+
+    assert_eq!(failed.status, 500, "body: {}", failed.body);
+    assert_eq!(
+        idempotency_status(&failed),
+        Some("OK"),
+        "the failure was stored rather than the key left behind"
+    );
+
+    let retried = pay_with_key(&pool, &token, "20", KEY).await;
+
+    assert_eq!(retried.status, 500, "body: {}", retried.body);
+    assert_eq!(retried.body, failed.body, "the first answer, verbatim");
+    assert_eq!(
+        idempotency_status(&retried),
+        Some("Duplicate"),
+        "and read back without touching the broken table"
+    );
+}
+
+/// The rows a key has in the layer's own table, which is what says whether a
+/// request claimed it.
+async fn claimed(pool: &PgPool, account: i32, key: &str) -> i64 {
+    sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM payments_idempotency
+          WHERE idempotency_key = $1 AND user_id = $2",
+        key.as_bytes().to_vec(),
+        i64::from(account)
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the layer's table")
 }

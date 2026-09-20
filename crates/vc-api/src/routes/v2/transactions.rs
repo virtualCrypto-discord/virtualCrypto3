@@ -14,9 +14,13 @@ use crate::state::AppState;
 
 /// `POST /api/v2/users/@me/transactions`
 ///
-/// Mirrors `UserTransactionController.post/2`. The idempotency plug runs before
-/// the controller in Elixir, so it is handled first here: an unusable key or a
-/// token without `vc.pay` is rejected before the body is looked at.
+/// Mirrors `UserTransactionController.post/2`, with one thing the port settled
+/// differently: **the body is read before the key is claimed.** In Elixir the
+/// plug claims first and hands an unread body to the controller, so a request the
+/// controller then refused left its key claimed with nothing recorded in it —
+/// and a retry of the corrected request was answered "still in flight" forever.
+/// A body that cannot become a payment is refused without touching the key here;
+/// the key's own refusals are still the layer's to answer first.
 pub async fn post(
     State(state): State<AppState>,
     user: Limited,
@@ -26,6 +30,8 @@ pub async fn post(
     let operator_id = i32::try_from(user.subject)
         .map_err(|_| ApiError::Internal("subject out of range".into()))?;
 
+    let asked = asked(&body)?;
+
     let claimed =
         match idempotency::claim(&state, &headers, operator_id, user.scopes.vc_pay).await? {
             Idempotency::None => None,
@@ -33,77 +39,65 @@ pub async fn post(
             Idempotency::Answered(response) => return Ok(response),
         };
 
-    let answered = if let Some(object) = body.as_object() {
-        single(&state, &user, operator_id, object).await
-    } else if body.is_array() {
-        bulk(&state, &user, operator_id, &body).await
-    } else {
-        Ok(missing_parameter())
-    };
+    let answered = paid(&state, &user, operator_id, asked).await;
 
     idempotency::answer(&state, claimed, operator_id, answered).await
 }
 
-/// The single-payment clause: the body must be the object with `unit`,
-/// `receiver_discord_id` and `amount`, all strings.
-async fn single(
-    state: &AppState,
-    user: &AuthUser,
-    operator_id: i32,
-    object: &serde_json::Map<String, Value>,
-) -> Result<(StatusCode, Value), ApiError> {
-    let Some((unit, receiver, amount)) = (match (
-        object.get("unit"),
-        object.get("receiver_discord_id"),
-        object.get("amount"),
-    ) {
-        (Some(unit), Some(receiver), Some(amount)) => Some((unit, receiver, amount)),
-        _ => None,
-    }) else {
-        return Ok(missing_parameter());
-    };
-
-    if !(unit.is_string() && receiver.is_string() && amount.is_string()) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "invalid_request", "error_description": "invalid_type_of_variable" }),
-        ));
-    }
-
-    let receiver_discord_id = parse_number(receiver.as_str().unwrap_or_default()).ok_or(
-        ApiError::InvalidRequest("invalid_format_of_receiver_discord_id"),
-    )?;
-    let amount = parse_number(amount.as_str().unwrap_or_default())
-        .ok_or(ApiError::InvalidRequest("invalid_format_of_convert_amount"))?;
-
-    if !user.scopes.vc_pay {
-        return Err(ApiError::InsufficientScope);
-    }
-
-    match vc_core::payment::pay(
-        state.pool(),
-        operator_id,
-        receiver_discord_id,
-        unit.as_str().unwrap_or_default(),
-        amount,
-    )
-    .await
-    {
-        Ok(()) => Ok((StatusCode::CREATED, json!({}))),
-        Err(error) => Ok(payment_error(error)),
-    }
+/// What the body asked for: one payment, or a list of them.
+enum Asked {
+    Single {
+        unit: String,
+        receiver_discord_id: i64,
+        amount: i64,
+    },
+    Bulk(Vec<vc_core::payment::BulkPayment>),
 }
 
-/// The bulk clause: the body is an array of the single-payment objects.
+/// The body, read the way the controller reads it: an object is one payment, an
+/// array is a list of them, and anything else is a missing parameter.
 ///
+/// The refusals are the controller's, in its order, and the index a list entry
+/// failed at is part of the answer — what changed is only *when* they happen.
+fn asked(body: &Value) -> Result<Asked, ApiError> {
+    if let Some(object) = body.as_object() {
+        // The single-payment clause: `unit`, `receiver_discord_id` and `amount`,
+        // all strings.
+        let Some((unit, receiver, amount)) = (match (
+            object.get("unit"),
+            object.get("receiver_discord_id"),
+            object.get("amount"),
+        ) {
+            (Some(unit), Some(receiver), Some(amount)) => Some((unit, receiver, amount)),
+            _ => None,
+        }) else {
+            return Err(ApiError::InvalidRequest("missing_parameter"));
+        };
+
+        if !(unit.is_string() && receiver.is_string() && amount.is_string()) {
+            return Err(ApiError::InvalidRequest("invalid_type_of_variable"));
+        }
+
+        return Ok(Asked::Single {
+            unit: unit.as_str().unwrap_or_default().to_owned(),
+            receiver_discord_id: parse_number(receiver.as_str().unwrap_or_default()).ok_or(
+                ApiError::InvalidRequest("invalid_format_of_receiver_discord_id"),
+            )?,
+            amount: parse_number(amount.as_str().unwrap_or_default())
+                .ok_or(ApiError::InvalidRequest("invalid_format_of_convert_amount"))?,
+        });
+    }
+
+    if body.is_array() {
+        return bulk_asked(body).map(Asked::Bulk);
+    }
+
+    Err(ApiError::InvalidRequest("missing_parameter"))
+}
+
 /// `convert_list/1` reads each entry's amount, then its unit, then its receiver,
 /// and reports the first problem with the index it appeared at.
-async fn bulk(
-    state: &AppState,
-    user: &AuthUser,
-    operator_id: i32,
-    body: &Value,
-) -> Result<(StatusCode, Value), ApiError> {
+fn bulk_asked(body: &Value) -> Result<Vec<vc_core::payment::BulkPayment>, ApiError> {
     let list = body.as_array().expect("the caller checked for an array");
 
     let mut payments = Vec::with_capacity(list.len());
@@ -141,21 +135,41 @@ async fn bulk(
         });
     }
 
+    Ok(payments)
+}
+
+/// The money, once the body has been read: the scope the caller needs, and then
+/// the payment.
+async fn paid(
+    state: &AppState,
+    user: &AuthUser,
+    operator_id: i32,
+    asked: Asked,
+) -> Result<(StatusCode, Value), ApiError> {
     if !user.scopes.vc_pay {
         return Err(ApiError::InsufficientScope);
     }
 
-    match vc_core::payment::pay_bulk(state.pool(), operator_id, &payments).await {
-        Ok(()) => Ok((StatusCode::CREATED, json!({}))),
-        Err(error) => Ok(payment_error(error)),
-    }
-}
+    let answered = match asked {
+        Asked::Single {
+            unit,
+            receiver_discord_id,
+            amount,
+        } => vc_core::payment::pay(
+            state.pool(),
+            operator_id,
+            receiver_discord_id,
+            &unit,
+            amount,
+        )
+        .await
+        .map(|()| (StatusCode::CREATED, json!({}))),
+        Asked::Bulk(payments) => vc_core::payment::pay_bulk(state.pool(), operator_id, &payments)
+            .await
+            .map(|()| (StatusCode::CREATED, json!({}))),
+    };
 
-fn missing_parameter() -> (StatusCode, Value) {
-    (
-        StatusCode::BAD_REQUEST,
-        json!({ "error": "invalid_request", "error_description": "missing_parameter" }),
-    )
+    Ok(answered.unwrap_or_else(payment_error))
 }
 
 /// `UserTransactionView.Pure.render_error/1`: three distinct shapes, and note

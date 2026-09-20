@@ -23,12 +23,18 @@ use vc_core::issue::IssueError;
 ///
 /// The guild is the token's, so the path names none: a guild token can only ever
 /// spend the pool of the guild it was issued for.
+///
+/// The body is read **before** the key is claimed, for the reason the payment
+/// endpoint gives: a request that cannot become an issue must not spend the key
+/// it came with.
 pub async fn post(
     State(state): State<AppState>,
     guild: GuildToken,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
+    let asked = asked(&body)?;
+
     let claimed = match idempotency::claim(
         &state,
         &headers,
@@ -46,35 +52,28 @@ pub async fn post(
         &state,
         claimed,
         guild.account_id,
-        issued(&state, &guild, &body).await,
+        issued(&state, &guild, asked).await,
     )
     .await
 }
 
-/// The body, and the issue it asks for.
+/// The body, read: who is paid, and how much.
 ///
 /// The shape is the payment endpoint's, because the two are the same kind of act:
 /// two values, each a number written as a string, which is how this API carries
 /// numbers.
-async fn issued(
-    state: &AppState,
-    guild: &GuildToken,
-    body: &Value,
-) -> Result<(StatusCode, Value), ApiError> {
+fn asked(body: &Value) -> Result<(i64, i64), ApiError> {
     let Some(object) = body.as_object() else {
-        return Ok(missing_parameter());
+        return Err(ApiError::InvalidRequest("missing_parameter"));
     };
 
     let (Some(receiver), Some(amount)) = (object.get("receiver_discord_id"), object.get("amount"))
     else {
-        return Ok(missing_parameter());
+        return Err(ApiError::InvalidRequest("missing_parameter"));
     };
 
     if !(receiver.is_string() && amount.is_string()) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "invalid_request", "error_description": "invalid_type_of_variable" }),
-        ));
+        return Err(ApiError::InvalidRequest("invalid_type_of_variable"));
     }
 
     let receiver_discord_id = parse_number(receiver.as_str().unwrap_or_default()).ok_or(
@@ -82,6 +81,17 @@ async fn issued(
     )?;
     let amount = parse_number(amount.as_str().unwrap_or_default())
         .ok_or(ApiError::InvalidRequest("invalid_format_of_amount"))?;
+
+    Ok((receiver_discord_id, amount))
+}
+
+/// The issue itself, once the body has been read.
+async fn issued(
+    state: &AppState,
+    guild: &GuildToken,
+    asked: (i64, i64),
+) -> Result<(StatusCode, Value), ApiError> {
+    let (receiver_discord_id, amount) = asked;
 
     if !guild.scopes.vc_issue {
         return Err(ApiError::InsufficientScope);
@@ -108,13 +118,6 @@ async fn issued(
         )),
         Err(error) => Ok(issue_error(error)),
     }
-}
-
-fn missing_parameter() -> (StatusCode, Value) {
-    (
-        StatusCode::BAD_REQUEST,
-        json!({ "error": "invalid_request", "error_description": "missing_parameter" }),
-    )
 }
 
 /// The payment endpoint's three shapes, for the three ways issuing fails.

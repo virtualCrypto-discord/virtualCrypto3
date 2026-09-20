@@ -395,11 +395,13 @@ async fn the_same_key_issues_once(pool: PgPool) {
     );
 }
 
-/// The same for issuing: an answer that is an error is what the key stores, so a
-/// retry reads it back rather than finding a key with nothing under it.
+/// The same for issuing: a body that cannot become an issue does not spend the
+/// key, so the corrected request is the issue rather than a replay of the typo.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_answer_that_is_an_error_is_stored_under_its_key(pool: PgPool) {
-    let (money, _, token) = fixture(&pool).await;
+async fn a_body_that_does_not_parse_does_not_spend_the_key(pool: PgPool) {
+    let (money, application, token) = fixture(&pool).await;
+    let account = account_of(&pool, application).await;
+    let before = get_amount(&pool, money.user2, money.currency).await;
 
     let malformed = send(
         router(pool.clone()),
@@ -414,21 +416,39 @@ async fn an_answer_that_is_an_error_is_stored_under_its_key(pool: PgPool) {
         malformed.body["error_description"],
         "invalid_format_of_amount"
     );
+    assert_eq!(idempotency_status(&malformed), None, "nothing was claimed");
     assert_eq!(
-        idempotency_status(&malformed),
-        Some("OK"),
-        "the refusal was stored rather than the key left behind"
+        claimed(&pool, i64::from(account), KEY).await,
+        0,
+        "and no row was left behind"
     );
 
-    let retried = send(
+    let corrected = send(
         router(pool.clone()),
         &token,
-        issue(money.user2, json!("ten")),
+        issue(money.user2, json!("100")),
         Some(KEY),
     )
     .await;
 
-    assert_eq!(retried.status, 400, "body: {}", retried.body);
-    assert_eq!(retried.body, malformed.body, "the first answer, verbatim");
-    assert_eq!(idempotency_status(&retried), Some("Duplicate"));
+    assert_eq!(corrected.status, 201, "body: {}", corrected.body);
+    assert_eq!(idempotency_status(&corrected), Some("OK"));
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        before + 100
+    );
+}
+
+/// The rows a key has in the layer's own table, which is what says whether a
+/// request claimed it.
+async fn claimed(pool: &PgPool, account: i64, key: &str) -> i64 {
+    sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM payments_idempotency
+          WHERE idempotency_key = $1 AND user_id = $2",
+        key.as_bytes().to_vec(),
+        account
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the layer's table")
 }
