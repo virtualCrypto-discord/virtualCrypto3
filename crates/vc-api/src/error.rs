@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde_json::json;
+use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::discord::DiscordError;
@@ -66,67 +66,65 @@ pub enum ApiError {
 /// a client may rely on the wording.
 const METADATA_LIMIT_MESSAGE: &str = "The upper limit of the number of metadata is 50, and it is highly possible that this has been reached. (Maybe for other reasons)";
 
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
+impl ApiError {
+    /// The status and the body this error answers with, as values rather than as
+    /// a finished response.
+    ///
+    /// [`IntoResponse`] is written in terms of this, and so is the one caller
+    /// that has to **store** what it answered: the idempotency layer replays a
+    /// refusal, and a refusal it cannot take apart is one it cannot store. Doing
+    /// it this way rather than by hand is what keeps the two from drifting apart.
+    pub fn parts(self) -> (StatusCode, Value) {
         match self {
             ApiError::PermissionDenied => (
                 StatusCode::FORBIDDEN,
-                Json(json!({ "error": "invalid_token", "error_description": "permission_denied" })),
-            )
-                .into_response(),
+                json!({ "error": "invalid_token", "error_description": "permission_denied" }),
+            ),
             ApiError::Forbidden(description) => (
                 StatusCode::FORBIDDEN,
-                Json(json!({ "error": "forbidden", "error_description": description })),
-            )
-                .into_response(),
+                json!({ "error": "forbidden", "error_description": description }),
+            ),
             ApiError::NotFound => (
                 StatusCode::NOT_FOUND,
-                Json(json!({ "error": "not_found", "error_description": "not_found" })),
-            )
-                .into_response(),
+                json!({ "error": "not_found", "error_description": "not_found" }),
+            ),
             ApiError::InvalidRequest(description) => (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "invalid_request", "error_description": description })),
-            )
-                .into_response(),
+                json!({ "error": "invalid_request", "error_description": description }),
+            ),
             ApiError::Conflict(info) => (
                 StatusCode::CONFLICT,
-                Json(json!({ "error": "conflict", "error_info": info })),
-            )
-                .into_response(),
+                json!({ "error": "conflict", "error_info": info }),
+            ),
             ApiError::InvalidMetadata(details) => (
                 StatusCode::BAD_REQUEST,
-                Json(json!({
+                json!({
                     "error": "invalid_request",
                     "error_description": "invalid_metadata",
                     "error_description_details": details,
-                })),
-            )
-                .into_response(),
+                }),
+            ),
             ApiError::MetadataLimit => (
                 StatusCode::BAD_REQUEST,
-                Json(json!({
+                json!({
                     "error": "invalid_request",
                     "error_description": METADATA_LIMIT_MESSAGE,
-                })),
-            )
-                .into_response(),
+                }),
+            ),
             ApiError::InsufficientScope => (
                 StatusCode::FORBIDDEN,
-                Json(json!({
+                json!({
                     "error": "insufficient_scope",
                     "error_description": "token_verification_failed",
-                })),
-            )
-                .into_response(),
+                }),
+            ),
             ApiError::BulkInvalid { tag, index } => (
                 StatusCode::BAD_REQUEST,
-                Json(json!({
+                json!({
                     "error": "invalid_request",
                     "error_description": format!("invalid_{tag}_at_{index}"),
-                })),
-            )
-                .into_response(),
+                }),
+            ),
             ApiError::Core(vc_core::Error::UserNotFound(_))
             | ApiError::Core(vc_core::Error::DiscordAuthNotFound(_))
             | ApiError::Internal(_)
@@ -134,18 +132,24 @@ impl IntoResponse for ApiError {
                 tracing::error!(%self, "request failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "errors": { "detail": "Internal Server Error" } })),
+                    json!({ "errors": { "detail": "Internal Server Error" } }),
                 )
-                    .into_response()
             }
             ApiError::Core(vc_core::Error::Database(error)) => {
                 tracing::error!(%error, "database error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "errors": { "detail": "Internal Server Error" } })),
+                    json!({ "errors": { "detail": "Internal Server Error" } }),
                 )
-                    .into_response()
             }
         }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, body) = self.parts();
+
+        (status, Json(body)).into_response()
     }
 }

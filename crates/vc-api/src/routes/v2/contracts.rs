@@ -15,7 +15,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -23,6 +23,7 @@ use time::OffsetDateTime;
 use vc_auth::AuthUser;
 
 use crate::error::ApiError;
+use crate::routes::idempotency::{self, Idempotency};
 use crate::routes::limited::Limited;
 use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
@@ -202,37 +203,86 @@ pub async fn withdraw(
 
 /// `POST /api/v2/contracts/{id}/payments`: the application spending what the
 /// parties locked.
+///
+/// The one write in this family that an `Idempotency-Key` matters for, and the
+/// reason the family has one at all: a charge that is retried because the answer
+/// was lost is a subscriber billed twice, and a billing API that cannot be
+/// retried safely is one nobody can reconcile. The key is the application's, so
+/// two applications may use the same one; a refusal is stored as well, because
+/// "the quota is gone" is an answer a retry must get rather than a second
+/// attempt at.
 pub async fn pay(
     State(state): State<AppState>,
     user: Limited,
     Path(id): Path<i64>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let application = application(&state, &user).await?;
-    let payment = payment(&body)?;
+    let account = i32::try_from(user.subject)
+        .map_err(|_| ApiError::Internal("the token's subject is not an account id".into()))?;
 
-    let payed = contract::pay(
+    let claimed =
+        match idempotency::claim(&state, &headers, account, user.scopes.vc_contract).await? {
+            Idempotency::None => None,
+            Idempotency::Claimed(key) => Some(key),
+            Idempotency::Answered(response) => return Ok(response),
+        };
+
+    let (status, body) = paid(&state, &user, id, &body).await?;
+
+    if let Some(key) = claimed {
+        idempotency::register(&state, &key, account, status, &body).await?;
+
+        Ok(idempotency::with_idempotency(status, body, "OK"))
+    } else {
+        Ok(idempotency::with_idempotency(status, body, "Not Requested"))
+    }
+}
+
+/// The charge itself, as the pair an answer is: what the idempotency layer
+/// stores and what the caller is given.
+///
+/// A domain refusal is `Ok` here rather than an `Err`, because a refusal *is* an
+/// answer — the one a replay has to return instead of charging again. What stays
+/// an error is the database failing, which is not an answer and must not be
+/// handed back later as though it were.
+async fn paid(
+    state: &AppState,
+    user: &AuthUser,
+    id: i64,
+    body: &Value,
+) -> Result<(StatusCode, Value), ApiError> {
+    let application = application(state, user).await?;
+    let payment = payment(body)?;
+
+    let payed = match contract::pay(
         state.pool(),
         id,
         application,
         payment.receiver_discord_id,
+        payment.party_discord_id,
         payment.amount,
         OffsetDateTime::now_utc(),
     )
     .await
-    .map_err(contract_error)?;
+    {
+        Ok(payed) => payed,
+        Err(ContractError::Database(error)) => {
+            return Err(ApiError::Core(vc_core::Error::Database(error)));
+        }
+        Err(refusal) => return Ok(contract_error(refusal).parts()),
+    };
 
-    let unit = find(&state, id).await?.unit;
+    let unit = find(state, id).await?.unit;
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({
+        json!({
             "amount": payed.amount.to_string(),
             "remaining": payed.remaining.to_string(),
             "unit": unit,
-        })),
-    )
-        .into_response())
+        }),
+    ))
 }
 
 /// `GET /api/v2/users/@me/contracts`: the contracts this user is named in.
@@ -321,6 +371,8 @@ struct Asked {
     expires_in: Option<i64>,
 }
 
+/// The body a payment arrives as: who is paid, how much, and — when the contract
+/// names more than one person — whose use it bills.
 fn payment(body: &Value) -> Result<Payment, ApiError> {
     let Some(object) = body.as_object() else {
         return Err(ApiError::InvalidRequest("missing_parameter"));
@@ -333,17 +385,30 @@ fn payment(body: &Value) -> Result<Payment, ApiError> {
         return Err(ApiError::InvalidRequest("missing_parameter"));
     };
 
+    // Absent, the draw is oldest-approval-first across every party, which is what
+    // a contract that names one person means and what every payment meant before
+    // this field existed.
+    let party_discord_id = match object.get("party_discord_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(party)) => Some(parse_number(party).ok_or(ApiError::InvalidRequest(
+            "invalid_format_of_party_discord_id",
+        ))?),
+        Some(_) => return Err(ApiError::InvalidRequest("invalid_type_of_variable")),
+    };
+
     Ok(Payment {
         receiver_discord_id: parse_number(receiver).ok_or(ApiError::InvalidRequest(
             "invalid_format_of_receiver_discord_id",
         ))?,
         amount: parse_number(amount).ok_or(ApiError::InvalidRequest("invalid_format_of_amount"))?,
+        party_discord_id,
     })
 }
 
 struct Payment {
     receiver_discord_id: i64,
     amount: i64,
+    party_discord_id: Option<i64>,
 }
 
 /// The contract a client asked about, or a 404 — the domain's `None` is the same
@@ -469,6 +534,7 @@ fn contract_error(error: ContractError) -> ApiError {
         ContractError::InvalidStatus => ApiError::Conflict("invalid_status"),
         ContractError::Expired => ApiError::Conflict("expired"),
         ContractError::ReceiverIsFixed => ApiError::InvalidRequest("receiver_is_fixed"),
+        ContractError::NotAParty => ApiError::InvalidRequest("not_a_party"),
         ContractError::Database(error) => ApiError::Core(vc_core::Error::Database(error)),
     }
 }

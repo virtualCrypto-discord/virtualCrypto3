@@ -36,8 +36,12 @@ pub enum ContractError {
     InvalidStatus,
     /// Its deadline has passed.
     Expired,
-    /// The contract fixes the receiver, and the payment names someone else.
+    /// The contract fixes the receiver, and the payment names someone else —
+    /// unless it names the party whose remainder it draws on, which is a return
+    /// rather than a spend.
     ReceiverIsFixed,
+    /// The payment names a party the contract does not name.
+    NotAParty,
     Database(sqlx::Error),
 }
 
@@ -640,6 +644,12 @@ pub async fn withdraw(
 /// the parties agreed to is an amount, and FIFO is what makes every refund exact
 /// without splitting anyone's remainder into fractions.
 ///
+/// **`party_discord_id` is how a payment says whose use it bills.** Absent, the
+/// draw is the FIFO one above. Present, the named party's remainder is the only
+/// thing the payment may draw on, which is what a metered application wants when
+/// one contract names several people: the contract is a pot, but the billing is
+/// per person.
+///
 /// The receiver is a Discord id like the parties, and paying someone new creates
 /// their account the way a payment does.
 pub async fn pay(
@@ -647,6 +657,7 @@ pub async fn pay(
     contract_id: i64,
     application_id: i64,
     receiver_discord_id: i64,
+    party_discord_id: Option<i64>,
     amount: i64,
     now: OffsetDateTime,
 ) -> std::result::Result<Payed, ContractError> {
@@ -671,14 +682,25 @@ pub async fn pay(
         return Err(ContractError::Expired);
     }
 
+    // A return is not a spend. Money a party locked may always go back to that
+    // party, and paying it back is the only correction an application has for a
+    // use it should not have billed — so the fixed receiver gives way exactly
+    // when the receiver is the party this payment draws on. What the exemption
+    // is not is a way to move one party's remainder to somebody else: the party
+    // has to be one the contract names, which the draw below checks.
+    let returning = party_discord_id == Some(receiver_discord_id);
+
     if contract
         .receiver_discord_id
         .is_some_and(|fixed| fixed != receiver_discord_id)
+        && !returning
     {
         return Err(ContractError::ReceiverIsFixed);
     }
 
-    let remaining = sqlx::query_scalar!(
+    // What the application may still spend in total, which is what a payment
+    // answers with whichever way it drew.
+    let total = sqlx::query_scalar!(
         "SELECT COALESCE(sum(remaining), 0)::bigint AS \"remaining!\"
            FROM contract_parties WHERE contract_id = $1",
         contract_id
@@ -687,7 +709,24 @@ pub async fn pay(
     .await
     .map_err(ContractError::Database)?;
 
-    if remaining < amount {
+    // And what this payment may draw on: all of it, or the one party it named.
+    // A party the contract does not name is not the same nothing as a party who
+    // has already spent their part.
+    let spendable = match party_discord_id {
+        Some(party) => sqlx::query_scalar!(
+            "SELECT remaining FROM contract_parties
+              WHERE contract_id = $1 AND discord_id = $2",
+            contract_id,
+            party
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ContractError::Database)?
+        .ok_or(ContractError::NotAParty)?,
+        None => total,
+    };
+
+    if spendable < amount {
         return Err(ContractError::NotEnoughAmount);
     }
 
@@ -700,6 +739,7 @@ pub async fn pay(
                FROM contract_parties p
                JOIN users u ON u.discord_id = p.discord_id
               WHERE p.contract_id = $1 AND p.remaining > 0
+                AND ($4::bigint IS NULL OR p.discord_id = $4)
          ), spent AS (
              -- What this party pays towards the payment: nothing once the ones
              -- before it have covered it, everything they left when it does not
@@ -719,7 +759,8 @@ pub async fn pay(
         RETURNING spent.sender_id AS \"sender_id!\", spent.amount AS \"amount!\"",
         contract_id,
         amount,
-        now
+        now,
+        party_discord_id
     )
     .fetch_all(&mut *tx)
     .await
@@ -782,7 +823,7 @@ pub async fn pay(
 
     Ok(Payed {
         amount,
-        remaining: remaining - amount,
+        remaining: total - amount,
     })
 }
 
