@@ -308,3 +308,31 @@ async fn a_statement_pages_by_default(pool: PgPool) {
     assert_eq!(ids(&rest).len(), 1, "the rest of it");
     assert_eq!(next_of(&rest), None);
 }
+
+/// A negative limit is a client's typo, and it is answered as one: Postgres would
+/// answer it with an error of its own, which is a 500 for something the caller can
+/// fix without help. Zero is a page of nothing rather than a mistake, and stays
+/// one.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_negative_limit_is_a_client_error(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let contract = open(&pool, &fixture).await;
+
+    for query in ["limit=-1", "limit=-100"] {
+        let listed = list(&pool, &fixture, query).await;
+
+        assert_eq!(listed.status, 400, "body: {}", listed.body);
+        assert_eq!(listed.body["error_description"], "invalid_limit");
+
+        let entries = statement(&pool, &fixture, contract, query).await;
+
+        assert_eq!(entries.status, 400, "body: {}", entries.body);
+        assert_eq!(entries.body["error_description"], "invalid_limit");
+    }
+
+    let empty = list(&pool, &fixture, "limit=0").await;
+
+    assert_eq!(empty.status, 200, "body: {}", empty.body);
+    assert_eq!(ids(&empty).len(), 0, "a page of nothing is still a page");
+    assert_eq!(next_of(&empty), None);
+}

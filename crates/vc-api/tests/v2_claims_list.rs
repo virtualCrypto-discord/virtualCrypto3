@@ -362,3 +362,18 @@ async fn a_token_without_the_claim_scope_is_forbidden(pool: PgPool) {
         json!({ "error": "invalid_token", "error_description": "permission_denied" }),
     );
 }
+
+/// A negative limit is the caller's typo rather than a question to put to
+/// Postgres: this is not one of the crashes `docs/known-gaps.md` reproduces (the
+/// cursor's and the order parameter's are), and the non-numeric limit beside it
+/// is already a 400.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_negative_limit_is_invalid(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+
+    let response = list(pool, "limit=-1", &token).await;
+
+    assert_eq!(response.status, 400, "body: {}", response.body);
+    assert_eq!(response.body["error_description"], "invalid_limit");
+}

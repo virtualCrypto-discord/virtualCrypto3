@@ -32,7 +32,19 @@ impl Page {
         let limit = match params.one("limit") {
             None => None,
             Some(value) => {
-                Some(parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?)
+                let limit =
+                    parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?;
+
+                // A negative limit is a client's typo, and Postgres answers it with
+                // an error of its own — a 500 for something the caller can fix. Zero
+                // is a page of nothing and is allowed, and this is not one of the
+                // crashes `docs/known-gaps.md` reproduces: the non-numeric case
+                // beside it is already a 400.
+                if limit < 0 {
+                    return Err(ApiError::InvalidRequest("invalid_limit"));
+                }
+
+                Some(limit)
             }
         };
 
