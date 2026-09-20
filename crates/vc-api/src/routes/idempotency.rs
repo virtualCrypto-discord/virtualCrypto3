@@ -110,6 +110,53 @@ pub async fn register(
     .map_err(db)
 }
 
+/// The answer to a request that has run, given what it produced.
+///
+/// **A claimed key stores the answer, including an answer that is an error.** A
+/// row with nothing recorded in it is a retry told to retry forever — the layer
+/// saying "still in flight" about a request that is over — and a replay must
+/// never be handed a second chance at a write whose first attempt may have gone
+/// through. What is stored is therefore whatever the handler answered, refusal
+/// or failure alike.
+///
+/// A request that carried no key is answered exactly as it would have been
+/// without this layer: a failure is the endpoint's to report, and the header is
+/// not the layer's to add.
+///
+/// This is one function rather than a shape each endpoint retypes, because the
+/// hole it closes was written twice: the payment and issuing endpoints both
+/// registered their success and their refusals and dropped their failures on the
+/// floor, and a key claimed by a request that then failed was stuck.
+pub async fn answer(
+    state: &AppState,
+    claimed: Option<Vec<u8>>,
+    identity: i32,
+    answered: Result<(StatusCode, Value), ApiError>,
+) -> Result<Response, ApiError> {
+    let (status, body) = match answered {
+        Ok(answer) => answer,
+        Err(failure) => match claimed.as_ref() {
+            Some(key) => {
+                let (status, body) = failure.parts();
+
+                register(state, key, identity, status, &body).await?;
+
+                return Ok(with_idempotency(status, body, "OK"));
+            }
+            None => return Err(failure),
+        },
+    };
+
+    match claimed {
+        Some(key) => {
+            register(state, &key, identity, status, &body).await?;
+
+            Ok(with_idempotency(status, body, "OK"))
+        }
+        None => Ok(with_idempotency(status, body, "Not Requested")),
+    }
+}
+
 /// The response, carrying what the layer did with the key.
 pub fn with_idempotency(status: StatusCode, body: Value, idempotency: &str) -> Response {
     let mut response = (status, Json(body)).into_response();

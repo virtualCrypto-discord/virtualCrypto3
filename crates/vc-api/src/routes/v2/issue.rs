@@ -42,15 +42,13 @@ pub async fn post(
         Idempotency::Answered(response) => return Ok(response),
     };
 
-    let (status, body) = issued(&state, &guild, &body).await?;
-
-    if let Some(key) = claimed {
-        idempotency::register(&state, &key, guild.account_id, status, &body).await?;
-
-        Ok(idempotency::with_idempotency(status, body, "OK"))
-    } else {
-        Ok(idempotency::with_idempotency(status, body, "Not Requested"))
-    }
+    idempotency::answer(
+        &state,
+        claimed,
+        guild.account_id,
+        issued(&state, &guild, &body).await,
+    )
+    .await
 }
 
 /// The body, and the issue it asks for.

@@ -394,3 +394,41 @@ async fn the_same_key_issues_once(pool: PgPool) {
         Some(400)
     );
 }
+
+/// The same for issuing: an answer that is an error is what the key stores, so a
+/// retry reads it back rather than finding a key with nothing under it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_answer_that_is_an_error_is_stored_under_its_key(pool: PgPool) {
+    let (money, _, token) = fixture(&pool).await;
+
+    let malformed = send(
+        router(pool.clone()),
+        &token,
+        issue(money.user2, json!("ten")),
+        Some(KEY),
+    )
+    .await;
+
+    assert_eq!(malformed.status, 400, "body: {}", malformed.body);
+    assert_eq!(
+        malformed.body["error_description"],
+        "invalid_format_of_amount"
+    );
+    assert_eq!(
+        idempotency_status(&malformed),
+        Some("OK"),
+        "the refusal was stored rather than the key left behind"
+    );
+
+    let retried = send(
+        router(pool.clone()),
+        &token,
+        issue(money.user2, json!("ten")),
+        Some(KEY),
+    )
+    .await;
+
+    assert_eq!(retried.status, 400, "body: {}", retried.body);
+    assert_eq!(retried.body, malformed.body, "the first answer, verbatim");
+    assert_eq!(idempotency_status(&retried), Some("Duplicate"));
+}

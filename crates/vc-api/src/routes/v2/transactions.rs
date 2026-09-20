@@ -33,21 +33,15 @@ pub async fn post(
             Idempotency::Answered(response) => return Ok(response),
         };
 
-    let (status, body) = if let Some(object) = body.as_object() {
-        single(&state, &user, operator_id, object).await?
+    let answered = if let Some(object) = body.as_object() {
+        single(&state, &user, operator_id, object).await
     } else if body.is_array() {
-        bulk(&state, &user, operator_id, &body).await?
+        bulk(&state, &user, operator_id, &body).await
     } else {
-        missing_parameter()
+        Ok(missing_parameter())
     };
 
-    if let Some(key) = claimed {
-        idempotency::register(&state, &key, operator_id, status, &body).await?;
-
-        Ok(idempotency::with_idempotency(status, body, "OK"))
-    } else {
-        Ok(idempotency::with_idempotency(status, body, "Not Requested"))
-    }
+    idempotency::answer(&state, claimed, operator_id, answered).await
 }
 
 /// The single-payment clause: the body must be the object with `unit`,

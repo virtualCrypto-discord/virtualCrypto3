@@ -274,23 +274,13 @@ pub async fn pay(
             Idempotency::Answered(response) => return Ok(response),
         };
 
-    // **A claimed key ends with an answer, never with a hole.** A row that says
-    // nothing is a retry told to retry forever, so even the failure of the
-    // charge itself is stored — which is also the conservative side of an
-    // unknown: a replay must not let a second charge happen under a key whose
-    // first attempt may have gone through.
-    let (status, body) = match charge(&state, application, id, &payment).await {
-        Ok(answer) => answer,
-        Err(failure) => failure.parts(),
-    };
-
-    if let Some(key) = claimed {
-        idempotency::register(&state, &key, account, status, &body).await?;
-
-        Ok(idempotency::with_idempotency(status, body, "OK"))
-    } else {
-        Ok(idempotency::with_idempotency(status, body, "Not Requested"))
-    }
+    idempotency::answer(
+        &state,
+        claimed,
+        account,
+        charge(&state, application, id, &payment).await,
+    )
+    .await
 }
 
 /// The charge itself, as the pair an answer is: what the idempotency layer

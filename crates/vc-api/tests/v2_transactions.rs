@@ -372,3 +372,32 @@ async fn an_unquoted_key_is_rejected(pool: PgPool) {
         json!({ "error": "invalid_request", "error_description": "invalid_idempotency_key" })
     );
 }
+
+/// An answer that is an error is stored like any other, because a claimed key
+/// with nothing recorded under it is a retry told to retry forever — the layer
+/// saying "still in flight" about a request that is over.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_answer_that_is_an_error_is_stored_under_its_key(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+
+    let malformed = pay_with_key(&pool, &token, "ten", KEY).await;
+
+    assert_eq!(malformed.status, 400, "body: {}", malformed.body);
+    assert_eq!(
+        malformed.body["error_description"],
+        "invalid_format_of_convert_amount"
+    );
+    assert_eq!(
+        idempotency_status(&malformed),
+        Some("OK"),
+        "the refusal was stored rather than the key left behind"
+    );
+
+    let retried = pay_with_key(&pool, &token, "ten", KEY).await;
+
+    assert_eq!(retried.status, 400, "body: {}", retried.body);
+    assert_eq!(retried.body, malformed.body, "the first answer, verbatim");
+    assert_eq!(idempotency_status(&retried), Some("Duplicate"));
+    assert_eq!(amount(&pool, USER1).await, 199_500, "nothing moved");
+}
