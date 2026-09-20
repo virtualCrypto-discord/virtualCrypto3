@@ -277,17 +277,20 @@ Three things follow from it, and all three are pinned by tests:
   the second waits inside its insert and then reads the first one's answer, or
   takes the key over if the first rolled back. **The wait is capped at a second**:
   a request still waiting is answered `409 processing`, so a slow write costs its
-  retries a second rather than holding them behind it. Measured at `READ
-  COMMITTED`, which is what this service runs; under `REPEATABLE READ` or
-  `SERIALIZABLE` the blocked insert is refused outright (`40001`, because the row
-  it conflicts with is newer than its snapshot) instead of being shown the answer.
-  That is answered the same way — `409 processing` — so a client sees one answer
-  at every isolation level, and the refused transaction holds no claim either:
-  nothing was written, and the row is not whose this request said it was.
+  retries a second rather than holding them behind it. **The transaction names
+  `READ COMMITTED`** rather than inheriting it, because the waiting is a property
+  of that level: at `REPEATABLE READ` and above the same insert is refused
+  outright (`40001`) — the row it conflicts with is newer than the transaction's
+  snapshot — and the answer a retry got would depend on a setting nobody here
+  chose. That refusal is therefore not handled anywhere: it cannot happen, and
+  `tests/contract_idempotency.rs::a_stricter_session_default_does_not_change_the_answer`
+  is what says so (it answers 500 without the named level).
 - `409 processing` is not "the request is over, come back tomorrow": it is what a
   request is told when it has waited a second for a key another one is using
-  (`CLAIM_WAIT`), or when it finds a row left by a version of this service that
-  claimed outside the transaction. Nothing new writes one of those.
+  (`CLAIM_WAIT`), or when it meets a row that answers nothing — one claimed by a
+  version of this service that claimed outside the transaction. Nothing new writes
+  one of those, and the row is not the caller's to take over: nothing can say
+  whether the request that made it wrote.
 
 ### The currency command is `/issue` here, where the Elixir's was `/give`
 

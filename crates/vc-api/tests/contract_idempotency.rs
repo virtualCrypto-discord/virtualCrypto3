@@ -635,17 +635,18 @@ async fn a_key_another_request_is_holding_answers_come_back(pool: PgPool) {
     assert_eq!(charged.body["remaining"], "75");
 }
 
-/// The same collision at a stronger isolation level, where the database does not
-/// let the insert wait: the row it conflicts with is newer than this transaction's
-/// snapshot, so it is refused (`40001`) instead of being shown the answer. It is
-/// answered exactly as the wait running out is — come back — and the transaction
-/// holds no claim either way.
+/// A session whose default isolation is stricter than the one the layer reasons
+/// about changes nothing: the transaction names its own level, so the claim waits
+/// for the holder and reads what is there rather than being refused outright. That
+/// refusal (`40001`) is not handled anywhere, because it cannot happen — and this
+/// is the test that says so: without the named level the same request would be a
+/// 500.
 ///
 /// The pool the request runs on is built here rather than taken from the harness,
 /// because what differs is a *session's* default isolation, which is a property of
 /// the connection.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_claim_the_isolation_level_refuses_answers_come_back(pool: PgPool) {
+async fn a_stricter_session_default_does_not_change_the_answer(pool: PgPool) {
     let fixture = fixture(&pool).await;
 
     // The harness's own connection, so this lands on the test's database, with one
@@ -659,8 +660,8 @@ async fn a_claim_the_isolation_level_refuses_answers_come_back(pool: PgPool) {
         .expect("a pool at another level");
 
     // The claim, held by a transaction that commits it: the row is then there for
-    // good and answers nothing, which is the state a request at this level cannot
-    // be shown.
+    // good and answers nothing — the state a request that waits for it is left
+    // with.
     let mut holder = pool.begin().await.expect("a transaction");
     sqlx::query!(
         "INSERT INTO payments_idempotency
@@ -694,6 +695,38 @@ async fn a_claim_the_isolation_level_refuses_answers_come_back(pool: PgPool) {
     };
 
     let (refused, ()) = tokio::join!(charge, release);
+
+    assert_eq!(refused.status, 409, "body: {}", refused.body);
+    assert_eq!(refused.body["error"], "processing");
+    assert_eq!(idempotency_status(&refused).as_deref(), Some("Duplicate"));
+    assert_eq!(
+        remaining(&pool, &fixture).await,
+        QUOTA.to_string(),
+        "and nothing was charged"
+    );
+}
+
+/// A row that answers nothing, committed — which the layer can meet, because the
+/// version before the claim moved inside the write left them, and a deployment
+/// upgrades rather than starting empty. It is not a write for anybody: the request
+/// is told to come back, and the key is not the caller's to take over, because
+/// nothing can say whether the request that made it wrote.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_row_that_answers_nothing_asks_the_caller_to_come_back(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    sqlx::query!(
+        "INSERT INTO payments_idempotency
+             (user_id, idempotency_key, expires, inserted_at, updated_at)
+         VALUES ($1, $2, now() + interval '7 days', now(), now())",
+        i64::from(fixture.account),
+        KEY.as_bytes().to_vec()
+    )
+    .execute(&pool)
+    .await
+    .expect("a claim nobody answered");
+
+    let refused = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
 
     assert_eq!(refused.status, 409, "body: {}", refused.body);
     assert_eq!(refused.body["error"], "processing");

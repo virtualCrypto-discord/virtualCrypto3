@@ -7,7 +7,8 @@
 //! headers, the stored body and the `Idempotency-Status` values are one behaviour.
 //!
 //! **The claim, the write and the answer are one commit.** [`guard`] opens the
-//! transaction, claims the key in it, runs the write on the same connection and
+//! transaction — naming `READ COMMITTED`, because the claim's behaviour depends on
+//! it — claims the key in it, runs the write on the same connection and
 //! registers the answer before committing — so a key can never be left claimed
 //! with nothing recorded under it (the state a retry can do nothing with), and a
 //! write that failed takes its claim down with it, leaving the key free to be used
@@ -82,7 +83,18 @@ pub async fn guard<F>(
 where
     F: for<'a> FnOnce(&'a mut PgConnection) -> Writing<'a>,
 {
-    let mut tx = state.pool().begin().await.map_err(db)?;
+    // The level this transaction is reasoned about at, named rather than
+    // inherited. The claim's insert is expected to **wait** for whoever holds the
+    // key and then read the answer — that is `READ COMMITTED` behaviour, and at
+    // `REPEATABLE READ` or above the same insert is refused outright, because the
+    // row it conflicts with is newer than this transaction's snapshot. A session
+    // or server default set to something stricter would change what a retry is
+    // answered, without a line of this changing.
+    let mut tx = state
+        .pool()
+        .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await
+        .map_err(db)?;
 
     let claimed = match claim_in(&mut tx, headers, identity, allowed).await? {
         Idempotency::None => None,
@@ -200,11 +212,10 @@ async fn claim_in(
                 Ok(Slot::Existing {
                     http_status: None, ..
                 }) => Ok(Idempotency::Answered(processing())),
-                // The claim lost to whoever holds the key, which the database
-                // reports in one of two ways — and each of them leaves this
-                // transaction holding nothing, so "come back" is all that is left
-                // to say.
-                Err(error) if claim_lost(&error) => Ok(Idempotency::Answered(processing())),
+                // The wait ran out, so whoever holds the key is still at it — and
+                // the failed insert leaves this transaction holding nothing, so
+                // "come back" is all that is left to say.
+                Err(error) if waited_too_long(&error) => Ok(Idempotency::Answered(processing())),
                 Err(error) => Err(db(error)),
             }
         }
@@ -231,28 +242,20 @@ fn processing() -> Response {
     )
 }
 
-/// Whether the claim lost to another transaction rather than failing on its own.
+/// Whether the claim gave up waiting for another transaction to let go of the row.
 ///
-/// Two codes, and they are one situation at two isolation levels:
-///
-/// - `lock_not_available` (`55P03`) is the `lock_timeout` above running out while
-///   the row is held by another transaction — what happens at `READ COMMITTED`,
-///   where the insert waits and is then told to stop waiting.
-/// - `serialization_failure` (`40001`) is the blocked insert being refused
-///   outright, because the row it conflicts with was committed after this
-///   transaction's snapshot — what happens at `REPEATABLE READ` and above, where
-///   the insert cannot be shown the row it must not duplicate.
-///
-/// Neither is this request's failure to report, and neither leaves it holding
-/// anything: the insert did not land.
-fn claim_lost(error: &sqlx::Error) -> bool {
-    matches!(
-        error
-            .as_database_error()
-            .and_then(|error| error.code())
-            .as_deref(),
-        Some("55P03" | "40001")
-    )
+/// PostgreSQL reports it as `lock_not_available` (`55P03`), which is what the
+/// `lock_timeout` around the claim produces — and this is the only way a claim
+/// loses here, because the transaction named the isolation level it is reasoned
+/// about at. At `REPEATABLE READ` and above the same insert is refused with a
+/// serialization failure instead, which is why that level is not left to a
+/// session default.
+fn waited_too_long(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .as_deref()
+        == Some("55P03")
 }
 
 /// The response, carrying what the layer did with the key.

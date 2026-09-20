@@ -167,6 +167,11 @@ instead of leaving a row that says "in flight" about a request that is over.
 Two requests with one key at the same time serialize on the key's own unique
 index: the second waits inside its insert until the first commits — and then reads
 the first one's answer — or until the first rolls back, and then charges itself.
+That is `READ COMMITTED` behaviour, so the transaction names that level rather than
+inheriting whatever a deployment set: a level that refuses the insert instead (as
+`REPEATABLE READ` does) would change what a retry is answered without this
+changing.
+
 **And the wait is bounded**: past a second it is answered `409 processing`, which
 tells the client to come back rather than leaving it sitting on a row a slow
 request is holding. Bounding it is also why the claim cannot be committed *before*
