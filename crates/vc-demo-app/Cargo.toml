@@ -18,3 +18,7 @@ ed25519-dalek.workspace = true
 [[bin]]
 name = "demo-issue"
 path = "src/bin/demo-issue.rs"
+
+[[bin]]
+name = "demo-billing"
+path = "src/bin/demo-billing.rs"
