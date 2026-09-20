@@ -12,6 +12,7 @@
 
 use std::time::Duration;
 
+use crate::notification::{Handshake, check_webhook};
 use crate::state::AppState;
 
 /// How often the clock ticks, unless a deployment says otherwise. A minute is
@@ -114,6 +115,97 @@ pub async fn purge_expired(state: &AppState) {
     }
 }
 
+/// How old a webhook's last pass has to be before it is checked again. A week is
+/// longer than any outage worth noticing lasts and short enough that a webhook
+/// that has stopped answering is found within one.
+const WEBHOOK_STALE: time::Duration = time::Duration::days(7);
+
+/// How many webhooks one pass re-checks. Two requests each, to strangers, so the
+/// batch is what keeps a pass short rather than the interval being the only bound.
+const WEBHOOKS_PER_PASS: i64 = 10;
+
+/// How long one application has to answer the handshake before it counts as
+/// silent. Nothing else bounds it: `Direct` sends through a plain `reqwest`
+/// client, which waits forever by default, and a webhook that accepts a connection
+/// and then says nothing is exactly the case this job exists to find.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The webhooks that have not answered in a while, re-checked.
+///
+/// The handshake runs at registration and at an edit, and an application that
+/// passed once and then stopped answering is one nobody hears about: deliveries
+/// are fire-and-forget, so nothing about sending one says whether it landed. This
+/// is what turns "it verified once" into something that is still true.
+///
+/// **It does not charge the handshake limiter.** That budget belongs to the
+/// caller a handshake is made for — one per three seconds, twenty an hour, fifty a
+/// day per requester — and a job re-checking a fleet would spend in a minute what
+/// a fleet of callers would take all day to spend, then be refused by its own
+/// limiter. What bounds this pass is the batch and the timeout instead, neither of
+/// which is a caller's.
+///
+/// A failure is recorded and logged, and that is all: the webhook stays, and
+/// deliveries keep going. What a delivery carries is a decision about somebody's
+/// money, and a transient outage is not a reason to stop telling an application
+/// about it.
+pub async fn reverify_webhooks(state: &AppState) {
+    let now = time::OffsetDateTime::now_utc();
+    let at = time::PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    let webhooks = match vc_core::application::stale_webhooks(
+        state.pool(),
+        at - WEBHOOK_STALE,
+        WEBHOOKS_PER_PASS,
+    )
+    .await
+    {
+        Ok(webhooks) => webhooks,
+        Err(error) => {
+            tracing::warn!(?error, "the webhooks to re-check could not be read");
+            return;
+        }
+    };
+
+    for webhook in webhooks {
+        let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
+            tracing::warn!(
+                application_id = webhook.id,
+                "the application's private key is not 32 bytes"
+            );
+            continue;
+        };
+
+        let handshake = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            check_webhook(state, &webhook.webhook_url, &private_key),
+        )
+        .await
+        .map(|(handshake, _)| handshake)
+        .unwrap_or(Handshake::Unreachable);
+
+        let passed = handshake == Handshake::Passed;
+
+        if !passed {
+            tracing::warn!(
+                application_id = webhook.id,
+                ?handshake,
+                "an application's webhook did not answer the handshake"
+            );
+        }
+
+        if let Err(error) =
+            vc_core::application::record_webhook_verification(state.pool(), webhook.id, passed, at)
+                .await
+        {
+            tracing::warn!(
+                ?error,
+                application_id = webhook.id,
+                "the handshake's outcome could not be written"
+            );
+        }
+    }
+}
+
 /// The loop: however long the deployment asked for, settle and wait again.
 ///
 /// The first tick is immediate, so a service that was down while a deadline passed
@@ -131,5 +223,12 @@ pub async fn run(state: AppState, every: Duration) {
         settle_expired(&state).await;
         purge_expired(&state).await;
         refill_pools(&state).await;
+
+        // The one job that is not awaited, and for a reason the other three do
+        // not have: it makes requests to strangers, and no webhook that never
+        // answers may hold up the tick that settles contracts — their money is
+        // waiting on a deadline rather than on an application's uptime.
+        let state = state.clone();
+        tokio::spawn(async move { reverify_webhooks(&state).await });
     }
 }

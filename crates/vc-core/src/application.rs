@@ -392,6 +392,78 @@ pub async fn webhook_data(
     Ok(found)
 }
 
+/// One application's webhook, as the job that re-checks them needs it: which row
+/// it is, where the webhook is, and the key that signs for it.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct StaleWebhook {
+    pub id: i64,
+    /// Never `None`: the row was selected because it names one.
+    pub webhook_url: String,
+    pub private_key: Vec<u8>,
+}
+
+/// The applications whose webhook has not been **checked** since `stale_before` —
+/// never-checked first, then the one that waited longest.
+///
+/// "Checked" is either outcome, which is what `GREATEST` over the two columns is:
+/// a webhook that was asked and failed has been asked, and a queue that counted
+/// only the passes would come back to the same failures on every tick while the
+/// rest of a fleet waited behind them. (PostgreSQL's `GREATEST` ignores nulls, so
+/// the answer is null exactly when neither has been written.)
+///
+/// `limit` is what keeps the clock's work bounded. The job runs on every tick and
+/// a fleet is not one application, so a pass re-checks a few and the tick after it
+/// takes the next few.
+pub async fn stale_webhooks(
+    pool: &sqlx::PgPool,
+    stale_before: time::PrimitiveDateTime,
+    limit: i64,
+) -> std::result::Result<Vec<StaleWebhook>, sqlx::Error> {
+    sqlx::query_as!(
+        StaleWebhook,
+        "SELECT id, webhook_url AS \"webhook_url!\", private_key
+           FROM applications
+          WHERE webhook_url IS NOT NULL
+            AND (GREATEST(webhook_verified_at, webhook_failed_at) IS NULL
+                 OR GREATEST(webhook_verified_at, webhook_failed_at) < $1)
+          ORDER BY GREATEST(webhook_verified_at, webhook_failed_at) NULLS FIRST, id
+          LIMIT $2",
+        stale_before,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// What a re-check found, written where the next one reads it.
+///
+/// A pass moves `webhook_verified_at` and a failure moves `webhook_failed_at`,
+/// and neither clears the other: an application that answered once and has gone
+/// quiet is one whose last pass is still worth knowing, and the failure beside it
+/// is why it is being asked again. Neither takes the webhook away.
+pub async fn record_webhook_verification(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+    passed: bool,
+    now: time::PrimitiveDateTime,
+) -> std::result::Result<(), sqlx::Error> {
+    match passed {
+        true => sqlx::query!(
+            "UPDATE applications SET webhook_verified_at = $2 WHERE id = $1",
+            application_id,
+            now
+        ),
+        false => sqlx::query!(
+            "UPDATE applications SET webhook_failed_at = $2 WHERE id = $1",
+            application_id,
+            now
+        ),
+    }
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
 /// Why a piece of client metadata was refused, in the API's own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataError {

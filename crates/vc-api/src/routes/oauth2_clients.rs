@@ -26,8 +26,9 @@ use vc_core::application::{
 
 use crate::discord_auth::resolve_token;
 use crate::error::ApiError;
-use crate::notification::{Handshake, fresh_keypair, verify};
+use crate::notification::{Handshake, fresh_keypair};
 use crate::rate_limit::TooSoon;
+use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
 
 /// An application as the API answers it, with its owner and its redirect URIs.
@@ -51,6 +52,14 @@ pub struct Details {
     pub owner_discord_id: Option<i64>,
     pub response_types: Vec<String>,
     pub webhook_url: Option<String>,
+    /// When the webhook last passed a handshake, and when it last failed one.
+    ///
+    /// `None` for an application that named no webhook, and for one whose webhook
+    /// has not been re-checked since registration — the handshake at registration
+    /// is not recorded, because it is the thing being established rather than
+    /// something already true.
+    pub webhook_verified_at: Option<time::PrimitiveDateTime>,
+    pub webhook_failed_at: Option<time::PrimitiveDateTime>,
     /// The event types the application wants delivered, as the `type` values
     /// the delivery bodies carry. Checked is sent and unchecked is not, and
     /// empty is nothing.
@@ -87,6 +96,11 @@ pub fn render(details: &Details) -> Value {
             .map(|discord_id| discord_id.to_string()),
         "response_types": details.response_types,
         "webhook_url": details.webhook_url,
+        // Whether the webhook is still answering, as the clock last found it.
+        // `null` is "not checked since registration", which is the truth for
+        // every application until the job reaches it.
+        "webhook_verified_at": details.webhook_verified_at.map(format_timestamp),
+        "webhook_failed_at": details.webhook_failed_at.map(format_timestamp),
         "subscribed_events": details.subscribed_events,
         // Lowercase hex, and the same spelling as the delivery signature — an
         // application holds this and compares it with what it registered.
@@ -126,6 +140,8 @@ pub async fn details(
                   a.owner_discord_id,
                   a.response_types::text[] AS "response_types!",
                   a.webhook_url,
+                  a.webhook_verified_at,
+                  a.webhook_failed_at,
                   a.subscribed_events AS "subscribed_events!",
                   a.public_key,
                   u.id AS user_id,
@@ -165,6 +181,8 @@ pub async fn details(
         owner_discord_id: row.owner_discord_id,
         response_types: row.response_types,
         webhook_url: row.webhook_url,
+        webhook_verified_at: row.webhook_verified_at,
+        webhook_failed_at: row.webhook_failed_at,
         subscribed_events: row.subscribed_events,
         public_key: row.public_key,
     }))
@@ -645,32 +663,17 @@ pub async fn create(
         .to_bytes();
 
     if let Some(webhook_url) = new.webhook_url.as_deref() {
-        // With no proxy configured the handshake goes straight at the webhook: a
-        // development machine has no proxy, and a registration that names a
-        // webhook has to be verifiable there for the application flow to be
-        // exercised at all.
-        let proxy = state.webhook_proxy();
-        let direct = crate::notification::Direct::default();
-        let transport: &dyn crate::notification::Transport = match proxy {
-            Some(proxy) => proxy.as_ref(),
-            None => &direct,
-        };
-
         // The handshake is the expensive thing here, and this is what stops one
         // requester spending all of it.
         if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
             return Err(Box::new(rate_limited(too_soon)));
         }
 
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_secs() as i64)
-            .unwrap_or_default();
-
-        let handshake = verify(transport, webhook_url, &private_key, at).await;
+        let (handshake, through_proxy) =
+            crate::notification::check_webhook(state, webhook_url, &private_key).await;
 
         if handshake != Handshake::Passed {
-            return Err(unverified(handshake, proxy.is_some()));
+            return Err(unverified(handshake, through_proxy));
         }
     }
 
@@ -993,14 +996,6 @@ pub async fn apply(
     // with a fresh pair: the pair is what it verifies deliveries with, so a new one
     // would be a handshake nobody could answer.
     if let Some(Some(webhook_url)) = changes.webhook_url.as_ref() {
-        // No proxy is a direct handshake, as in registration.
-        let proxy = state.webhook_proxy();
-        let direct = crate::notification::Direct::default();
-        let transport: &dyn crate::notification::Transport = match proxy {
-            Some(proxy) => proxy.as_ref(),
-            None => &direct,
-        };
-
         let webhook = vc_core::application::webhook_data(state.pool(), application_id)
             .await
             .ok()
@@ -1022,15 +1017,11 @@ pub async fn apply(
             return Err(Box::new(rate_limited(too_soon)));
         }
 
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_secs() as i64)
-            .unwrap_or_default();
-
-        let handshake = verify(transport, webhook_url, &private_key, at).await;
+        let (handshake, through_proxy) =
+            crate::notification::check_webhook(state, webhook_url, &private_key).await;
 
         if handshake != Handshake::Passed {
-            return Err(unverified(handshake, proxy.is_some()));
+            return Err(unverified(handshake, through_proxy));
         }
     }
 
@@ -1064,6 +1055,8 @@ mod tests {
             owner_discord_id: Some(100_000_000_000_000_002),
             response_types: vec!["code".to_owned()],
             webhook_url: Some("https://app.example/hook".to_owned()),
+            webhook_verified_at: None,
+            webhook_failed_at: None,
             subscribed_events: vec![2, 3],
             public_key: vec![0x00, 0xab, 0xff],
         }

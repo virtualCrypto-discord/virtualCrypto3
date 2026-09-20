@@ -555,6 +555,42 @@ pub async fn verify(
     )
 }
 
+/// The whole handshake for one application's webhook: the transport a deployment
+/// sends through, the moment it is signed for, and the two requests.
+///
+/// Three callers — registration, an edit, and the clock that re-checks what
+/// registration once accepted — and the transport is none of their business. What
+/// *is* their business travels back with the answer: whether a proxy was in the
+/// way, which is what decides whose fault a silence is ([`crate::routes::
+/// oauth2_clients`]'s `unverified` answers an application's `Failed` and this
+/// service's `Unreachable`).
+///
+/// With no proxy configured the handshake goes straight at the webhook: a
+/// development machine has no proxy, and a registration that names a `webhook_url`
+/// has to be verifiable there for the application flow to be exercised at all.
+pub async fn check_webhook(
+    state: &crate::state::AppState,
+    url: &str,
+    private_key: &[u8; 32],
+) -> (Handshake, bool) {
+    let proxy = state.webhook_proxy();
+    let direct = Direct::default();
+    let transport: &dyn Transport = match proxy {
+        Some(proxy) => proxy.as_ref(),
+        None => &direct,
+    };
+
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or_default();
+
+    (
+        verify(transport, url, private_key, at).await,
+        proxy.is_some(),
+    )
+}
+
 /// One PING, and what the application answered through the proxy.
 async fn send_ping(
     transport: &dyn Transport,
