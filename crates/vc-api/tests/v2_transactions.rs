@@ -404,12 +404,12 @@ async fn a_body_that_does_not_parse_does_not_spend_the_key(pool: PgPool) {
     assert_eq!(claimed(&pool, USER1, KEY).await, 1, "now it is claimed");
 }
 
-/// An answer that is an error *is* stored once the key is claimed — the failure
-/// the payment itself hits is the endpoint's answer, not a request that never
-/// became one. The table the payment reads is dropped rather than the failure
-/// simulated, so this is the real path.
+/// A failure is not an answer: the payment's transaction rolled back, nothing
+/// moved, and the key goes back so the caller can try the same payment again with
+/// the key it chose. The table the payment reads is dropped rather than the
+/// failure simulated, so this is the real path.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_failure_is_stored_under_its_key(pool: PgPool) {
+async fn a_failure_gives_the_key_back(pool: PgPool) {
     fixture(&pool).await;
     let token = mint(&pool, USER1, &["vc.pay"]).await;
 
@@ -421,21 +421,18 @@ async fn a_failure_is_stored_under_its_key(pool: PgPool) {
     let failed = pay_with_key(&pool, &token, "20", KEY).await;
 
     assert_eq!(failed.status, 500, "body: {}", failed.body);
-    assert_eq!(
-        idempotency_status(&failed),
-        Some("OK"),
-        "the failure was stored rather than the key left behind"
-    );
+    assert_eq!(idempotency_status(&failed), None, "not the layer's answer");
+    assert_eq!(claimed(&pool, USER1, KEY).await, 0, "and the key went back");
 
     let retried = pay_with_key(&pool, &token, "20", KEY).await;
 
     assert_eq!(retried.status, 500, "body: {}", retried.body);
-    assert_eq!(retried.body, failed.body, "the first answer, verbatim");
     assert_eq!(
         idempotency_status(&retried),
-        Some("Duplicate"),
-        "and read back without touching the broken table"
+        None,
+        "attempted again rather than read back — a replay would carry Duplicate"
     );
+    assert_eq!(claimed(&pool, USER1, KEY).await, 0, "and released again");
 }
 
 /// The rows a key has in the layer's own table, which is what says whether a

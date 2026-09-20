@@ -267,6 +267,15 @@ pub async fn pay(
     let application = application(&state, &user).await?;
     let payment = payment(&body)?;
 
+    // The unit the answer carries is read here, and not for the answer's sake: it
+    // is what leaves the charge with **one** fallible step, the transaction
+    // itself. A failure after the key is claimed is then a transaction that rolled
+    // back — nothing happened — and the layer gives the key back instead of
+    // storing the failure, which is what lets a caller retry a blip with the key
+    // it already chose. A read made *after* the charge would be the other kind of
+    // failure, the one whose effect is unknown, and that one has to be stored.
+    let unit = find(&state, id).await?.unit;
+
     let claimed =
         match idempotency::claim(&state, &headers, account, user.scopes.vc_contract).await? {
             Idempotency::None => None,
@@ -278,7 +287,7 @@ pub async fn pay(
         &state,
         claimed,
         account,
-        charge(&state, application, id, &payment).await,
+        charge(&state, application, id, &payment, &unit).await,
     )
     .await
 }
@@ -287,14 +296,14 @@ pub async fn pay(
 /// stores and what the caller is given.
 ///
 /// A domain refusal is `Ok` here rather than an `Err`, because a refusal *is* an
-/// answer — the one a replay has to return instead of charging again. What stays
-/// an error is the database failing, whose parts the caller stores like any
-/// other answer rather than handing a replay the chance to charge twice.
+/// answer — the one a replay has to return instead of charging again. An `Err` is
+/// the transaction failing, which is not an answer and did not happen.
 async fn charge(
     state: &AppState,
     application: i64,
     id: i64,
     payment: &Payment,
+    unit: &Option<String>,
 ) -> Result<(StatusCode, Value), ApiError> {
     let payed = match contract::pay(
         state.pool(),
@@ -314,8 +323,6 @@ async fn charge(
         Err(refusal) => return Ok(contract_error(refusal).parts()),
     };
 
-    let unit = find(state, id).await?.unit;
-
     Ok((
         StatusCode::CREATED,
         json!({
@@ -326,7 +333,7 @@ async fn charge(
             // across all of them is not any single one's.
             "remaining": payed.remaining.to_string(),
             "party_remaining": payed.party_remaining.map(|remaining| remaining.to_string()),
-            "unit": unit,
+            "unit": unit.clone(),
         }),
     ))
 }

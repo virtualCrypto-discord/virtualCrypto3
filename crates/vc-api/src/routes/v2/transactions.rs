@@ -169,32 +169,34 @@ async fn paid(
             .map(|()| (StatusCode::CREATED, json!({}))),
     };
 
-    Ok(answered.unwrap_or_else(payment_error))
+    match answered {
+        Ok(answer) => Ok(answer),
+        Err(error) => payment_error(error),
+    }
 }
 
 /// `UserTransactionView.Pure.render_error/1`: three distinct shapes, and note
 /// that `not_found_sender_asset` reports `not_enough_amount`.
-fn payment_error(error: PayError) -> (StatusCode, Value) {
+///
+/// The fourth is not a shape: a payment that failed in the database is one whose
+/// transaction rolled back, so the caller has an answer to nothing — an `Err` here
+/// is what lets the layer give the key back and the caller retry the same
+/// operation rather than being told a week later what went wrong once.
+fn payment_error(error: PayError) -> Result<(StatusCode, Value), ApiError> {
     match error {
-        PayError::NotFoundCurrency => (
+        PayError::NotFoundCurrency => Ok((
             StatusCode::BAD_REQUEST,
             json!({ "error": "invalid_request", "error_info": "not_found_currency" }),
-        ),
-        PayError::NotEnoughAmount | PayError::NotFoundSenderAsset => (
+        )),
+        PayError::NotEnoughAmount | PayError::NotFoundSenderAsset => Ok((
             StatusCode::CONFLICT,
             json!({ "error": "conflict", "error_info": "not_enough_amount" }),
-        ),
-        PayError::InvalidAmount => (
+        )),
+        PayError::InvalidAmount => Ok((
             StatusCode::BAD_REQUEST,
             json!({ "error": "invalid_request", "error_description": "invalid_amount" }),
-        ),
-        PayError::Database(error) => {
-            tracing::error!(%error, "payment failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "errors": { "detail": "Internal Server Error" } }),
-            )
-        }
+        )),
+        PayError::Database(error) => Err(ApiError::Core(vc_core::Error::Database(error))),
     }
 }
 

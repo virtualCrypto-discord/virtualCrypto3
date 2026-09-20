@@ -141,7 +141,7 @@ and the header means here what `docs/oauth2.md` and the claim endpoints mean by
 it. The key belongs to **the application** — its own account is the one it is
 scoped by — so two applications may use the same one without meeting.
 
-Two rules make the key mean one thing.
+Three rules make the key mean one thing: **the same charge, once**.
 
 **A request that never becomes a charge does not spend it.** A body that does not
 parse, or a token that is not an application's, is refused *before* the key is
@@ -152,13 +152,19 @@ place this port does not follow the Elixir: its plug claims the key and then han
 an unread body to the controller, so a request the controller refused left its key
 claimed with nothing recorded under it.
 
-**Once the key is claimed, the request ends with an answer.** What is stored is
-the answer, whatever it turned out to be: a charge that succeeded replays as its
-own `201` and its own numbers, and **a charge that was refused replays as the
-refusal**, because "the quota is gone" is an answer a retry has to get rather
-than a second attempt at. And if the charge failed rather than refused — the
-database, say — the failure is stored too: a replay must not be handed the chance
-to charge again under a key whose first attempt may have gone through.
+**A charge that happened answers, whatever the answer is.** A charge that
+succeeded replays as its own `201` and its own numbers, and **a charge that was
+refused replays as the refusal**, because "the quota is gone" is an answer a retry
+has to get rather than a second attempt at.
+
+**A charge that did not happen gives the key back.** If the transaction failed —
+the database, say — then nothing moved, and the key is released rather than stored:
+a key that kept the failure would leave the caller unable to attempt the same
+operation again for a week, answered with a stale error instead of a try, when what
+the key exists for is to stop a *second* charge and there was not a first one. That
+is also why the unit the answer carries is read before the charge rather than after
+it: it leaves the transaction as the only step that can fail, so a failure is
+always one that rolled back rather than one whose effect is unknown.
 
 The response header says which of the three things happened:
 `Idempotency-Status: OK` for the request that did the work, `Duplicate` for one

@@ -116,7 +116,7 @@ async fn issued(
                 "unit": issued.unit,
             }),
         )),
-        Err(error) => Ok(issue_error(error)),
+        Err(error) => issue_error(error),
     }
 }
 
@@ -126,27 +126,25 @@ async fn issued(
 /// `error_description` outside the contract, and what a client matches is `error`
 /// and `error_info` — and it is the same wording, so that one client library
 /// reading both endpoints has one thing to learn.
-fn issue_error(error: IssueError) -> (StatusCode, Value) {
+///
+/// A database failure is not a fourth shape: the transaction rolled back, so
+/// there is nothing to report as an answer, and an `Err` here is what lets the
+/// layer give the key back for the caller to try again.
+fn issue_error(error: IssueError) -> Result<(StatusCode, Value), ApiError> {
     match error {
-        IssueError::NotFoundCurrency => (
+        IssueError::NotFoundCurrency => Ok((
             StatusCode::BAD_REQUEST,
             json!({ "error": "invalid_request", "error_info": "not_found_currency" }),
-        ),
-        IssueError::NotEnoughAmount => (
+        )),
+        IssueError::NotEnoughAmount => Ok((
             StatusCode::CONFLICT,
             json!({ "error": "conflict", "error_info": "not_enough_amount" }),
-        ),
-        IssueError::InvalidAmount => (
+        )),
+        IssueError::InvalidAmount => Ok((
             StatusCode::BAD_REQUEST,
             json!({ "error": "invalid_request", "error_description": "invalid_amount" }),
-        ),
-        IssueError::Database(error) => {
-            tracing::error!(%error, "issuing failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "errors": { "detail": "Internal Server Error" } }),
-            )
-        }
+        )),
+        IssueError::Database(error) => Err(ApiError::Core(vc_core::Error::Database(error))),
     }
 }
 

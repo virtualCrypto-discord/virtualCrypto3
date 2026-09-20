@@ -509,16 +509,16 @@ async fn second_application(pool: &PgPool) -> Fixture {
     }
 }
 
-/// A failure **is** an answer once the key is claimed, and it is stored like any
-/// other: what a replay must never do is leave the key in a state that says
-/// "still in flight" about a request that is over, or hand out a second chance at
-/// a write whose first attempt may have gone through.
+/// A failure is not an answer: the charge's transaction rolled back, nothing
+/// happened, and the key goes back — so the caller can attempt the same operation
+/// again with the key it already chose, rather than being told for a week what
+/// went wrong once.
 ///
 /// The table the charge reads is dropped rather than the failure simulated: this
-/// is the real path — the transaction rolls back, the handler has nothing but an
-/// error, and the layer stores its parts.
+/// is the real path, and it is also what says the retry re-attempts instead of
+/// reading a stored error back.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_failure_is_stored_under_its_key(pool: PgPool) {
+async fn a_failure_gives_the_key_back(pool: PgPool) {
     let fixture = fixture(&pool).await;
 
     sqlx::query("DROP TABLE contract_parties CASCADE")
@@ -529,25 +529,25 @@ async fn a_failure_is_stored_under_its_key(pool: PgPool) {
     let failed = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
 
     assert_eq!(failed.status, 500, "body: {}", failed.body);
+    assert_eq!(idempotency_status(&failed), None, "not the layer's answer");
     assert_eq!(
-        idempotency_status(&failed).as_deref(),
-        Some("OK"),
-        "the failure was stored rather than the key left behind"
+        claimed(&pool, &fixture, KEY).await,
+        0,
+        "and the key went back"
     );
 
     let retried = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
 
     assert_eq!(retried.status, 500, "body: {}", retried.body);
-    assert_eq!(retried.body, failed.body, "the first answer, verbatim");
     assert_eq!(
-        idempotency_status(&retried).as_deref(),
-        Some("Duplicate"),
-        "and read back without touching the broken table"
+        idempotency_status(&retried),
+        None,
+        "attempted again rather than read back — a replay would carry Duplicate"
     );
     assert_eq!(
         escrow(&pool, fixture.contract).await,
         QUOTA,
-        "and the charge that failed moved nothing"
+        "and the charges that failed moved nothing"
     );
 }
 

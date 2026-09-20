@@ -105,6 +105,33 @@ pub async fn register(
     Ok(())
 }
 
+/// Give the key back, because the request that claimed it did not happen.
+///
+/// A claim is a promise to answer, and a request whose transaction rolled back has
+/// nothing to answer with: storing the failure would make the key unretryable for
+/// a week — the caller's next attempt at the same operation would be answered with
+/// a stale error rather than attempted — when what the key protects against is a
+/// second *write*, and there was no first one.
+///
+/// Only the request that claimed the key may do this, and only once it knows the
+/// write did not happen. A failure whose effect is unknown is the other case, and
+/// is answered by registering it instead.
+pub async fn release(
+    pool: &PgPool,
+    key: &[u8],
+    user_id: i32,
+) -> std::result::Result<(), sqlx::Error> {
+    sqlx::query!(
+        "DELETE FROM payments_idempotency WHERE idempotency_key = $1 AND user_id = $2",
+        key,
+        i64::from(user_id)
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// The replay body for a request that is still in flight.
 pub fn processing() -> Value {
     json!({

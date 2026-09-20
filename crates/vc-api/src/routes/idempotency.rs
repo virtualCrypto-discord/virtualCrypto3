@@ -112,21 +112,27 @@ pub async fn register(
 
 /// The answer to a request that has run, given what it produced.
 ///
-/// **A claimed key stores the answer, including an answer that is an error.** A
-/// row with nothing recorded in it is a retry told to retry forever — the layer
-/// saying "still in flight" about a request that is over — and a replay must
-/// never be handed a second chance at a write whose first attempt may have gone
-/// through. What is stored is therefore whatever the handler answered, refusal
-/// or failure alike.
+/// Three cases, and the difference between them is what the write did rather than
+/// what status it produced:
 ///
-/// A request that carried no key is answered exactly as it would have been
-/// without this layer: a failure is the endpoint's to report, and the header is
-/// not the layer's to add.
+/// - **`Ok`** — the endpoint answered. Success or refusal, it is stored under a
+///   claimed key, because a replay has to get that answer rather than a second
+///   attempt at a write that already happened.
+/// - **`Err`, claimed** — the request failed without happening: the transaction
+///   rolled back, nothing moved, and the key is **given back** (`release`). A key
+///   that stored the failure would be unretryable for a week — the caller's next
+///   attempt at the same operation answered with a stale error instead of
+///   attempted — when what the key exists for is to stop a second write, and there
+///   was not a first one.
+/// - **`Err`, no key** — answered exactly as it would have been without this layer:
+///   a failure is the endpoint's to report, and the header is not the layer's to
+///   add.
 ///
-/// This is one function rather than a shape each endpoint retypes, because the
-/// hole it closes was written twice: the payment and issuing endpoints both
-/// registered their success and their refusals and dropped their failures on the
-/// floor, and a key claimed by a request that then failed was stuck.
+/// What this costs is the case it cannot see: a failure whose effect is *unknown*
+/// must be registered rather than released, or a retry could write twice. Each
+/// handler answers that by making its failures unambiguous — the contract
+/// endpoint reads what it needs for the answer before it charges, so the only way
+/// it can fail is a rolled-back transaction.
 pub async fn answer(
     state: &AppState,
     claimed: Option<Vec<u8>>,
@@ -135,16 +141,13 @@ pub async fn answer(
 ) -> Result<Response, ApiError> {
     let (status, body) = match answered {
         Ok(answer) => answer,
-        Err(failure) => match claimed.as_ref() {
-            Some(key) => {
-                let (status, body) = failure.parts();
-
-                register(state, key, identity, status, &body).await?;
-
-                return Ok(with_idempotency(status, body, "OK"));
+        Err(failure) => {
+            if let Some(key) = claimed.as_ref() {
+                release(state, key, identity).await?;
             }
-            None => return Err(failure),
-        },
+
+            return Err(failure);
+        }
     };
 
     match claimed {
@@ -155,6 +158,14 @@ pub async fn answer(
         }
         None => Ok(with_idempotency(status, body, "Not Requested")),
     }
+}
+
+/// `IdempotencyLayer`'s counterpart to [`claim`]: the key goes back, and the next
+/// request that names it is a request again rather than a replay.
+pub async fn release(state: &AppState, key: &[u8], identity: i32) -> Result<(), ApiError> {
+    vc_core::idempotency::release(state.pool(), key, identity)
+        .await
+        .map_err(db)
 }
 
 /// The response, carrying what the layer did with the key.
