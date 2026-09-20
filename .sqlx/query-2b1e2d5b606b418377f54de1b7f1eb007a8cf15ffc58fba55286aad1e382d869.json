@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO payments_idempotency\n             (user_id, idempotency_key, expires, inserted_at, updated_at)\n         VALUES ($1, $2, now() + interval '7 days', now(), now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b1e2d5b606b418377f54de1b7f1eb007a8cf15ffc58fba55286aad1e382d869"
+}

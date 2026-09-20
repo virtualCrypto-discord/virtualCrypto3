@@ -595,3 +595,42 @@ async fn concurrent_charges_with_one_key_write_once(pool: PgPool) {
 
     assert_eq!(remaining(&pool, &fixture).await, "75", "charged once");
 }
+
+/// A request whose key another one is holding waits — and stops waiting. The
+/// holder here is a transaction the test never commits, so the claim blocks for
+/// exactly as long as the layer allows and the answer is the one that tells a
+/// client to come back, rather than a request sitting on the row.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_key_another_request_is_holding_answers_come_back(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let mut holder = pool.begin().await.expect("a transaction");
+    sqlx::query!(
+        "INSERT INTO payments_idempotency
+             (user_id, idempotency_key, expires, inserted_at, updated_at)
+         VALUES ($1, $2, now() + interval '7 days', now(), now())",
+        i64::from(fixture.account),
+        KEY.as_bytes().to_vec()
+    )
+    .execute(&mut *holder)
+    .await
+    .expect("a claim nobody finishes");
+
+    let refused = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(refused.status, 409, "body: {}", refused.body);
+    assert_eq!(refused.body["error"], "processing");
+    assert_eq!(idempotency_status(&refused).as_deref(), Some("Duplicate"));
+    assert_eq!(
+        remaining(&pool, &fixture).await,
+        QUOTA.to_string(),
+        "and nothing was charged"
+    );
+
+    holder.rollback().await.expect("the claim goes away");
+
+    let charged = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(charged.status, 201, "body: {}", charged.body);
+    assert_eq!(charged.body["remaining"], "75");
+}

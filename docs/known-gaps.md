@@ -275,13 +275,17 @@ Three things follow from it, and all three are pinned by tests:
   touching it.
 - Two requests with one key at the same time serialize on the key's unique index —
   the second waits inside its insert and then reads the first one's answer, or
-  takes the key over if the first rolled back. Measured at `READ COMMITTED`, which
-  is what this service runs; under `REPEATABLE READ` or `SERIALIZABLE` the blocked
-  insert is answered with a serialization failure instead, which aborts the whole
-  transaction: nothing is written, no claim survives, and the same key may be used
-  again.
-- `409 processing` is left for one case only: a row claimed by a version of this
-  service that claimed outside the transaction. Nothing new writes one.
+  takes the key over if the first rolled back. **The wait is capped at a second**:
+  a request still waiting is answered `409 processing`, so a slow write costs its
+  retries a second rather than holding them behind it. Measured at `READ
+  COMMITTED`, which is what this service runs; under `REPEATABLE READ` or
+  `SERIALIZABLE` the blocked insert is answered with a serialization failure
+  instead, which aborts the whole transaction: nothing is written, no claim
+  survives, and the same key may be used again.
+- `409 processing` is not "the request is over, come back tomorrow": it is what a
+  request is told when it has waited a second for a key another one is using
+  (`CLAIM_WAIT`), or when it finds a row left by a version of this service that
+  claimed outside the transaction. Nothing new writes one of those.
 
 ### The currency command is `/issue` here, where the Elixir's was `/give`
 

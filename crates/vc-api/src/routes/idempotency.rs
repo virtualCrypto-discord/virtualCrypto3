@@ -46,6 +46,17 @@ enum Idempotency {
 pub type Writing<'a> =
     Pin<Box<dyn Future<Output = Result<(StatusCode, Value), ApiError>> + Send + 'a>>;
 
+/// How long a request waits for another request's claim before giving up.
+///
+/// Waiting is the *right* answer for the ordinary case — a key used twice at once
+/// is a client's retry, and the first request is usually milliseconds from
+/// finishing, so the honest thing to hand back is its answer rather than "in
+/// flight". Waiting forever is not: the row is held for as long as the first
+/// request runs, and a request stuck on a slow query or a lock would hold every
+/// retry of itself behind it. A second is far longer than a write here takes and
+/// far shorter than a client's patience.
+const CLAIM_WAIT: &str = "1s";
+
 /// Run a write under its key: claim the key, run the write, store the answer, and
 /// commit all three together.
 ///
@@ -56,6 +67,11 @@ pub type Writing<'a> =
 /// What the caller has already settled — who they are, what they are asking for,
 /// anything the answer needs — it settles *before* this, because a request that
 /// never becomes a write must not spend the key.
+///
+/// Two requests with one key serialize on the claim: the second waits for the
+/// first, and the wait is bounded by [`CLAIM_WAIT`] — past that it is answered
+/// `409 processing`, which is what tells a client to come back rather than to sit
+/// on a connection.
 pub async fn guard<F>(
     state: &AppState,
     headers: &HeaderMap,
@@ -145,29 +161,49 @@ async fn claim_in(
                 return Err(ApiError::InsufficientScope);
             }
 
-            match vc_core::idempotency::claim_in(tx, &key, identity)
+            // The wait for another request's claim is bounded, for this statement
+            // only: the insert is what blocks, and everything after it wants the
+            // ordinary timeout back — a write waiting on a row lock is a write that
+            // should keep waiting.
+            //
+            // `set_config` rather than `SET LOCAL`, which cannot take a parameter:
+            // the timeout is this function's, and a statement built by formatting
+            // one is a statement nobody can check.
+            sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+                .bind(CLAIM_WAIT)
+                .execute(&mut *tx)
                 .await
-                .map_err(db)?
-            {
-                // A row with nothing under it: another transaction's claim (which
-                // the insert above would have waited for), or one left by a version
-                // of this service that claimed outside the transaction.
-                Slot::Existing {
-                    http_status: None, ..
-                } => Ok(Idempotency::Answered(with_idempotency(
-                    StatusCode::CONFLICT,
-                    vc_core::idempotency::processing(),
-                    "Duplicate",
-                ))),
-                Slot::Existing {
+                .map_err(db)?;
+
+            let claimed = vc_core::idempotency::claim_in(tx, &key, identity).await;
+
+            // Whether or not the claim succeeded, everything after it wants the
+            // ordinary timeout back. The reset is allowed to fail: an aborted
+            // transaction has nothing left that could time out.
+            let _ = sqlx::query("SELECT set_config('lock_timeout', '0', true)")
+                .execute(&mut *tx)
+                .await;
+
+            match claimed {
+                Ok(Slot::Created) => Ok(Idempotency::Claimed(key)),
+                Ok(Slot::Existing {
                     http_status: Some(status),
                     body,
-                } => Ok(Idempotency::Answered(with_idempotency(
+                }) => Ok(Idempotency::Answered(with_idempotency(
                     StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK),
                     body.unwrap_or(Value::Null),
                     "Duplicate",
                 ))),
-                Slot::Created => Ok(Idempotency::Claimed(key)),
+                // A row with nothing under it: a claim from a version of this
+                // service that claimed outside the transaction, and nobody is
+                // writing for it. Not a write — "come back".
+                Ok(Slot::Existing {
+                    http_status: None, ..
+                }) => Ok(Idempotency::Answered(processing())),
+                // The wait ran out, so whoever holds the key is still at it: the
+                // request is told to come back rather than left sitting on the row.
+                Err(error) if waited_too_long(&error) => Ok(Idempotency::Answered(processing())),
+                Err(error) => Err(db(error)),
             }
         }
         // More than one header is refused by the plug itself, with no
@@ -181,6 +217,29 @@ async fn claim_in(
             "",
         ))),
     }
+}
+
+/// The answer for a request whose key another one is using: `409` with the body
+/// that says to come back, and the header that says it was read rather than done.
+fn processing() -> Response {
+    with_idempotency(
+        StatusCode::CONFLICT,
+        vc_core::idempotency::processing(),
+        "Duplicate",
+    )
+}
+
+/// Whether the claim gave up waiting for another transaction to let go of the row.
+///
+/// PostgreSQL reports it as `lock_not_available` (`55P03`), which is what the
+/// `lock_timeout` around the claim produces — and only that, since nothing else in
+/// the transaction runs under it.
+fn waited_too_long(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .as_deref()
+        == Some("55P03")
 }
 
 /// The response, carrying what the layer did with the key.

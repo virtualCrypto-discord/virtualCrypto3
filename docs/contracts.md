@@ -167,9 +167,12 @@ instead of leaving a row that says "in flight" about a request that is over.
 Two requests with one key at the same time serialize on the key's own unique
 index: the second waits inside its insert until the first commits — and then reads
 the first one's answer — or until the first rolls back, and then charges itself.
-That ordering is a property of the transaction, not of this service's timing, and
-it is why the unit the answer carries is read before the charge as well: the
-charge is left as the only step that can fail.
+**And the wait is bounded**: past a second it is answered `409 processing`, which
+tells the client to come back rather than leaving it sitting on a row a slow
+request is holding. Bounding it is also why the claim cannot be committed *before*
+the write, which is how the Elixir's plug did it: a claim that can outlive its
+request is a key nothing can answer for. The unit the answer carries is read before
+the charge as well, leaving the charge as the only step that can fail.
 
 The response header says which of the three things happened:
 `Idempotency-Status: OK` for the request that did the work, `Duplicate` for one
