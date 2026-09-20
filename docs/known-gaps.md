@@ -235,6 +235,27 @@ practice; it is recorded because it is not a faithful reproduction.
 
 ## Deliberate differences
 
+### A negative `limit` is a 400 here, where the Elixir asked Postgres
+
+`limit=-1` reached Ecto and came back as an error of the database's, which is a
+500 for something the caller can fix without help. It is refused as
+`invalid_limit` (400) instead, which is what the non-numeric limit beside it was
+already answered with. The cursor and the `order` parameter keep the 500s the
+Elixir's own code produces — those are crashes in this service's path too — but
+this one was an accident of the column rather than a decision, and no test ever
+pinned it.
+
+### A key is not spent by a request that never became a write
+
+The Elixir's idempotency plug claims the key and *then* calls the controller, so a
+request the controller refused — a value that does not parse — left the key
+claimed with nothing recorded under it, and a retry of the corrected request was
+answered `409 processing` about a request that was over. Here the body is read
+before the key is claimed, so a request that could not have had an effect does not
+spend the key; and whatever a claimed key's request did answer, failure included,
+is what a replay gets. The payment, issuing and contract-charging endpoints all
+end in `routes/idempotency.rs`'s `answer`, which is where that is written down.
+
 ### The currency command is `/issue` here, where the Elixir's was `/give`
 
 Renamed, not reimplemented. The Elixir registered `give` in
