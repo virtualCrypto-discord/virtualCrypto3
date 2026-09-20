@@ -108,8 +108,10 @@ pub async fn index(
     let order = match order_param.as_deref() {
         None | Some("desc_claim_id") => Order::Desc,
         Some("asc_claim_id") => Order::Asc,
-        // `parse_order/1` has no clause for anything else, so Elixir raises here.
-        Some(_) => return Err(ApiError::Internal("invalid order parameter".into())),
+        // An order that is not one of the two is the caller's mistake, so it is a
+        // 400 with a name rather than the 500 the Elixir's `parse_order/1` crash
+        // produced. `docs/known-gaps.md` records the difference.
+        Some(_) => return Err(ApiError::InvalidRequest("invalid_order")),
     };
 
     let claims = vc_core::claim::list(

@@ -336,3 +336,23 @@ async fn a_negative_limit_is_a_client_error(pool: PgPool) {
     assert_eq!(ids(&empty).len(), 0, "a page of nothing is still a page");
     assert_eq!(next_of(&empty), None);
 }
+
+/// The cursor is read by the same code the claim list reads it with, so its
+/// mistakes are answered the same way: a 400 that names what is wrong.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_cursor_that_cannot_be_read_is_a_client_error(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let contract = open(&pool, &fixture).await;
+
+    for query in ["next=abc", "on_next=abc"] {
+        let listed = list(&pool, &fixture, query).await;
+
+        assert_eq!(listed.status, 400, "{query}: {}", listed.body);
+        assert_eq!(listed.body["error_description"], "invalid_cursor");
+
+        let entries = statement(&pool, &fixture, contract, query).await;
+
+        assert_eq!(entries.status, 400, "{query}: {}", entries.body);
+        assert_eq!(entries.body["error_description"], "invalid_cursor");
+    }
+}

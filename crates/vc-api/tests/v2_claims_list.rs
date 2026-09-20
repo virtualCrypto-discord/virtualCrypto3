@@ -377,3 +377,24 @@ async fn a_negative_limit_is_invalid(pool: PgPool) {
     assert_eq!(response.status, 400, "body: {}", response.body);
     assert_eq!(response.body["error_description"], "invalid_limit");
 }
+
+/// A cursor and an order that cannot be read are the caller's mistakes, and each
+/// is answered with the 400 that names it — the same `invalid_cursor` two cursors
+/// at once already got. The 500s the Elixir produces here are not reproduced;
+/// `docs/known-gaps.md` says why.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_cursor_or_an_order_that_cannot_be_read_is_400(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+
+    for (query, complaint) in [
+        ("next=abc", "invalid_cursor"),
+        ("on_next=abc", "invalid_cursor"),
+        ("order=nonsense", "invalid_order"),
+    ] {
+        let response = list(pool.clone(), query, &token).await;
+
+        assert_eq!(response.status, 400, "{query}: {}", response.body);
+        assert_eq!(response.body["error_description"], complaint, "{query}");
+    }
+}

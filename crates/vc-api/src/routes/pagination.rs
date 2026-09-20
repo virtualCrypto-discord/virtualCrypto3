@@ -53,8 +53,12 @@ impl Page {
 
         let cursor = match (on_next, next) {
             (Some(_), Some(_)) => return Err(ApiError::InvalidRequest("invalid_cursor")),
-            (Some(value), None) => Cursor::OnNext(parse_number(&value).ok_or_else(numeric_cursor)?),
-            (None, Some(value)) => Cursor::Next(parse_number(&value).ok_or_else(numeric_cursor)?),
+            (Some(value), None) => {
+                Cursor::OnNext(parse_number(&value).ok_or_else(cursor_cannot_be_read)?)
+            }
+            (None, Some(value)) => {
+                Cursor::Next(parse_number(&value).ok_or_else(cursor_cannot_be_read)?)
+            }
             (None, None) => Cursor::First,
         };
 
@@ -155,11 +159,16 @@ impl QueryParams {
     }
 }
 
-/// A cursor that is not a number is not a client error here: the Elixir casts it
-/// with Ecto and raises, which Phoenix turns into a 500, and the port reproduces
-/// that rather than inventing an answer.
-pub fn numeric_cursor() -> ApiError {
-    ApiError::Internal("non-numeric cursor".into())
+/// A cursor that is not a number, which is the same complaint as two cursors at
+/// once: the caller named a place to resume from, and the place cannot be read.
+///
+/// This used to reproduce the Elixir's crash — the value went into Ecto's
+/// `bigint` cast and raised, and Phoenix turns a raise into a 500 — which
+/// `docs/known-gaps.md` recorded as deliberate. It is a 400 now, for the reason a
+/// negative `limit` is: a 500 for a client's typo is a status nobody can act on,
+/// and the mistake is the one `invalid_cursor` already named.
+pub fn cursor_cannot_be_read() -> ApiError {
+    ApiError::InvalidRequest("invalid_cursor")
 }
 
 pub fn parse_number(value: &str) -> Option<i64> {
