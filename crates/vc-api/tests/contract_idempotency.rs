@@ -109,6 +109,21 @@ async fn send(
     key: Option<HeaderValue>,
     body: Value,
 ) -> Response {
+    let keys: Vec<HeaderValue> = key.into_iter().collect();
+
+    send_with_keys(app, method, uri, token, &keys, body).await
+}
+
+/// The same, with however many keys the test wants — which is one of the refusals
+/// rather than a convenience.
+async fn send_with_keys(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    keys: &[HeaderValue],
+    body: Value,
+) -> Response {
     let mut builder = axum::http::Request::builder()
         .method(method)
         .uri(uri)
@@ -119,8 +134,8 @@ async fn send(
         builder = builder.header("content-type", "application/json");
     }
 
-    if let Some(key) = key {
-        builder = builder.header("idempotency-key", key);
+    for key in keys {
+        builder = builder.header("idempotency-key", key.clone());
     }
 
     let request = builder
@@ -736,4 +751,61 @@ async fn a_row_that_answers_nothing_asks_the_caller_to_come_back(pool: PgPool) {
         QUOTA.to_string(),
         "and nothing was charged"
     );
+}
+
+/// Two keys at once are refused by the layer itself, and with no
+/// `Idempotency-Status` header: it cannot say what it did with a key it never read.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn two_keys_at_once_are_refused(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let response = charge_with_keys(&pool, &fixture, &[KEY, "another"]).await;
+
+    assert_eq!(response.status, 400, "body: {}", response.body);
+    assert_eq!(
+        response.body["error_description"],
+        "multiple_idempotency_key_header_is_not_supported"
+    );
+    assert_eq!(idempotency_status(&response), None);
+    assert_eq!(
+        claimed(&pool, &fixture, KEY).await,
+        0,
+        "and neither of them was claimed"
+    );
+}
+
+/// The specification's key is a quoted string of at most 256 characters, and one
+/// that is longer is not a key at all.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_over_long_key_is_refused(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let long = "k".repeat(257);
+
+    let response = charge_with_keys(&pool, &fixture, &[&long]).await;
+
+    assert_eq!(response.status, 400, "body: {}", response.body);
+    assert_eq!(
+        response.body["error_description"],
+        "invalid_idempotency_key"
+    );
+    assert_eq!(idempotency_status(&response), None);
+    assert_eq!(claimed(&pool, &fixture, &long).await, 0);
+}
+
+/// One charge carrying exactly the keys a test names.
+async fn charge_with_keys(pool: &PgPool, fixture: &Fixture, keys: &[&str]) -> Response {
+    let headers: Vec<HeaderValue> = keys.iter().map(|key| key_header(key)).collect();
+
+    send_with_keys(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{}/payments", fixture.contract),
+        &fixture.token,
+        &headers,
+        json!({
+            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "amount": "25",
+        }),
+    )
+    .await
 }
