@@ -360,3 +360,48 @@ async fn a_webhook_that_does_not_answer_is_refused(pool: PgPool) {
 
     assert_eq!(body["error"], "webhook_verification_failed");
 }
+
+/// The two webhook timestamps ride on the shape an application is answered with,
+/// and `null` is what "the clock has not looked at this one yet" reads as — which
+/// is every application until the re-check reaches it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_shape_says_when_the_webhook_was_last_checked(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let (application, account) = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let token = mint_app(&pool, account, &["oauth2.register"]).await;
+
+    let response = get(
+        vc_api::router(state(pool.clone(), fake())),
+        URI,
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "{:?}", response.body);
+    assert_eq!(
+        response.body["webhook_verified_at"],
+        Value::Null,
+        "never checked"
+    );
+    assert_eq!(response.body["webhook_failed_at"], Value::Null);
+
+    sqlx::query!(
+        "UPDATE applications
+            SET webhook_url = 'https://app.example/hook',
+                webhook_verified_at = '2026-09-01 12:00:00',
+                webhook_failed_at = '2026-09-02 12:00:00'
+          WHERE id = $1",
+        application
+    )
+    .execute(&pool)
+    .await
+    .expect("what the clock found");
+
+    let response = get(vc_api::router(state(pool, fake())), URI, Some(&token)).await;
+
+    assert_eq!(
+        response.body["webhook_verified_at"], "2026-09-01T12:00:00Z",
+        "as the family writes timestamps"
+    );
+    assert_eq!(response.body["webhook_failed_at"], "2026-09-02T12:00:00Z");
+}

@@ -277,3 +277,34 @@ async fn an_application_without_a_webhook_is_not_checked(pool: PgPool) {
     assert_eq!(verified, None);
     assert_eq!(failed, None, "nothing to check is not a failure");
 }
+
+/// A pass ages: a webhook that answered a week and a day ago is asked again,
+/// because "it verified once" is only worth something while it is still true.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_pass_that_is_old_is_asked_again(pool: PgPool) {
+    let (url, asked) = honest_hook().await;
+    let application = application_at(&pool, &url).await;
+    let state = state(pool.clone(), fake());
+
+    vc_api::scheduler::reverify_webhooks(&state).await;
+
+    assert_eq!(asked.load(Ordering::SeqCst), 2, "the two PINGs");
+
+    sqlx::query!(
+        "UPDATE applications
+            SET webhook_verified_at = webhook_verified_at - interval '8 days'
+          WHERE id = $1",
+        application
+    )
+    .execute(&pool)
+    .await
+    .expect("age the pass");
+
+    vc_api::scheduler::reverify_webhooks(&state).await;
+
+    assert_eq!(asked.load(Ordering::SeqCst), 4, "asked again");
+    assert!(
+        recorded(&pool, application).await.0.is_some(),
+        "and it passed"
+    );
+}

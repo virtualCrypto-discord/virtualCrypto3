@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n            SET webhook_verified_at = webhook_verified_at - interval '8 days'\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "021b899f75062d85d459264234129b884e0ff96767ce11c0234d7206966dc589"
+}

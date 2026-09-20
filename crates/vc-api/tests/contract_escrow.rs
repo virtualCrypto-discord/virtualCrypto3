@@ -12,12 +12,17 @@ mod support;
 
 use sqlx::PgPool;
 use support::{insert_application, insert_asset, insert_currency, insert_user};
-use vc_core::contract::{NewParty, approve, create, withdraw};
+use vc_core::contract::{NewParty, approve, create, pay, withdraw};
 
 const OWNER: i32 = 1;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
 const PARTY: i32 = 2;
 const PARTY_DISCORD_ID: i64 = 100_000_000_000_000_001;
+/// Four, not three: the application's own account is the row after the two
+/// people, and ids are what `insert_user` writes.
+const OTHER: i32 = 4;
+const OTHER_DISCORD_ID: i64 = 100_000_000_000_000_002;
+const RECEIVER_DISCORD_ID: i64 = 500_000_000_000_000_002;
 const GUILD: i64 = 900_000_000_000_000_001;
 
 async fn fixture(pool: &PgPool) -> i64 {
@@ -154,4 +159,89 @@ async fn the_end_of_a_contract_empties_the_account(pool: PgPool) {
 
     assert_eq!(escrow(&pool, id).await, 0, "nothing is held any more");
     assert_eq!(supply(&pool).await, before, "and the supply never moved");
+}
+
+/// The invariant holds for metering too. A charge that names one party draws on
+/// that party alone, and a return pays that party their own remainder back —
+/// both change whose balance the money is, and neither changes how much exists.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_party_draw_and_a_return_move_no_supply(pool: PgPool) {
+    let application = fixture(&pool).await;
+    insert_user(&pool, OTHER, OTHER_DISCORD_ID).await;
+    insert_asset(&pool, OTHER, 1, 500).await;
+
+    let id = create(
+        &pool,
+        application,
+        "nyan",
+        &[
+            NewParty {
+                discord_id: PARTY_DISCORD_ID,
+                amount: 100,
+            },
+            NewParty {
+                discord_id: OTHER_DISCORD_ID,
+                amount: 50,
+            },
+        ],
+        None,
+        None,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("a contract");
+
+    for party in [PARTY, OTHER] {
+        approve(&pool, id, party, time::OffsetDateTime::now_utc())
+            .await
+            .expect("an approval");
+    }
+
+    let before = supply(&pool).await;
+
+    let charged = pay(
+        &pool,
+        id,
+        application,
+        RECEIVER_DISCORD_ID,
+        Some(PARTY_DISCORD_ID),
+        40,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("a charge");
+
+    assert_eq!(charged.amount, 40);
+    assert_eq!(
+        charged.party_remaining,
+        Some(60),
+        "the party it named, not the contract"
+    );
+    assert_eq!(
+        charged.remaining, 110,
+        "the contract holds both parties' rest"
+    );
+    assert_eq!(supply(&pool).await, before, "the supply did not move");
+    assert_eq!(escrow(&pool, id).await, 110, "and the contract holds it");
+
+    let returned = pay(
+        &pool,
+        id,
+        application,
+        PARTY_DISCORD_ID,
+        Some(PARTY_DISCORD_ID),
+        40,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("a return");
+
+    assert_eq!(returned.party_remaining, Some(20));
+    assert_eq!(returned.remaining, 70);
+    assert_eq!(
+        supply(&pool).await,
+        before,
+        "a return is not a spend either"
+    );
+    assert_eq!(escrow(&pool, id).await, 70);
 }

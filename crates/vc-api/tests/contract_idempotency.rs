@@ -47,12 +47,23 @@ async fn fixture(pool: &PgPool) -> Fixture {
     let application = insert_application(pool, OWNER_DISCORD_ID, "a metered service").await;
     let account = account_of(pool, application).await;
     let token = mint_app(pool, account, &["vc.contract"]).await;
+    let contract = created(pool, &token).await;
 
+    Fixture {
+        token,
+        contract,
+        account,
+    }
+}
+
+/// A contract of Alice's that `token`'s application wrote, approved and ready to
+/// charge.
+async fn created(pool: &PgPool, token: &str) -> i64 {
     let created = send(
         vc_api::router(state(pool.clone(), fake())),
         "POST",
         "/api/v2/contracts",
-        &token,
+        token,
         None,
         json!({
             "unit": "nyan",
@@ -87,11 +98,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
 
     assert_eq!(approved.status, 200, "body: {}", approved.body);
 
-    Fixture {
-        token,
-        contract,
-        account,
-    }
+    contract
 }
 
 async fn send(
@@ -399,4 +406,162 @@ async fn a_charge_without_a_key_says_so(pool: PgPool) {
         idempotency_status(&response).as_deref(),
         Some("Not Requested")
     );
+}
+
+/// A failure is not the layer's to dress: what carried no key is answered exactly
+/// as it would have been without the layer, while a *refusal* — an answer the
+/// endpoint produced — does carry the header that says so.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_failure_without_a_key_carries_no_layer_header(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let malformed = send(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{}/payments", fixture.contract),
+        &fixture.token,
+        None,
+        json!({
+            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "amount": "ten",
+        }),
+    )
+    .await;
+
+    assert_eq!(malformed.status, 400, "body: {}", malformed.body);
+    assert_eq!(
+        idempotency_status(&malformed),
+        None,
+        "not the layer's answer"
+    );
+
+    let refused = charge(&pool, &fixture, 200, None).await;
+
+    assert_eq!(refused.status, 409, "body: {}", refused.body);
+    assert_eq!(
+        idempotency_status(&refused).as_deref(),
+        Some("Not Requested"),
+        "an answer, from an endpoint that was not asked to remember it"
+    );
+}
+
+/// The key is the application's, so the same one used by another application is
+/// another key — and both charges happen.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn another_application_may_use_the_same_key(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let mine = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(mine.status, 201, "body: {}", mine.body);
+    assert_eq!(idempotency_status(&mine).as_deref(), Some("OK"));
+
+    let theirs = second_application(&pool).await;
+    let charged = send(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{}/payments", theirs.contract),
+        &theirs.token,
+        Some(key_header(KEY)),
+        json!({
+            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "amount": "25",
+        }),
+    )
+    .await;
+
+    assert_eq!(charged.status, 201, "body: {}", charged.body);
+    assert_eq!(
+        idempotency_status(&charged).as_deref(),
+        Some("OK"),
+        "their key, not mine"
+    );
+
+    assert_eq!(balance(&pool, ALICE).await, 800, "both approvals locked");
+}
+
+/// Another application, with a contract of its own, which Alice also approved.
+async fn second_application(pool: &PgPool) -> Fixture {
+    let application = insert_application(pool, OWNER_DISCORD_ID, "another service").await;
+    let account = account_of(pool, application).await;
+    let token = mint_app(pool, account, &["vc.contract"]).await;
+
+    let contract = created(pool, &token).await;
+
+    let alice = mint(pool, ALICE, &[]).await;
+
+    let approved = send(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{contract}/approval"),
+        &alice,
+        None,
+        Value::Null,
+    )
+    .await;
+
+    assert_eq!(approved.status, 200, "body: {}", approved.body);
+
+    Fixture {
+        token,
+        contract,
+        account,
+    }
+}
+
+/// A failure **is** an answer once the key is claimed, and it is stored like any
+/// other: what a replay must never do is leave the key in a state that says
+/// "still in flight" about a request that is over, or hand out a second chance at
+/// a write whose first attempt may have gone through.
+///
+/// The table the charge reads is dropped rather than the failure simulated: this
+/// is the real path — the transaction rolls back, the handler has nothing but an
+/// error, and the layer stores its parts.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_failure_is_stored_under_its_key(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    sqlx::query("DROP TABLE contract_parties CASCADE")
+        .execute(&pool)
+        .await
+        .expect("the tables a charge reads");
+
+    let failed = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(failed.status, 500, "body: {}", failed.body);
+    assert_eq!(
+        idempotency_status(&failed).as_deref(),
+        Some("OK"),
+        "the failure was stored rather than the key left behind"
+    );
+
+    let retried = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(retried.status, 500, "body: {}", retried.body);
+    assert_eq!(retried.body, failed.body, "the first answer, verbatim");
+    assert_eq!(
+        idempotency_status(&retried).as_deref(),
+        Some("Duplicate"),
+        "and read back without touching the broken table"
+    );
+    assert_eq!(
+        escrow(&pool, fixture.contract).await,
+        QUOTA,
+        "and the charge that failed moved nothing"
+    );
+}
+
+/// What the contract's own account holds, which is the locked quota until
+/// something is charged against it.
+async fn escrow(pool: &PgPool, contract: i64) -> i64 {
+    sqlx::query_scalar!(
+        "SELECT COALESCE(SUM(a.amount), 0)::bigint AS \"total!\"
+           FROM assets a
+           JOIN users u ON u.id = a.user_id
+          WHERE u.contract_id = $1",
+        contract
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the escrow")
 }
