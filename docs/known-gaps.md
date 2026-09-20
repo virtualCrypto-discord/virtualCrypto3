@@ -138,10 +138,10 @@ own, per requester and much tighter.
 - `related_discord_user_id` resolves an existing user, while Elixir's resolver
   may create one. A freshly created user has no claims, so the filter result is
   the same either way, but the side effect differs.
-- An unparsable cursor value or an unknown `order` answers 500, matching the
-  crashes Elixir hits in `parse_order/1` and in Ecto's `bigint` cast. These are
-  client errors that the Elixir service mishandles; they are reproduced rather
-  than invented differently.
+- An unparsable cursor value and an unknown `order` used to answer 500, matching
+  the crashes Elixir hits in `parse_order/1` and in Ecto's `bigint` cast. **They
+  are 400s now**, which is a deliberate difference and has moved to "Deliberate
+  differences" below.
 
 ## Documented deviations from captured behaviour
 
@@ -235,26 +235,54 @@ practice; it is recorded because it is not a faithful reproduction.
 
 ## Deliberate differences
 
-### A negative `limit` is a 400 here, where the Elixir asked Postgres
+### A client's typo is a 400 here, where the Elixir answered 500
 
-`limit=-1` reached Ecto and came back as an error of the database's, which is a
-500 for something the caller can fix without help. It is refused as
-`invalid_limit` (400) instead, which is what the non-numeric limit beside it was
-already answered with. The cursor and the `order` parameter keep the 500s the
-Elixir's own code produces — those are crashes in this service's path too — but
-this one was an accident of the column rather than a decision, and no test ever
-pinned it.
+Three things a caller can get wrong were answered with a 500 — a status that says
+the *service* failed, about something the caller can fix without help. Each is a
+400 that names it now:
 
-### A key is not spent by a request that never became a write
+- **`limit=-1`** reached Ecto and came back as an error of the database's. It is
+  `invalid_limit`, which is what the non-numeric limit beside it was already
+  answered with.
+- **`next=abc`** (or `on_next=abc`) went into Ecto's `bigint` cast and raised. It
+  is `invalid_cursor` — the same complaint two cursors at once already got, since
+  both say the caller named a place to resume from that cannot be read.
+- **`order=nonsense`** found no clause in `parse_order/1` and raised. It is
+  `invalid_order`.
 
-The Elixir's idempotency plug claims the key and *then* calls the controller, so a
-request the controller refused — a value that does not parse — left the key
-claimed with nothing recorded under it, and a retry of the corrected request was
-answered `409 processing` about a request that was over. Here the body is read
-before the key is claimed, so a request that could not have had an effect does not
-spend the key; and whatever a claimed key's request did answer, failure included,
-is what a replay gets. The payment, issuing and contract-charging endpoints all
-end in `routes/idempotency.rs`'s `answer`, which is where that is written down.
+**This reverses what this file used to say**, which was that such client errors
+"are reproduced rather than invented differently". What decided it is whose error
+a status reports: a wrong cursor says nothing about this service, and the caller
+who can fix it is looking at the status. All three are pinned by tests on the
+claim list and on the contract lists, which share the reader — so they are
+behaviour rather than an accident of a column.
+
+### A key is spent by a write, and only by a write
+
+The Elixir's idempotency plug claims the key and *then* calls the controller, and
+it stored whatever the controller rendered — so a request the controller refused,
+or one whose transaction failed, kept a key whose caller could not attempt that
+operation again. Two shapes of that are gone here, and both are the difference
+between "the request did something" and "the request answered something":
+
+- **A request that never became a write does not spend the key.** The body is read
+  before the key is claimed, so a value that does not parse is refused without
+  touching it, and the corrected request under the same key is the write rather
+  than a replay of the typo.
+- **A write that did not happen gives the key back.** A transaction that rolled
+  back is released (`vc_core::idempotency::release`) rather than stored, so a
+  caller can retry a database blip with the key it already chose instead of being
+  answered with a stale 500 for a week. What a claimed key stores is the answers
+  the endpoint produced — success and refusal alike.
+
+The payment, issuing and contract-charging endpoints all end in
+`routes/idempotency.rs`'s `answer`, which is where the three cases are written
+down. What is *not* fixed, and cannot be from inside a request: a process that
+dies between claiming the key and answering leaves a row with nothing under it, so
+a retry is told `409 processing` until the purge takes it (seven days). The
+alternative — letting a retry take over an unanswered claim after a grace period —
+is at-least-once for the write as well, which is the wrong side of the trade for
+money.
 
 ### The currency command is `/issue` here, where the Elixir's was `/give`
 
