@@ -39,5 +39,11 @@ mbx doctor   # the reflink lines say "cloning is supported", not "different file
 - `mkfs.btrfs` comes from nixpkgs (`nix profile add nixpkgs#btrfs-progs`); the
   kernel module is in the WSL kernel but not loaded by default, which the script
   does.
+- **`cargo sqlx prepare` cannot be run bare here.** The cache restores every
+  artifact, so the compiler never runs — and sqlx learns queries *from the
+  compiler*, so it answers "no queries found" and empties `.sqlx`. Touching the
+  sources does not help, because the cache does not read mtimes. `just
+  sqlx-prepare` is the way: it switches the shim off, compiles the crates that
+  carry a query from scratch, and fails rather than leaving an empty directory.
 - `mbx cache remove <workspace>` drops one checkout's target and keeps the store;
   `mbx cache stats` reports what is held; `mbx gc --dry-run` previews collection.

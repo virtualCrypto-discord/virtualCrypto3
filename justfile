@@ -37,9 +37,18 @@ build:
 test:
 	cargo nextest run --workspace
 
+# Regenerate the offline query data — the way that actually compiles every crate
+# carrying a query. A bare `cargo sqlx prepare` in this checkout does not: mbx
+# restores the artifacts, the compiler never runs, and sqlx — which learns
+# queries from the compiler — answers "no queries found" and *empties* `.sqlx`.
+# The script explains it at length and refuses to leave an empty directory.
+sqlx-prepare:
+	bash scripts/sqlx-prepare.sh
+
 # The committed offline query data has to match the queries and the schema. A
 # deployment builds with SQLX_OFFLINE, so data that has drifted is a build that
 # succeeds here and fails there — or worse, one that succeeds with the wrong SQL.
+# Regenerate it with `just sqlx-prepare`, never with a bare `cargo sqlx prepare`.
 #
 # `--all-targets`, because the data is prepared for every target: without it the
 # check reads only the library and the binaries, and every query that lives in a
