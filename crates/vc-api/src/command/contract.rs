@@ -21,6 +21,7 @@ use crate::custom_id::ui::contract::{Action, custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
 use vc_core::contract::{Contract, ContractError};
+use vc_core::page::Cursor;
 
 /// How many contracts one screen shows, for `/grant list`'s reason: five fits in
 /// one message without scrolling it off the screen, and a sixth waits for the
@@ -114,7 +115,9 @@ pub async fn component(
 async fn page(state: &AppState, payload: &Value) -> Result<Value, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
 
-    let contracts = vc_core::contract::of_party(state.pool(), me)
+    // Every contract this user is named in, not a page of them: the screen says
+    // how many are left over, and a number it cannot count is not one it can say.
+    let contracts = vc_core::contract::of_party(state.pool(), me, Cursor::First, None)
         .await
         .map_err(contract_error)?;
 

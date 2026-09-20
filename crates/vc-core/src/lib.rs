@@ -14,6 +14,7 @@ pub mod job;
 pub mod metadata;
 pub mod model;
 pub mod notification;
+pub mod page;
 pub mod payment;
 pub mod purge;
 pub mod transfer;

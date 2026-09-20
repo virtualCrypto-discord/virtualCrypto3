@@ -198,31 +198,10 @@ impl Order {
     }
 }
 
-/// Where to resume from. `First` is the start, `Next` is exclusive (`<`/`>`) and
-/// `OnNext` is inclusive (`<=`/`>=`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cursor {
-    First,
-    Next(i64),
-    OnNext(i64),
-}
-
-impl Cursor {
-    fn kind(self) -> &'static str {
-        match self {
-            Cursor::First => "first",
-            Cursor::Next(_) => "next",
-            Cursor::OnNext(_) => "on_next",
-        }
-    }
-
-    fn value(self) -> Option<i64> {
-        match self {
-            Cursor::First => None,
-            Cursor::Next(value) | Cursor::OnNext(value) => Some(value),
-        }
-    }
-}
+/// Where to resume from. This list was the first to be paged and the shape it
+/// used is the one every other paged list here uses, so the type lives in
+/// `crate::page` now and this is where callers still find it.
+pub use crate::page::Cursor;
 
 pub struct ClaimFilter<'a> {
     pub operator_id: i32,

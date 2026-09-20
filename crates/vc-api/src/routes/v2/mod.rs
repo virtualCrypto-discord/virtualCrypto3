@@ -43,9 +43,11 @@ pub fn router() -> Router<AppState> {
             "/api/v2/contracts/{id}/refusal",
             axum::routing::post(contracts::refuse),
         )
+        // One path, two things: the application spending what a contract holds,
+        // and the statement of what it has spent.
         .route(
             "/api/v2/contracts/{id}/payments",
-            axum::routing::post(contracts::pay),
+            get(contracts::payments).post(contracts::pay),
         )
         .route("/api/v2/currencies", get(currencies::index))
         .route("/api/v2/currencies/{id}", get(currencies::show))

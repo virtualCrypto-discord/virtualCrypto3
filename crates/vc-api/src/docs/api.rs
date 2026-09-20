@@ -217,7 +217,7 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts",
         summary: "そのアプリケーションが作った契約の一覧です。",
         access: "アプリケーションのトークン + `vc.contract`",
-        notes: &[],
+        notes: &["`limit` を付けるとページになり、続きは `link` ヘッダーが示します。"],
     },
     Endpoint {
         method: "POST",
@@ -269,7 +269,21 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/payments",
         summary: "ロックされた通貨から支払います。",
         access: "アプリケーションのトークン + `vc.contract`",
-        notes: &["`receiver_discord_id` と `amount` を送ります。成功は 201 です。"],
+        notes: &[
+            "`receiver_discord_id` と `amount` を送ります。成功は 201 です。",
+            "`party_discord_id` を送ると、その対象者の分だけから引きます。",
+            "`Idempotency-Key` に対応しています。同じ鍵の再送は、最初の答えを返します。",
+        ],
+    },
+    Endpoint {
+        method: "GET",
+        path: "/api/v2/contracts/{id}/payments",
+        summary: "その契約が支払った記録を、新しい順に返します。",
+        access: "アプリケーションのトークン、または対象の利用者のトークン",
+        notes: &[
+            "1件は台帳の1行で、1回の支払いが複数行になることがあります。",
+            "`limit` は既定で 50 です。続きは `link` ヘッダーが示します。",
+        ],
     },
     Endpoint {
         method: "GET",

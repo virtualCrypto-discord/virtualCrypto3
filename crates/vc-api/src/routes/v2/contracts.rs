@@ -14,7 +14,7 @@
 //! spend — the parties' approvals are.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{OriginalUri, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
@@ -25,9 +25,16 @@ use vc_auth::AuthUser;
 use crate::error::ApiError;
 use crate::routes::idempotency::{self, Idempotency};
 use crate::routes::limited::Limited;
+use crate::routes::pagination::{self, QueryParams};
 use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
 use vc_core::contract::{self, Contract, ContractError, NewParty};
+
+/// How many payments a statement page holds when the caller does not say. A
+/// statement is paged whether or not anyone asked, because unlike the lists
+/// beside it — whose absent `limit` still means every row — its rows are written
+/// by every use an application bills for.
+const PAYMENTS_PER_PAGE: i64 = 50;
 
 /// `POST /api/v2/contracts`: the application asking.
 ///
@@ -58,15 +65,36 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(render(&created))).into_response())
 }
 
-/// `GET /api/v2/contracts`: the ones this application wrote.
-pub async fn index(State(state): State<AppState>, user: Limited) -> Result<Json<Value>, ApiError> {
+/// `GET /api/v2/contracts`: the ones this application wrote, newest first.
+///
+/// `limit` is what makes it a page. Without it the answer is every contract, the
+/// way it was before it could be paged; with it, a page that came back full
+/// carries the `link` header that continues from its last id.
+pub async fn index(
+    State(state): State<AppState>,
+    user: Limited,
+    RawQuery(raw): RawQuery,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     let application = application(&state, &user).await?;
 
-    let contracts = contract::of_application(state.pool(), application)
+    let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
+    let page = pagination::Page::asked(&params)?;
+
+    let contracts = contract::of_application(state.pool(), application, page.cursor, page.limit)
         .await
         .map_err(contract_error)?;
 
-    Ok(Json(rendered(&contracts)))
+    let next = page.next_cursor(&contracts, |contract| contract.id);
+
+    Ok(paged(
+        rendered(&contracts),
+        next,
+        page.limit,
+        &headers,
+        uri.path(),
+    ))
 }
 
 /// `GET /api/v2/contracts/{id}`: the application that wrote it, or one of the
@@ -285,21 +313,114 @@ async fn paid(
     ))
 }
 
-/// `GET /api/v2/users/@me/contracts`: the contracts this user is named in.
-pub async fn mine(State(state): State<AppState>, user: Limited) -> Result<Json<Value>, ApiError> {
+/// `GET /api/v2/users/@me/contracts`: the contracts this user is named in,
+/// newest first, paged the way the application's own list is.
+pub async fn mine(
+    State(state): State<AppState>,
+    user: Limited,
+    RawQuery(raw): RawQuery,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     let named = caller_discord_id(&state, &user).await?;
 
     let Some(named) = named else {
         // An account without a Discord id is nobody a contract can name, so it
         // is named in nothing.
-        return Ok(Json(Value::Array(Vec::new())));
+        return Ok(Json(Value::Array(Vec::new())).into_response());
     };
 
-    let contracts = contract::of_party(state.pool(), named)
+    let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
+    let page = pagination::Page::asked(&params)?;
+
+    let contracts = contract::of_party(state.pool(), named, page.cursor, page.limit)
         .await
         .map_err(contract_error)?;
 
-    Ok(Json(rendered(&contracts)))
+    let next = page.next_cursor(&contracts, |contract| contract.id);
+
+    Ok(paged(
+        rendered(&contracts),
+        next,
+        page.limit,
+        &headers,
+        uri.path(),
+    ))
+}
+
+/// `GET /api/v2/contracts/{id}/payments`: what this contract has paid out, newest
+/// first.
+///
+/// The same readers as the contract itself: the application that wrote it and
+/// the users it names, and nobody else — a caller who is neither is answered as
+/// a contract that is not there.
+///
+/// **A row is a ledger entry, not a charge.** One payment draws on as many
+/// parties as it needs — oldest approval first, or the one party it names — and
+/// writes one row per party drawn on, so a statement of a multi-party contract
+/// has several rows for one payment. For the one-party contract a metered
+/// application writes the two are the same list.
+pub async fn payments(
+    State(state): State<AppState>,
+    user: Limited,
+    Path(id): Path<i64>,
+    RawQuery(raw): RawQuery,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let found = find(&state, id).await?;
+
+    if !visible(&state, &user, &found).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
+    let page = pagination::Page::asked(&params)?.limited_to(PAYMENTS_PER_PAGE);
+
+    let entries = contract::payments(state.pool(), id, page.cursor, page.limit)
+        .await
+        .map_err(contract_error)?;
+
+    let next = page.next_cursor(&entries, |payment| payment.id);
+    let body = Value::Array(entries.iter().map(render_payment).collect());
+
+    Ok(paged(body, next, page.limit, &headers, uri.path()))
+}
+
+fn render_payment(payment: &contract::Payment) -> Value {
+    json!({
+        "id": payment.id.to_string(),
+        "discord_id": payment.discord_id.to_string(),
+        "amount": payment.amount.to_string(),
+        "receiver_discord_id": payment.receiver_discord_id.to_string(),
+        "time": format_timestamp(payment.time),
+    })
+}
+
+/// A list's answer: the body, and a `link` header when there is a next page.
+///
+/// The continuation is this family's own shape — `limit` and the last row's id
+/// as `next` — because only the list knows which of its parameters the rest of
+/// the query carries. For these three the rest is nothing: a contract list is
+/// filtered by who is asking, not by parameters.
+fn paged(
+    body: Value,
+    next: Option<i64>,
+    limit: Option<i64>,
+    headers: &HeaderMap,
+    path: &str,
+) -> Response {
+    let mut response = Json(body).into_response();
+
+    if let Some(next) = next {
+        let query = format!("limit={}&next={next}", limit.unwrap_or_default());
+
+        if let Some(value) = pagination::link(headers, path, &query) {
+            response.headers_mut().insert("link", value);
+        }
+    }
+
+    response
 }
 
 /// The body a creation arrives as, parsed rather than deserialized: which field

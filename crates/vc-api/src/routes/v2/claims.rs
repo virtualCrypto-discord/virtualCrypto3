@@ -1,13 +1,13 @@
 use axum::Json;
 use axum::extract::{OriginalUri, Path, RawQuery, State};
-use axum::http::header::HOST;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::PrimitiveDateTime;
 
 use crate::routes::limited::Limited;
-use vc_core::claim::{ClaimFilter, ClaimView, Cursor, Order, SrFilter};
+use crate::routes::pagination::{self, QueryParams, parse_number};
+use vc_core::claim::{ClaimFilter, ClaimView, Order, SrFilter};
 
 use crate::discord::filter_profile;
 use crate::error::ApiError;
@@ -102,19 +102,7 @@ pub async fn index(
         Some(_) => return Err(ApiError::InvalidRequest("invalid_type")),
     };
 
-    let limit = match params.one("limit") {
-        None => None,
-        Some(value) => Some(parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?),
-    };
-
-    let on_next = params.one("on_next");
-    let next = params.one("next");
-    let cursor = match (on_next, next) {
-        (Some(_), Some(_)) => return Err(ApiError::InvalidRequest("invalid_cursor")),
-        (Some(value), None) => Cursor::OnNext(parse_number(&value).ok_or_else(numeric_cursor)?),
-        (None, Some(value)) => Cursor::Next(parse_number(&value).ok_or_else(numeric_cursor)?),
-        (None, None) => Cursor::First,
-    };
+    let page = pagination::Page::asked(&params)?;
 
     let order_param = params.one("order");
     let order = match order_param.as_deref() {
@@ -132,14 +120,13 @@ pub async fn index(
             sr_filter,
             related_user_id,
             order,
-            cursor,
-            limit,
+            cursor: page.cursor,
+            limit: page.limit,
         },
     )
     .await?;
 
-    let claims_len = claims.len() as i64;
-    let last_id = claims.last().map(|claim| claim.id);
+    let next = page.next_cursor(&claims, |claim| claim.id);
     let mut body = Vec::with_capacity(claims.len());
     for claim in claims {
         body.push(serialize_claim(&state, claim).await?);
@@ -147,22 +134,19 @@ pub async fn index(
 
     let mut response = Json(Value::Array(body)).into_response();
 
-    if let (Some(limit), Some(last_id)) = (limit, last_id)
-        && limit == claims_len
-    {
+    if let Some(next) = next {
         let query = pagination_query(
             type_param.as_deref().unwrap_or("all"),
             order_param.as_deref().unwrap_or("desc_claim_id"),
-            last_id,
-            limit,
+            next,
+            page.limit.unwrap_or_default(),
             related_param
                 .as_ref()
                 .map(|(key, value)| (*key, value.as_str())),
             &statuses,
         );
 
-        if let Ok(value) = header_value(&scheme(&headers), &authority(&headers), uri.path(), &query)
-        {
+        if let Some(value) = pagination::link(&headers, uri.path(), &query) {
             response.headers_mut().insert("link", value);
         }
     }
@@ -458,14 +442,6 @@ async fn parse_related_discord(state: &AppState, value: &str) -> Result<i64, Api
     Ok(i64::from(user.id))
 }
 
-fn numeric_cursor() -> ApiError {
-    ApiError::Internal("non-numeric cursor".into())
-}
-
-fn parse_number(value: &str) -> Option<i64> {
-    value.parse::<i64>().ok()
-}
-
 /// `build_url_from_options/2`: the query is rebuilt from the options, in this
 /// order, with `statuses[]` percent-encoded the way `URI.encode_query/1` does.
 fn pagination_query(
@@ -494,113 +470,10 @@ fn pagination_query(
     parts.join("&")
 }
 
-fn scheme(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-proto")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("http")
-        .to_string()
-}
-
-/// The `Host` header verbatim, port included: the documented `link` example is
-/// `<https://localhost:4000/api/v2/users/@me/claims?...>`.
-fn authority(headers: &HeaderMap) -> String {
-    headers
-        .get(HOST)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn header_value(
-    scheme: &str,
-    authority: &str,
-    path: &str,
-    query: &str,
-) -> Result<axum::http::HeaderValue, axum::http::header::InvalidHeaderValue> {
-    axum::http::HeaderValue::from_str(&format!(
-        "<{scheme}://{authority}{path}?{query}>; rel=\"next\""
-    ))
-}
-
 /// `DateTime.from_naive!(naive, "Etc/UTC")` serialized by Jason.
 pub(crate) fn format_timestamp(value: PrimitiveDateTime) -> String {
     let format =
         time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 
     value.format(&format).unwrap_or_default()
-}
-
-/// Query parameters as ordered pairs, so repeated keys survive the way Plug's
-/// `statuses[]` handling preserves them.
-struct QueryParams {
-    pairs: Vec<(String, String)>,
-}
-
-impl QueryParams {
-    fn parse(raw: &str) -> Self {
-        let pairs = raw
-            .split('&')
-            .filter(|pair| !pair.is_empty())
-            .map(|pair| match pair.split_once('=') {
-                Some((key, value)) => (decode(key), decode(value)),
-                None => (decode(pair), String::new()),
-            })
-            .collect();
-
-        Self { pairs }
-    }
-
-    fn all(&self, key: &str) -> Vec<String> {
-        self.pairs
-            .iter()
-            .filter(|(candidate, _)| candidate == key)
-            .map(|(_, value)| value.clone())
-            .collect()
-    }
-
-    fn one(&self, key: &str) -> Option<String> {
-        self.pairs
-            .iter()
-            .rev()
-            .find(|(candidate, _)| candidate == key)
-            .map(|(_, value)| value.clone())
-    }
-}
-
-fn decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-
-    while index < bytes.len() {
-        match bytes[index] {
-            b'+' => {
-                out.push(b' ');
-                index += 1;
-            }
-            b'%' if index + 2 < bytes.len()
-                && bytes[index + 1].is_ascii_hexdigit()
-                && bytes[index + 2].is_ascii_hexdigit() =>
-            {
-                let hex = &input[index + 1..index + 3];
-                match u8::from_str_radix(hex, 16) {
-                    Ok(byte) => {
-                        out.push(byte);
-                        index += 3;
-                    }
-                    Err(_) => {
-                        out.push(bytes[index]);
-                        index += 1;
-                    }
-                }
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-
-    String::from_utf8_lossy(&out).into_owned()
 }

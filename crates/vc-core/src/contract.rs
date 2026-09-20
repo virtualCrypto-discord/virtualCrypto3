@@ -13,6 +13,8 @@
 use sqlx::{PgConnection, PgPool};
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 
+use crate::page::Cursor;
+
 /// How many parties one contract may name.
 pub const MAX_PARTIES: usize = 50;
 /// How long a temporary contract may run: a year, in seconds.
@@ -215,11 +217,18 @@ pub async fn find(
     }
 }
 
-/// The contracts one application wrote.
+/// The contracts one application wrote, newest first.
+///
+/// `limit` absent is every one of them, which is what the endpoint answered
+/// before it could be paged and what a caller that does not page still gets.
 pub async fn of_application(
     pool: &PgPool,
     application_id: i64,
+    cursor: Cursor,
+    limit: Option<i64>,
 ) -> std::result::Result<Vec<Contract>, ContractError> {
+    let (next, on_next) = cursors(cursor);
+
     let rows = sqlx::query_as!(
         ContractRow,
         "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
@@ -228,8 +237,14 @@ pub async fn of_application(
            JOIN currencies ON currencies.id = c.currency_id
            JOIN applications ON applications.id = c.application_id
           WHERE c.application_id = $1
-          ORDER BY c.id DESC",
-        application_id
+            AND ($2::bigint IS NULL OR c.id < $2)
+            AND ($3::bigint IS NULL OR c.id <= $3)
+          ORDER BY c.id DESC
+          LIMIT $4",
+        application_id,
+        next,
+        on_next,
+        limit
     )
     .fetch_all(pool)
     .await
@@ -238,11 +253,17 @@ pub async fn of_application(
     read_all(pool, rows).await
 }
 
-/// The contracts one user is named in.
+/// The contracts one user is named in, newest first.
+///
+/// `limit` absent is every one of them, the same as [`of_application`].
 pub async fn of_party(
     pool: &PgPool,
     discord_id: i64,
+    cursor: Cursor,
+    limit: Option<i64>,
 ) -> std::result::Result<Vec<Contract>, ContractError> {
+    let (next, on_next) = cursors(cursor);
+
     let rows = sqlx::query_as!(
         ContractRow,
         "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
@@ -252,8 +273,14 @@ pub async fn of_party(
            JOIN applications ON applications.id = c.application_id
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1
-          ORDER BY c.id DESC",
-        discord_id
+            AND ($2::bigint IS NULL OR c.id < $2)
+            AND ($3::bigint IS NULL OR c.id <= $3)
+          ORDER BY c.id DESC
+          LIMIT $4",
+        discord_id,
+        next,
+        on_next,
+        limit
     )
     .fetch_all(pool)
     .await
@@ -800,19 +827,31 @@ pub async fn pay(
 
     // The ledger records what moved and from whom: one row per party whose
     // remainder was drawn on, which is the money's own path into the receiver's
-    // balance rather than a note that an application paid.
+    // balance rather than a note that an application paid. The contract is named
+    // beside it, because a statement per contract cannot be read out of rows
+    // that do not say which contract they belong to.
     let amounts: Vec<i64> = taken.iter().map(|row| row.amount).collect();
     let senders: Vec<i64> = taken.iter().map(|row| i64::from(row.sender_id)).collect();
 
+    // `ORDER BY p.id` is what makes a payment's rows ordered rather than
+    // unfortunate: without it the rows of one payment are inserted in whatever
+    // order the draw returned them, and a statement lists them by id. This is the
+    // draw's own order — oldest approval first — so a reader sees the slices in
+    // the order the money left.
     sqlx::query!(
         "INSERT INTO currency_payment_histories
-             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at)
-         SELECT t.amount, t.sender_id, $3, $4, $5, $5, $5
-           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)",
+             (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
+              updated_at)
+         SELECT t.amount, t.sender_id, $3, $4, $5, $6, $6, $6
+           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)
+           JOIN users u ON u.id = t.sender_id
+           JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id
+          ORDER BY p.id",
         &amounts,
         &senders,
         i64::from(receiver.id),
         contract.currency_id,
+        contract_id,
         now
     )
     .execute(&mut *tx)
@@ -870,6 +909,95 @@ pub async fn party_balances(
             amount: row.amount,
         })
         .collect())
+}
+
+/// One payment a contract made, in the shape a statement names it: which party's
+/// remainder was drawn on, how much of it, where it went, and when.
+///
+/// One API payment writes **one row per party drawn on** — a payment that names
+/// no party draws oldest-approval-first across as many as it needs — so a list of
+/// these is a list of ledger rows rather than of charges. For the one-party
+/// contract a metered application writes, the two are the same list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Payment {
+    /// The ledger row, which is what a page resumes from and what a reader can
+    /// point at.
+    pub id: i64,
+    /// The party the money came out of: the account the row names is theirs, and
+    /// this is the Discord id it belongs to.
+    pub discord_id: i64,
+    pub amount: i64,
+    pub receiver_discord_id: i64,
+    pub time: PrimitiveDateTime,
+}
+
+/// The payments made under one contract, newest first.
+///
+/// The cursor is the ledger's own id: rows are only ever appended, so it orders
+/// them the way the list reads and pages without a timestamp to collide on — and
+/// `(contract_id, id)` is exactly the index this query wants.
+///
+/// Every row here was written by `pay` above, which always fills these four
+/// columns; the schema's nullability is the Elixir's, which writes rows this
+/// never selects (`amount`, `time`) or writes them for an account with a Discord
+/// id (`sender_id`, `receiver_id`).
+pub async fn payments(
+    pool: &PgPool,
+    contract_id: i64,
+    cursor: Cursor,
+    limit: Option<i64>,
+) -> std::result::Result<Vec<Payment>, ContractError> {
+    let (next, on_next) = cursors(cursor);
+
+    let rows = sqlx::query_as!(
+        PaymentRow,
+        "SELECT history.id, sender.discord_id AS \"discord_id!\", history.amount AS \"amount!\",
+                receiver.discord_id AS \"receiver_discord_id!\", history.\"time\" AS \"time!\"
+           FROM currency_payment_histories history
+           JOIN users sender ON sender.id = history.sender_id
+           JOIN users receiver ON receiver.id = history.receiver_id
+          WHERE history.contract_id = $1
+            AND ($2::bigint IS NULL OR history.id < $2)
+            AND ($3::bigint IS NULL OR history.id <= $3)
+          ORDER BY history.id DESC
+          LIMIT $4",
+        contract_id,
+        next,
+        on_next,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(ContractError::Database)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| Payment {
+            id: row.id,
+            discord_id: row.discord_id,
+            amount: row.amount,
+            receiver_discord_id: row.receiver_discord_id,
+            time: row.time,
+        })
+        .collect())
+}
+
+struct PaymentRow {
+    id: i64,
+    discord_id: i64,
+    amount: i64,
+    receiver_discord_id: i64,
+    time: PrimitiveDateTime,
+}
+
+/// The two comparisons a cursor may be, as the pair the list queries bind: `next`
+/// is exclusive, `on_next` is inclusive, and at most one of them is ever set.
+fn cursors(cursor: Cursor) -> (Option<i64>, Option<i64>) {
+    match cursor {
+        Cursor::Next(value) => (Some(value), None),
+        Cursor::OnNext(value) => (None, Some(value)),
+        Cursor::First => (None, None),
+    }
 }
 
 async fn currency_of(pool: &PgPool, contract_id: i64) -> std::result::Result<i64, ContractError> {
