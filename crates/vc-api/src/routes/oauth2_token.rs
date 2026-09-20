@@ -4,7 +4,8 @@
 //! `client_credentials` in both of its shapes — which are two mechanisms wearing
 //! one name, and are documented as such in docs/oauth2.md.
 //!
-//! Revocation is not here yet.
+//! Revocation is here too, in both of the shapes the Elixir accepts: a token
+//! itself, or the `jti`, `typ` and `kind` triple that names one.
 
 use axum::Json;
 use axum::extract::{Form, State};

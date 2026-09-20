@@ -107,7 +107,12 @@ Two differences from Elixir's, both about the bound rather than the behaviour:
 - It lives in this process, so every Fly machine keeps its own. That changes
   nothing a caller can see.
 
-## Rate limiting is loose, and only on the interactions endpoint
+## Rate limiting is per caller, and only where the caller is known
+
+The heading here used to say "only on the interactions endpoint", which stopped
+being true when `routes/limited.rs` arrived: what is left of it is the reason the
+limit is where it is, which is that a caller is only known once something has
+established who they are.
 
 Requests are counted per identity rather than per address, because an address
 says nothing once authentication has decided who is calling: `RATE_LIMIT_PER_MINUTE`
@@ -117,9 +122,11 @@ interaction, established by the signature check that runs before it.
 The v2 REST API takes the same extractor an endpoint does when it needs it, in
 `routes/limited.rs`: `Limited(AuthUser)` counts per account `v2:{subject}`, and
 the guild endpoints count per application `guild:{application_id}` in the guild
-token's own extractor. The coverage is still uneven — an endpoint is limited when
-its extractor is one of those, and the limiter has to be asked for where the
-token's identity is — but the per-account shape is where it lands.
+token's own extractor. Every v2 handler takes it, so the v2 side is covered;
+what is *not* is the OAuth2 surface — registration, the edit, and
+`/oauth2/clients/@me` take `AuthUser` — and that is deliberate rather than
+unfinished: registration's real cost is the handshake, which has a limiter of its
+own, per requester and much tighter.
 
 ## Not yet verified against captures
 
@@ -168,31 +175,42 @@ relevant test.
 
 Two items in the original plan were dropped by decision, not forgotten:
 
-- `GET /api/v2/users/@me/balances` is not implemented. It and `/users/@me` are
-  consumed only by the web frontend, which is being rebuilt separately, so the
-  endpoint waits for that. (`/users/@me` is implemented because it already
-  existed.)
+- **`GET /api/v2/users/@me/balances` was one of them, and is implemented now** —
+  the wait was for the frontend, and the endpoint arrived with it
+  (`routes/v2/users.rs`, and four goldens under `tests/golden/`). An application
+  that wants to see what the people it deals with hold has its own read for that:
+  `GET /api/v2/contracts/{id}/balances`, which answers for a contract's parties
+  and works from the moment the contract is written.
 - The differential harness — replaying a recorded request corpus against both the
   Elixir and the Rust service — is not built. The ported contract tests and the
   captured goldens are the evidence of compatibility instead.
 
 CI is no longer one of these. `.github/workflows/ci.yml` brings up a Postgres 17
 — the major version the baseline was generated from — and runs `just check`,
-which is the same four gates a laptop runs. The database is what the `sqlx`
-macros compile against, so no `.sqlx` offline cache is committed and none can go
-stale.
+which is the same four gates a laptop runs.
+
+This paragraph used to end "so no `.sqlx` offline cache is committed and none can
+go stale", which was true of the CI that compiled against a live database and is
+not true of this one: `.sqlx/` is committed, `just sqlx-check` is one of the gates
+(`cargo sqlx prepare --workspace --check -- --all-targets`), and a query that is
+added without regenerating it fails the check rather than the deployment.
 
 ## OAuth2 and applications
 
-Not built at all: no `/oauth2/*` route exists, so no third-party application can
-register or obtain a token. This is the largest remaining milestone, and unlike
-everything else in this migration Elixir has **no tests for it**, so there is no
-ported spec — `docs/oauth2.md` records the contract read out of the controllers,
-which is where a port would have to start.
+**Built, and this section claimed otherwise for longer than it should have.** The
+routes are all in `routes/mod.rs`: `/oauth2/authorize` (the consent screen),
+`/oauth2/token` (the code exchange, the refresh, `client_credentials` and the
+device poll), `/oauth2/token/revoke`, `/oauth2/clients` (list and register),
+`/oauth2/clients/@me` (read and edit) and `/oauth2/clients/@me/grant-requests`.
+`docs/oauth2.md` is the contract read out of the Elixir's controllers and the port
+follows it; what the Elixir has **no tests for** is covered by this tree's own
+suite instead — `tests/oauth2_*.rs` and `tests/interactions_*.rs` — which is an
+addition rather than a port, and `docs/test-port.md` is where the difference is
+recorded.
 
-It is also what the claim notifications are waiting on: the webhook handshake
-that registering an application performs is the same mutual-TLS path the
-notifications are sent over, so the transport arrives with this.
+The claim notifications were waiting on this, and are not any more: the handshake
+registration performs is the transport the notifier sends through, and both now
+go through `notification::check_webhook`.
 
 ## Discord interactions
 
@@ -322,9 +340,20 @@ runtime taught us rather than the schema.
 The delivery is implemented: `WebhookNotifier` signs with the application's
 private key and posts through the worker where one is configured, and straight at
 the application's own `webhook_url` where there is none — the same choice the
-handshake makes. What is missing here is the re-verification: `verify` runs when
-a webhook is registered or edited, and nothing runs it afterwards, because there
-is no scheduler in this service at all.
+handshake makes.
+
+**And so is the re-verification, which this paragraph used to say was missing.**
+`handshake` ("verify") runs when a webhook is registered or edited, and
+`scheduler::reverify_webhooks` runs it afterwards: one tick's work is a batch of
+the applications whose webhook has not been checked for a week, and the outcome
+goes into `applications.webhook_verified_at` and `webhook_failed_at` (`0010`),
+which `GET /oauth2/clients/@me` answers back to the application. A failure is
+recorded and logged and that is all — the webhook is not taken away and deliveries
+keep going, because what a delivery carries is a decision about somebody's money
+and an outage is not a reason to stop telling an application about it. The
+sentence that stood here — "nothing runs it afterwards, because there is no
+scheduler in this service at all" — was true when it was written: the clock that
+settles contracts is newer than it, and the re-check is the fourth job on it.
 
 ### What a delivery is, and what the handshake checks
 
@@ -380,9 +409,14 @@ an account that has no application being a silent `:nop`.
 
 ## The v2 rate limit, and why it is an extractor
 
+**Planned here, and built since.** What follows was written as the argument for a
+shape that has arrived — `routes/limited.rs`, taken by every v2 handler — and it
+is kept because the reasoning is the part worth having; the paragraphs below that
+describe the work as outstanding are marked where they are.
+
 The limiter already exists and the interaction endpoint already uses it:
 `RateLimiter::allow(&self, key: &str) -> bool`, keyed per caller — the interaction
-side asks for `format!("discord:{user}")`. What v2 has not got is the calling of
+side asks for `format!("discord:{user}")`. What v2 had not got was the calling of
 it, and where to call it decides how much code that is.
 
 A layer on the v2 router is the wrong place. The limit is per **account**, and an
@@ -396,7 +430,7 @@ cannot forget to be limited. It has to be `FromRequestParts<AppState>` rather th
 generic over `AuthState`, because the limiter is the state's and `AuthState` — the
 pool and the signing secret — does not carry it.
 
-That is a parameter change in every v2 handler: mechanical, about twenty of them,
-and the compiler finds them all. The refusal is the one the interaction endpoint
-already answers with, and `RATE_LIMIT_PER_MINUTE=0` still turns it off.
+That was a parameter change in every v2 handler: mechanical, about twenty of them,
+and the compiler found them all. The refusal is the one the interaction endpoint
+answers with, and `RATE_LIMIT_PER_MINUTE=0` still turns it off.
 

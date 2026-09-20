@@ -65,7 +65,14 @@ balance until it comes back.
    the contract for.
 4. **The application spends.** `POST /api/v2/contracts/{id}/payments` moves
    locked money to a Discord user: the receiver it names at the time, or the one
-   the contract fixed. Nothing else about the money is the application's to do.
+   the contract fixed. **`party_discord_id`, when it is sent, says whose use the
+   charge is for** — that party's remainder becomes the only thing the payment may
+   draw on, which is what an application billing several people under one contract
+   needs, because without it the draw is oldest-approval-first across all of them
+   and "whose use was this" has no answer. And a payment whose receiver *is* the
+   party it draws on is a **return** rather than a spend: it is allowed even where
+   the receiver is fixed, and it is the correction an application has for a use it
+   should not have billed. Nothing else about the money is the application's to do.
 5. **The contract ends** when a party refuses, when a party withdraws, or —
    for a temporary contract — when its deadline passes: nothing may be spent
    after it, and the service settles the contract itself rather than waiting for
@@ -122,6 +129,51 @@ in the contract's currency, and nothing else — not their other currencies, not
 the guild's pool. An application that cannot read a balance cannot decide how
 much to pay out, which is why this travels with the operation authority rather
 than being a separate permission to ask for.
+
+## Retrying a charge
+
+A charge is the one write in this family that an `Idempotency-Key` matters for,
+and the header means here what `docs/oauth2.md` and the claim endpoints mean by
+it. The key belongs to **the application** — its own account is the one it is
+scoped by — so two applications may use the same one without meeting.
+
+What is stored is the answer, whatever it turned out to be: a charge that
+succeeded replays as its own `201` and its own numbers, and **a charge that was
+refused replays as the refusal**, because "the quota is gone" is an answer a retry
+has to get rather than a second attempt at. The response header says which of the
+three things happened: `Idempotency-Status: OK` for the request that did the work,
+`Duplicate` for one that read it back, `Not Requested` for a request that carried
+no key. A key that is being used right now answers `409 processing` and asks to be
+retried; a key that is not the quoted string the specification asks for is a `400`
+before anything is claimed.
+
+## Reading what it paid
+
+`GET /api/v2/contracts/{id}/payments` is the statement: what the contract has paid
+out, newest first. The same readers as the contract itself — the application that
+wrote it and the users it names, and nobody else, with a stranger answered as a
+contract that is not there.
+
+**A row is a ledger entry rather than a charge.** A payment draws on as many
+parties as it needs and writes one row per party drawn on, so a statement of a
+multi-party contract has several rows for one payment; for the one-party contract
+a metered application writes, the two are the same list. A row names the party the
+money came out of, the amount of that slice, the receiver, and when.
+
+The ledger does not say which contract a row belongs to on its own: the column
+that does it is this service's own, added in migration `0009`, and **the rows
+written before it are not in any statement** — they are byte for byte an ordinary
+transfer, and a guess built out of who sent, who received and which currency would
+file somebody's own payment under a contract it never belonged to. A contract's
+statement says what the contract has paid since that migration, which is the
+honest thing for it to say.
+
+Both contract lists and the statement take `limit`, `next` and `on_next`, the way
+the claim list does, and a page that came back exactly full carries the `link`
+header that continues it. They differ in their default: an absent `limit` still
+means every contract, because those two lists answered that way before they could
+be paged, while the statement pages at fifty — its rows are written by every use
+an application bills for.
 
 ## The event
 
@@ -180,9 +232,14 @@ Discord, and that is the whole of its surface.
 - **An application cannot change a contract** (its amounts, its deadline) or end
   it early. Amounts are what the parties agreed to, and a party can withdraw or
   wait out the deadline; an application that wants different terms writes a
-  different contract.
-- **Three jobs run on the clock.** Settling expired contracts, deleting the rows
-  whose `expires` has passed (`vc_core::purge`), and refilling each pool once a day
-  (`vc_core::currency::reset_pool_amount`). `docs/known-gaps.md` is where the
-  Elixir's job list and what this service does and does not reproduce of it are
-  written down.
+  different contract. A subscription is therefore a contract per period and an
+  approval per period, which is the whole of what stands where automatic renewal
+  would — `docs/renewal.md` is where the questions that would have to be answered
+  first are written down.
+- **Four jobs run on the clock.** Settling expired contracts, deleting the rows
+  whose `expires` has passed (`vc_core::purge`), refilling each pool once a day
+  (`vc_core::currency::reset_pool_amount`), and re-checking the webhooks that have
+  gone quiet (`crate::scheduler::reverify_webhooks`, which is `docs/known-gaps.md`'s
+  business rather than a contract's). `docs/known-gaps.md` is where the Elixir's
+  job list and what this service does and does not reproduce of it are written
+  down.

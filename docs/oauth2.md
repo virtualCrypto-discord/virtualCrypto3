@@ -399,7 +399,9 @@ never absent in practice.
 `Clients.render_application/1`, which the single read, the list and the client
 registration all go through — so an error here is an error in three endpoints at
 once. Seventeen fields, and the encodings are the part that is easy to get
-wrong:
+wrong. Two more are this service's own and are marked below; a response field
+added is not a breaking change, which is what lets them ride along on a shape the
+specification fixes.
 
 | Field | |
 | --- | --- |
@@ -412,6 +414,7 @@ wrong:
 | `public_key` | the key as **lowercase hex** |
 | `subscribed_events` | the subscribed `type` values, as numbers — checked is sent, unchecked is not |
 | `application_type`, `client_name`, `client_uri`, `logo_uri`, `webhook_url`, `grant_types`, `response_types`, `discord_support_server_invite_slug` | as stored |
+| `webhook_verified_at`, `webhook_failed_at` | **this service's own, not the Elixir's**: when the clock last found the webhook answering a handshake, and when it last found it not answering one, as the family's `…Z` timestamps. `null` is "not checked since registration", which is every application until the job reaches it. Nothing is taken away on a failure — the webhook and its deliveries stay |
 
 Three numbers travel as strings and one travels as hex, which is why this is
 written down rather than inferred from the columns. The subscription travels as
