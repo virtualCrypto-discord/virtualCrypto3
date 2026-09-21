@@ -17,6 +17,7 @@ pub mod grant;
 pub mod help;
 pub mod info;
 pub mod issue;
+pub mod pat;
 pub mod pay;
 
 use serde_json::{Map, Value, json};
@@ -67,6 +68,22 @@ impl From<vc_core::Error> for CommandError {
 impl From<sqlx::Error> for CommandError {
     fn from(error: sqlx::Error) -> Self {
         CommandError::Internal(ApiError::from(vc_core::Error::Database(error)))
+    }
+}
+
+/// The token store is `vc_auth`'s, so a failure there arrives as its error — and a database one
+/// is answered the way the rest of the service answers one, from `vc_core`, which is where the
+/// query's error belongs.
+impl From<vc_auth::AuthError> for CommandError {
+    fn from(error: vc_auth::AuthError) -> Self {
+        match error {
+            vc_auth::AuthError::Database(error) => {
+                CommandError::from(vc_core::Error::Database(error))
+            }
+            // Neither of the other two can come out of issuing a token: they are the extractor's
+            // refusals, and there is nothing here for them to be.
+            other => CommandError::Internal(ApiError::Internal(other.to_string())),
+        }
     }
 }
 
@@ -198,6 +215,7 @@ pub async fn handle(
         "grant" => grant::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
         "issue" => issue::handle(state, options, payload).await,
+        "pat" => pat::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),
     }

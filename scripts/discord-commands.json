@@ -11,36 +11,130 @@
     "name": "issue",
     "description": "発行枠から通貨を発行します。管理者権限が必要です。amountを省略した場合は全額が指定されたuserに発行されます。",
     "options": [
-      { "name": "user", "description": "発行先のユーザーです。", "type": 6, "required": true },
-      { "name": "amount", "description": "発行する通貨の量です。", "type": 4, "required": false }
+      {
+        "name": "user",
+        "description": "発行先のユーザーです。",
+        "type": 6,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "発行する通貨の量です。",
+        "type": 4,
+        "required": false
+      }
     ],
     "dm_permission": false,
     "default_member_permissions": "0"
   },
   {
+    "name": "pat",
+    "description": "LLMやスクリプトに渡すトークン（個人アクセストークン）を作ります。",
+    "options": [
+      {
+        "name": "create",
+        "description": "トークンを1つ作ります。値はこの返信に一度だけ表示されます。",
+        "type": 1,
+        "options": [
+          {
+            "name": "name",
+            "description": "トークンの名前です。1〜32文字で、失効させる時に使います。",
+            "type": 3,
+            "required": true,
+            "min_length": 1,
+            "max_length": 32
+          }
+        ]
+      },
+      {
+        "name": "list",
+        "description": "作ったトークンの名前と有効期限を表示します。",
+        "type": 1
+      },
+      {
+        "name": "revoke",
+        "description": "名前を指定してトークンを失効させます。",
+        "type": 1,
+        "options": [
+          {
+            "name": "name",
+            "description": "失効させるトークンの名前です。",
+            "type": 3,
+            "required": true,
+            "min_length": 1,
+            "max_length": 32
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "pay",
     "description": "指定したユーザーに通貨を指定した分だけ送信します。",
     "options": [
-      { "name": "unit", "description": "送信したい通貨の単位です。", "type": 3, "required": true, "autocomplete": true },
-      { "name": "user", "description": "送信先のユーザーです。", "type": 6, "required": true },
-      { "name": "amount", "description": "送信する通貨の量です。", "type": 4, "required": true }
+      {
+        "name": "unit",
+        "description": "送信したい通貨の単位です。",
+        "type": 3,
+        "required": true,
+        "autocomplete": true
+      },
+      {
+        "name": "user",
+        "description": "送信先のユーザーです。",
+        "type": 6,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "送信する通貨の量です。",
+        "type": 4,
+        "required": true
+      }
     ]
   },
   {
     "name": "info",
     "description": "通貨の情報を表示します。通貨名または単位がない場合はそのサーバーの通貨を表示します。",
     "options": [
-      { "name": "name", "description": "検索したい通貨の通貨名です。", "type": 3, "required": false, "autocomplete": true },
-      { "name": "unit", "description": "検索したい通貨の単位です。", "type": 3, "required": false, "autocomplete": true }
+      {
+        "name": "name",
+        "description": "検索したい通貨の通貨名です。",
+        "type": 3,
+        "required": false,
+        "autocomplete": true
+      },
+      {
+        "name": "unit",
+        "description": "検索したい通貨の単位です。",
+        "type": 3,
+        "required": false,
+        "autocomplete": true
+      }
     ]
   },
   {
     "name": "create",
     "description": "新しい通貨を作成します",
     "options": [
-      { "name": "name", "description": "新しい通貨の通貨名です。2〜16文字の英数字です。", "type": 3, "required": true },
-      { "name": "unit", "description": "新しい通貨の単位です。1〜10文字の英小文字です。", "type": 3, "required": true },
-      { "name": "amount", "description": "通貨の初期発行枚数です。あなたの所持金となります。", "type": 4, "required": true }
+      {
+        "name": "name",
+        "description": "新しい通貨の通貨名です。2〜16文字の英数字です。",
+        "type": 3,
+        "required": true
+      },
+      {
+        "name": "unit",
+        "description": "新しい通貨の単位です。1〜10文字の英小文字です。",
+        "type": 3,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "通貨の初期発行枚数です。あなたの所持金となります。",
+        "type": 4,
+        "required": true
+      }
     ],
     "dm_permission": false,
     "default_member_permissions": "0"
@@ -64,11 +158,31 @@
         "description": "請求の一覧を表示します。",
         "type": 1,
         "options": [
-          { "name": "pending", "description": "未処理の請求を表示します。", "type": 5 },
-          { "name": "approved", "description": "承諾済みの請求を表示します。", "type": 5 },
-          { "name": "denied", "description": "拒否済みの請求を表示します。", "type": 5 },
-          { "name": "canceled", "description": "キャンセル済みの請求を表示します。", "type": 5 },
-          { "name": "user", "description": "ユーザーからの請求及びユーザーへの請求を表示します。", "type": 6 }
+          {
+            "name": "pending",
+            "description": "未処理の請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "approved",
+            "description": "承諾済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "denied",
+            "description": "拒否済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "canceled",
+            "description": "キャンセル済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "user",
+            "description": "ユーザーからの請求及びユーザーへの請求を表示します。",
+            "type": 6
+          }
         ]
       },
       {
@@ -76,11 +190,31 @@
         "description": "受け取った請求の一覧を表示します。",
         "type": 1,
         "options": [
-          { "name": "pending", "description": "未処理の請求を表示します。", "type": 5 },
-          { "name": "approved", "description": "承諾済みの請求を表示します。", "type": 5 },
-          { "name": "denied", "description": "拒否済みの請求を表示します。", "type": 5 },
-          { "name": "canceled", "description": "キャンセル済みの請求を表示します。", "type": 5 },
-          { "name": "user", "description": "請求元を指定します。", "type": 6 }
+          {
+            "name": "pending",
+            "description": "未処理の請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "approved",
+            "description": "承諾済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "denied",
+            "description": "拒否済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "canceled",
+            "description": "キャンセル済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "user",
+            "description": "請求元を指定します。",
+            "type": 6
+          }
         ]
       },
       {
@@ -88,11 +222,31 @@
         "description": "送信した請求の一覧を表示します。",
         "type": 1,
         "options": [
-          { "name": "pending", "description": "未処理の請求を表示します。", "type": 5 },
-          { "name": "approved", "description": "承諾済みの請求を表示します。", "type": 5 },
-          { "name": "denied", "description": "拒否済みの請求を表示します。", "type": 5 },
-          { "name": "canceled", "description": "キャンセル済みの請求を表示します。", "type": 5 },
-          { "name": "user", "description": "請求先を指定します。", "type": 6 }
+          {
+            "name": "pending",
+            "description": "未処理の請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "approved",
+            "description": "承諾済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "denied",
+            "description": "拒否済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "canceled",
+            "description": "キャンセル済みの請求を表示します。",
+            "type": 5
+          },
+          {
+            "name": "user",
+            "description": "請求先を指定します。",
+            "type": 6
+          }
         ]
       },
       {
@@ -100,9 +254,25 @@
         "description": "請求を作成します。",
         "type": 1,
         "options": [
-          { "name": "user", "description": "請求先のユーザーです。", "type": 6, "required": true },
-          { "name": "unit", "description": "請求する通貨の単位です。", "type": 3, "required": true, "autocomplete": true },
-          { "name": "amount", "description": "請求する通貨の枚数です。", "type": 4, "required": true }
+          {
+            "name": "user",
+            "description": "請求先のユーザーです。",
+            "type": 6,
+            "required": true
+          },
+          {
+            "name": "unit",
+            "description": "請求する通貨の単位です。",
+            "type": 3,
+            "required": true,
+            "autocomplete": true
+          },
+          {
+            "name": "amount",
+            "description": "請求する通貨の枚数です。",
+            "type": 4,
+            "required": true
+          }
         ]
       },
       {
@@ -110,7 +280,13 @@
         "description": "請求を承諾し支払います。",
         "type": 1,
         "options": [
-          { "name": "id", "description": "請求の番号です。", "type": 4, "required": true, "autocomplete": true }
+          {
+            "name": "id",
+            "description": "請求の番号です。",
+            "type": 4,
+            "required": true,
+            "autocomplete": true
+          }
         ]
       },
       {
@@ -118,7 +294,13 @@
         "description": "請求を拒否します。",
         "type": 1,
         "options": [
-          { "name": "id", "description": "請求の番号です。", "type": 4, "required": true, "autocomplete": true }
+          {
+            "name": "id",
+            "description": "請求の番号です。",
+            "type": 4,
+            "required": true,
+            "autocomplete": true
+          }
         ]
       },
       {
@@ -126,7 +308,13 @@
         "description": "自分が送った請求をキャンセルします。",
         "type": 1,
         "options": [
-          { "name": "id", "description": "請求の番号です。", "type": 4, "required": true, "autocomplete": true }
+          {
+            "name": "id",
+            "description": "請求の番号です。",
+            "type": 4,
+            "required": true,
+            "autocomplete": true
+          }
         ]
       },
       {
@@ -134,7 +322,13 @@
         "description": "請求を表示します。",
         "type": 1,
         "options": [
-          { "name": "id", "description": "請求の番号です。", "type": 4, "required": true, "autocomplete": true }
+          {
+            "name": "id",
+            "description": "請求の番号です。",
+            "type": 4,
+            "required": true,
+            "autocomplete": true
+          }
         ]
       }
     ]

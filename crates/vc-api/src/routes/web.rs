@@ -188,14 +188,14 @@ pub async fn discord_callback(
     }
 }
 
-/// The scopes a browser session is issued. The old app's three, unchanged.
-const BROWSER_SCOPES: &[&str] = &["oauth2.register", "vc.pay", "vc.claim"];
-
 /// The old site's `/token`: the session's account, and a token for it.
 ///
 /// A request with no session answers 401. The Elixir returned *nothing* from its
 /// controller in that case, which renders as a crash — nothing depended on that,
 /// and a status is something the caller can act on.
+///
+/// The scopes are [`vc_auth::issue::BROWSER_SCOPES`], which a personal access token also carries:
+/// one list, in the auth crate, rather than the same three names written down twice.
 pub async fn token(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(session) = session::from_headers(&headers, state.session_secret()) else {
         return unauthorized();
@@ -209,7 +209,7 @@ pub async fn token(State(state): State<AppState>, headers: HeaderMap) -> Respons
         state.pool(),
         state.jwt_secret(),
         user_id,
-        BROWSER_SCOPES,
+        vc_auth::issue::BROWSER_SCOPES,
         OffsetDateTime::now_utc(),
     )
     .await
