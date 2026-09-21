@@ -15,17 +15,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // The names are the Elixir application's — written in its `config/dev.exs`,
-    // which is the configuration the service is operated under, and the ones
-    // `scripts/discord-env.sh` sets — and they are read as they are, each on its
-    // own: a value the environment does not have is refused by name.
+    // The names are the deployment's own: the `VCRYPTO_*` secrets the app already
+    // carries, which is what the Elixir reads — plus `DATABASE_URL` and
+    // `SECRET_KEY_BASE`, which are Phoenix's and sqlx's. They are read as they are,
+    // each on its own: a value the environment does not have is refused by name.
     let database_url = require_env("DATABASE_URL")?;
-    let jwt_secret = require_env("GUARDIAN_SECRET_KEY")?;
-    let discord_client_id = require_env("DISCORD_CLIENT_ID")?;
-    let discord_client_secret = require_env("DISCORD_CLIENT_SECRET")?;
-    let discord_bot_token = require_env("DISCORD_BOT_TOKEN")?;
-    let discord_public_key = vc_api::discord::parse_public_key(&require_env("DISCORD_PUBLIC_KEY")?)
-        .ok_or_else(|| "DISCORD_PUBLIC_KEY must be 32 hex-encoded bytes".to_string())?;
+    let jwt_secret = require_env("VCRYPTO_API_JWT_SECRET_KEY")?;
+    let discord_client_id = require_env("VCRYPTO_CLIENT_ID")?;
+    let discord_client_secret = require_env("VCRYPTO_CLIENT_SECRET")?;
+    let discord_bot_token = require_env("VCRYPTO_BOT_TOKEN")?;
+    let discord_public_key = vc_api::discord::parse_public_key(&require_env("VCRYPTO_PUBLIC_KEY")?)
+        .ok_or_else(|| "VCRYPTO_PUBLIC_KEY must be 32 hex-encoded bytes".to_string())?;
     let port = std::env::var("PORT")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -34,15 +34,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Elixir keeps these in `config/*.exs`; they are not secrets, so the defaults
     // match the ones the checked-in examples use.
     let links = Links {
-        site_url: optional_env("SITE_URL", "https://vcrypto.sumidora.com"),
-        invite_url: std::env::var("INVITE_URL").unwrap_or_else(|_| {
+        site_url: optional_env("VCRYPTO_SITE_URL", "https://vcrypto.sumidora.com"),
+        invite_url: std::env::var("VCRYPTO_INVITE_URL").unwrap_or_else(|_| {
             format!(
                 "https://discord.com/api/oauth2/authorize?client_id={discord_client_id}\
                  &permissions=0&scope=applications.commands%20bot"
             )
         }),
         support_guild_invite_url: optional_env(
-            "SUPPORT_GUILD_INVITE_URL",
+            "VCRYPTO_SUPPORT_GUILD_INVITE_URL",
             "https://discord.com/invite/Hgp5DpG",
         ),
     };
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             discord_bot_token,
             // Where Discord sends the browser back to. It has to match the URL
             // the login redirect used, so a deployment sets its own origin.
-            std::env::var("DISCORD_OAUTH2_REDIRECT_URI")
+            std::env::var("VCRYPTO_DISCORD_CALLBACK_URI")
                 .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
         vc_api::state::Outbound {
@@ -146,8 +146,8 @@ fn webhook_proxy() -> Option<vc_api::notification::Proxy> {
     // The emitter is a published endpoint of this project's, not a per-deployment
     // one: its Worker routes to `vcrypto-webhook-emitter.sumidora.com` for every
     // environment (wrangler.toml in virtualCrypto-discord/webhook-emitter-cf-workers).
-    // So it has a default like `SITE_URL` does, and what decides whether there is a
-    // proxy at all is the client certificate below.
+    // So it has a default like `VCRYPTO_SITE_URL` does, and what decides whether
+    // there is a proxy at all is the client certificate below.
     let url = optional_env(
         "WEBHOOK_PROXY_URL",
         "https://vcrypto-webhook-emitter.sumidora.com",

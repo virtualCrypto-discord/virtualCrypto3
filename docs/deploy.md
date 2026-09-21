@@ -6,43 +6,45 @@ correct as this list.
 
 ## What the server requires
 
-**The names are the Elixir application's**: they are the ones its `config/dev.exs`
-reads, which is the configuration the service is operated under and the names
-`scripts/discord-env.sh` sets — so the port is started from an environment that
-already exists rather than from a spelling of its own.
+**The names are the deployment's own**: the `VCRYPTO_*` secrets `virtualcrypto-prod`
+already carries, which is what the Elixir reads, plus `DATABASE_URL` and
+`SECRET_KEY_BASE`, which are Phoenix's and sqlx's. The port reads them as they are —
+there is no second spelling of them to keep in step.
 
-The first list is what `require_env` refuses to start without, each named in the
-error it exits with; the second is everything else that is read, `WEB_ROOT` from
-`vc-api` rather than from `main.rs`.
+This is what `require_env` refuses to start without, each named in the error it exits
+with.
 
 - `DATABASE_URL`
-- `DISCORD_BOT_TOKEN`
-- `DISCORD_CLIENT_ID`
-- `DISCORD_CLIENT_SECRET`
-- `DISCORD_PUBLIC_KEY`
-- `GUARDIAN_SECRET_KEY`
 - `SECRET_KEY_BASE`
+- `VCRYPTO_API_JWT_SECRET_KEY`
+- `VCRYPTO_BOT_TOKEN`
+- `VCRYPTO_CLIENT_ID`
+- `VCRYPTO_CLIENT_SECRET`
+- `VCRYPTO_PUBLIC_KEY`
 
-`DISCORD_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by
-name.
+`VCRYPTO_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by name.
 
-The `virtualcrypto-prod` app carries secrets spelled `VCRYPTO_*` instead. Those are
-not the names above and nothing here reads them, so a deployment of this port sets
-the names above. The certificate pair below is the exception: both sides spell it
-the same.
+All seven are already set on the app (`flyctl secrets list -a virtualcrypto-prod`), so
+a deployment of this port has nothing to add here.
 
 ## What it takes with a default
 
-- `DISCORD_OAUTH2_REDIRECT_URI`
-- `INVITE_URL`
+Already on the app:
+
 - `PORT`
-- `RATE_LIMIT_PER_MINUTE`
-- `SECURE_COOKIES`
-- `SITE_URL`
-- `SUPPORT_GUILD_INVITE_URL`
-- `VCRYPTO_SETTLE_INTERVAL_SECS`
+- `VCRYPTO_DISCORD_CALLBACK_URI`
+- `VCRYPTO_INVITE_URL`
+- `VCRYPTO_SITE_URL`
+- `VCRYPTO_SUPPORT_GUILD_INVITE_URL`
 - `VCRYPTO_WEBHOOK_PROXY_CERT`
 - `VCRYPTO_WEBHOOK_PROXY_KEY`
+
+This port's own — what the Elixir has no equivalent of, and what a deployment of this
+port is the first to set:
+
+- `RATE_LIMIT_PER_MINUTE`
+- `SECURE_COOKIES`
+- `VCRYPTO_SETTLE_INTERVAL_SECS`
 - `WEBHOOK_PROXY_URL`
 - `WEB_ROOT`
 
@@ -50,11 +52,12 @@ the same.
 built SPA is unpacked. Unset, `default_web_root()` decides, and `web/dist` is what
 `npm run build` writes — so a container has to place one where the other expects it.
 
-`RATE_LIMIT_PER_MINUTE=0` turns the v2 limit off. `WEBHOOK_PROXY_URL` is the one entry here that a deployment does not have to
-provide: the emitter is a published endpoint of this project's, routed by its
-Worker to `vcrypto-webhook-emitter.sumidora.com` for every environment (see
-`wrangler.toml` in `virtualCrypto-discord/webhook-emitter-cf-workers`), so it
-defaults like `SITE_URL` does. What decides whether there is a proxy at all is the
+`RATE_LIMIT_PER_MINUTE=0` turns the limit off. `WEBHOOK_PROXY_URL` is the one entry
+above that a deployment does not have to provide: the emitter is a published endpoint
+of this project's, routed by its Worker to `vcrypto-webhook-emitter.sumidora.com` for
+every environment (see `wrangler.toml` in
+`virtualCrypto-discord/webhook-emitter-cf-workers`), so it defaults like
+`VCRYPTO_SITE_URL` does. What decides whether there is a proxy at all is the
 certificate below.
 
 `VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` are the mTLS client the

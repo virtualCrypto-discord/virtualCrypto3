@@ -175,7 +175,7 @@ the feature itself has since been built as an addition rather than a port
 
 `/invite` and `/support` are built: `web::invite` and `web::support` redirect from
 `Links::invite_url` and `Links::support_guild_invite_url`, which `vc-server` already
-fills from `INVITE_URL` and `SUPPORT_GUILD_INVITE_URL`, so the bot's
+fills from `VCRYPTO_INVITE_URL` and `VCRYPTO_SUPPORT_GUILD_INVITE_URL`, so the bot's
 invite and the support guild's address stayed where the command responses read them
 from. 307 rather than the Elixir's 302, because that is what axum has for a move that is
 not permanent and a `GET` cannot tell them apart.

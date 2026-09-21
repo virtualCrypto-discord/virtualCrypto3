@@ -11,16 +11,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/discord-env.sh" >/dev/null
 
 if [[ $# -ge 1 ]]; then
-  url="https://discord.com/api/v10/applications/${DISCORD_CLIENT_ID}/guilds/$1/commands"
+  url="https://discord.com/api/v10/applications/${VCRYPTO_CLIENT_ID}/guilds/$1/commands"
   scope="commands in guild $1"
 else
-  url="https://discord.com/api/v10/applications/${DISCORD_CLIENT_ID}/commands"
+  url="https://discord.com/api/v10/applications/${VCRYPTO_CLIENT_ID}/commands"
   scope="global commands"
 fi
 
 response="$(
   curl -sS -X PUT "$url" \
-    -H "Authorization: Bot $DISCORD_BOT_TOKEN" \
+    -H "Authorization: Bot $VCRYPTO_BOT_TOKEN" \
     -H "Content-Type: application/json" \
     --data-binary "@$repo_root/scripts/discord-commands.json"
 )"

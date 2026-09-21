@@ -6,7 +6,7 @@
 //! [`discord_commands::commands`]. It has to be run when the list changes; the service
 //! answering an interaction is a separate thing and does not need it.
 //!
-//!     DISCORD_BOT_TOKEN=... DISCORD_CLIENT_ID=... cargo run -p vc-api --bin register-commands
+//!     VCRYPTO_BOT_TOKEN=... VCRYPTO_CLIENT_ID=... cargo run -p vc-api --bin register-commands
 //!     ... register-commands 123456789012345678    # one guild's commands instead
 //!
 //!     just register-commands
@@ -15,8 +15,8 @@ use vc_api::discord_commands;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let token = require_env("DISCORD_BOT_TOKEN")?;
-    let client_id = require_env("DISCORD_CLIENT_ID")?;
+    let token = require_env("VCRYPTO_BOT_TOKEN")?;
+    let client_id = require_env("VCRYPTO_CLIENT_ID")?;
 
     // An argument is a guild. The old script took one for the same reason: a guild's
     // commands appear in it at once, where an application's can take an hour, which is
