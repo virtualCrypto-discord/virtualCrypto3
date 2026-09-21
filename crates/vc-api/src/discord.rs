@@ -100,6 +100,15 @@ pub trait DiscordApi: Send + Sync {
         user_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError>;
 
+    /// `GET /applications/{client_id}/commands`: the commands Discord holds for this
+    /// application, with the ids a command mention is written with.
+    ///
+    /// The ids belong to one application, so they are read rather than written down: the
+    /// same command has a different id in development and in production. Nothing else on
+    /// the command screens needs Discord, and a deployment that cannot answer this loses
+    /// the links and nothing else — see [`crate::state::AppState::command_ids`].
+    async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError>;
+
     /// The bot's own user id, which for a Discord application is the same number
     /// as its client id. The consent screen asks whether the bot is in a guild
     /// before it asks a person anything: a grant belongs to a guild, and one the
@@ -283,6 +292,10 @@ impl DiscordApi for CachedDiscord {
         user_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
         self.inner.get_user_with_status(user_id).await
+    }
+
+    async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        self.inner.get_application_commands().await
     }
     /// Not cached: the Elixir cache wraps `get_user` and `get_guild` only, and a
     /// token is looked up once per request.
@@ -561,6 +574,39 @@ impl DiscordApi for HttpDiscordApi {
         self.client_id
             .parse()
             .expect("the Discord client id is a snowflake")
+    }
+
+    /// The commands Discord holds for this application, read with the bot's own token: the
+    /// response is the registration's, ids and all.
+    async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        let response = self
+            .http
+            .get(format!(
+                "https://discord.com/api/applications/{}/commands",
+                self.client_id
+            ))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.bot_token),
+            )
+            .send()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| DiscordError::Request(error.to_string()))?;
+
+        Ok(body
+            .as_array()
+            .map(|commands| {
+                commands
+                    .iter()
+                    .filter_map(|command| command.as_object().cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {

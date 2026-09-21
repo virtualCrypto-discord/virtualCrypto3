@@ -10,6 +10,8 @@
 //! `crate::command::help`'s job. That also lets `/application help` show the same
 //! command screen with its own button beside it.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use super::{Block, INTRO, OptionKind, OptionLine, Section, Showing, resolve};
@@ -24,11 +26,11 @@ const FOOTER: &str = "[コマンドの使い方]({site}/document/commands) — [
                       [サポートサーバー]({support})";
 
 /// The list: what this bot is, every command with the sentence Discord shows for
-/// it, and the menu that opens one.
-pub fn index(links: &Links) -> Vec<Value> {
+/// it, the menu that opens one, and the way to the page a new person needs.
+pub fn index(links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
     let listing = super::showings()
         .iter()
-        .map(listing_line)
+        .map(|showing| listing_line(showing, ids))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -37,15 +39,33 @@ pub fn index(links: &Links) -> Vec<Value> {
         separator(),
         text(format!("## コマンド\n\n{listing}")),
         menu(),
+        // 「はじめに」 was a line in the footer and nothing a person could press, which is the
+        // wrong place for the one page somebody who has just been handed the bot needs.
+        action_row(vec![link_button(
+            &format!("{}/document/start", links.site_url),
+            "はじめに",
+        )]),
         text(resolve(FOOTER, links)),
     ]
 }
 
+/// A command's name as Discord reads it: a mention —— `</name:id>` —— when the application's
+/// ids are known, which is a link somebody can press, and the name in bold when they are not.
+///
+/// The ids come from Discord and are read once per process; a deployment that cannot read
+/// them says 「/name」 exactly as it always did.
+fn named(name: &str, ids: &BTreeMap<String, u64>) -> String {
+    match ids.get(name) {
+        Some(id) => format!("</{name}:{id}>"),
+        None => format!("**/{name}**"),
+    }
+}
+
 /// One command: how it is typed, what its options are, and what has been written
 /// about it.
-pub fn command(showing: &Showing, links: &Links) -> Vec<Value> {
+pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
     let mut children = vec![greeting(
-        &format!("**/{}**", showing.name),
+        &named(&showing.name, ids),
         &showing.description,
         links,
     )];
@@ -106,11 +126,15 @@ fn menu() -> Value {
 
 /// One line of the list. The administrator bit is read off the registration
 /// payload, so the four commands that ask for it say so without being told twice.
-fn listing_line(showing: &Showing) -> String {
+fn listing_line(showing: &Showing, ids: &BTreeMap<String, u64>) -> String {
     if showing.admin_only {
-        format!("- **/{}**（管理者） {}", showing.name, showing.description)
+        format!(
+            "- {}（管理者） {}",
+            named(&showing.name, ids),
+            showing.description
+        )
     } else {
-        format!("- **/{}** {}", showing.name, showing.description)
+        format!("- {} {}", named(&showing.name, ids), showing.description)
     }
 }
 

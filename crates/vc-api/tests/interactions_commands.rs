@@ -172,6 +172,51 @@ async fn the_back_button_shows_the_list_again(pool: PgPool) {
     assert!(rendered.contains("**/bal**"), "{rendered}");
 }
 
+/// `/help` sends somebody who has just been handed the bot to the page they need, with a
+/// button rather than a line of text — the one page a new person is looking for.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn help_offers_the_starting_page_as_a_button(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        execute_from_guild(json!({ "name": "help" }), 12),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains(&format!("{SITE_URL}/document/start")),
+        "the way in: {rendered}"
+    );
+    assert!(rendered.contains("はじめに"), "{rendered}");
+}
+
+/// A command is a mention — `</name:id>`, which Discord makes pressable — when the
+/// application's ids are known, and the plain name when they are not.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn help_links_a_command_when_discord_knows_its_id(pool: PgPool) {
+    let response = interaction(
+        vc_api::router(support::state(
+            pool,
+            support::FakeDiscord::with_commands(&[("bal", 1_234_567_890)]),
+        )),
+        execute_from_guild(json!({ "name": "help" }), 12),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(rendered.contains("</bal:1234567890>"), "{rendered}");
+    assert!(
+        !rendered.contains("**/bal**"),
+        "the mention replaces the bold name: {rendered}"
+    );
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn invite(pool: PgPool) {
     let response = interaction(

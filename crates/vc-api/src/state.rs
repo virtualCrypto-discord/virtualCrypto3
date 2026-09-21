@@ -74,6 +74,9 @@ pub struct AppState {
     discord: Arc<dyn DiscordApi>,
     outbound: Outbound,
     limiter: Arc<RateLimiter>,
+    /// This application's commands and their ids, which a command mention is written with.
+    /// Read from Discord once and remembered; see [`AppState::command_ids`].
+    command_ids: Arc<tokio::sync::OnceCell<std::collections::BTreeMap<String, u64>>>,
 }
 
 impl AppState {
@@ -94,7 +97,35 @@ impl AppState {
             discord,
             outbound,
             limiter,
+            command_ids: Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+
+    /// The ids of this application's commands, keyed by name — what `</name:id>` needs.
+    ///
+    /// Read once per process and remembered, because the ids change when the commands are
+    /// re-registered, which is a deploy-time act, and every `/help` asking Discord would be
+    /// a call per help. A deployment that cannot answer — no bot token, no network — gets
+    /// an empty map, which is not a failure: the screens then name a command without
+    /// linking it.
+    pub async fn command_ids(&self) -> &std::collections::BTreeMap<String, u64> {
+        self.command_ids
+            .get_or_init(|| async {
+                let Ok(commands) = self.discord.get_application_commands().await else {
+                    return std::collections::BTreeMap::new();
+                };
+
+                commands
+                    .iter()
+                    .filter_map(|command| {
+                        let name = command.get("name")?.as_str()?.to_owned();
+                        let id = command.get("id")?.as_str()?.parse().ok()?;
+
+                        Some((name, id))
+                    })
+                    .collect()
+            })
+            .await
     }
 
     pub fn pool(&self) -> &PgPool {

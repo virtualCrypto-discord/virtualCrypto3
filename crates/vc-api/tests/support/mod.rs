@@ -54,6 +54,10 @@ pub struct FakeDiscord {
     /// and an empty list is a guild with nothing installed rather than a guild that
     /// cannot be read.
     integrations: Vec<Map<String, Value>>,
+    /// What `get_application_commands` reports: the ids a command mention is written with.
+    /// Empty unless a test sets it, and an empty list is a deployment whose links are
+    /// missing rather than a failure.
+    commands: Vec<Map<String, Value>>,
     /// What the integrations call and the guild call after it answer. Both 200 unless a
     /// test says otherwise, which is how the two 403s are told apart: the integrations
     /// call refuses either way, and the guild call is what says whether the service is
@@ -114,12 +118,31 @@ impl FakeDiscord {
             member: Map::new(),
             roles: Vec::new(),
             integrations: Vec::new(),
+            commands: Vec::new(),
             integrations_status: 200,
             guild_status: 200,
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             webhooks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The commands Discord would answer with, by name and id — what `</name:id>` is
+    /// written from.
+    pub fn with_commands(names: &[(&str, u64)]) -> Arc<Self> {
+        let mut fake = Self::new();
+
+        fake.commands = names
+            .iter()
+            .map(|(name, id)| {
+                json!({ "name": name, "id": id.to_string() })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        Arc::new(fake)
     }
 
     /// The integrations `get_guild_integrations_with_status` reports, which is where
@@ -219,6 +242,11 @@ impl DiscordApi for FakeDiscord {
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
         Ok((404, Map::new()))
     }
+
+    async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        Ok(self.commands.clone())
+    }
+
     async fn get_user_info(&self, _token: &str) -> Result<Map<String, Value>, DiscordError> {
         Ok(self.payload.clone())
     }

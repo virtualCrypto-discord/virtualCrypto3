@@ -187,7 +187,7 @@ pub async fn handle(
     payload: &Value,
 ) -> Result<Value, CommandError> {
     match name {
-        "help" => Ok(help::command(state, options)),
+        "help" => Ok(help::command(state, options).await),
         "invite" => Ok(invite(state)),
         "application" => application::handle(state, options, payload).await,
         "bal" => bal::handle(state, payload).await,

@@ -18,22 +18,27 @@ use crate::state::AppState;
 
 /// `Command.handle/4` for `help`: with a name, that command's screen; without
 /// one, the list.
-pub fn command(state: &AppState, options: &Map<String, Value>) -> Value {
+///
+/// The ids that turn a command's name into a link are read here rather than passed in, and
+/// reading them cannot fail: a deployment that cannot answer gets an empty map and the
+/// screens say the names alone.
+pub async fn command(state: &AppState, options: &Map<String, Value>) -> Value {
     let links = state.links();
+    let ids = state.command_ids().await;
 
     let children = match options.get("command").and_then(Value::as_str) {
         Some(name) => match docs::showing_of(name) {
-            Some(showing) => discord::command(&showing, links),
+            Some(showing) => discord::command(&showing, links, ids),
             // Autocomplete offers the names that exist, but a name can be typed
             // anyway: the list, with the one sentence that says so above it.
             None => {
                 let mut children = vec![text(format!("`{name}` というコマンドはありません。"))];
-                children.extend(discord::index(links));
+                children.extend(discord::index(links, ids));
 
                 children
             }
         },
-        None => discord::index(links),
+        None => discord::index(links, ids),
     };
 
     screen(children, CHANNEL_MESSAGE_WITH_SOURCE)
@@ -53,6 +58,7 @@ pub async fn component(
         .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
 
     let links = state.links();
+    let ids = state.command_ids().await;
 
     let children = match picked {
         Screen::Select => {
@@ -64,14 +70,14 @@ pub async fn component(
                 .and_then(Value::as_str);
 
             match chosen.and_then(docs::showing_of) {
-                Some(showing) => discord::command(&showing, links),
+                Some(showing) => discord::command(&showing, links, ids),
                 // A value no menu of this service offered. The list is where the
                 // person already was, so that is the honest screen to leave them
                 // on.
-                None => discord::index(links),
+                None => discord::index(links, ids),
             }
         }
-        Screen::Index => discord::index(links),
+        Screen::Index => discord::index(links, ids),
     };
 
     Ok(screen(children, UPDATE_MESSAGE))
