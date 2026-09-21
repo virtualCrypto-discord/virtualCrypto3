@@ -343,3 +343,94 @@ async fn create_rejects_a_name_that_is_too_long_or_has_a_mark_in_it(pool: PgPool
         );
     }
 }
+
+async fn racing_create(pool: PgPool, collision: &str) {
+    let money = setup_money(&pool).await;
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE currencies IN SHARE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let (guild, unit, name) = match collision {
+        "guild" => (FREE_GUILD, "raceb", "racenameb"),
+        "unit" => (FREE_GUILD + 100, "racea", "racenameb"),
+        "name" => (FREE_GUILD + 100, "raceb", "racenamea"),
+        _ => unreachable!(),
+    };
+    let first = tokio::spawn(interaction(
+        router(pool.clone()),
+        from_guild_in(
+            json!(100),
+            "racea",
+            "racenamea",
+            money.user1,
+            FREE_GUILD,
+            DEFAULT_PERMISSIONS,
+        ),
+    ));
+    let second = tokio::spawn(interaction(
+        router(pool.clone()),
+        from_guild_in(
+            json!(100),
+            unit,
+            name,
+            money.user2,
+            guild,
+            DEFAULT_PERMISSIONS,
+        ),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'INSERT INTO currencies%'")
+                .fetch_one(&pool).await.unwrap();
+            if waiting == 2 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("both creates reached insertion after the duplicate checks");
+    blocker.commit().await.unwrap();
+    let first = first.await.unwrap();
+    let second = second.await.unwrap();
+    assert_eq!(
+        (first.status, second.status),
+        (200, 200),
+        "{collision}: first={}, second={}",
+        first.body,
+        second.body
+    );
+    let responses = [&first, &second];
+    let successes = responses
+        .iter()
+        .filter(|r| r.body["data"]["components"][0]["accent_color"] == COLOR_OK)
+        .count();
+    assert_eq!(successes, 1, "exactly one currency should be created");
+    let refused = responses
+        .iter()
+        .find(|r| r.body["data"]["components"][0]["accent_color"] == COLOR_ERROR)
+        .unwrap();
+    let message = match collision {
+        "guild" => "このギルドではすでに通貨が作成されています。",
+        "unit" => "`racea`という単位の通貨は存在しています。別の単位を使用してください。",
+        "name" => "`racenamea`という名前の通貨は存在しています。別の名前を使用してください。",
+        _ => unreachable!(),
+    };
+    assert_error(refused, message);
+    let created: (i64, i64) = sqlx::query_as("SELECT count(*), COALESCE(sum(a.amount), 0)::bigint FROM currencies c JOIN assets a ON a.currency_id = c.id WHERE c.guild_id = $1 OR c.guild_id = $2")
+        .bind(FREE_GUILD).bind(FREE_GUILD + 100).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        created,
+        (1, 100),
+        "the rejected create must not leave a currency or creator grant"
+    );
+}
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_guild_collision(pool: PgPool) {
+    racing_create(pool, "guild").await;
+}
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_unit_collision(pool: PgPool) {
+    racing_create(pool, "unit").await;
+}
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_name_collision(pool: PgPool) {
+    racing_create(pool, "name").await;
+}

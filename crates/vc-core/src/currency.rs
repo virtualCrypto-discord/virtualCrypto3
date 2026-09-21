@@ -131,9 +131,9 @@ pub enum CreateError {
 /// and the creator is resolved (creating their account if needed) only once all
 /// three have passed.
 ///
-/// Elixir wraps the insert in a retry loop, which covers a concurrent insert
-/// slipping past those checks. That is not reproduced, so such a race would
-/// surface as a database error instead.
+/// A concurrent insert can pass the same checks. Its uniqueness violation is
+/// mapped to the corresponding duplicate error; other database failures remain
+/// database errors.
 pub async fn create(
     pool: &PgPool,
     guild_id: i64,
@@ -191,7 +191,19 @@ pub async fn create(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(CreateError::Database)?;
+    .map_err(|error| {
+        if let sqlx::Error::Database(ref database) = error
+            && database.is_unique_violation()
+        {
+            match database.constraint() {
+                Some("info_guild_id_index") => return CreateError::Guild,
+                Some("info_unit_index") => return CreateError::Unit,
+                Some("info_name_index") => return CreateError::Name,
+                _ => {}
+            }
+        }
+        CreateError::Database(error)
+    })?;
 
     sqlx::query!(
         "INSERT INTO assets (amount, user_id, currency_id, inserted_at, updated_at)
