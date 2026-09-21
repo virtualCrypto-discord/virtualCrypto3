@@ -1,45 +1,115 @@
-# QA, split by who can decide it
+# QA: what a machine can check, and what a person has to
 
-Three kinds of verification, and the split is by *who can settle the question*:
+This is the verification plan for the whole service, split by **who can settle a
+question**:
 
-- **Static** — a reader, human or model, comparing one artefact against another:
-  code against docs, a claim against its evidence, a test against the thing it says
-  it pins. No execution and no environment.
-- **Dynamic** — a shell and a database: the gates, the focused suites, and the
+- **Static** (§1) — a reader, human or model, comparing one artefact against
+  another. No execution, no environment. This is the section a reviewing model can
+  do on its own.
+- **Dynamic** (§2) — a shell and a database: the gates, the focused suites, and the
   experiments that need rows and concurrent connections.
-- **Human** — Discord, a real webhook, a real deployment, and judgement about
-  whether a behaviour is the right one.
+- **Human** (§3) — Discord, a real webhook, a deployment, and judgement.
 
-Each item says what to look at and what "pass" is. A finding goes where the project
-already keeps its notes: an accepted difference in `docs/known-gaps.md`, a bug as a
-failing test first, and the reasoning in the commit message.
+§4 lists what this document deliberately does not settle; the appendices map the
+recent changes and the project's other notes.
 
-Two findings from writing this file, kept here so the list is not read as
-speculation: **`POST /oauth2/token/revoke` has no test** (the helpers it calls do),
-and **`PATCH /oauth2/clients/@me` has no test through HTTP** (only
-`vc_core::application::patch` is tested). Both are reachable by a client.
+**The one rule for every item**: it names a file, a test or a command, and a reader
+can falsify it. An item that only says "check that X is right" is a defect in this
+document — report it as such.
 
-## Static
+**How to report what you find**:
 
-### The surface, endpoint by endpoint
+- A **defect**: the item, the file and line that contradict it, and the smallest
+  command or read that shows it. Prefer a failing assertion over a paragraph.
+- An **accepted difference** from the Elixir service this is a rewrite of: it
+  belongs in `docs/known-gaps.md`.
+- A **judgement call** (a number, a wording, a UX choice): §4, with a
+  recommendation and what it costs.
+- A **stale claim in this document**: quote it and say what the tree says instead.
 
-Every route, who may call it, and the suite that would notice if it broke. The
-column that matters is the last one: an endpoint whose suite is "—" is either
-covered somewhere indirect or is a finding.
+**If you have one pass and not a day**, in this order:
+
+1. §1.2 against `routes/mod.rs`, `routes/v2/mod.rs`, and the test files: the route
+   table and the suite column — it is the fastest way to see a surface nothing
+   holds.
+2. §1.5: re-derive the reachability table from `routes/idempotency.rs` and
+   `vc_core/idempotency.rs`. The interesting claim is the *unreachable* one.
+3. §1.4: the two pagination mechanisms, in the code and in the docs, and the doc ↔
+   code rows of that table.
+4. §2.2: pick two mutations and run them. A test that cannot fail is worth less
+   than no test, and this is the only cheap way to know.
+5. §4: nothing there is a defect, but a recommendation with a cost is the most
+   useful thing a reviewer can leave.
+
+## 0. Orientation, for a reader who was not in the room
+
+virtualCrypto is a Discord application and a REST API for virtual currency: guilds
+issue currency from a pool, users pay each other, claims move money when two people
+agree, and **contracts** let an application operate a user's currency with that
+user's approval. It is a Rust rewrite of an Elixir service and **shares its
+PostgreSQL schema**, which is why migrations are additive and why the Elixir's
+behaviour is a reference point throughout.
+
+| Crate | What it is |
+| --- | --- |
+| `vc-core` | the domain and the SQL: users, currencies, assets, claims, payments, contracts, grants, applications, idempotency, purge |
+| `vc-auth` | tokens: user and application JWTs, scopes, the Discord session, the extractors |
+| `vc-api` | HTTP routes, the Discord interaction surface, the docs/help join, the scheduler, notifications |
+| `vc-server` | the process: configuration, the pool, the router, the clock |
+| `vc-demo-app` | two sample applications that talk to the API over HTTP |
+
+Running anything: the dev shell is Nix (`nix develop`, or direnv), the database is
+PostgreSQL 17 (`just db-create && just migrate`), and the gates are `just check`
+(formatting, clippy with warnings denied, the suite, the sqlx data, the baseline).
+`DATABASE_URL` is exported by the justfile.
+
+The invariants that matter most, and that most items below are about:
+
+1. **Money is conserved.** A lock is a transfer into the contract's own account,
+   never a deletion; a refusal, a withdrawal and an expiry return every remainder;
+   `SUM(assets.amount)` does not move except by issuing.
+2. **One key, one write.** An `Idempotency-Key` is spent by a write and only by a
+   write, and a claimed key always ends with an answer.
+3. **A page is bounded**, whatever the caller asks.
+4. **A caller who may not see something is answered 404, not 403**, so that ids
+   cannot be probed.
+
+## 1. Static
+
+### 1.1 The method
+
+Three questions per artefact, in this order:
+
+1. **Is it there?** (a route is registered, a command is dispatched, a doc section
+   exists, a test names the thing.)
+2. **Does it say what the code does?** (prose against behaviour, not prose against
+   intent.)
+3. **Would anything notice?** (a test, a golden, a refusal — the tables below name
+   what.)
+
+Then falsify: for each claim, name the read or command that would refute it. Claims
+here are cheap to check with `grep` because the code says what it means — a claim
+that needs a paragraph of interpretation is usually a finding.
+
+### 1.2 The HTTP surface
+
+Every route, who may call it, and the suite that would notice it breaking. **A
+suite of "—" is either covered indirectly or a finding**; the two marked below are
+findings.
 
 | Endpoint | Caller | Suite |
 | --- | --- | --- |
-| `GET /health` | — | `web` (a smoke test) |
+| `GET /health` | — | `web` |
 | `GET /login`, `GET /logout`, `GET /callback/discord`, `GET /invite`, `GET /support`, `POST /token` | session | `login`, `oauth2_token_endpoint` |
 | `GET /assets` | — | `web` |
-| `POST /api/integrations/discord/interactions` | Ed25519 signature | `interactions_*` (ten files), `discord_schema` |
-| `GET /oauth2/authorize`, `POST /oauth2/authorize` | session | `oauth2_authorize`, `oauth2_preauthorize` |
-| `POST /oauth2/token` | client credentials (Basic) | `oauth2_token`, `oauth2_token_endpoint`, `grant_requests` |
-| `POST /oauth2/token/revoke` | — | **—** |
+| `POST /api/integrations/discord/interactions` | Ed25519 signature | `interactions_*` (eleven suites, plus a shared helper), `discord_schema` |
+| `GET`/`POST /oauth2/authorize` | session | `oauth2_authorize`, `oauth2_preauthorize` |
+| `POST /oauth2/token` (four grants) | client credentials | `oauth2_token`, `oauth2_token_endpoint`, `grant_requests` |
+| `POST /oauth2/token/revoke` | — | **no test (finding)** |
 | `GET /oauth2/clients` | app token | `oauth2_clients_mine` |
 | `POST /oauth2/clients` | user token | `oauth2_clients` |
 | `GET /oauth2/clients/@me` | app token | `oauth2_clients_me`, `webhook_reverify` |
-| `PATCH /oauth2/clients/@me` | app token | **—** (the core function has tests) |
+| `PATCH /oauth2/clients/@me` | app token | **no test through HTTP (finding)** — only `vc_core::application::patch` is tested |
 | `GET`/`POST /oauth2/clients/@me/grant-requests` | app token | `grant_requests` |
 | `POST /applications/{id}/connect` | session | `connect` |
 | `GET /applications/{id}/grants`, `DELETE /applications/{id}/grants/{guild_id}` | session | `guild_grants` |
@@ -57,304 +127,348 @@ covered somewhere indirect or is a finding.
 | `GET /api/v2/currencies`, `GET /api/v2/currencies/{id}` | — | `v2_currencies` |
 | `POST /api/v2/currencies/issue` | guild token + `vc.issue` | `v2_issue` |
 | `GET /api/docs` | — | `documentation` |
+| `GET /` and the client routes | — | `web` |
 
-- [ ] **Walk the table against `crates/vc-api/src/routes/mod.rs` and
-      `routes/v2/mod.rs`**: every path there is a row, and no row has been dropped.
-- [ ] **Close the two gaps named above**, or record why they stay: revocation is
-      the one endpoint a *client* calls to undo a leak, and the edit is the only way
-      an application changes its own webhook.
-- [ ] **For each endpoint, the auth column against the extractor**: `AuthUser`
-      vs `Limited` vs `GuildToken`, the `kind` check inside, and the scope. A v2
-      handler that takes `AuthUser` instead of `Limited` is an unlimited one;
-      `routes/limited.rs` is the list of what is limited.
-- [ ] **Unknown fields are ignored, and adding response fields is not breaking**
-      (`docs/known-gaps.md` quotes the specification). Check that no handler
-      refuses a body for carrying a field it does not know.
+- [ ] Every path in `crates/vc-api/src/routes/mod.rs` and `routes/v2/mod.rs` is a
+      row here:
+      `grep -hoE '"/[a-zA-Z0-9/:{}@_.-]*"' crates/vc-api/src/routes/{mod.rs,v2/mod.rs} | sort -u`
+      is the list to compare against.
+- [ ] For each endpoint, the auth column against its extractor: `AuthUser` (auth
+      only), `Limited` (auth plus the per-account limit), `GuildToken` (a grant).
+      `routes/limited.rs` says what is limited; a v2 handler taking `AuthUser`
+      instead of `Limited` is an unlimited endpoint and a finding.
+- [ ] The two findings above: `POST /oauth2/token/revoke` is what a client calls
+      when a token leaked, and `PATCH /oauth2/clients/@me` is the only way an
+      application changes its own webhook. Either add the test, or say in §4 why
+      not.
+- [ ] `Accept` under `/api` (`require_json_accept` in `routes/mod.rs`): a header
+      that cannot be satisfied with JSON is a 406 before any handler runs, a
+      **missing** header is treated as `*/*` and allowed, and media type parameters
+      are ignored (so `q=0` excludes nothing). The four cases are goldens:
+      `v2_users_me_accept_absent`, `…_accept_any`, `…_accept_html`,
+      `…_accept_json_and_html`.
+- [ ] Unknown fields are ignored and added response fields are not breaking
+      (`docs/known-gaps.md` quotes the specification this was written against). No
+      handler refuses a body for carrying a field it does not know.
 
-### The Discord surface
+### 1.3 The Discord surface
 
 Twelve commands — `help`, `invite`, `application`, `issue`, `grant`, `contract`,
-`pay`, `info`, `create`, `delete`, `bal`, `claim` — and each is four things that
+`pay`, `info`, `create`, `delete`, `bal`, `claim` — and each is four artefacts that
 have to agree:
 
-- [ ] **Registration ↔ handler ↔ prose ↔ suite.** `discord_commands.rs` (the
-      payload, options, `contexts`, `integration_types`) ↔ `command/mod.rs`'s
-      `handle` arm ↔ `docs/commands.rs` (the prose shown by `/help` and on the
-      site) ↔ `tests/interactions_<name>.rs`. `tests/documentation.rs` asserts the
-      first, third and fourth exist and are in order; a reader checks the second
-      and that the prose describes what the handler does.
-- [ ] **The state a component carries.** Every button, select and modal packs its
-      state into a `custom_id` (`custom_id.rs`): a reader confirms the head byte,
-      the action, the id, and that a stale id is answered rather than trusted.
-- [ ] **The screens nobody clicks in a test**: the "ほかK件" line, the error
-      screens (`CommandError`), the ephemeral flags, the autocomplete lists.
-- [ ] **`contexts` and `integration_types`** per command: `/contract list` runs in
-      a DM as well as a guild; the admin-only commands carry the default
-      permissions bit.
+| Artefact | Where | What to check |
+| --- | --- | --- |
+| the registration | `discord_commands.rs` | names, descriptions, options, `contexts`, `integration_types`, the admin bit |
+| the dispatch | `command/mod.rs`'s `handle` | one arm per command; an unknown name is refused |
+| the prose | `docs/commands.rs` (shown by `/help` and the site) | describes what the handler does, not what it was meant to |
+| the suite | `tests/interactions_*.rs` | nine commands have their own file; `help`, `invite` and `application` live in `interactions_commands.rs`, with `interactions_autocomplete.rs` and the shared `interactions_common.rs` beside them |
 
-### The joins between artefacts
+- [ ] `tests/documentation.rs` asserts registration ↔ prose ↔ order; a reader checks
+      the *content* of the prose against the handler.
+- [ ] Every component's state travels in its `custom_id`
+      (`crates/vc-api/src/custom_id.rs`): a head byte per space (`0xF0` claim list,
+      `0xF2` contract, others beside them), an action byte, and a decimal payload. A
+      forged or stale id is refused rather than trusted.
+- [ ] The contract space's ids are `Pressed::Decided(Action, id)` and
+      `Pressed::Paged(Page, number)`: the same encoding for a contract id and a page
+      number, told apart by the action byte. Both round-trip in `custom_id.rs`'s
+      unit tests.
+- [ ] The screens nobody clicks in a test: the empty list, "this page is empty", the
+      error screens (`CommandError`), the ephemeral flags, the autocomplete lists
+      (`command/autocomplete.rs`).
+- [ ] `contexts` in the registration: `[0, 1]` everywhere except `issue`, `grant`,
+      `create` and `delete`, which are `[0]` — guild only, because they act on a
+      guild's currency. `discord_commands.rs`'s header says that is the whole of
+      what the deprecated `dm_permission` said, and its unit test asserts the four.
 
-- [ ] **Every documented endpoint is a route and every route is documented** —
-      `tests/documentation.rs` asserts the join's existence; a reader checks the
-      *content* (`docs/api.rs` against the handlers), including recently added
-      notes (`limit` defaults, `party_discord_id`, `Idempotency-Key`).
-- [ ] **`docs/contracts.md` against the contract handlers**: the three rules under
-      "Retrying a charge" are `routes/idempotency.rs`'s `guard`; the return rule is
-      the `returning` check in `vc_core::contract::pay_in`; the statement's grain is
-      the `contract_id` write and `contract::payments`; the page default is
-      `PER_PAGE`.
-- [ ] **`docs/known-gaps.md` against the tree**: every claim in it is a file, a
-      function or a test. Walk each, especially the recent ones (a client's typo is
-      a 400; the claim is in the write's transaction; the level is named).
-- [ ] **`docs/issue.md`, `docs/oauth2.md`, `docs/deploy.md`, `docs/test-port.md`**
-      against their subjects: the issue scope and the device poll, the OAuth2
-      metadata rules and the rendered application, the env vars, and the port
-      ledger's "dropped" column.
-- [ ] **`docs/web-ui.md`'s "what the service answers"** against the SPA in `web/`:
-      every page it fetches is a route.
-- [ ] **`README.md`, `justfile`, `flake.nix`, `scripts/`** against each other: the
-      mbx note against `sqlx-prepare.sh`, the gates in `just check` against CI's
-      `.github/workflows/ci.yml`, `docs/deploy.md`'s env vars against
-      `vc-server/src/main.rs`.
-- [ ] **Each commit's message against its diff**, newest first: the messages make
-      specific claims and a reader confirms the diff is that and nothing else.
-- [ ] **The migrations' comments against their SQL**: `0009` says the rows already
-      written are not backfilled (they cannot be) and the migration does exactly
-      that.
+### 1.4 The joins between artefacts
 
-### Every branch, and what makes it reachable
+| This | must agree with | How it is held |
+| --- | --- | --- |
+| `docs/api.rs` | the routes | `tests/documentation.rs` both ways; a reader checks the content |
+| `docs/contracts.md` | the contract handlers | prose only — the three rules under "Retrying a charge" are `routes/idempotency.rs`'s `guard`; the return rule is `contract::pay_in`; the sizes are `PER_PAGE`, `MAX_LIMIT`, `MAX_CONTRACTS` |
+| `docs/known-gaps.md` | the tree | prose only; every claim is a file or a test |
+| `docs/issue.md`, `docs/oauth2.md` | the issue endpoint, the OAuth2 surface | prose only |
+| `docs/test-port.md` | the ported suites | a ledger: every Elixir case is a file here or recorded as dropped |
+| `docs/web-ui.md` | `web/` | every page it fetches is a route |
+| `README.md` | `scripts/sqlx-prepare.sh`, `flake.nix` | the mbx note is the script's own header |
+| `.github/workflows/ci.yml` | `justfile`'s `check` | the same gates, in the same order |
+| commit messages | their diffs | newest first; each message makes specific claims |
 
-An unreachable branch nothing names is a lie about the code; a reachable one
-nothing tests is a hole. Start with the idempotency layer:
+- [ ] Walk each row. The machine-checked ones fail loudly; the prose ones are what a
+      reader is for.
+- [ ] **Two pagination mechanisms, both kept**: the API pages with a cursor
+      (`next`/`on_next`, `vc_core::page::Cursor`, `of_party`/`of_application`), the
+      Discord screens page with numbers (`claim::list_page`,
+      `contract::open_of_party`). Confirm neither has replaced the other, and that
+      each is used where it is right: a cursor is stable under inserts and cannot
+      say "back"; a page number can say first/last and shifts when rows are
+      inserted.
+
+### 1.5 Branches, and what makes each reachable
+
+An unreachable branch that nothing names is a lie about the code; a reachable one
+that nothing tests is a hole. The idempotency layer, the most recent and the most
+intricate:
 
 | Branch | Reachable | What makes it so | Pinned by |
 | --- | --- | --- | --- |
 | the key is claimed | yes | an ordinary first request | `a_repeated_key_charges_once`, `concurrent_charges_with_one_key_write_once` |
 | the key has an answer | yes | a retry | the same two (`Duplicate`, same body) |
 | the write failed | yes | a database failure (the table is dropped in the test) | `a_failure_gives_the_key_back` |
-| the wait ran out | yes | another transaction holds the row for a second | `a_key_another_request_is_holding_answers_come_back` |
+| the wait ran out | yes | another transaction holds the row for `CLAIM_WAIT` | `a_key_another_request_is_holding_answers_come_back` |
 | a row that answers nothing | yes, *as data* | rows claimed by the version before `4435878` | `a_row_that_answers_nothing_asks_the_caller_to_come_back` |
-| refused by the isolation level | **no** | — the transaction names `READ COMMITTED` | `a_stricter_session_default_does_not_change_the_answer` |
+| refused by the isolation level | **no** | the transaction names `READ COMMITTED` | `a_stricter_session_default_does_not_change_the_answer` |
 | a key that is unquoted, too long, or several | yes | a client's mistake | `an_unquoted_key_is_rejected`, `an_over_long_key_is_refused`, `two_keys_at_once_are_refused` |
 
-- [ ] **Two mechanisms, both kept**: the API pages with a cursor (`next`/`on_next`
-      through `Page::asked`, `vc_core::page::Cursor`) and the Discord screens page
-      with numbers (`claim::list_page`, `contract::open_of_party`). A reader
-      confirms neither has quietly replaced the other, and that each is used where
-      it is the right one.
-- [ ] **Re-derive the table** from `routes/idempotency.rs` and
-      `vc_core/idempotency.rs`: every `match` arm is in it, and the unreachable one
-      has a reason a reader can check rather than "should not happen".
-- [ ] **The same pass over the rest**: `contract::pay_in`'s error arms,
+- [ ] Re-derive the table from `routes/idempotency.rs` and
+      `vc_core/idempotency.rs`: every `match` arm appears, and the one marked
+      unreachable has a reason a reader can check rather than "should not happen".
+- [ ] The same pass over the rest: `contract::pay_in`'s error arms,
       `Page::asked`'s bounds, `scheduler::reverify_webhooks`'s handshake outcomes,
       `notification::check_webhook`'s transport choice, `interactions.rs`'s type
-      dispatch, the OAuth2 token endpoint's four grants.
-- [ ] **No defensive branch without a name**: anything shaped like
-      `unwrap_or_default`, a catch-all `_ =>` arm or a "just in case" check — is the
-      case reachable, and does the comment say by what?
+      dispatch, `oauth2_token`'s four grants.
+- [ ] Nothing shaped like a defensive branch without a name (`unwrap_or_default`, a
+      catch-all `_` arm, a "just in case" check) fails this question: **what makes
+      it reachable?**
 
-### Invariants
+### 1.6 Invariants
 
-- [ ] **"The escrow is the parties' remainders."** Read `contract::approve`
-      (debit the party, credit the contract's account), `pay_in` (debit the
-      contract, credit the receiver) and `end` (refund): no path writes `remaining`
-      without moving `assets` in the same transaction.
-- [ ] **"A lock is a transfer, not a deletion."** `tests/contract_escrow.rs`'s
-      `supply()` and `escrow()` state it; the pool arithmetic
-      (`currency::reset_pool_amount`) is the reader that would break otherwise.
-- [ ] **A claim's money**: refuse and withdraw return every locked remainder;
-      expiry settles the same way; a spend after the deadline is refused whether or
-      not the tick has run.
-- [ ] **Idempotency**: one key, one write — success, refusal and failure each leave
-      the key in the state the three rules in `docs/contracts.md` describe.
-- [ ] **Pagination**: a page is bounded, the cursor is the ordered column, and a
-      short page is the end (no `link`). `Page::next_cursor` is the only place that
-      decides "there is more".
-- [ ] **Error shapes**: `ApiError::parts()` against the hand-written bodies in
-      `payment_error` / `issue_error` / `contract_error` — same status, same keys,
-      same words where they overlap.
-- [ ] **Every `_in` write is used inside a transaction the layer owns**:
+- [ ] **Money is conserved.** Read `contract::approve`, `pay_in` and `end`: no path
+      writes `remaining` without moving `assets` in the same transaction.
+      `tests/contract_escrow.rs`'s `supply()` and `escrow()` state it.
+- [ ] **A lock is a transfer.** `contract::approve` credits the contract's own
+      account (`users.contract_id`); the `assets` trigger deletes a balance that
+      reaches zero.
+- [ ] **A claim's money**: refusal, withdrawal and expiry each return every
+      remainder; a spend after the deadline is refused whether or not the clock has
+      run.
+- [ ] **One key, one write**: `docs/contracts.md`'s rules are the statement; the
+      code is `guard` (claim, write and answer in one transaction).
+- [ ] **A page is bounded**: `PER_PAGE` when the caller says nothing, `MAX_LIMIT`
+      when they say too much, `MAX_CONTRACTS` on the contract screen,
+      `MAX_COLUMN_COUNT` on the claim screen. `Page::next_cursor` is the only place
+      that decides "there is more".
+- [ ] **Error bodies have one spelling**: `ApiError::parts()` against the
+      hand-written bodies in `payment_error`, `issue_error`, `contract_error`.
+- [ ] **Every `_in` write runs in a transaction the layer owns**:
       `grep -n "begin()" crates/vc-core/src/{contract,payment,issue}.rs` — the
       wrappers open one, the `_in` functions never do.
+- [ ] **Invisibility is 404**: a caller who is neither the application nor a party
+      is answered as a contract that is not there, for reads and for writes.
 
-### Ported fidelity, and where it was deliberately dropped
+### 1.7 Ported fidelity, and where it was dropped on purpose
 
-- [ ] **The goldens**: `tests/golden/` (fourteen files) are captured from the
-      Elixir; `assert_matches_golden` compares status, body and content type
-      exactly. A reader confirms no fixture has been edited to fit the code.
-- [ ] **`docs/test-port.md`'s ledger**: every Elixir test case is a file here or is
-      recorded as dropped, and each "dropped" has a reason.
-- [ ] **`docs/known-gaps.md`'s deliberate differences**, one by one, against the
-      code: the negative limit, the cursor and the order (400 rather than the
-      Elixir's 500), `/issue` rather than `/give`, 303 rather than 302, the consent
-      screen's repairs, `POST /oauth2/token`'s 400, the member's unknown role id.
-- [ ] **Vacuous assertions**: a test that would pass if the subject were broken —
-      the shape to look for is an id compared against the wrong account (one
-      existed here: a key counted for an application's row id instead of its
-      account id, always zero), or a loop that never runs.
+- [ ] The goldens (`crates/vc-api/tests/golden/`: thirteen `v2_users_*.json` files
+      captured from the Elixir, with `fixture.json` and a `README.md` beside them);
+      `assert_matches_golden` compares status, parsed body and content type exactly.
+      No fixture has been edited to fit the code.
+- [ ] `docs/test-port.md`: every Elixir case is a file here or recorded as dropped,
+      with a reason.
+- [ ] `docs/known-gaps.md`'s differences from the Elixir, one by one — every `###`
+      heading in that section, against the code: a client's typo is a 400 where the
+      Elixir answered 500 (the negative limit, the ceiling on `limit`, the cursor,
+      the order), the claim is in the write's transaction, `/issue` rather than
+      `/give`, 303 rather than 302, `POST /token` without a session is 401, a
+      member's unknown role id is skipped, the consent screen's two repairs,
+      `POST /oauth2/token`'s 400, and what a delivery and a handshake check are.
+- [ ] **Vacuous assertions**: a test that would pass if its subject were broken. The
+      shape to look for is an id compared against the wrong account — one existed
+      here (a key counted for an application's row id instead of its account id, so
+      the count was always zero) — or a loop that never runs.
 
-### Coverage: what nothing tests
+### 1.8 Coverage: known holes, and how to find more
 
-- [ ] **The two named at the top** (`/oauth2/token/revoke` through HTTP,
-      `PATCH /oauth2/clients/@me` through HTTP).
-- [ ] **The `_in` functions' wrappers**: `contract::pay`, `payment::pay`,
-      `payment::pay_bulk`, `issue::issue` — used by tests and the Discord
-      commands; a reader confirms each still commits exactly once.
-- [ ] **`/health`**: what it answers and what reads it (a deployment's check).
-- [ ] **The purge's five tables** (`vc_core::purge`): each has a row in
-      `tests/purge.rs` that expires and a row that does not.
-- [ ] **The Discord commands' rare arms**: a command name that is not registered,
-      a component with a forged `custom_id`, a modal submitted empty.
+- [ ] The two findings in §1.2.
+- [ ] `PATCH` and `DELETE` through HTTP:
+      `grep -rn '"PATCH"\|"DELETE"' crates/vc-api/tests` — comparing that list
+      against §1.2 is how the `PATCH /oauth2/clients/@me` gap was found.
+- [ ] Public surface with no caller: a `pub fn` in `vc-core` used once, by the thing
+      written to use it, is a shape that has already been reshaped in this tree
+      (`open_of_party`). Prefer the read the caller actually needs.
+- [ ] The `_in` wrappers (`contract::pay`, `payment::pay`, `payment::pay_bulk`,
+      `issue::issue`): used by tests and the Discord commands, each commits once.
+- [ ] The purge's five tables (`vc_core::purge`): a row that expires and one that
+      does not, per table, in `tests/purge.rs`.
 
-## Dynamic
+## 2. Dynamic
 
-### The gates
+### 2.1 The gates and the suites
 
-- [ ] `just check` — formatting, clippy with warnings denied, the whole suite, the
-      sqlx data, the baseline. Any failure is a finding.
-- [ ] `just test` alone, and the focused suites when one area moved:
+- [ ] `just check` — formatting, clippy (warnings denied), the whole suite, the
+      sqlx offline data, the schema baseline. Any failure is a finding.
+- [ ] The focused suites when one area moved:
       `cargo nextest run -p vc-api --test contract_idempotency --test contract_party
       --test contract_payments --test contract_pagination --test contract_escrow
-      --test webhook_reverify --test interactions_contract`.
-- [ ] `just sqlx-check`, and after any new query `just sqlx-prepare` — *not* a bare
-      `cargo sqlx prepare`, which under mbx writes nothing and empties `.sqlx`.
-      Check `git status .sqlx` immediately afterwards.
+      --test interactions_contract --test webhook_reverify`.
+- [ ] `just sqlx-check`; after any new query, `just sqlx-prepare` — **never** a bare
+      `cargo sqlx prepare`, which under mbx writes nothing and empties `.sqlx`
+      (`scripts/sqlx-prepare.sh` says why). Check `git status .sqlx` immediately
+      afterwards.
 
-### Prove the tests bite
+### 2.2 Prove the tests bite
 
 Remove a mechanism, watch its test fail. This is what turns "reachable" from a
-belief into a fact, and it is how two of the claims above were checked:
+belief into a fact, and each of these was run while the code was written:
 
-- [ ] `begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")` → `begin()`: the
-      isolation test answers 500.
-- [ ] `register_in` before `commit`: a replay loses its body.
-- [ ] the `lock_timeout` around the claim: `a_key_another_request_is_holding_…`
-      hangs rather than answering.
-- [ ] `party_discord_id`'s filter in the draw: `a_charge_draws_on_the_party_it_names`
-      draws from the wrong party.
-- [ ] the `assets` trigger (delete a balance that reaches zero): the supply
-      assertions in `contract_escrow` fail.
-- [ ] `Page::next_cursor`'s "exactly full" test: a short page gains a `link`.
-- [ ] the webhook signature check in `notification::verify`: the handshake tests
-      pass an application that verifies nothing.
+| Remove | Expect |
+| --- | --- |
+| `begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")` → `begin()` | `a_stricter_session_default_does_not_change_the_answer` answers 500 |
+| `register_in` before `commit` | a replay loses its body |
+| the `lock_timeout` around the claim | `a_key_another_request_is_holding_answers_come_back` hangs |
+| `party_discord_id`'s filter in the draw | `a_charge_draws_on_the_party_it_names` draws from the wrong party |
+| `PER_PAGE`'s `limited_to` on one list | `an_absent_limit_is_a_page` sees every row |
+| `Page::next_cursor`'s "exactly full" test | a short page gains a `link` |
+| the `assets` trigger | `contract_escrow`'s supply assertions fail |
+| the signature check in `notification::verify` | the handshake tests pass an application that verifies nothing |
 
-### The database, by experiment
+### 2.3 The database, by experiment
 
-- [ ] **The default isolation**: `psql … -Atc "show
-      default_transaction_isolation"` — `read committed`, which is what the claim's
-      behaviour is reasoned about at (and the transaction says so anyway).
-- [ ] **Concurrency at the right level**: two `psql` processes, one key, the second
-      committing while the first holds the row (`INSERT … ON CONFLICT DO NOTHING
-      RETURNING id`). At `read committed` the second waits and then sees the row;
-      at `repeatable read` it is refused with `40001`. The suite covers both
-      outcomes; the raw experiment is what says the suite is not a coincidence.
-- [ ] **Supply and escrow under the API**: run lock → charge → return → settle with
-      data in the database and check `SUM(assets.amount)`, the contract's account
-      and `currency_payment_histories` after each step.
+- [ ] **The default isolation**: `psql … -Atc "show default_transaction_isolation"`
+      — `read committed`, and the idempotency transaction names it anyway.
+- [ ] **Concurrency, at both levels**: two `psql` processes, one key, the second
+      committing while the first holds the row. At `read committed` the second waits
+      and then reads the row; at `repeatable read` it is refused with `40001`. The
+      suite covers both outcomes (`concurrent_charges_with_one_key_write_once`,
+      `a_stricter_session_default_does_not_change_the_answer`); the raw experiment
+      is what says the suite is not a coincidence.
+- [ ] **Supply and escrow under the API**: lock → charge → return → settle with data
+      in the database, checking `SUM(assets.amount)`, the contract's account and
+      `currency_payment_histories` after each step.
 - [ ] **Upgrade shapes**: a database carrying a row that answers nothing (the
       pre-`4435878` shape) answers `409 processing` and charges nothing; a database
       migrated from the Ecto baseline passes `just baseline-check`.
 
-### Boundaries through the API
+### 2.4 Boundaries, with the answer each should get
 
-- [ ] A table of inputs, each against the endpoints that read it: `limit` of
-      `-1`, `0`, `1`, `1000000`; `next`/`on_next` of a number, of text, of both;
-      `order` of the two known values and of anything else; a key that is unquoted,
-      257 characters, or two headers; an `amount` of `"0"`, `"-1"`, `"ten"`, and
-      everything the contract holds plus one; `expires_in` of `0`, of a year, of a
-      year and a day; `party_discord_id` of a party, of a stranger, of the receiver;
-      `unit` of a currency that does not exist; a body that is `null`, `[]` or
-      `"string"`.
-- [ ] **Content negotiation**: no `Accept`, `Accept: */*`, `Accept:
-      application/json` and `Accept: text/html` on one v2 endpoint and one site
-      route.
-- [ ] **Rate limiting**: `RATE_LIMIT_PER_MINUTE=1` and two requests → 429 on the
-      second; `0` disables it. The verification limiter: three handshakes in three
-      seconds → `retry_after_3_seconds`.
+| Input | Endpoint | Expected |
+| --- | --- | --- |
+| no `limit` | contract lists, statement | 200, fifty rows, `link` when full |
+| no `limit` | claim list | 200, **every matching claim** — see §4 |
+| `limit=0` | any list | 200, no rows, no `link` |
+| `limit=-1`, `limit=201`, `limit=1000000` | any list | 400 `invalid_limit` |
+| `limit=nyan` | any list | 400 `invalid_limit` |
+| `next=abc`, `on_next=abc` | claims, contracts, statement | 400 `invalid_cursor` |
+| `next=1&on_next=1` | the same | 400 `invalid_cursor` |
+| `order=nonsense` | claim list | 400 `invalid_order` |
+| a key that is unquoted, or 257 characters | any write | 400 `invalid_idempotency_key` |
+| two `Idempotency-Key` headers | any write | 400 `multiple_idempotency_key_header_is_not_supported`, no `Idempotency-Status` |
+| the same key twice | any write | the first answer, `Idempotency-Status: Duplicate` |
+| a failure after the key is claimed | any write | 500 with no `Idempotency-Status`, and the key is free afterwards |
+| a claim held for more than a second | any write | 409 `processing` (`should_retry_after_in_seconds`) |
+| `amount` of `"0"`, `"-1"` | payment | 400 `invalid_amount` (the core's refusal) |
+| `amount` of `"ten"` | payment | 400 — but `invalid_format_of_convert_amount`, see §4 |
+| `amount` of `"ten"` | charge, issue | 400 `invalid_format_of_amount` |
+| everything the contract holds plus one | charge | 409 `not_enough_amount` |
+| `expires_in` of `0`, or of a year and a day | contract create | 400 `invalid_expires_in` |
+| `party_discord_id` naming a stranger | charge | 400 `not_a_party` |
+| `party_discord_id` naming a party whose remainder is short | charge | 409 `not_enough_amount`, even when the contract holds more |
+| a fixed receiver, and a receiver that is neither it nor the party drawn on | charge | 400 `receiver_is_fixed` |
+| a charge after the deadline | charge | 409 `expired` |
+| `Accept` of `text/html` alone | any `/api` route | 406, before any handler |
+| three handshakes within three seconds | a webhook | the third is `retry_after_3_seconds` |
+| `RATE_LIMIT_PER_MINUTE=1`, two requests | any v2 route | 429 on the second |
 
-### Runtime shapes
+### 2.5 Runtime shapes
 
 - [ ] **The clock**: `VCRYPTO_SETTLE_INTERVAL_SECS=0` stops settling, purging and
       the webhook re-check together; with a short interval, an aged `expires_at`
       refunds within a tick and the application is notified.
-- [ ] **The deploy build**: `SQLX_OFFLINE=true cargo build --release` — the compile
-      a deployment does, against the committed data.
-- [ ] **The server's env vars** (`vc-server/src/main.rs`): required ones absent →
-      a clear refusal to start; optional ones absent → the documented defaults.
-- [ ] **The site**: `GET /` serves the index, a hashed asset is cached forever, an
-      unknown client route answers the index, and `/api/…` keeps its own routes
-      (`tests/web.rs`).
-- [ ] **The demo's edges without Discord**: `demo-billing` with a missing argument
-      exits 2; with no server it fails with a message and exits 1.
+- [ ] **The deploy build**: `SQLX_OFFLINE=true cargo build --release`.
+- [ ] **Required env vars absent**: `vc-server/src/main.rs` refuses to start, with a
+      clear message. Optional ones absent: the documented defaults.
+- [ ] **The site**: `GET /` answers the index, a hashed asset may be kept forever,
+      an unknown client route answers the index, and `/api/…` keeps its own routes.
+- [ ] **The demo without Discord**: `demo-billing` with a missing argument exits 2;
+      with no server it fails with a message and exits 1.
 
-## Human
+## 3. Human
 
-Nothing here can be concluded from a terminal.
+Nothing here can be settled from a terminal.
 
-### Discord
-
-- [ ] **`/help` and the site's command list** against what the commands actually
-      do — the copy is generated from the registration, so a wrong description is a
-      wrong registration.
-- [ ] **`/contract list`**: the screen, the five-contract cap and the "ほかK件"
-      line, the four states a caller's own part can be in, the deadline line, the
-      buttons offered in each state, and that answering one advances the list.
-- [ ] **`/claim`**: every subcommand, the buttons, the metadata modal, the
-      autocomplete lists, and the pagination if the list has any.
+- [ ] **`/help` and the site's command list** against what the commands do.
+- [ ] **`/contract list`**: five rows, the count in the first line, the arrows
+      (⏪ ⏮️ ⏭️ ⏩) and their disabled states, the four states a caller's own part can
+      be in, the deadline line, and that a decision draws the first page again.
+- [ ] **`/claim`**: every subcommand, the buttons, the page row (⏪ ⏮️ ⏭️ ⏩ 🔄), the
+      selection menu, the metadata modal, the autocomplete lists.
 - [ ] **`/grant` and `/issue`**: the ask, the `user_code`, the approval, and the
       refusal a guild that has not granted gets.
-- [ ] **`/application register`**: the client id and secret it answers, and that
-      the webhook handshake it runs is the one that decides.
-- [ ] **`/bal`, `/info`, `/pay`, `/create`, `/delete`, `help`, `invite`**: the
-      screens, in Japanese, as a person reads them.
-
-### End to end, as a person
-
-- [ ] **A claim**: created by an application, approved and denied by the parties,
-      the webhook event arriving both times, the money moving exactly once.
+- [ ] **`/application register`**: the client id and secret, and the handshake that
+      decides the registration.
+- [ ] **A claim end to end**: created by an application, approved and denied, the
+      webhook arriving both times, the money moving exactly once.
 - [ ] **A metered run**: register an application, `/issue` a balance, run
       `demo-billing`, approve with the button, watch the charges fall to zero, and
       read the statement back — the same total.
-- [ ] **A webhook, for real**: a public HTTPS endpoint that verifies signatures,
-      the PING handshake at registration, the type-4 event when a contract goes
-      `active`, and a decision (refusal, withdrawal, expiry) as `canceled`/`expired`.
+- [ ] **A webhook, for real**: a public HTTPS endpoint that verifies signatures; the
+      PING handshake at registration; the type-4 event when a contract goes `active`;
+      a refusal, a withdrawal and an expiry arriving as `canceled`/`expired`.
 - [ ] **The re-check against that webhook**: `/oauth2/clients/@me` after the job has
-      run — `webhook_verified_at` set; then make the endpoint answer 200 to the
-      false-signature PING (or stop answering) and confirm `webhook_failed_at` moves
-      and deliveries continue.
+      run; then make the endpoint answer 200 to the false-signature PING (or stop
+      answering) and confirm `webhook_failed_at` moves and deliveries continue.
 - [ ] **A deployment**: Fly, the worker proxy and its certificate, a delivery
-      through it, and the scheduler running as a task rather than in a request.
-- [ ] **The clock over a real day**: a contract settled by the tick, and a pool
-      refill across a UTC day boundary (`job_runs`).
-- [ ] **The Elixir beside it**: point the Elixir service at the same database after
-      `0009`/`0010` and confirm it neither reads nor writes the columns it does not
-      know, and that its own flows still work.
+      through it, the scheduler as a task rather than in a request.
+- [ ] **The clock over a real day**: a contract settled by the tick, a pool refill
+      across a UTC day boundary (`job_runs`).
+- [ ] **The Elixir beside it**: point it at the same database after `0009`/`0010` and
+      confirm it neither reads nor writes the columns it does not know.
 
-### Judgement, which is the part no test has
+## 4. What this document cannot settle
 
-- [ ] Is a second's bounded wait the right answer for a retry (`CLAIM_WAIT`)? Is
-      `409 processing` with `should_retry_after_in_seconds` the right thing to tell
-      a client?
-- [ ] Is a page of fifty, with a ceiling of two hundred, right for the lists and
-      the statement? (The size is the judgement; the ceiling and the screens' pages
-      are done.) Two screens answer "how many are there" differently — the contract
-      screen counts (`open_of_party` says the total and the four pages around it),
-      the claim screen fetches one row more than a page holds and says "and more" —
-      and a person should confirm both read well.
-- [ ] Does a request that fails leave the caller able to retry *the same* request?
-      (`docs/contracts.md`'s three rules are the answer; a person checks the answer
-      is the right one.)
-- [ ] Is the Japanese copy on the Discord screens and the site what we want to say?
-- [ ] **A fresh reader**: give `docs/` to somebody who was not in this session and
-      ask what they think the service does. Every hesitation is a doc that assumes
-      what only the author knew.
+Each of these is a decision rather than a defect; a reviewer should give a
+recommendation and what it costs:
 
-## Reporting a finding
+- [ ] **The claim list answers every matching claim when no `limit` is given**,
+      where the contract lists and the statement answer fifty. It is a ported
+      endpoint whose documented behaviour is "no limit means no limit", and it is
+      now the only unbounded-by-default list in the service. Align it (a deviation
+      to record) or say in `docs/known-gaps.md` why not.
+- [ ] **Is fifty the right page**, with a ceiling of two hundred? The size is a
+      judgement; the bounds are tested.
+- [ ] **Is a second the right wait** for a key another request holds
+      (`CLAIM_WAIT`)? It decides whether a retry waits for the answer or is told to
+      come back.
+- [ ] **Is `409 processing` with `should_retry_after_in_seconds` the right thing to
+      tell a client**, and is the `Idempotency-Status` header worth what it costs?
+- [ ] **Is `invalid_format_of_convert_amount` the right name** for a non-numeric
+      `amount` in the single-payment clause of `POST /api/v2/users/@me/transactions`
+      (`routes/v2/transactions.rs:86`)? It is what the Elixir said for that clause,
+      and the charge and issue endpoints call the same mistake
+      `invalid_format_of_amount`. Either it is fidelity worth keeping or a name to
+      fix in one line.
+- [ ] **The two screens count differently on purpose**: the contract screen says a
+      number (a `COUNT`), the claim screen fetches one row more than a page holds and
+      says "and more". Both are legitimate; confirm both read well.
+- [ ] **Whether a deployment ever sets an isolation level above `READ COMMITTED`**:
+      the idempotency transaction names its own, so the answer is the same either
+      way, but the session default is what a `psql` session inherits.
+- [ ] **The Japanese copy** on the Discord screens and the site.
 
-- A **bug**: a failing test first, then the fix, then the message saying what the
-  mechanism was and why the old shape looked right.
-- An **accepted difference** from the Elixir: a paragraph in `docs/known-gaps.md`
-  that says what changed and what decided it.
-- A **behaviour that is right but surprising**: a line in `docs/contracts.md` or
-  `docs/issue.md` where a reader will look, and a test that pins it.
-- A **coverage gap**: a test, or a line here saying why there is not one.
+## Appendix A: what changed recently
+
+The newest commits are the surface most worth a reviewer's time, and each message
+says what the mechanism was. Newest first:
+
+| Commit | What it is |
+| --- | --- |
+| `5b6071e` | the contract screen pages: arrows, a count, and both pagination mechanisms kept |
+| `3af70bf` | the ceiling on `limit`; the contract screen's count and page (it used to read every contract the caller is named in) |
+| `4282238` | this document, first version |
+| `fb41dc3` | every contract list answers a page (the two older ones answered every row) |
+| `a6aa784` | the two key refusals nothing pinned (several keys; a key over 256 characters) |
+| `cff3380` | the idempotency transaction names its isolation level; the `40001` branch it made unreachable is gone |
+| `a81e94b`, `4435878`, `8a71980` | the claim, the write and the answer are one commit; the wait for another request's claim is bounded |
+| `153098d`, `5dfd892`, `73366c8` | a client's typo is a 400 (limit, cursor, order); a key is spent by a write and only by a write |
+
+## Appendix B: where the project keeps its notes
+
+| File | What it holds |
+| --- | --- |
+| `docs/known-gaps.md` | what is deliberately missing or different, and why |
+| `docs/test-port.md` | every Elixir test case, ported or dropped |
+| `docs/contracts.md`, `docs/issue.md`, `docs/oauth2.md` | the designed contracts: money, applications, guild tokens |
+| `docs/deploy.md` | the environment a deployment needs |
+| `docs/web-ui.md` | what the frontend replaced, and what the service answers |
+| `docs/qa.md` | this document |
