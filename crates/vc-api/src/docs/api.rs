@@ -9,10 +9,13 @@
 //! refuses a `/api/v2/...` route the table does not mention. A rename or a
 //! deletion cannot leave this page alone.
 //!
-//! What is not here is as deliberate: no request or response schema beyond a
-//! line. What a body is, exactly, is what the handler in [`crate::routes::v2`]
-//! reads, and a second copy of it written out here would be the copy that goes
-//! stale.
+//! Each endpoint carries what a caller needs to make the call: `fields` is the
+//! body's or query's own fields, one line each with the type and whether it is
+//! required, and `example` is one call and the answer it gets. **The examples are
+//! the tests' bodies**, which is what keeps them from being a second, staler copy:
+//! a shape that changes in a handler changes the test that asserts it, and
+//! `docs/api.rs`'s own test reads them back as JSON to refuse a fence that is not
+//! one.
 
 use super::{Listing, Page, Section, list, section, text};
 
@@ -39,9 +42,22 @@ pub struct Endpoint {
     pub summary: &'static str,
     /// Who may call it, and what the token must carry.
     pub access: &'static str,
-    /// What a caller has to know: the body's fields, the query parameters, the
-    /// refusals. Usually a line or two, never a schema.
+    /// The body's or query's fields, one line each: the name, its type, whether it is
+    /// required, and what it means. Empty is an endpoint that takes nothing but the path.
+    pub fields: &'static [&'static str],
+    /// One call and its answer, or `None` for an endpoint whose answer is a redirect.
+    pub example: Option<Example>,
+    /// What a caller has to know that the fields do not say: the refusals, the rules
+    /// that span fields.
     pub notes: &'static [&'static str],
+}
+
+/// A call and the answer it gets, each as the lines of a fence.
+pub struct Example {
+    /// The request: the method and path, the headers that matter, and the body.
+    pub request: &'static [&'static str],
+    /// The answer's body, exactly as it comes back.
+    pub response: &'static [&'static str],
 }
 
 const PROSE: &[Section] = &[
@@ -144,6 +160,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/token",
         summary: "ブラウザのセッションを、利用者のトークンに交換します。",
         access: "ブラウザのセッション",
+        fields: &[],
+        example: None,
         notes: &["セッションが無い場合は 401 `invalid_token` です。"],
     },
     // The v2 API, in the order the router registers it.
@@ -152,13 +170,42 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me",
         summary: "呼び出した利用者と、そのDiscordのプロフィールです。",
         access: "利用者のトークン",
-        notes: &[],
+        fields: &[],
+        // `tests/golden/v2_users_me.json`, body and all.
+        example: Some(Example {
+            request: &[
+                "GET /api/v2/users/@me",
+                "Authorization: Bearer <利用者のトークン>",
+                "Accept: application/json",
+            ],
+            response: &[
+                "{",
+                "  \"id\": \"1\",",
+                "  \"discord\": {",
+                "    \"id\": \"100000000000000001\",",
+                "    \"username\": \"tester\",",
+                "    \"discriminator\": \"0001\",",
+                "    \"avatar\": null,",
+                "    \"bot\": false,",
+                "    \"system\": false,",
+                "    \"mfa_enabled\": true,",
+                "    \"premium_type\": 2,",
+                "    \"public_flags\": 0",
+                "  }",
+                "}",
+            ],
+        }),
+        notes: &[
+            "`id` はVirtualCryptoの利用者ID、`discord` はDiscordから読んだプロフィールです。`discord` はDiscordを読めないとき `null` になります。",
+        ],
     },
     Endpoint {
         method: "GET",
         path: "/api/v2/users/@me/balances",
         summary: "呼び出した利用者の残高の一覧です。",
         access: "利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &[],
     },
     Endpoint {
@@ -166,6 +213,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/claims",
         summary: "呼び出した利用者に関係する請求の一覧です。",
         access: "利用者のトークン + `vc.claim`",
+        fields: &[],
+        example: None,
         notes: &[
             "`statuses[]` を省略すると未決定の請求だけを返します。",
             "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
@@ -176,6 +225,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/claims",
         summary: "請求を作ります。",
         access: "利用者のトークン + `vc.claim`",
+        fields: &[],
+        example: None,
         notes: &[
             "`payer_discord_id`・`amount`・`unit` が必須で、`metadata` は任意です。",
             "成功は 201 です。",
@@ -186,6 +237,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/claims/{id}",
         summary: "請求を1件読みます。",
         access: "利用者のトークン + `vc.claim`",
+        fields: &[],
+        example: None,
         notes: &["請求元か請求先でなければ 403 です。"],
     },
     Endpoint {
@@ -193,6 +246,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/claims/{id}",
         summary: "請求の状態を変えるか、メタデータを書き換えます。",
         access: "利用者のトークン + `vc.claim`",
+        fields: &[],
+        example: None,
         notes: &[
             "`status` は `approved` `denied` `canceled` です。",
             "承諾は支払う側、拒否も支払う側、取り消しは請求した側だけが行えます。",
@@ -203,6 +258,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/transactions",
         summary: "通貨を送ります。1件でも、配列でまとめてでも送れます。",
         access: "利用者のトークン + `vc.pay`",
+        fields: &[],
+        example: None,
         notes: &[
             "`unit`・`receiver_discord_id`・`amount` を送ります。",
             "`Idempotency-Key` に対応しています。",
@@ -213,6 +270,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/contracts",
         summary: "呼び出した利用者が対象になっている契約の一覧です。",
         access: "利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &["既定は50件、上限は200件です。続きは `link` ヘッダーが示します。"],
     },
     Endpoint {
@@ -220,6 +279,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts",
         summary: "そのアプリケーションが作った契約の一覧です。",
         access: "アプリケーションのトークン + `vc.contract`",
+        fields: &[],
+        example: None,
         notes: &[
             "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
             "負の `limit` は 400 `invalid_limit` です。",
@@ -230,6 +291,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts",
         summary: "契約を作ります。対象の利用者に承認を求めます。",
         access: "アプリケーションのトークン + `vc.contract`",
+        fields: &[],
+        example: None,
         notes: &[
             "`unit` と `parties`（`discord_id` と `amount` の配列）が必須で、`receiver_discord_id` と `expires_in` は任意です。",
             "成功は 201 です。",
@@ -240,6 +303,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}",
         summary: "契約を1件読みます。",
         access: "アプリケーションのトークン、または対象の利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &["見えない契約は 404 です。"],
     },
     Endpoint {
@@ -247,6 +312,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/balances",
         summary: "契約の対象者が、それぞれいくら持っているかを返します。",
         access: "アプリケーションのトークン + `vc.contract`",
+        fields: &[],
+        example: None,
         notes: &[],
     },
     Endpoint {
@@ -254,6 +321,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/approval",
         summary: "契約を承認し、その分の通貨をロックします。",
         access: "利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &["残高が足りない場合は 409 `not_enough_amount` です。"],
     },
     Endpoint {
@@ -261,6 +330,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/approval",
         summary: "承認を取り消し、ロックした通貨を戻します。",
         access: "利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &["期限のある契約は、その期間が終わるまで取り消せません。"],
     },
     Endpoint {
@@ -268,6 +339,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/refusal",
         summary: "承認する前に、契約を拒否します。",
         access: "利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &[],
     },
     Endpoint {
@@ -275,6 +348,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/payments",
         summary: "ロックされた通貨から支払います。",
         access: "アプリケーションのトークン + `vc.contract`",
+        fields: &[],
+        example: None,
         notes: &[
             "`receiver_discord_id` と `amount` を送ります。成功は 201 です。",
             "`party_discord_id` を送ると、その対象者の分だけから引きます。",
@@ -287,6 +362,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/contracts/{id}/payments",
         summary: "その契約が支払った記録を、新しい順に返します。",
         access: "アプリケーションのトークン、または対象の利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &[
             "1件は台帳の1行で、1回の支払いが複数行になることがあります。",
             "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
@@ -297,6 +374,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/currencies",
         summary: "通貨の情報を返します。",
         access: "認証は要りません",
+        fields: &[],
+        example: None,
         notes: &["`id` `guild` `name` `unit` のうち、ちょうど1つを指定します。"],
     },
     Endpoint {
@@ -304,6 +383,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/currencies/{id}",
         summary: "通貨の情報を、idで返します。",
         access: "認証は要りません",
+        fields: &[],
+        example: None,
         notes: &["`id` はパスのものが優先されます。"],
     },
     Endpoint {
@@ -311,6 +392,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/currencies/issue",
         summary: "サーバーの発行枠から、指定した利用者に発行します。",
         access: "サーバーのトークン + `vc.issue`",
+        fields: &[],
+        example: None,
         notes: &[
             "`receiver_discord_id` と `amount` を送ります。成功は 201 です。",
             "`Idempotency-Key` に対応しています。",
@@ -322,6 +405,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/authorize",
         summary: "同意画面。アプリケーションが求める内容を確かめます。",
         access: "ブラウザのセッション",
+        fields: &[],
+        example: None,
         notes: &[
             "`response_type=code`・`client_id`・`redirect_uri`・`guild_id`・`scope` が必要です。",
             "`scope` に置けるのは `openid` と `vc.issue` だけです。",
@@ -333,6 +418,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/authorize",
         summary: "同意し、認可コードを発行します。",
         access: "ブラウザのセッション",
+        fields: &[],
+        example: None,
         notes: &[
             "`action=approve` が必要です。拒否という操作はありません。",
             "結果は `redirect_uri` へ `code` と `scope` を付けて返ります。",
@@ -343,6 +430,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/token",
         summary: "トークンを発行します。",
         access: "グラントの種類によります",
+        fields: &[],
+        example: None,
         notes: &[
             "`authorization_code` はサーバーのトークン、`client_credentials` はアプリケーションのトークンを返します。",
             "`refresh_token` は新しいサーバーのトークンを返します。リフレッシュトークンは毎回入れ替わるので、返ってきたものを保存してください。",
@@ -354,6 +443,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/token/revoke",
         summary: "トークンを失効させます。",
         access: "トークン自体を送ります",
+        fields: &[],
+        example: None,
         notes: &["知らないトークンでも 200 です。"],
     },
     Endpoint {
@@ -361,6 +452,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/clients",
         summary: "呼び出した利用者が持つアプリケーションの一覧です。",
         access: "利用者のトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &[],
     },
     Endpoint {
@@ -368,6 +461,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/clients",
         summary: "アプリケーションを登録します。",
         access: "利用者のトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &[
             "`redirect_uris` が必須です。",
             "成功は 201 で、`client_id`・`client_secret`・`registration_access_token`・`registration_client_uri` を返します。",
@@ -378,6 +473,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/clients/@me",
         summary: "そのアプリケーション自身の登録内容を読みます。",
         access: "アプリケーションのトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &["登録の応答が返す `registration_client_uri` は、このURLです。"],
     },
     Endpoint {
@@ -385,6 +482,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/clients/@me",
         summary: "そのアプリケーション自身の登録内容を書き換えます。",
         access: "アプリケーションのトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &[
             "送らなかった項目はそのままです。`null` を送ると消えます。",
             "成功は 204 です。",
@@ -395,6 +494,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/clients/@me/grant-requests",
         summary: "そのアプリケーションが送った、発行の申請の一覧です。",
         access: "アプリケーションのトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &[],
     },
     Endpoint {
@@ -402,6 +503,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/clients/@me/grant-requests",
         summary: "サーバーに発行の許可を申請します。",
         access: "アプリケーションのトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &[
             "`guild_id` と `scopes` が必須です。`scopes` に置けるのは `openid` と `vc.issue` だけです。",
             "`expires_in` は既定600秒、最大3600秒です。",
@@ -413,6 +516,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/applications/{id}/connect",
         summary: "アプリケーションにDiscordのBotを結びつけます。",
         access: "利用者のトークン",
+        fields: &[],
+        example: None,
         notes: &[
             "`bot_id` と `guild_id` を送ります。成功は 204 です。",
             "Botのプロフィール（説明）に、アプリケーションの画面に出るトークン（`{site}/applications/verification?q=<client_id>`）が書かれていない場合は 400 `invalid_description` です。",
@@ -423,6 +528,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/applications/{id}/grants",
         summary: "そのアプリケーションが許可されているサーバーの一覧です。",
         access: "利用者のトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &[],
     },
     Endpoint {
@@ -430,6 +537,8 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/applications/{id}/grants/{guild_id}",
         summary: "サーバーに与えた発行の許可を取り消します。",
         access: "利用者のトークン + `oauth2.register`",
+        fields: &[],
+        example: None,
         notes: &["許可が無くても 204 です。"],
     },
 ];

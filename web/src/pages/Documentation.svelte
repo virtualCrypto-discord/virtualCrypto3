@@ -127,6 +127,21 @@
           <p><Spans spans={endpoint.summary} /></p>
           <p class="access"><Spans spans={endpoint.access} /></p>
 
+          {#if endpoint.fields.length > 0}
+            <ul>
+              {#each endpoint.fields as field}
+                <li><Spans spans={field} /></li>
+              {/each}
+            </ul>
+          {/if}
+
+          {#if endpoint.example !== null}
+            <p class="example">リクエスト</p>
+            <Body blocks={[{ kind: "code", lines: endpoint.example.request }]} />
+            <p class="example">応答</p>
+            <Body blocks={[{ kind: "code", lines: endpoint.example.response }]} />
+          {/if}
+
           {#if endpoint.notes.length > 0}
             <ul>
               {#each endpoint.notes as note}

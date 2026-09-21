@@ -63,6 +63,13 @@ export type Endpoint = {
   path: string;
   summary: Span[];
   access: Span[];
+  /** The body's or query's fields, one line each: name, type, required, meaning. */
+  fields: Span[][];
+  /**
+   * One call and the answer it gets, each as the lines of a fence. `null` for an
+   * endpoint whose answer is a redirect rather than a body.
+   */
+  example: { request: string[]; response: string[] } | null;
   notes: Span[][];
 };
 

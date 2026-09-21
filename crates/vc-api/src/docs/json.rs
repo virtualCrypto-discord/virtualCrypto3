@@ -103,6 +103,17 @@ fn endpoint_json(endpoint: &Endpoint, links: &Links) -> Value {
         "path": endpoint.path,
         "summary": spans_json(endpoint.summary, links),
         "access": spans_json(endpoint.access, links),
+        "fields": endpoint
+            .fields
+            .iter()
+            .map(|field| spans_json(field, links))
+            .collect::<Vec<_>>(),
+        // A fence, so the lines travel as they are: a mark in a fence is a mark people
+        // would see.
+        "example": endpoint.example.as_ref().map(|example| json!({
+            "request": example.request,
+            "response": example.response,
+        })),
         "notes": endpoint
             .notes
             .iter()
