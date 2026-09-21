@@ -237,6 +237,86 @@ async fn help_links_a_command_when_discord_knows_its_id(pool: PgPool) {
     );
 }
 
+/// And 「はじめに」, which is the same document the site renders: every command it names that
+/// Discord has an id for is a link there, and the one it does not stays the code it was
+/// written as.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_starting_page_links_the_commands_it_names(pool: PgPool) {
+    let response = interaction(
+        vc_api::router(support::state(
+            pool,
+            support::FakeDiscord::with_commands(&[("create", 11), ("pay", 22), ("bal", 33)]),
+        )),
+        support::button_from_guild(
+            json!({ "custom_id": vc_api::custom_id::ui::help::start() }),
+            12,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains("</create:11> サーバーに通貨を作る"),
+        "the list of what this does: {rendered}"
+    );
+    assert!(
+        rendered.contains("</pay:22> で配る。</bal:33> で自分の残高を確認できます。"),
+        "two commands in one sentence: {rendered}"
+    );
+    assert!(
+        rendered.contains("`/info` で総発行量"),
+        "a command with no id here is left as it was written: {rendered}"
+    );
+}
+
+/// A usage line opens with the command it is for, so that is a mention too — the subcommand's
+/// own id is what `</claim make:id>` is written with, and a subcommand this deployment has no
+/// id for is left as the line it is rather than half-linked to `/claim`.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_usage_line_links_the_command_it_opens_with(pool: PgPool) {
+    let response = interaction(
+        vc_api::router(support::state(
+            pool,
+            support::FakeDiscord::with_command_payloads(vec![json!({
+                "name": "claim",
+                "id": "21",
+                "options": [
+                    { "name": "make", "id": "22", "type": 1 },
+                    { "name": "show", "id": "23", "type": 1 },
+                ],
+            })]),
+        )),
+        execute_from_guild(
+            json!({
+                "name": "help",
+                "options": [{ "name": "command", "type": 3, "value": "claim" }],
+            }),
+            12,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains("</claim make:22> user:<請求先> unit:<通貨の単位> amount:<枚数>"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("</claim show:23> id:<請求番号>"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("/claim list"),
+        "a subcommand with no id is not a mention: {rendered}"
+    );
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn invite(pool: PgPool) {
     let response = interaction(

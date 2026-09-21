@@ -110,6 +110,36 @@ async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
     assert_eq!(get_amount(&pool, sender, currency.id).await, 10000);
 }
 
+/// The message it answers with names two commands, and a name is a link when Discord's ids
+/// are known: the same rule the document's prose follows, because the same person reads both.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_created_message_links_the_commands_it_names(pool: PgPool) {
+    setup_money(&pool).await;
+    let sender = 100_000_000_000_000_101;
+
+    let response = interaction(
+        vc_api::router(state(
+            pool,
+            support::FakeDiscord::with_commands(&[("info", 7), ("delete", 8)]),
+        )),
+        from_guild(json!(10000), "ub", "funyu2", sender),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rendered = response.body["data"].to_string();
+
+    assert!(
+        rendered.contains("</info:7> `unit: ub`コマンドで通貨の情報をご覧ください。"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("72時間以内に</delete:8>コマンドを実行してください。"),
+        "{rendered}"
+    );
+}
+
 /// Elixir calls this case "not admin without v2 flag" and passes the default
 /// permissions, which are every bit set — so what it actually pins is that a
 /// guild other than the seeded ones works. The flag it was named for is the

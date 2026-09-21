@@ -142,16 +142,23 @@ impl FakeDiscord {
     /// The commands Discord would answer with, by name and id — what `</name:id>` is
     /// written from.
     pub fn with_commands(names: &[(&str, u64)]) -> Arc<Self> {
+        Self::with_command_payloads(
+            names
+                .iter()
+                .map(|(name, id)| json!({ "name": name, "id": id.to_string() }))
+                .collect(),
+        )
+    }
+
+    /// The same, in the endpoint's own shape: a subcommand is an option with an id of its own,
+    /// and `</claim make:id>` is written with that id, so a test that reads a subcommand's
+    /// mention has to write one.
+    pub fn with_command_payloads(commands: Vec<Value>) -> Arc<Self> {
         let mut fake = Self::new();
 
-        fake.commands = names
-            .iter()
-            .map(|(name, id)| {
-                json!({ "name": name, "id": id.to_string() })
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default()
-            })
+        fake.commands = commands
+            .into_iter()
+            .filter_map(|command| command.as_object().cloned())
             .collect();
 
         Arc::new(fake)

@@ -175,9 +175,10 @@ async fn connect_bot(
     payload: &Value,
 ) -> Result<Value, CommandError> {
     let Some(guild) = payload.get("guild_id").and_then(Value::as_str) else {
-        return Ok(developer::plain(
+        return Ok(developer::plain(&crate::docs::discord::mentions(
             "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application show` を開き、Bot を選んでください。",
-        ));
+            state.command_ids().await,
+        )));
     };
 
     // Discord sends every id as text and this is the same single parse the route makes. The
@@ -273,7 +274,10 @@ async fn list(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
         }
     }
 
-    Ok(ephemeral(vec![developer::applications(&owned)]))
+    Ok(ephemeral(vec![developer::applications(
+        &owned,
+        state.command_ids().await,
+    )]))
 }
 
 /// A submitted form: `dev:register` or `dev:edit`.

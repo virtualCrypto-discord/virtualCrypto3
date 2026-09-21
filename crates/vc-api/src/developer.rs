@@ -23,6 +23,8 @@
 //! - A list longer than one application is a select, not a row of buttons: a person may
 //!   own several, and Discord caps a select at 25 options anyway.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use vc_core::application::{APPLICATION_TYPES, EVENT_TYPES, GRANT_TYPES, RESPONSE_TYPES};
@@ -40,13 +42,14 @@ const REFUSED: u32 = 0xED4245;
 ///
 /// Takes what `GET /oauth2/clients` answered. An empty list is not an error and says so
 /// with what to do about it, rather than showing an empty menu.
-pub fn applications(applications: &[Value]) -> Value {
+pub fn applications(applications: &[Value], ids: &BTreeMap<String, u64>) -> Value {
     if applications.is_empty() {
         return container(
             Some(WORKING),
-            vec![text(
+            vec![text(crate::docs::discord::mentions(
                 "まだアプリケーションを登録していません。`/application register` で登録できます。",
-            )],
+                ids,
+            ))],
         );
     }
 
@@ -481,7 +484,7 @@ mod tests {
             "client_name": "テスト",
         })];
 
-        let screen = applications(&owned);
+        let screen = applications(&owned, &BTreeMap::new());
         let menu = screen["components"]
             .as_array()
             .expect("components")
@@ -500,11 +503,24 @@ mod tests {
     /// do, which is the only useful thing an empty screen can say.
     #[test]
     fn an_empty_list_teaches_the_space() {
-        let screen = applications(&[]);
+        let screen = applications(&[], &BTreeMap::new());
 
         // The command, not a button: a screen's buttons move or choose, and this screen has
         // nowhere to move to, so what it teaches is the command's name.
         assert!(first_text(&screen).contains("/application register"));
+    }
+
+    /// And the command it teaches is a link when Discord's ids are known, which is the rule
+    /// every piece of this service's Discord prose follows.
+    #[test]
+    fn an_empty_list_links_the_command_it_teaches() {
+        let ids = BTreeMap::from([("application register".to_owned(), 9)]);
+        let screen = applications(&[], &ids);
+
+        assert!(
+            first_text(&screen).contains("</application register:9> で登録できます。"),
+            "{screen}"
+        );
     }
 
     /// Every button that does something carries an id the dispatcher will recognise, and
@@ -536,7 +552,7 @@ mod tests {
         let mut found = Vec::new();
 
         for screen in [
-            applications(&[]),
+            applications(&[], &BTreeMap::new()),
             application(
                 "id",
                 None,
@@ -584,7 +600,7 @@ mod tests {
     #[test]
     fn no_screen_carries_content_or_embeds_at_the_top() {
         for screen in [
-            applications(&[]),
+            applications(&[], &BTreeMap::new()),
             application(
                 "id",
                 None,

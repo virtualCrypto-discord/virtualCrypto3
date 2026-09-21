@@ -101,6 +101,9 @@ impl AppState {
     /// a call per help. A deployment that cannot answer — no bot token, no network — gets
     /// an empty map, which is not a failure: the screens then name a command without
     /// linking it.
+    ///
+    /// A subcommand has an id of its own, which is what `</claim make:id>` is written with,
+    /// so its key is the path: `claim make`.
     pub async fn command_ids(&self) -> &std::collections::BTreeMap<String, u64> {
         self.command_ids
             .get_or_init(|| async {
@@ -108,15 +111,13 @@ impl AppState {
                     return std::collections::BTreeMap::new();
                 };
 
-                commands
-                    .iter()
-                    .filter_map(|command| {
-                        let name = command.get("name")?.as_str()?.to_owned();
-                        let id = command.get("id")?.as_str()?.parse().ok()?;
+                let mut ids = std::collections::BTreeMap::new();
 
-                        Some((name, id))
-                    })
-                    .collect()
+                for command in &commands {
+                    command_ids(command, "", &mut ids);
+                }
+
+                ids
             })
             .await
     }
@@ -190,5 +191,53 @@ impl AuthState for AppState {
 
     fn jwt_secret(&self) -> &[u8] {
         &self.signing.jwt
+    }
+}
+
+/// One command of the registration payload, and every subcommand under it, keyed by the path
+/// a mention is written with.
+///
+/// Discord gives each subcommand an id of its own, and an id it did not give — a command whose
+/// payload has none yet, which is a registration that has not happened — is one no mention can
+/// name, so it is left out rather than filed as zero.
+fn command_ids(
+    command: &serde_json::Map<String, serde_json::Value>,
+    prefix: &str,
+    into: &mut std::collections::BTreeMap<String, u64>,
+) {
+    let Some(name) = command.get("name").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+
+    let path = if prefix.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{prefix} {name}")
+    };
+
+    let id = command
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|id| id.parse().ok());
+
+    if let Some(id) = id {
+        into.insert(path.clone(), id);
+    }
+
+    // 1 is a subcommand and 2 a group of them; both take a place in the path, which is why
+    // the walk does not care which it found.
+    for option in command
+        .get("options")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if matches!(
+            option.get("type").and_then(serde_json::Value::as_i64),
+            Some(1 | 2)
+        ) && let Some(option) = option.as_object()
+        {
+            command_ids(option, &path, into);
+        }
     }
 }

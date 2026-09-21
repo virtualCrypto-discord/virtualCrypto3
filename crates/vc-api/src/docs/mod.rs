@@ -32,6 +32,16 @@
 //! escape. Anything that is not one of the three is literal text, which is what
 //! keeps `usage` lines like `/pay amount:<枚数>` readable in both.
 //!
+//! One of those three marks reads differently on each screen, and that is the
+//! point of having both: a code span that names a command —— `` `/claim make` ``,
+//! or `` `/pay unit:<枚数>` `` with the arguments somebody would type —— is a link
+//! on Discord, because [`discord`] writes it as Discord's own command mention and
+//! Discord makes that pressable. [`json`] renders the span as the code it was
+//! written as, which is what the site can do with it: a page there is read, and a
+//! command is typed somewhere else.
+//!
+//! # The placeholders
+//!
 //! Addresses are written as `{site}`, `{invite}` and `{support}` and filled in
 //! by [`resolve`] from [`Links`], because the deployment's URLs are not
 //! compile-time constants: a test deployment and the real one are the same

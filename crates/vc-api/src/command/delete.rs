@@ -93,9 +93,10 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
             ));
         }
         DeleteResult::ConfirmationFailed => {
-            return Ok(render_error(
+            return Ok(render_error(&crate::docs::discord::mentions(
                 "エラー: 確認に失敗しました。再度`/delete`コマンドを実行してください。",
-            ));
+                state.command_ids().await,
+            )));
         }
     }
 

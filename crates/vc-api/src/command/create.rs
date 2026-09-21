@@ -87,7 +87,7 @@ pub async fn handle(
     }
 
     match currency::create(state.pool(), guild_id, &name, &unit, user_id, amount).await {
-        Ok(()) => Ok(render_ok(options)),
+        Ok(()) => Ok(render_ok(state, options).await),
         Err(CreateError::Guild) => Ok(render_error(Reason::Guild, options)),
         Err(CreateError::Unit) => Ok(render_error(Reason::Unit, options)),
         Err(CreateError::Name) => Ok(render_error(Reason::Name, options)),
@@ -97,16 +97,21 @@ pub async fn handle(
 }
 
 /// `Interactions.Create.render/3` for `{:ok, :ok, options}`.
-fn render_ok(options: &Map<String, Value>) -> Value {
+async fn render_ok(state: &AppState, options: &Map<String, Value>) -> Value {
+    let done = format!(
+        "\u{2705} 通貨の作成に成功しました！ `/info unit: {}`コマンドで通貨の情報をご覧ください。\n\
+         削除したい場合は、72時間以内に`/delete`コマンドを実行してください。",
+        option_display(options, "unit"),
+    );
+
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             // The accent the embed carried.
             Some(COLOR_OK as u32),
-            vec![crate::components::text(format!(
-                "\u{2705} 通貨の作成に成功しました！ `/info unit: {}`コマンドで通貨の情報をご覧ください。\n\
-                 削除したい場合は、72時間以内に`/delete`コマンドを実行してください。",
-                option_display(options, "unit"),
+            vec![crate::components::text(crate::docs::discord::mentions(
+                &done,
+                state.command_ids().await,
             ))],
         )]),
     })

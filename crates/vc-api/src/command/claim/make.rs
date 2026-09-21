@@ -38,7 +38,7 @@ pub async fn handle(
     )
     .await
     {
-        Ok(claim_id) => Ok(render(claim_id)),
+        Ok(claim_id) => Ok(render(state, claim_id).await),
         Err(CreateError::NotFoundCurrency) => Ok(render_error("指定された通貨は存在しません。")),
         Err(CreateError::InvalidAmount) => Ok(render_error(
             "不正な金額です。1以上9223372036854775807以下である必要があります。",
@@ -48,14 +48,19 @@ pub async fn handle(
 }
 
 /// `Interactions.Claim.render/1` for `{:ok, "make", claim}`.
-fn render(claim_id: i64) -> Value {
+async fn render(state: &AppState, claim_id: i64) -> Value {
+    let advice = format!(
+        "請求id: {claim_id} で請求を受け付けました。`/claim show id:{claim_id}`でご確認ください。"
+    );
+
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             // The accent the embed carried.
             Some(COLOR_OK as u32),
-            vec![crate::components::text(format!(
-                "請求id: {claim_id} で請求を受け付けました。`/claim show id:{claim_id}`でご確認ください。"
+            vec![crate::components::text(crate::docs::discord::mentions(
+                &advice,
+                state.command_ids().await,
             ))],
         )]),
     })

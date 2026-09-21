@@ -57,8 +57,121 @@ pub fn index(links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
 /// them says 「/name」 exactly as it always did.
 fn named(name: &str, ids: &BTreeMap<String, u64>) -> String {
     match ids.get(name) {
-        Some(id) => format!("</{name}:{id}>"),
+        Some(id) => mention(name, *id),
         None => format!("**/{name}**"),
+    }
+}
+
+/// A command mention: Discord writes a command somebody can press as its name and its id
+/// between angle brackets, and renders it as the name.
+fn mention(name: &str, id: u64) -> String {
+    format!("</{name}:{id}>")
+}
+
+/// The command a piece of prose opens with, the id it is filed under, and what follows it —
+/// the space between them included.
+///
+/// A command may be followed by one subcommand, which is the longest path Discord has an id
+/// for: `/claim make`, and never `/claim make user:<送信先>`, whose arguments are what the
+/// person reads rather than what they press.
+///
+/// What tells a subcommand from the first argument is the command itself: one that has
+/// subcommands is followed by one — so `/claim show`, of an application whose registry has no
+/// `/claim show`, is left unlinked rather than half-linked to `/claim`, which would send the
+/// person somewhere else — and one that has none, like `/pay`, is followed by its arguments.
+fn command_head<'a>(text: &'a str, ids: &BTreeMap<String, u64>) -> Option<(String, u64, &'a str)> {
+    let rest = text.strip_prefix('/')?;
+    let (first, after) = split_word(rest);
+
+    if let Some(word) = after.strip_prefix(' ') {
+        let (second, after_second) = split_word(word);
+
+        if let Some(id) = ids.get(&format!("{first} {second}")) {
+            return Some((format!("{first} {second}"), *id, after_second));
+        }
+
+        if subcommands_of(first, ids) {
+            return None;
+        }
+    }
+
+    Some((first.to_owned(), *ids.get(first)?, after))
+}
+
+/// Whether a command has subcommands, which is what tells the word after it apart from the
+/// first of its arguments.
+fn subcommands_of(command: &str, ids: &BTreeMap<String, u64>) -> bool {
+    let prefix = format!("{command} ");
+
+    ids.keys().any(|key| key.starts_with(&prefix))
+}
+
+/// A word and what follows it.
+fn split_word(text: &str) -> (&str, &str) {
+    match text.find(' ') {
+        Some(at) => (&text[..at], &text[at..]),
+        None => (text, ""),
+    }
+}
+
+/// Prose with the commands in it as mentions.
+///
+/// A command is written the only way a screen that cannot link one can write it — in a code
+/// span, `` `/pay` `` — which is what the site renders and what Discord's own picker shows.
+/// Discord *can* link one, so a span that opens with a registered command becomes that
+/// command's mention: `</pay:123>`, and for an example that carries its arguments,
+/// `</pay:123> \`unit:<枚数>\`` — the command is what is pressable, and what followed it keeps
+/// the code it was written in.
+///
+/// A span naming nothing this application has is left exactly as it was written, code and all,
+/// which is what a deployment that cannot read the ids gets for every span: the screens then
+/// read as they always did rather than as something half-linked. So is a backtick without its
+/// pair, and the rest of the text after it.
+///
+/// Public because the document is not the only Discord text that names a command: a handler's
+/// own sentence — 「`/info` で確認できます」 — is read by the same person and reads the same way.
+pub fn mentions(text: &str, ids: &BTreeMap<String, u64>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+
+        // An unpaired backtick is literal text: nothing after it is a span, so the walk ends
+        // here and the remainder is appended as it stands.
+        let Some(close) = after.find('`') else {
+            break;
+        };
+
+        out.push_str(&rest[..open]);
+        out.push_str(&linked_span(&after[..close], ids));
+
+        rest = &after[close + 1..];
+    }
+
+    out.push_str(rest);
+
+    out
+}
+
+/// One code span, with the command it opens with as a mention.
+fn linked_span(span: &str, ids: &BTreeMap<String, u64>) -> String {
+    match command_head(span, ids) {
+        None => format!("`{span}`"),
+        Some((name, id, rest)) if rest.trim_start().is_empty() => mention(&name, id),
+        Some((name, id, rest)) => format!("{} `{}`", mention(&name, id), rest.trim_start()),
+    }
+}
+
+/// One line of a fence — what somebody types — with the command it opens with as a mention.
+///
+/// A fence line's first word is the command by construction, so the mention replaces that word
+/// and the line keeps everything else, spaces and all: a usage line is read, and its form is
+/// what says which arguments go where.
+fn linked_line(line: &str, ids: &BTreeMap<String, u64>) -> String {
+    match command_head(line, ids) {
+        Some((name, id, rest)) => format!("{}{rest}", mention(&name, id)),
+        None => line.to_owned(),
     }
 }
 
@@ -67,11 +180,11 @@ fn named(name: &str, ids: &BTreeMap<String, u64>) -> String {
 ///
 /// The same blocks the site shows, rendered from the same document — the point of one document
 /// with three renderings is that this is not prose written twice.
-pub fn page(page: &Page, links: &Links) -> Vec<Value> {
+pub fn page(page: &Page, links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
     let mut children = vec![greeting(&format!("**{}**", page.title), page.summary)];
 
     for section in page.sections {
-        children.push(text(section_text(section, links)));
+        children.push(text(section_text(section, links, ids)));
     }
 
     children.push(action_row(vec![
@@ -95,10 +208,7 @@ pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) ->
     let mut children = vec![greeting(&named(&showing.name, ids), &showing.description)];
 
     if !showing.usage.is_empty() {
-        children.push(text(format!(
-            "## 使い方\n\n```\n{}\n```",
-            showing.usage.join("\n")
-        )));
+        children.push(text(format!("## 使い方\n\n{}", fence(showing.usage, ids))));
     }
 
     if !showing.options.is_empty() {
@@ -106,7 +216,7 @@ pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) ->
     }
 
     for section in showing.sections {
-        children.push(text(section_text(section, links)));
+        children.push(text(section_text(section, links, ids)));
     }
 
     children.push(menu());
@@ -208,11 +318,11 @@ fn option_lines(options: &[OptionLine], depth: usize) -> Vec<String> {
 
 /// A section as one Text Display: a heading, then its blocks with a blank line
 /// between them — which is how markdown says "a new paragraph".
-fn section_text(section: &Section, links: &Links) -> String {
+fn section_text(section: &Section, links: &Links, ids: &BTreeMap<String, u64>) -> String {
     let body = section
         .blocks
         .iter()
-        .map(|block| block_text(block, links))
+        .map(|block| block_text(block, links, ids))
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -222,18 +332,29 @@ fn section_text(section: &Section, links: &Links) -> String {
     }
 }
 
-fn block_text(block: &Block, links: &Links) -> String {
+fn block_text(block: &Block, links: &Links, ids: &BTreeMap<String, u64>) -> String {
     match block {
-        Block::Text(text) => resolve(text, links),
+        Block::Text(text) => mentions(&resolve(text, links), ids),
         // Discord reads a list out of the lines itself, so the marker is all
         // this has to write.
         Block::List(items) => items
             .iter()
-            .map(|item| format!("- {}", resolve(item, links)))
+            .map(|item| format!("- {}", mentions(&resolve(item, links), ids)))
             .collect::<Vec<_>>()
             .join("\n"),
-        Block::Code(lines) => format!("```\n{}\n```", lines.join("\n")),
+        Block::Code(lines) => fence(lines, ids),
     }
+}
+
+/// A fence: the lines as they were written, each one's command a mention.
+fn fence(lines: &[&str], ids: &BTreeMap<String, u64>) -> String {
+    let body = lines
+        .iter()
+        .map(|line| linked_line(line, ids))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("```\n{body}\n```")
 }
 
 #[cfg(test)]
@@ -295,6 +416,9 @@ mod tests {
 
     /// The three blocks, as Discord reads them: a fence keeps its newlines, a
     /// list keeps its markers, and the addresses are the deployment's.
+    ///
+    /// No ids, so no mention: everything is exactly as it was written, which is what a
+    /// deployment that cannot read the application's commands answers with.
     #[test]
     fn the_blocks_become_markdown() {
         const BLOCKS: &[Block] = &[
@@ -303,19 +427,14 @@ mod tests {
             Block::List(&["ひとつ", "ふたつ"]),
         ];
 
-        let links = crate::state::Links {
-            site_url: "https://example.test".to_owned(),
-            invite_url: "https://example.test/invite".to_owned(),
-            support_guild_invite_url: "https://example.test/support".to_owned(),
-        };
-
         assert_eq!(
             section_text(
                 &Section {
                     heading: Some("例"),
                     blocks: BLOCKS,
                 },
-                &links
+                &links(),
+                &BTreeMap::new()
             ),
             "## 例\n\
              \n\
@@ -325,5 +444,120 @@ mod tests {
              \n\
              - ひとつ\n- ふたつ"
         );
+    }
+
+    fn links() -> crate::state::Links {
+        crate::state::Links {
+            site_url: "https://example.test".to_owned(),
+            invite_url: "https://example.test/invite".to_owned(),
+            support_guild_invite_url: "https://example.test/support".to_owned(),
+        }
+    }
+
+    /// What Discord answers for this application's commands: two of them, and one
+    /// subcommand — which is what a mention of a subcommand is written with.
+    fn ids() -> BTreeMap<String, u64> {
+        BTreeMap::from([
+            ("pay".to_owned(), 1),
+            ("claim".to_owned(), 2),
+            ("claim make".to_owned(), 3),
+        ])
+    }
+
+    /// A span that names a command is that command's mention, and one that names anything
+    /// else is left as the code it was written as: an address, a command this application
+    /// does not have, a subcommand it was not given an id for.
+    #[test]
+    fn a_command_in_prose_is_a_mention() {
+        let ids = ids();
+
+        assert_eq!(
+            mentions("`/pay` で送ります。", &ids),
+            "</pay:1> で送ります。"
+        );
+        assert_eq!(
+            mentions("既にある通貨を `/info` で確認してください。", &ids),
+            "既にある通貨を `/info` で確認してください。",
+            "this application has no `/info` in the map"
+        );
+        assert_eq!(
+            mentions(
+                "`/api/v2/currencies` と `/document/commands` はそのまま。",
+                &ids
+            ),
+            "`/api/v2/currencies` と `/document/commands` はそのまま。",
+            "a span that is not a command is code"
+        );
+        assert_eq!(
+            mentions("`/claim show` は1件を表示します。", &ids),
+            "`/claim show` は1件を表示します。",
+            "a subcommand with no id of its own cannot be named by a mention"
+        );
+        assert_eq!(
+            mentions("真ん中に `/pay` がある文。", &ids),
+            "真ん中に </pay:1> がある文。",
+            "and it need not open the text"
+        );
+        assert_eq!(
+            mentions("**`/pay` で作る**", &ids),
+            "**</pay:1> で作る**",
+            "the mark around it is left alone"
+        );
+    }
+
+    /// The arguments of an example are what the person reads rather than what they press, so
+    /// only the command becomes a link — and what follows it keeps its code span.
+    #[test]
+    fn an_example_keeps_its_arguments_as_code() {
+        let ids = ids();
+
+        assert_eq!(
+            mentions(
+                "`/pay unit:<枚数> user:<送信先>` のように入力します。",
+                &ids
+            ),
+            "</pay:1> `unit:<枚数> user:<送信先>` のように入力します。"
+        );
+        assert_eq!(
+            mentions("`/claim make` で請求を作ります。", &ids),
+            "</claim make:3> で請求を作ります。",
+            "a subcommand is a mention of its own"
+        );
+        assert_eq!(
+            mentions("`/claim make user:<請求先>` と入力します。", &ids),
+            "</claim make:3> `user:<請求先>` と入力します。",
+            "the command is as long as its path, and no longer"
+        );
+    }
+
+    /// A backtick with no pair is text, and so is everything after it: there is no span to
+    /// read a command out of, and inventing one would swallow the sentence.
+    #[test]
+    fn an_unpaired_backtick_ends_the_walk() {
+        assert_eq!(
+            mentions("`/pay` のあとに ` ひとつ。", &ids()),
+            "</pay:1> のあとに ` ひとつ。"
+        );
+    }
+
+    /// A fence line opens with the command being typed, so that is what becomes the mention:
+    /// the line keeps its arguments, and their places, exactly.
+    #[test]
+    fn a_fence_links_the_command_it_opens_with() {
+        assert_eq!(
+            fence(
+                &[
+                    "/claim make user:<請求先> unit:<単位> amount:<枚数>",
+                    "/claim show id:<請求番号>",
+                ],
+                &ids()
+            ),
+            "```\n\
+             </claim make:3> user:<請求先> unit:<単位> amount:<枚数>\n\
+             /claim show id:<請求番号>\n\
+             ```",
+            "a subcommand with no id is left as the line it was"
+        );
+        assert_eq!(fence(&["/bal"], &ids()), "```\n/bal\n```");
     }
 }

@@ -184,10 +184,11 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
     let mut children = Vec::new();
 
     if authorized.total == 0 {
-        children.push(text(
+        children.push(text(crate::docs::discord::mentions(
             "発行を許可しているアプリケーションはありません。申請が来たときは、\
              アプリケーションが表示するコードを `/grant approve code:` に入れて承認します。",
-        ));
+            state.command_ids().await,
+        )));
     } else {
         children.push(text(format!(
             "**発行を許可しているアプリケーション** ({}件)\n\
