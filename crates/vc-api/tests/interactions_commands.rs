@@ -272,11 +272,11 @@ async fn the_starting_page_links_the_commands_it_names(pool: PgPool) {
     );
 }
 
-/// A usage line opens with the command it is for, so that is a mention too — the subcommand's
-/// own id is what `</claim make:id>` is written with, and a subcommand this deployment has no
-/// id for is left as the line it is rather than half-linked to `/claim`.
+/// A usage line is inside a fence — what somebody types — and Discord does not resolve a
+/// mention there: it shows the raw `</claim make:22>` rather than `/claim make`. So the line
+/// stays exactly as it was written, whether or not this deployment has an id for it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_usage_line_links_the_command_it_opens_with(pool: PgPool) {
+async fn a_usage_line_stays_as_it_was_written(pool: PgPool) {
     let response = interaction(
         vc_api::router(support::state(
             pool,
@@ -304,17 +304,185 @@ async fn a_usage_line_links_the_command_it_opens_with(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(
-        rendered.contains("</claim make:22> user:<請求先> unit:<通貨の単位> amount:<枚数>"),
-        "{rendered}"
+        rendered.contains("/claim make user:<請求先> unit:<通貨の単位> amount:<枚数>"),
+        "the usage line, as it was written: {rendered}"
     );
+    assert!(rendered.contains("/claim show id:<請求番号>"), "{rendered}");
+
+    let (in_code, _) = code_mentions(&response.body["data"]);
+
     assert!(
-        rendered.contains("</claim show:23> id:<請求番号>"),
-        "{rendered}"
+        in_code.is_empty(),
+        "an id for the subcommand does not put a mention in its usage fence: {in_code:?}"
     );
+}
+
+/// Nothing puts a mention inside a code block or an inline code span, anywhere in a screen.
+///
+/// A mention is a link in prose and raw markup in code — Discord does not resolve one inside a
+/// fence or an inline span, so the person reads `</pat:1551719234256637972>` instead of `/pat`.
+/// Every command's own screen is rendered here, with an id for every command and every
+/// subcommand, which is the state that makes a mention possible at all, and the code is read
+/// back out of each answer rather than off the source: a fence that ate a mention is a fence
+/// this sees.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn no_command_puts_a_mention_in_a_code_block(pool: PgPool) {
+    let discord = support::FakeDiscord::with_command_payloads(commands_with_ids());
+
+    // The list first: it is the same walk over the same text, and it is where a person starts.
+    let menu = interaction(
+        vc_api::router(support::state(pool.clone(), discord.clone())),
+        execute_from_guild(json!({ "name": "help" }), 12),
+    )
+    .await;
+
+    assert_eq!(menu.status, 200, "body: {}", menu.body);
+
+    let (in_code, _) = code_mentions(&menu.body["data"]);
+
+    assert!(in_code.is_empty(), "the command list: {in_code:?}");
+
+    let mut mentions_in_prose = 0;
+
+    for showing in vc_api::docs::showings() {
+        let response = interaction(
+            vc_api::router(support::state(pool.clone(), discord.clone())),
+            execute_from_guild(
+                json!({
+                    "name": "help",
+                    "options": [{ "name": "command", "type": 3, "value": showing.name }],
+                }),
+                12,
+            ),
+        )
+        .await;
+
+        assert_eq!(response.status, 200, "body: {}", response.body);
+
+        // The usage fence holds what was written, not what a mention would replace it with.
+        let usage = showing.usage[0];
+
+        assert!(
+            response.body["data"].to_string().contains(usage),
+            "the usage fence of {} does not hold {usage:?}: {}",
+            showing.name,
+            response.body["data"]
+        );
+
+        let (in_code, in_prose) = code_mentions(&response.body["data"]);
+
+        assert!(
+            in_code.is_empty(),
+            "a mention is raw markup in a code block of {}: {in_code:?}",
+            showing.name
+        );
+
+        mentions_in_prose += in_prose;
+    }
+
+    // The ids above are known, so the prose does name commands by mention. Without this the
+    // check above would pass on a screen that never had a mention to put anywhere.
     assert!(
-        rendered.contains("/claim list"),
-        "a subcommand with no id is not a mention: {rendered}"
+        mentions_in_prose > 0,
+        "the prose holds no mention, so nothing here proved anything"
     );
+}
+
+/// Every registered command with an id, and an id for each of its subcommands — what Discord
+/// answers `get_application_commands` with once the commands are registered.
+fn commands_with_ids() -> Vec<Value> {
+    vc_api::discord_commands::commands()
+        .iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let base = 1_000_000_000 + index as u64 * 100;
+
+            let subcommands: Vec<Value> = command["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                // 1 is a subcommand and 2 a group of them; both take a place in the path.
+                .filter(|option| option["type"] == 1 || option["type"] == 2)
+                .enumerate()
+                .map(|(sub, option)| {
+                    json!({
+                        "name": option["name"].clone(),
+                        "id": (base + sub as u64 + 1).to_string(),
+                        "type": 1,
+                    })
+                })
+                .collect();
+
+            let mut payload = json!({
+                "name": command["name"].clone(),
+                "id": base.to_string(),
+            });
+
+            if !subcommands.is_empty() {
+                payload["options"] = Value::Array(subcommands);
+            }
+
+            payload
+        })
+        .collect()
+}
+
+/// Every string a rendered answer carries.
+fn strings(value: &Value, into: &mut Vec<String>) {
+    match value {
+        Value::String(text) => into.push(text.clone()),
+        Value::Object(map) => map.values().for_each(|nested| strings(nested, into)),
+        Value::Array(items) => items.iter().for_each(|nested| strings(nested, into)),
+        _ => {}
+    }
+}
+
+/// One rendered string taken apart the way Discord reads it: the prose it renders, and the code
+/// it does not — a fence is what a pair of ``` holds, and an inline span what a pair of ` holds.
+fn prose_and_code(text: &str) -> (Vec<&str>, Vec<&str>) {
+    let mut prose = Vec::new();
+    let mut code = Vec::new();
+
+    for (at, block) in text.split("```").enumerate() {
+        if at % 2 == 1 {
+            code.push(block);
+            continue;
+        }
+
+        for (at, span) in block.split('`').enumerate() {
+            if at % 2 == 1 {
+                code.push(span);
+            } else {
+                prose.push(span);
+            }
+        }
+    }
+
+    (prose, code)
+}
+
+/// The code pieces of a rendered answer that hold a command mention — which is none of them —
+/// and how many mentions the prose around that code holds.
+fn code_mentions(data: &Value) -> (Vec<String>, usize) {
+    let mut rendered = Vec::new();
+    strings(data, &mut rendered);
+
+    let mut in_code = Vec::new();
+    let mut in_prose = 0;
+
+    for text in &rendered {
+        let (prose, code) = prose_and_code(text);
+
+        for piece in code {
+            if piece.contains("</") {
+                in_code.push(piece.to_owned());
+            }
+        }
+
+        in_prose += prose.iter().filter(|piece| piece.contains("</")).count();
+    }
+
+    (in_code, in_prose)
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

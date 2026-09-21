@@ -163,18 +163,6 @@ fn linked_span(span: &str, ids: &BTreeMap<String, u64>) -> String {
     }
 }
 
-/// One line of a fence — what somebody types — with the command it opens with as a mention.
-///
-/// A fence line's first word is the command by construction, so the mention replaces that word
-/// and the line keeps everything else, spaces and all: a usage line is read, and its form is
-/// what says which arguments go where.
-fn linked_line(line: &str, ids: &BTreeMap<String, u64>) -> String {
-    match command_head(line, ids) {
-        Some((name, id, rest)) => format!("{}{rest}", mention(&name, id)),
-        None => line.to_owned(),
-    }
-}
-
 /// A page of the site, in Discord: its title, then its sections as the command screens render
 /// theirs.
 ///
@@ -208,7 +196,7 @@ pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) ->
     let mut children = vec![greeting(&named(&showing.name, ids), &showing.description)];
 
     if !showing.usage.is_empty() {
-        children.push(text(format!("## 使い方\n\n{}", fence(showing.usage, ids))));
+        children.push(text(format!("## 使い方\n\n{}", fence(showing.usage))));
     }
 
     if !showing.options.is_empty() {
@@ -342,19 +330,18 @@ fn block_text(block: &Block, links: &Links, ids: &BTreeMap<String, u64>) -> Stri
             .map(|item| format!("- {}", mentions(&resolve(item, links), ids)))
             .collect::<Vec<_>>()
             .join("\n"),
-        Block::Code(lines) => fence(lines, ids),
+        Block::Code(lines) => fence(lines),
     }
 }
 
-/// A fence: the lines as they were written, each one's command a mention.
-fn fence(lines: &[&str], ids: &BTreeMap<String, u64>) -> String {
-    let body = lines
-        .iter()
-        .map(|line| linked_line(line, ids))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!("```\n{body}\n```")
+/// A fence: the lines exactly as they were written, command and all.
+///
+/// Discord does not resolve a mention inside a code block — it shows the raw
+/// `</pat:1551719234256637972>` rather than `/pat` — so a fence, which is what somebody types,
+/// keeps the plain `/name` a mention would have swallowed. [`mentions`] is where a mention
+/// belongs: prose is the only place Discord makes one pressable, and a fence is not prose.
+fn fence(lines: &[&str]) -> String {
+    format!("```\n{}\n```", lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -540,24 +527,24 @@ mod tests {
         );
     }
 
-    /// A fence line opens with the command being typed, so that is what becomes the mention:
-    /// the line keeps its arguments, and their places, exactly.
+    /// A fence is what somebody types, so every line stays exactly as it was written — a mention
+    /// goes in prose, because Discord does not resolve one inside a code block and would show
+    /// the raw `</claim make:3>`. The ids are in hand and unused: a fence has no place for one.
     #[test]
-    fn a_fence_links_the_command_it_opens_with() {
+    fn a_fence_keeps_the_command_as_it_was_written() {
+        assert!(ids().contains_key("claim make"), "an id to put somewhere");
+
         assert_eq!(
-            fence(
-                &[
-                    "/claim make user:<請求先> unit:<単位> amount:<枚数>",
-                    "/claim show id:<請求番号>",
-                ],
-                &ids()
-            ),
+            fence(&[
+                "/claim make user:<請求先> unit:<単位> amount:<枚数>",
+                "/claim show id:<請求番号>",
+            ]),
             "```\n\
-             </claim make:3> user:<請求先> unit:<単位> amount:<枚数>\n\
+             /claim make user:<請求先> unit:<単位> amount:<枚数>\n\
              /claim show id:<請求番号>\n\
              ```",
-            "a subcommand with no id is left as the line it was"
+            "an id for the subcommand is not enough to put a mention in a fence"
         );
-        assert_eq!(fence(&["/bal"], &ids()), "```\n/bal\n```");
+        assert_eq!(fence(&["/bal"]), "```\n/bal\n```");
     }
 }
