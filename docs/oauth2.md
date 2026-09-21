@@ -591,7 +591,7 @@ between an empty list and no list, and the reason the Elixir asks
 
 **The webhook is verified only when `webhook_url` is in the request.** The
 handshake is the same one registration performs, and it is skipped for an edit
-that does not name a webhook — which is what makes it possible to change a client
+that does not name a webhook or supplies the URL already stored — which is what makes it possible to change a client
 name on an application whose webhook has since gone silent, rather than being
 unable to edit it at all.
 

@@ -1005,23 +1005,27 @@ pub async fn apply(
             return Err(Box::new(internal("the application has no webhook data")));
         };
 
-        let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
-            return Err(Box::new(internal(
-                "the application's private key is not 32 bytes",
-            )));
-        };
+        // The Elixir validator accepts the stored URL without another handshake.
+        // An unchanged URL also leaves the verification budget untouched.
+        if webhook.webhook_url.as_deref() != Some(webhook_url.as_str()) {
+            let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {
+                return Err(Box::new(internal(
+                    "the application's private key is not 32 bytes",
+                )));
+            };
 
-        // The handshake is the expensive thing here, and this is what stops one
-        // requester spending all of it.
-        if let Some(too_soon) = state.handshake_limiter().refuse(key) {
-            return Err(Box::new(rate_limited(too_soon)));
-        }
+            // The handshake is the expensive thing here, and this is what stops one
+            // requester spending all of it.
+            if let Some(too_soon) = state.handshake_limiter().refuse(key) {
+                return Err(Box::new(rate_limited(too_soon)));
+            }
 
-        let (handshake, through_proxy) =
-            crate::notification::check_webhook(state, webhook_url, &private_key).await;
+            let (handshake, through_proxy) =
+                crate::notification::check_webhook(state, webhook_url, &private_key).await;
 
-        if handshake != Handshake::Passed {
-            return Err(unverified(handshake, through_proxy));
+            if handshake != Handshake::Passed {
+                return Err(unverified(handshake, through_proxy));
+            }
         }
     }
 

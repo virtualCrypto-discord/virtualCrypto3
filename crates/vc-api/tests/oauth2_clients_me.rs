@@ -405,3 +405,64 @@ async fn the_shape_says_when_the_webhook_was_last_checked(pool: PgPool) {
     );
     assert_eq!(response.body["webhook_failed_at"], "2026-09-02T12:00:00Z");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn unchanged_webhook_does_not_block_name_edit(pool: PgPool) {
+    let (application, account) = insert_application(&pool, OWNER_DISCORD_ID, "before").await;
+    let hook = refusing_hook().await;
+    sqlx::query("UPDATE applications SET webhook_url = $1, private_key = $2 WHERE id = $3")
+        .bind(&hook)
+        .bind(vec![1u8; 32])
+        .bind(application)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let token = mint_app(&pool, account, &["oauth2.register"]).await;
+    let request = axum::http::Request::builder()
+        .method("PATCH")
+        .uri(URI)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({
+                "client_name": "after", "webhook_url": hook
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let app_state = state(pool.clone(), fake());
+    let response = vc_api::router(app_state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(status.as_u16(), 204, "{}", String::from_utf8_lossy(&bytes));
+    let name: Option<String> =
+        sqlx::query_scalar("SELECT client_name FROM applications WHERE id = $1")
+            .bind(application)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(name.as_deref(), Some("after"));
+    assert!(
+        app_state
+            .handshake_limiter()
+            .refuse(&account.to_string())
+            .is_none(),
+        "an unchanged URL must not consume the handshake budget"
+    );
+    vc_api::routes::oauth2_clients::apply(
+        &app_state,
+        application,
+        &account.to_string(),
+        &vc_core::application::Changes {
+            webhook_url: Some(Some(hook)),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("an unchanged URL must bypass an exhausted handshake budget");
+}
