@@ -1,9 +1,7 @@
 //! The `delete` command, ported from
 //! `test/virtualCrypto_web/controllers/api/interactions/delete_test.exs`.
 //!
-//! The submission of the modal this command answers with is a type 5
-//! interaction, which is not implemented yet; that case is recorded in
-//! docs/test-port.md.
+//! Includes confirmation submissions and expiry between opening and submitting.
 
 mod support;
 
@@ -129,4 +127,60 @@ async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
             .is_none(),
         "the currency is gone"
     );
+}
+
+async fn submit_confirmation(pool: PgPool, uppercase: bool, expired: bool, legacy: bool) {
+    let money = setup_money(&pool).await;
+    let opened = interaction(router(pool.clone()), from_guild(money.user1, money.guild)).await;
+    assert_eq!(opened.body["type"], 9);
+    if expired {
+        let now = OffsetDateTime::now_utc() - Duration::hours(73);
+        support::set_currency_inserted_at(
+            &pool,
+            money.currency,
+            time::PrimitiveDateTime::new(now.date(), now.time()),
+        )
+        .await;
+    }
+    let value = format!("delete {}", money.unit);
+    let input = json!({"type":4, "custom_id":"confirm", "value":if uppercase {value.to_uppercase()} else {value}});
+    let component = if legacy {
+        json!({"type":1,"components":[input]})
+    } else {
+        json!({"type":18,"component":input})
+    };
+    let response = interaction(router(pool.clone()), json!({
+        "type":5,
+        "data":{"custom_id":opened.body["data"]["custom_id"],"components":[component]},
+        "member":{"user":{"id":money.user1.to_string()},"permissions":DEFAULT_PERMISSIONS.to_string()},
+        "guild_id":money.guild.to_string()
+    })).await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(
+        support::currency_by_unit(&pool, &money.unit)
+            .await
+            .is_some(),
+        expired,
+        "{}",
+        response.body
+    );
+    if expired {
+        assert!(response.body.to_string().contains("72時間"));
+        assert!(support::get_amount(&pool, money.user1, money.currency).await > 0);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn confirmation_rechecks_the_deletion_window(pool: PgPool) {
+    submit_confirmation(pool, false, true, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn confirmation_accepts_uppercase_like_elixir(pool: PgPool) {
+    submit_confirmation(pool, true, false, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn confirmation_accepts_a_legacy_action_row(pool: PgPool) {
+    submit_confirmation(pool, false, false, true).await;
 }

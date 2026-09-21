@@ -441,3 +441,33 @@ async fn a_key_covers_the_whole_bulk_request(pool: PgPool) {
     assert_eq!(amount_of_discord(&pool, STRANGER_B, WAN).await, 30);
     assert_eq!(amount_of_discord(&pool, STRANGER_C, WAN).await, 10);
 }
+
+// Each entry fits bigint, but the batch cannot fit any sender's balance.
+async fn assert_overflow_is_refused(pool: PgPool, receivers: [i64; 3]) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+    let amounts = [i64::MAX, i64::MAX, 10];
+    let body = Value::Array(receivers.into_iter().zip(amounts).map(|(receiver, amount)| {
+        json!({"unit": "nyan", "receiver_discord_id": receiver.to_string(), "amount": amount.to_string()})
+    }).collect());
+    let response = send(build(pool.clone()), &token, body, None).await;
+    support::assert_json(
+        &response,
+        409,
+        json!({"error":"conflict", "error_info":"not_enough_amount"}),
+    );
+    assert_eq!(amount_of(&pool, USER1, NYAN).await, 199_500);
+    for receiver in receivers {
+        assert_eq!(amount_of_discord(&pool, receiver, NYAN).await, 0);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn overflowing_total_across_receivers_is_refused(pool: PgPool) {
+    assert_overflow_is_refused(pool, [STRANGER_A, STRANGER_B, STRANGER_C]).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn overflowing_total_for_one_receiver_is_refused(pool: PgPool) {
+    assert_overflow_is_refused(pool, [STRANGER_A; 3]).await;
+}

@@ -273,19 +273,34 @@ pub async fn unit_for_guild(
 ///
 /// `claim_metadata` is not named because its foreign key to `claims` cascades,
 /// which is also why Elixir can leave it out.
-pub async fn delete(pool: &PgPool, guild_id: i64) -> std::result::Result<(), sqlx::Error> {
+pub async fn delete(
+    pool: &PgPool,
+    guild_id: i64,
+    confirmation: &str,
+) -> std::result::Result<DeleteResult, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    let currency_id = sqlx::query_scalar!(
-        "SELECT id FROM currencies WHERE guild_id = $1 FOR UPDATE",
+    let currency = sqlx::query!(
+        "SELECT id, unit, inserted_at FROM currencies WHERE guild_id = $1 FOR UPDATE",
         guild_id
     )
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some(currency_id) = currency_id else {
-        return Ok(());
+    let Some(currency) = currency else {
+        return Ok(DeleteResult::NotExist);
     };
+
+    // Check after acquiring the lock: a modal can outlive the deletion window,
+    // and confirmation must apply to the same currency we actually delete.
+    if (crate::model::utc_now() - currency.inserted_at).whole_seconds() > DELETABLE_WINDOW {
+        return Ok(DeleteResult::OutOfTerm);
+    }
+    let required = format!("delete {}", currency.unit.unwrap_or_default());
+    if confirmation.to_lowercase() != required.to_lowercase() {
+        return Ok(DeleteResult::ConfirmationFailed);
+    }
+    let currency_id = currency.id;
 
     for statement in [
         "DELETE FROM assets WHERE currency_id = $1",
@@ -308,7 +323,15 @@ pub async fn delete(pool: &PgPool, guild_id: i64) -> std::result::Result<(), sql
 
     tx.commit().await?;
 
-    Ok(())
+    Ok(DeleteResult::Deleted)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteResult {
+    Deleted,
+    NotExist,
+    OutOfTerm,
+    ConfirmationFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

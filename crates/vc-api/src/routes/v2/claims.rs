@@ -439,11 +439,11 @@ async fn discord_user(state: &AppState, discord_id: Option<i64>) -> Result<Value
 /// enough here because a user without claims matches nothing either way.
 async fn parse_related_discord(state: &AppState, value: &str) -> Result<i64, ApiError> {
     let discord_id = parse_number(value).ok_or(ApiError::InvalidRequest("invalid_related_user"))?;
-    let user = vc_core::user::find_by_discord_id(state.pool(), discord_id)
-        .await?
-        .ok_or(ApiError::InvalidRequest("invalid_related_user"))?;
+    let user = vc_core::user::find_by_discord_id(state.pool(), discord_id).await?;
 
-    Ok(i64::from(user.id))
+    // An unregistered user has no claims. Keep the filter (rather than
+    // removing it), but match no account, as the Discord claim list does.
+    Ok(user.map_or(-1, |user| i64::from(user.id)))
 }
 
 /// `build_url_from_options/2`: the query is rebuilt from the options, in this

@@ -73,22 +73,31 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
         .and_then(|rows| rows.first())
         // A label holds its component under `component`, which is the one thing the deprecated
         // action row spelled differently.
-        .and_then(|row| row.get("component"))
+        .and_then(|row| {
+            row.get("component")
+                .or_else(|| row.get("components")?.as_array()?.first())
+        })
         .and_then(|input| input.get("value"))
         .and_then(Value::as_str)
         .ok_or_else(|| CommandError::missing("the delete modal has no value"))?;
 
-    let Some(unit) = vc_core::currency::unit_for_guild(state.pool(), guild_id).await? else {
-        return Ok(render_error("エラー: このサーバーに通貨が存在しません。"));
-    };
-
-    if value != format!("delete {unit}") {
-        return Ok(render_error(
-            "エラー: 確認に失敗しました。再度`/delete`コマンドを実行してください。",
-        ));
+    use vc_core::currency::DeleteResult;
+    match vc_core::currency::delete(state.pool(), guild_id, value).await? {
+        DeleteResult::Deleted => {}
+        DeleteResult::NotExist => {
+            return Ok(render_error("エラー: このサーバーに通貨が存在しません。"));
+        }
+        DeleteResult::OutOfTerm => {
+            return Ok(render_error(
+                "エラー: 作成から72時間以上経過しているため削除できません。",
+            ));
+        }
+        DeleteResult::ConfirmationFailed => {
+            return Ok(render_error(
+                "エラー: 確認に失敗しました。再度`/delete`コマンドを実行してください。",
+            ));
+        }
     }
-
-    vc_core::currency::delete(state.pool(), guild_id).await?;
 
     Ok(json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,

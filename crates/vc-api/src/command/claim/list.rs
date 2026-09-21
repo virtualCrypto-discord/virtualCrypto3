@@ -408,7 +408,8 @@ struct Quotation {
     name: String,
     unit: String,
     current: i64,
-    quoted: i64,
+    // A selection can contain several individually valid bigint amounts.
+    quoted: i128,
 }
 
 fn quotations(selected: &[&ClaimView], me: i64, balances: &[Balance]) -> Vec<Quotation> {
@@ -442,7 +443,7 @@ fn quotations(selected: &[&ClaimView], me: i64, balances: &[Balance]) -> Vec<Quo
 
         // Only what this operator would pay counts against them.
         if claim.payer.discord_id == Some(me) {
-            quotations[index].quoted += claim.amount.unwrap_or_default();
+            quotations[index].quoted += i128::from(claim.amount.unwrap_or_default());
         }
     }
 
@@ -463,11 +464,15 @@ fn quotation_text(quotation: &Quotation) -> String {
         return format!("**{name}**: `{current}{unit}`");
     }
 
-    let warning = if current < quoted { "⚠" } else { "" };
+    let warning = if i128::from(*current) < *quoted {
+        "⚠"
+    } else {
+        ""
+    };
 
     format!(
         "**{name}**: `{current}{unit}` - `{quoted}{unit}` => `{}{unit}`{warning}",
-        current - quoted
+        i128::from(*current) - quoted
     )
 }
 
@@ -554,7 +559,7 @@ fn action_row(
     let approvable = deniable
         && quotations
             .iter()
-            .all(|quotation| quotation.current >= quotation.quoted);
+            .all(|quotation| i128::from(quotation.current) >= quotation.quoted);
 
     let ids: Vec<i64> = selected.iter().map(|claim| claim.id).collect();
 

@@ -457,3 +457,11 @@ async fn a_limit_above_the_ceiling_is_invalid(pool: PgPool) {
     assert_eq!(response.status, 400, "body: {}", response.body);
     assert_eq!(response.body["error_description"], "invalid_limit");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_unregistered_related_discord_user_matches_no_claims(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+    let response = list(pool, "related_discord_user_id=777777777777777777", &token).await;
+    assert_json(&response, 200, json!([]));
+}

@@ -1865,3 +1865,39 @@ async fn selecting_someone_elses_claims_is_refused(pool: PgPool) {
     // Elixir raises `ArgumentError, "Illegal request"`, which is a 500.
     assert_eq!(response.status, 500, "body: {}", response.body);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn selecting_claims_above_bigint_shows_the_total_and_disables_approval(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+    sqlx::query("UPDATE claims SET amount=$1 WHERE status='pending'")
+        .bind(i64::MAX)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let page = first_page(&pool, 1).await;
+    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
+    let expected: i128 = page
+        .claims
+        .iter()
+        .filter(|claim| claim.payer.discord_id == Some(money.user1))
+        .map(|claim| i128::from(claim.amount.unwrap()))
+        .sum();
+    assert!(expected > i128::from(i64::MAX));
+    let response = interaction(
+        router(pool),
+        support::select_from_guild(
+            json!({
+                "custom_id":select_menu_custom_id(0, &ids), "values":selection_values(&ids)
+            }),
+            money.user1,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert!(response.body.to_string().contains(&expected.to_string()));
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap();
+    assert_eq!(children.last().unwrap()["components"][1]["disabled"], true);
+}

@@ -152,12 +152,20 @@ pub async fn transfer_bulk(
 
     let mut totals: BTreeMap<(i64, i32), i64> = BTreeMap::new();
     for (unit, receiver_id, amount) in entries {
-        *totals.entry((currency_of[unit], *receiver_id)).or_insert(0) += amount;
+        let total = totals.entry((currency_of[unit], *receiver_id)).or_insert(0);
+        // Every amount is positive. A sum beyond bigint cannot be covered by
+        // any sender's balance, even when individual payments fit in bigint.
+        *total = total
+            .checked_add(*amount)
+            .ok_or(TransferError::NotEnoughAmount)?;
     }
 
     let mut per_currency: BTreeMap<i64, i64> = BTreeMap::new();
     for ((currency_id, _), amount) in &totals {
-        *per_currency.entry(*currency_id).or_insert(0) += amount;
+        let total = per_currency.entry(*currency_id).or_insert(0);
+        *total = total
+            .checked_add(*amount)
+            .ok_or(TransferError::NotEnoughAmount)?;
     }
 
     let currency_ids: Vec<i64> = per_currency.keys().copied().collect();
