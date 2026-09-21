@@ -38,6 +38,25 @@ const ROUTER_SOURCES: [&str; 9] = [
 
 /// Every command is registered, and every registered command is written about.
 ///
+/// An example is what a caller copies: a JSON answer that is not JSON is worse than none, and
+/// the body it shows is the body the tests assert.
+#[test]
+fn every_example_answer_is_json_or_nothing() {
+    for endpoint in api::all() {
+        let Some(example) = &endpoint.example else {
+            continue;
+        };
+
+        let body = example.response.join("\n");
+
+        if body.starts_with('{') || body.starts_with('[') {
+            serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|error| {
+                panic!("{} {}: {error}\n{body}", endpoint.method, endpoint.path)
+            });
+        }
+    }
+}
+
 /// The two lists are one list: Discord's picker, the bot's `/help` and the site's
 /// command page are the same commands, and a command that is only in one of them
 /// is a command nobody can find out about — or a page about something that does

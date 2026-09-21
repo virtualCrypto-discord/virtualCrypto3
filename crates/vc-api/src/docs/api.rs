@@ -205,8 +205,31 @@ const ENDPOINTS: &[Endpoint] = &[
         summary: "呼び出した利用者の残高の一覧です。",
         access: "利用者のトークン",
         fields: &[],
-        example: None,
-        notes: &[],
+        // `tests/golden/v2_users_me_balances.json`, body and all: one object per currency the
+        // caller holds, and none for a currency they do not.
+        example: Some(Example {
+            request: &[
+                "GET /api/v2/users/@me/balances",
+                "Authorization: Bearer <利用者のトークン>",
+                "Accept: application/json",
+            ],
+            response: &[
+                "[",
+                "  {",
+                "    \"amount\": \"199500\",",
+                "    \"currency\": {",
+                "      \"guild\": \"900000000000000001\",",
+                "      \"name\": \"nyan\",",
+                "      \"pool_amount\": \"500\",",
+                "      \"unit\": \"nyan\"",
+                "    }",
+                "  }",
+                "]",
+            ],
+        }),
+        notes: &[
+            "空の配列は、その利用者がまだどの通貨も持っていないという意味です。`amount` も `pool_amount` も文字列です。",
+        ],
     },
     Endpoint {
         method: "GET",
