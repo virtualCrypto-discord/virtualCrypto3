@@ -57,11 +57,7 @@ pub async fn balances(
         .await?
         .ok_or(vc_core::Error::UserNotFound(user.subject))?;
 
-    let discord_id = account
-        .discord_id
-        .ok_or_else(|| ApiError::Internal(format!("user {local_id} has no discord id")))?;
-
-    let holdings = vc_core::balance::holdings_for_discord_user(state.pool(), discord_id).await?;
+    let holdings = vc_core::balance::holdings_for_user(state.pool(), account.id).await?;
 
     Ok(Json(Value::Array(
         holdings.iter().map(render_holding).collect(),

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT assets.amount,\n                currencies.guild_id AS guild,\n                currencies.name,\n                currencies.pool_amount,\n                currencies.unit\n           FROM assets\n           JOIN currencies ON currencies.id = assets.currency_id\n           JOIN users ON users.id = assets.user_id\n          WHERE users.discord_id = $1\n          ORDER BY currencies.unit",
+  "query": "SELECT assets.amount,\n                currencies.guild_id AS guild,\n                currencies.name,\n                currencies.pool_amount,\n                currencies.unit\n           FROM assets\n           JOIN currencies ON currencies.id = assets.currency_id\n          WHERE assets.user_id = $1\n          ORDER BY currencies.unit",
   "describe": {
     "columns": [
       {
@@ -72,5 +72,5 @@
       true
     ]
   },
-  "hash": "09771794d6590a4b8899fe34b70240eb3d7e0454097d1b4ef6cf155c5bb8119e"
+  "hash": "610cd185f2840dc5488ba113a983ce22f613d880ca5cb1306092ba03decbd011"
 }

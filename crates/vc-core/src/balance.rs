@@ -53,12 +53,9 @@ pub struct Holding {
     pub unit: Option<String>,
 }
 
-/// `GET /api/v2/users/@me/balances`: the same join as [`for_discord_user`], with
-/// the currency's guild and pool as well.
-pub async fn holdings_for_discord_user(
-    pool: &PgPool,
-    discord_user_id: i64,
-) -> Result<Vec<Holding>> {
+/// `GET /api/v2/users/@me/balances`: holdings for the authenticated internal
+/// account, including applications without a linked Discord user.
+pub async fn holdings_for_user(pool: &PgPool, user_id: i32) -> Result<Vec<Holding>> {
     let rows = sqlx::query_as!(
         Holding,
         "SELECT assets.amount,
@@ -68,10 +65,9 @@ pub async fn holdings_for_discord_user(
                 currencies.unit
            FROM assets
            JOIN currencies ON currencies.id = assets.currency_id
-           JOIN users ON users.id = assets.user_id
-          WHERE users.discord_id = $1
+          WHERE assets.user_id = $1
           ORDER BY currencies.unit",
-        discord_user_id
+        i64::from(user_id)
     )
     .fetch_all(pool)
     .await?;

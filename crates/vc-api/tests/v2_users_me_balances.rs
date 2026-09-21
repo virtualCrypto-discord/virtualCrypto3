@@ -113,3 +113,23 @@ async fn holdings_are_ordered_by_unit(pool: PgPool) {
         &golden(include_str!("golden/v2_users_me_balances_user2.json")),
     );
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_can_read_its_balance_without_discord_link(pool: PgPool) {
+    let application = support::insert_application(&pool, 100000000000000001, "Shop").await;
+    let account = support::account_of(&pool, application).await;
+    support::insert_currency(&pool, 1, "test", "tst", 900000000000000001, 0).await;
+    support::insert_asset(&pool, account, 1, 500).await;
+    support::insert_user(&pool, account + 1, 100000000000000002).await;
+    support::insert_asset(&pool, account + 1, 1, 999).await;
+    let token = support::mint_app(&pool, account, &["vc.pay"]).await;
+    let response = support::get(
+        vc_api::router(support::state(pool, support::fake())),
+        "/api/v2/users/@me/balances",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.body.as_array().unwrap().len(), 1);
+    assert_eq!(response.body[0]["amount"], "500");
+}

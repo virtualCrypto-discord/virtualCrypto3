@@ -549,3 +549,14 @@ That was a parameter change in every v2 handler: mechanical, about twenty of the
 and the compiler found them all. The refusal is the one the interaction endpoint
 answers with, and `RATE_LIMIT_PER_MINUTE=0` still turns it off.
 
+
+## Payment requests require JSON
+
+`POST /api/v2/users/@me/transactions` intentionally accepts only JSON request
+bodies. Supporting form-encoded payments is not intended for this port.
+The Elixir endpoint's `Plug.Parsers` also accepted
+`application/x-www-form-urlencoded`; existing clients using that encoding must
+send `Content-Type: application/json` and a JSON body instead. Form-encoded
+requests receive HTTP 415. This is an accepted compatibility gap, not an
+outstanding bug. The token and revocation endpoints' form support is separate
+and remains supported.
