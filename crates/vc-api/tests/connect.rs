@@ -530,3 +530,39 @@ async fn the_id_the_list_hands_out_is_the_id_a_connect_takes(pool: PgPool) {
     assert_eq!(after.status, 200, "{:?}", after.body);
     assert_eq!(after.body[0]["discord_user_id"], BOT_ID.to_string());
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn connect_requires_management_scope(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
+    let token = mint(&pool, OWNER, &["vc.pay"]).await;
+    let described = token_of(&client_id);
+
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT_ID, &described)],
+    ));
+
+    let response = connect_with(
+        pool.clone(),
+        discord,
+        &token,
+        &client_id,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 403, "{:?}", response.body);
+    assert_eq!(response.body["error"], "insufficient_scope");
+
+    let bound = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the account");
+
+    assert_eq!(bound, None, "a refused request must not bind the bot");
+}

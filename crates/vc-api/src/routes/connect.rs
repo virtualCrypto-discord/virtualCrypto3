@@ -110,6 +110,14 @@ pub async fn connect(
         );
     }
 
+    if !user.scopes.oauth2_register {
+        return refused(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "oauth2.register is required",
+        );
+    }
+
     let Ok(subject) = i32::try_from(user.subject) else {
         return internal("the subject is out of range for an account id").response();
     };

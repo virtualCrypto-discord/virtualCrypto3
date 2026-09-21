@@ -212,3 +212,86 @@ async fn interaction_callback_accepts_empty_204_and_rejects_errors() {
     assert_eq!(requests[0].0, "/api/interactions/123/test-token/callback");
     assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);
 }
+
+#[tokio::test]
+async fn failed_lookups_release_flight_locks() {
+    let entries = Entries::<i64>::new();
+    for key in 0..100 {
+        let result = entries
+            .fetch(key, || async { Err::<Option<i64>, _>(()) })
+            .await;
+        assert!(result.is_err());
+    }
+    assert_eq!(
+        entries.flights.lock().unwrap().len(),
+        0,
+        "finished failures must not retain per-key locks"
+    );
+}
+
+#[tokio::test]
+async fn waiting_cache_hits_release_flight_locks() {
+    let entries = std::sync::Arc::new(Entries::<i64>::new());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let first_entries = entries.clone();
+    let first = tokio::spawn(async move {
+        first_entries
+            .fetch(1, || async {
+                started_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                Ok::<_, ()>(Some(42))
+            })
+            .await
+    });
+    started_rx.await.unwrap();
+    let waiting_entries = entries.clone();
+    let waiting = tokio::spawn(async move {
+        waiting_entries
+            .fetch(1, || async { panic!("should read the cached value") })
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if std::sync::Arc::strong_count(entries.flights.lock().unwrap().get(&1).unwrap()) == 3 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release_tx.send(()).unwrap();
+    assert_eq!(first.await.unwrap(), Ok(Some(42)));
+    let answer: Result<Option<i64>, ()> = waiting.await.unwrap();
+    assert_eq!(answer, Ok(Some(42)));
+    assert_eq!(
+        entries.flights.lock().unwrap().len(),
+        0,
+        "the final waiter must release the flight entry"
+    );
+}
+
+#[tokio::test]
+async fn cancelled_lookup_releases_flight_lock() {
+    let entries = Arc::new(Entries::<i64>::new());
+    let fetching = entries.clone();
+    let (started, received) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        fetching
+            .fetch(1, || async {
+                started.send(()).unwrap();
+                std::future::pending::<Result<Option<i64>, ()>>().await
+            })
+            .await
+    });
+    received.await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(entries.flights.lock().unwrap().is_empty());
+    assert_eq!(
+        entries.fetch(1, || async { Ok::<_, ()>(Some(42)) }).await,
+        Ok(Some(42))
+    );
+    assert!(entries.flights.lock().unwrap().is_empty());
+}

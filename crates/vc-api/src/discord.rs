@@ -167,6 +167,33 @@ struct Entries<T> {
         std::sync::Mutex<std::collections::HashMap<i64, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
+// Own a flight reference even while waiting for its lock. Cleanup must also run
+// when a lookup fails, returns a cached value, or its task is cancelled.
+struct Flight<'a, T> {
+    cache: &'a Entries<T>,
+    key: i64,
+    lock: Option<std::sync::Arc<tokio::sync::Mutex<()>>>,
+}
+
+impl<T> Drop for Flight<'_, T> {
+    fn drop(&mut self) {
+        let mut flights = self
+            .cache
+            .flights
+            .lock()
+            .expect("the cache is not poisoned");
+        // Drop our reference under the map lock so concurrent finishers cannot
+        // both see another reference and leave the entry behind.
+        drop(self.lock.take());
+        if flights
+            .get(&self.key)
+            .is_some_and(|lock| std::sync::Arc::strong_count(lock) == 1)
+        {
+            flights.remove(&self.key);
+        }
+    }
+}
+
 impl<T: Clone> Entries<T> {
     fn new() -> Self {
         Self {
@@ -187,12 +214,21 @@ impl<T: Clone> Entries<T> {
 
         let flight = {
             let mut flights = self.flights.lock().expect("the cache is not poisoned");
-            std::sync::Arc::clone(flights.entry(key).or_default())
+            Flight {
+                cache: self,
+                key,
+                lock: Some(std::sync::Arc::clone(flights.entry(key).or_default())),
+            }
         };
 
         // Held for the whole call, so a second caller waits here and then finds
         // what the first one stored.
-        let held = flight.lock().await;
+        let _held = flight
+            .lock
+            .as_ref()
+            .expect("the flight owns its lock")
+            .lock()
+            .await;
 
         if let Some(cached) = self.get(key) {
             return Ok(cached);
@@ -200,19 +236,6 @@ impl<T: Clone> Entries<T> {
 
         let value = fetch().await?;
         self.put(key, value.clone());
-
-        drop(held);
-
-        // Forget the lock once nobody is waiting on it, so the table is only as
-        // large as the calls in flight.
-        let mut flights = self.flights.lock().expect("the cache is not poisoned");
-        let finished = flights
-            .get(&key)
-            .is_some_and(|flight| std::sync::Arc::strong_count(flight) == 2);
-
-        if finished {
-            flights.remove(&key);
-        }
 
         Ok(value)
     }
