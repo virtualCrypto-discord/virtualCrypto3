@@ -41,8 +41,8 @@ pub trait DiscordApi: Send + Sync {
     async fn get_user_info(&self, token: &str) -> Result<Map<String, Value>, DiscordError>;
 
     /// `Discord.Api.Cached.get_user/2`, used to decorate claims with the claimant
-    /// and payer. `None` stands for the `:not_found` the Elixir cache stores,
-    /// which the serializer then fails on.
+    /// and payer. `None` stands for the `:not_found` the Elixir cache stores;
+    /// claim responses then retain only the account's known Discord ID.
     async fn get_user(
         &self,
         discord_user_id: i64,

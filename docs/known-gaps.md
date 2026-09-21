@@ -617,3 +617,14 @@ integer range. Leading `+` or `-`, zero, and whitespace are rejected with HTTP 4
 (`invalid_request`, `invalid_related_user`). Unlike Elixir's general integer
 parser, this intentionally treats the parameters as IDs rather than signed
 numbers. A leading `+` is rejected, not normalized in pagination links.
+
+## Discord profile failures do not fail claim responses
+
+Claim creation and approval commit before the API builds its response. Failing
+that response because Discord is unavailable can make a successful payment look
+unsuccessful, or cause a retried creation to create another claim. Claim reads,
+creation, and updates therefore return a minimal `discord: {"id": "..."}` when
+profile lookup fails or returns 404. The ID comes from the stored account; an
+account with no Discord ID still returns `discord: null`. Successful lookups
+continue to return the filtered profile. This deliberately avoids the old
+serializer's failure on unavailable profiles.

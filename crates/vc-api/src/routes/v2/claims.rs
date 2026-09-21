@@ -43,7 +43,7 @@ pub async fn get_by_id(
         return Err(ApiError::Forbidden("not_related_user"));
     }
 
-    Ok(Json(serialize_claim(&state, view).await?))
+    Ok(Json(serialize_claim(&state, view).await))
 }
 
 /// `GET /api/v2/users/@me/claims`
@@ -136,7 +136,7 @@ pub async fn index(
     let next = page.next_cursor(&claims, |claim| claim.id);
     let mut body = Vec::with_capacity(claims.len());
     for claim in claims {
-        body.push(serialize_claim(&state, claim).await?);
+        body.push(serialize_claim(&state, claim).await);
     }
 
     let mut response = Json(Value::Array(body)).into_response();
@@ -243,7 +243,7 @@ pub async fn create(
 
         return Ok((
             StatusCode::CREATED,
-            Json(serialize_claim(&state, view).await?),
+            Json(serialize_claim(&state, view).await),
         )
             .into_response());
     }
@@ -373,7 +373,7 @@ pub async fn patch(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    Ok(Json(serialize_claim(&state, view).await?))
+    Ok(Json(serialize_claim(&state, view).await))
 }
 
 fn transition_error(error: vc_core::claim::TransitionError) -> ApiError {
@@ -395,11 +395,11 @@ fn transition_error(error: vc_core::claim::TransitionError) -> ApiError {
 
 /// `format_claim/2`: amounts and ids as strings, timestamps as UTC with a `Z`,
 /// and the claimant/payer decorated with their filtered Discord profile.
-pub async fn serialize_claim(state: &AppState, view: ClaimView) -> Result<Value, ApiError> {
-    let claimant_discord = discord_user(state, view.claimant.discord_id).await?;
-    let payer_discord = discord_user(state, view.payer.discord_id).await?;
+pub async fn serialize_claim(state: &AppState, view: ClaimView) -> Value {
+    let claimant_discord = discord_user(state, view.claimant.discord_id).await;
+    let payer_discord = discord_user(state, view.payer.discord_id).await;
 
-    Ok(json!({
+    json!({
         "id": view.id.to_string(),
         "currency": {
             "name": view.currency.name,
@@ -420,20 +420,24 @@ pub async fn serialize_claim(state: &AppState, view: ClaimView) -> Result<Value,
         "updated_at": format_timestamp(view.updated_at),
         "status": view.status,
         "metadata": view.metadata,
-    }))
+    })
 }
 
-async fn discord_user(state: &AppState, discord_id: Option<i64>) -> Result<Value, ApiError> {
+// Profile data decorates the claim; it must not turn a committed creation or
+// payment into a failure response. Preserve the known Discord ID if lookup
+// fails or Discord no longer has the user. An unbound account remains null.
+async fn discord_user(state: &AppState, discord_id: Option<i64>) -> Value {
     let Some(discord_id) = discord_id else {
-        return Ok(Value::Null);
+        return Value::Null;
     };
 
-    match state.discord().get_user(discord_id).await? {
-        Some(payload) => Ok(Value::Object(filter_profile(payload).into_iter().collect())),
-        // `Filtering.user/1` is called on the cached `:not_found` atom and raises.
-        None => Err(ApiError::Internal(format!(
-            "discord user {discord_id} not found"
-        ))),
+    match state.discord().get_user(discord_id).await {
+        Ok(Some(payload)) => Value::Object(filter_profile(payload).into_iter().collect()),
+        Ok(None) => json!({ "id": discord_id.to_string() }),
+        Err(error) => {
+            tracing::warn!(discord_id, %error, "claim profile lookup failed");
+            json!({ "id": discord_id.to_string() })
+        }
     }
 }
 

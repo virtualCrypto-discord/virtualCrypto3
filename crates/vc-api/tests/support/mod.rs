@@ -66,6 +66,7 @@ pub struct FakeDiscord {
     guild_status: u16,
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
+    user_status: u16,
     webhooks: Mutex<Vec<Value>>,
     callbacks: Mutex<Vec<Value>>,
     followup_gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -129,6 +130,7 @@ impl FakeDiscord {
             guild_status: 200,
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
+            user_status: 200,
             webhooks: Mutex::new(Vec::new()),
             callbacks: Mutex::new(Vec::new()),
             followup_gate: None,
@@ -201,6 +203,12 @@ impl FakeDiscord {
         fake.integrations_status = integrations_status;
         fake.guild_status = guild_status;
 
+        fake
+    }
+
+    pub fn with_user_status(status: u16) -> Self {
+        let mut fake = Self::new();
+        fake.user_status = status;
         fake
     }
 
@@ -402,6 +410,15 @@ impl DiscordApi for FakeDiscord {
         discord_user_id: i64,
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
         self.user_calls.fetch_add(1, Ordering::SeqCst);
+        if self.user_status == 404 {
+            return Ok(None);
+        }
+        if self.user_status != 200 {
+            return Err(DiscordError::Request(format!(
+                "Discord answered HTTP {}",
+                self.user_status
+            )));
+        }
 
         // Give a second caller the chance to reach the cache while this one is
         // still out, so a lookup that is not coalesced has somewhere to show it.
