@@ -13,6 +13,10 @@
   // The API answers every unclaimed path with this document, so a reload or a
   // shared link lands here — including `/document/*`, which is what the bot's own
   // `/help` sends people to and what its menu's link opens.
+  //
+  // `/applications/verification` is where the connect token points: the operator pastes
+  // that address into a bot's description, and anybody sent one by somebody else lands
+  // on the page that says so.
   let path = $state(cleaned(window.location.pathname));
 
   window.addEventListener("popstate", () => {
@@ -29,6 +33,8 @@
 <main>
   {#if path === "/"}
     <Landing />
+  {:else if path === "/applications/verification"}
+    <Verification />
   {:else if path === "/document" || path.startsWith("/document/")}
     <Documentation slug={path === "/document" ? "" : path.slice("/document/".length)} />
   {:else}

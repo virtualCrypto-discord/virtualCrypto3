@@ -394,10 +394,11 @@ Nothing here can be settled from a terminal.
 - [ ] **`/contract list`**: five rows, the count in the first line, the arrows
       (⏪ ⏮️ ⏭️ ⏩) and their disabled states, the four states a caller's own part can
       be in, the deadline line, and that a decision draws the first page again.
-- [ ] **`/claim`**: every subcommand, the buttons, the page row (⏪ ⏮️ ⏭️ ⏩ 🔄), the
-      selection menu, the metadata modal, the autocomplete lists.
-- [ ] **`/grant` and `/issue`**: the ask, the `user_code`, the approval, and the
-      refusal a guild that has not granted gets.
+- [ ] **`/claim`**: every subcommand, each pending row's own buttons, the page row
+      (⏪ ⏮️ ⏭️ ⏩ 🔄), the metadata modal, the autocomplete lists.
+- [ ] **`/grant` and `/issue`**: the ask, the `user_code` the application shows,
+      the approval, the list of what the guild has allowed with its revoke button
+      and the four arrows, and the refusal a guild that has not granted gets.
 - [ ] **`/application register`**: the client id and secret, and the handshake that
       decides the registration.
 - [ ] **A claim end to end**: created by an application, approved and denied, the

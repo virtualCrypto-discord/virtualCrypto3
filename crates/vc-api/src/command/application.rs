@@ -10,7 +10,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, get_user};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user};
 use crate::components::ephemeral;
 use crate::developer;
 use crate::routes::oauth2_clients::{
@@ -44,13 +44,10 @@ pub async fn handle(
             show(state, client_id_of(sub_options)?, payload).await?,
         )),
         "register" => register(state, payload).await,
-        "help" => Ok(message(help(state))),
-        // The rest are registered and not written yet. Saying so is better than the answer
-        // an unknown subcommand gets, because this command exists and a person pressing it
-        // deserves to know which part is missing.
-        other => Ok(message(ephemeral(vec![crate::components::text(format!(
-            "`{other}` はまだ実装されていません。"
-        ))]))),
+        // Everything registered is written, so an unknown subcommand is one this service does
+        // not have — a client with a stale command list, answered the way any unknown command
+        // is.
+        _ => Err(CommandError::Unknown),
     }
 }
 
@@ -101,27 +98,32 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
 
     match create(state, account, &new).await {
-        Ok(created) => Ok(message(ephemeral(vec![developer::application(
-            &created.client_id,
-            new.client_name.as_deref(),
-            false,
-            None,
-            Some(&created.client_secret),
-            developer::Fields {
-                client_name: new.client_name.as_deref(),
-                redirect_uris: &new.redirect_uris,
-                client_uri: new.client_uri.as_deref(),
-                logo_uri: new.logo_uri.as_deref(),
-                webhook_url: new.webhook_url.as_deref(),
-                discord_support_server_invite_slug: new
-                    .discord_support_server_invite_slug
-                    .as_deref(),
-                application_type: &new.application_type,
-                grant_types: &new.grant_types,
-                response_types: &new.response_types,
-                subscribed_events: &new.subscribed_events,
-            },
-        )]))),
+        Ok(created) => {
+            let token = crate::routes::connect::token_url(state.links(), &created.client_id);
+
+            Ok(message(ephemeral(vec![developer::application(
+                &created.client_id,
+                new.client_name.as_deref(),
+                false,
+                None,
+                Some(&created.client_secret),
+                Some(&token),
+                developer::Fields {
+                    client_name: new.client_name.as_deref(),
+                    redirect_uris: &new.redirect_uris,
+                    client_uri: new.client_uri.as_deref(),
+                    logo_uri: new.logo_uri.as_deref(),
+                    webhook_url: new.webhook_url.as_deref(),
+                    discord_support_server_invite_slug: new
+                        .discord_support_server_invite_slug
+                        .as_deref(),
+                    application_type: &new.application_type,
+                    grant_types: &new.grant_types,
+                    response_types: &new.response_types,
+                    subscribed_events: &new.subscribed_events,
+                },
+            )])))
+        }
         Err(refusal) => Ok(message(ephemeral(vec![developer::refusal(
             "登録",
             refusal.description.as_deref(),
@@ -216,12 +218,19 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
         )]));
     };
 
+    // The token the description has to carry, composed from what this screen already
+    // shows: there is nothing to connect while a bot is connected, so there is nothing to
+    // paste then either.
+    let token = (!found.discord_user_id.is_some())
+        .then(|| crate::routes::connect::token_url(state.links(), &found.client_id));
+
     Ok(ephemeral(vec![developer::application(
         &found.client_id,
         found.client_name.as_deref(),
         found.discord_user_id.is_some(),
         found.logo_uri.as_deref(),
         found.client_secret.as_deref(),
+        token.as_deref(),
         developer::Fields {
             client_name: found.client_name.as_deref(),
             redirect_uris: &found.redirect_uris,
@@ -265,40 +274,6 @@ async fn list(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
     }
 
     Ok(ephemeral(vec![developer::applications(&owned)]))
-}
-
-/// `/application help`: the command's own screen, drawn from the one document
-/// every help surface reads, with the way into the developer screens under it.
-///
-/// The prose is not written here. It is [`crate::docs`]'s, so this screen and
-/// `/help command:application` cannot come to say different things about the
-/// same command — which is what happened to the paragraph this replaced.
-fn help(state: &AppState) -> Value {
-    let Some(showing) = crate::docs::showing_of("application") else {
-        return ephemeral(vec![crate::components::text(
-            "`/help command:application` をご覧ください。",
-        )]);
-    };
-
-    let mut children = crate::docs::discord::command(&showing, state.links());
-
-    children.push(crate::components::action_row(vec![
-        crate::components::button(
-            // A packed id, like every other: `"dev:list"` is a readable string that
-            // `custom_id::parse` cannot decode, so this button failed whenever it was
-            // pressed.
-            &crate::custom_id::ui::developer::custom_id(
-                crate::custom_id::ui::developer::Screen::List,
-            ),
-            "アプリケーション",
-            crate::components::ButtonStyle::Primary,
-        ),
-    ]));
-
-    ephemeral(vec![crate::components::container(
-        Some(COLOR_BRAND as u32),
-        children,
-    )])
 }
 
 /// A submitted form: `dev:register` or `dev:edit`.
@@ -363,27 +338,33 @@ async fn edit_form(
 
     match apply(state, application_id, &key, &changes).await {
         Ok(()) => match details(state.pool(), application_id).await {
-            Ok(Some(now)) => Ok(registered(developer::application(
-                &now.client_id,
-                now.client_name.as_deref(),
-                now.discord_user_id.is_some(),
-                now.logo_uri.as_deref(),
-                now.client_secret.as_deref(),
-                developer::Fields {
-                    client_name: now.client_name.as_deref(),
-                    redirect_uris: &now.redirect_uris,
-                    client_uri: now.client_uri.as_deref(),
-                    logo_uri: now.logo_uri.as_deref(),
-                    webhook_url: now.webhook_url.as_deref(),
-                    discord_support_server_invite_slug: now
-                        .discord_support_server_invite_slug
-                        .as_deref(),
-                    application_type: &now.application_type,
-                    grant_types: &now.grant_types,
-                    response_types: &now.response_types,
-                    subscribed_events: &now.subscribed_events,
-                },
-            ))),
+            Ok(Some(now)) => {
+                let token = (!now.discord_user_id.is_some())
+                    .then(|| crate::routes::connect::token_url(state.links(), &now.client_id));
+
+                Ok(registered(developer::application(
+                    &now.client_id,
+                    now.client_name.as_deref(),
+                    now.discord_user_id.is_some(),
+                    now.logo_uri.as_deref(),
+                    now.client_secret.as_deref(),
+                    token.as_deref(),
+                    developer::Fields {
+                        client_name: now.client_name.as_deref(),
+                        redirect_uris: &now.redirect_uris,
+                        client_uri: now.client_uri.as_deref(),
+                        logo_uri: now.logo_uri.as_deref(),
+                        webhook_url: now.webhook_url.as_deref(),
+                        discord_support_server_invite_slug: now
+                            .discord_support_server_invite_slug
+                            .as_deref(),
+                        application_type: &now.application_type,
+                        grant_types: &now.grant_types,
+                        response_types: &now.response_types,
+                        subscribed_events: &now.subscribed_events,
+                    },
+                )))
+            }
             _ => Ok(registered(developer::refusal("変更", None))),
         },
         Err(refusal) => Ok(registered(developer::refusal(

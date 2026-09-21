@@ -415,7 +415,7 @@ const ENDPOINTS: &[Endpoint] = &[
         access: "利用者のトークン",
         notes: &[
             "`bot_id` と `guild_id` を送ります。成功は 204 です。",
-            "Botのプロフィールに `client_id` が書かれていない場合は 400 `invalid_description` です。",
+            "Botのプロフィール（説明）に、アプリケーションの画面に出るトークン（`{site}/applications/verification?q=<client_id>`）が書かれていない場合は 400 `invalid_description` です。",
         ],
     },
     Endpoint {

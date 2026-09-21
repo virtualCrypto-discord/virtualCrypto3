@@ -39,7 +39,10 @@ impl CurrencyInfo {
 /// Two behaviours are worth keeping in mind:
 ///
 /// * the total is `sum(assets.amount)` — Ecto reads it as `numeric` and calls
-///   `Decimal.to_integer/1`, so the sum is cast back to `bigint` here;
+///   `Decimal.to_integer/1`, so the sum is cast back to `bigint` here. That is the
+///   amount issued so far, because nothing but deleting the currency removes an
+///   `assets` row: a payment moves one, a contract holds one in the contract's own
+///   account, and the pool is not in `assets` at all;
 /// * the query joins `assets`, so a currency that has no asset rows produces no
 ///   row at all and is reported as not found.
 pub async fn info(pool: &PgPool, selector: CurrencySelector<'_>) -> Result<Option<CurrencyInfo>> {

@@ -4,9 +4,18 @@
 //! An application's account is created with no `discord_id`, and this is what gives it
 //! one. The proof is not in the request: the guild's integrations are read from
 //! Discord, the one whose `application.bot.id` is the submitted bot is found, and only
-//! then must its `application.description` contain the application's client id. So the
-//! operator writes the id into the bot's integration description and this reads it
-//! back — which is why a request cannot simply assert ownership.
+//! then must its `application.description` contain the token that application's own
+//! screen shows — this site's `/applications/verification?q=<client_id>` address. So the
+//! operator writes the token into the bot's description and this reads it back from
+//! Discord, which is why a request cannot simply assert ownership.
+//!
+//! **The address is what is compared, not the `client_id` on its own.** A `client_id` is
+//! public — the Elixir's page printed it beside the token, and every authorization URL
+//! carries one — so a description containing one is not a description somebody wrote on
+//! purpose. The Elixir's page assigned a fresh
+//! `https://<site>/applications/verification?q=<uuid4>` per view and compared the
+//! description against that; here the query carries the `client_id`, and the check is
+//! the same one.
 //!
 //! **Two of the answers here are decisions rather than ports.** The Elixir is a
 //! LiveView: it knows the application from the session, and its answers are sentences
@@ -26,7 +35,7 @@ use sqlx::PgPool;
 use vc_auth::AuthUser;
 
 use crate::routes::oauth2_clients::{Details, Refusal, details, internal, refusal, refused};
-use crate::state::AppState;
+use crate::state::{AppState, Links};
 
 /// What the connect form sends.
 ///
@@ -46,6 +55,19 @@ pub struct Connect {
 /// and a name that is missing should not be a panic.
 fn text<'a>(object: &'a Map<String, Value>, key: &str) -> &'a str {
     object.get(key).and_then(Value::as_str).unwrap_or("unknown")
+}
+
+/// The token as the operator is shown it: this site's address for the page that warns
+/// about pasting it there, with the application named in the query.
+///
+/// The shape is the Elixir's — `https://<site>/applications/verification?q=<uuid4>` —
+/// and it is the reason that page exists at all: a token that is an address is a token a
+/// stranger can ask somebody to paste. What goes in the query here is the `client_id`
+/// rather than a fresh uuid, which makes the token the same for every bot this
+/// application connects; the address is what the check turns on, and a bot's description
+/// does not come to contain this one by accident.
+pub(crate) fn token_url(links: &Links, client_id: &str) -> String {
+    format!("{}/applications/verification?q={client_id}", links.site_url)
 }
 
 /// The application the caller owns whose `client_id` this is, or nothing.
@@ -105,19 +127,18 @@ pub async fn connect(
     };
 
     // The owner and nobody else, and 404 rather than 403 so that somebody else's
-    // application is not confirmed to exist.
-    //
-    // The path carries the client id, because that is what `/applications/:id` means:
-    // the old site's list links `"/applications/" ++ application.client_id`, and the
-    // connect route is the same `:id`. The numeric id is this service's own, is not
-    // handed out by any read, and so is not something a caller could name.
+    // application is not confirmed to exist. The path carries the client id, because
+    // that is what `/applications/:id` means: the old site's list links
+    // `"/applications/" ++ application.client_id`, and the connect route is the same
+    // `:id`. The numeric id is this service's own, is not handed out by any read, and so
+    // is not something a caller could name.
     let owned = match vc_core::application::owned_by(state.pool(), subject).await {
         Ok(owned) => owned,
         Err(_) => return internal("the applications an account owns could not be read").response(),
     };
 
-    // The application's own account, which is what the write at the end gives a
-    // Discord id to, and the client id the description must contain.
+    // The application's own account, which is what the write at the end gives a Discord
+    // id to, and whose `client_id` the token the description has to carry is built from.
     let found = match owned_by_client_id(state.pool(), &owned, &client_id).await {
         Ok(Some((_, found))) => found,
         Ok(None) => {
@@ -138,8 +159,9 @@ pub async fn connect(
 /// that account owns. A command in a guild has the interaction for the caller and the guild's
 /// id already, so it makes the same ownership check itself. What is left is one piece of work
 /// either way — read the guild's integrations from Discord, find the one whose bot this is,
-/// insist that its description names the application, and give the application's account that
-/// bot — and it is here once, because the proof does not care which surface asked.
+/// insist that its description carries the token this application's screen showed, and give
+/// the application's account that bot — and it is here once, because the proof does not care
+/// which surface asked.
 pub async fn connect_application(
     state: &AppState,
     application: &Details,
@@ -242,18 +264,23 @@ pub async fn connect_application(
         };
     };
 
+    // What the operator's screen showed, against the description Discord holds: the whole
+    // address, because the whole address is what they copied. A description carrying the
+    // `client_id` alone is not this handshake.
+    let expected = token_url(state.links(), &application.client_id);
+
     let describes = integration
         .get("application")
         .and_then(|application| application.get("description"))
         .and_then(Value::as_str)
-        .is_some_and(|description| description.contains(&application.client_id));
+        .is_some_and(|description| description.contains(&expected));
 
     if !describes {
         return Err(refusal(
             StatusCode::BAD_REQUEST,
             "invalid_description",
             format!(
-                "the integration's description does not contain this application's client id (bot: {})",
+                "the integration's description does not contain this application's token (bot: {})",
                 integration
                     .get("application")
                     .and_then(|application| application.get("bot"))

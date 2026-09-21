@@ -104,12 +104,17 @@ pub struct Fields<'a> {
 }
 
 /// One application, with what can be done to it.
+///
+/// `token` is what has to be in the bot's description before the picker below connects
+/// anything, shown exactly as it has to be pasted: the Elixir's page said the same thing
+/// over an input holding the same string, and without it there is nothing to copy.
 pub fn application(
     client_id: &str,
     name: Option<&str>,
     connected: bool,
     logo_uri: Option<&str>,
     secret: Option<&str>,
+    token: Option<&str>,
     fields: Fields<'_>,
 ) -> Value {
     let name = name.unwrap_or("（名前なし）");
@@ -129,142 +134,148 @@ pub fn application(
         _ => text(format!("**{name}**\n{state}\n`{client_id}`")),
     };
 
-    container(
-        Some(if connected { WORKING } else { REFUSED }),
-        vec![
-            heading,
-            separator(),
-            // The six fields that are free text, each beside the value it edits and with its own
-            // button — a text input is a component only a modal may carry, so these are the six
-            // that need a form, and the form asks for exactly the field its button is next to.
-            // A section is what puts a control beside the text it is about; none of them is
-            // gathered at the bottom, because a button away from its value is a guess.
-            editing(
+    let mut children = vec![heading, separator()];
+
+    if let Some(token) = token {
+        children.push(text(format!(
+            "**Bot の接続**\nBot のアプリケーションのDescriptionに、下のトークンを\
+             追記してください。\n`{token}`"
+        )));
+    }
+
+    children.extend([
+        // The six fields that are free text, each beside the value it edits and with its own
+        // button — a text input is a component only a modal may carry, so these are the six
+        // that need a form, and the form asks for exactly the field its button is next to.
+        // A section is what puts a control beside the text it is about; none of them is
+        // gathered at the bottom, because a button away from its value is a guess.
+        editing(
+            client_id,
+            "client_name",
+            "クライアント名",
+            fields.client_name,
+        ),
+        editing(
+            client_id,
+            "redirect_uris",
+            "リダイレクト URI",
+            Some(&listing(fields.redirect_uris)),
+        ),
+        editing(
+            client_id,
+            "client_uri",
+            "クライアント URI",
+            fields.client_uri,
+        ),
+        editing(client_id, "logo_uri", "ロゴ URI", fields.logo_uri),
+        editing(client_id, "webhook_url", "webhook URL", fields.webhook_url),
+        editing(
+            client_id,
+            "discord_support_server_invite_slug",
+            "サポートサーバーの招待 slug",
+            fields.discord_support_server_invite_slug,
+        ),
+        // The three fields whose values are a set the service defines, each with its own
+        // menu and nothing behind a button: a string select is the one select a message may
+        // carry with options we choose, which is exactly what an enumerated field is, and
+        // the set that comes back is the set that is sent.
+        text(format!(
+            "**アプリケーションの種類**（`application_type`）\n{}",
+            fields.application_type
+        )),
+        action_row(vec![select_many(
+            &crate::custom_id::ui::developer::custom_id_for_field(
+                crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
-                "client_name",
-                "クライアント名",
-                fields.client_name,
+                "application_type",
             ),
-            editing(
+            Some("種類を選ぶ"),
+            APPLICATION_TYPES
+                .iter()
+                .map(|kind| select_option(kind, kind, None))
+                .collect(),
+            1,
+            1,
+        )]),
+        text(format!(
+            "**グラントタイプ**（`grant_types`）\n{}",
+            listing(fields.grant_types)
+        )),
+        action_row(vec![select_many(
+            &crate::custom_id::ui::developer::custom_id_for_field(
+                crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
-                "redirect_uris",
-                "リダイレクト URI",
-                Some(&listing(fields.redirect_uris)),
+                "grant_types",
             ),
-            editing(
+            Some("グラントタイプを選ぶ"),
+            GRANT_TYPES
+                .iter()
+                .map(|kind| select_option(kind, kind, None))
+                .collect(),
+            0,
+            GRANT_TYPES.len() as u8,
+        )]),
+        text(format!(
+            "**レスポンスタイプ**（`response_types`）\n{}",
+            listing(fields.response_types)
+        )),
+        action_row(vec![select_many(
+            &crate::custom_id::ui::developer::custom_id_for_field(
+                crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
-                "client_uri",
-                "クライアント URI",
-                fields.client_uri,
+                "response_types",
             ),
-            editing(client_id, "logo_uri", "ロゴ URI", fields.logo_uri),
-            editing(client_id, "webhook_url", "webhook URL", fields.webhook_url),
-            editing(
+            Some("レスポンスタイプを選ぶ"),
+            RESPONSE_TYPES
+                .iter()
+                .map(|kind| select_option(kind, kind, None))
+                .collect(),
+            0,
+            RESPONSE_TYPES.len() as u8,
+        )]),
+        // The events the webhook wants, as the `type` values the deliveries
+        // carry: 2 for a claim update, 3 for a grant decision. A string
+        // select is the one select a message may carry with options we
+        // choose, which is exactly what an enumerated field is — the same
+        // shape as the two menus above, and for the same reason. The set
+        // that comes back is the set that is stored: checked is sent,
+        // unchecked is not, and empty is nothing — which needs no
+        // enforcement, because Discord lets the menu come back empty.
+        text(format!(
+            "**通知イベント**（`subscribed_events`）\n{}",
+            event_listing(fields.subscribed_events)
+        )),
+        action_row(vec![select_many(
+            &crate::custom_id::ui::developer::custom_id_for_field(
+                crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
-                "discord_support_server_invite_slug",
-                "サポートサーバーの招待 slug",
-                fields.discord_support_server_invite_slug,
+                "subscribed_events",
             ),
-            // The three fields whose values are a set the service defines, each with its own
-            // menu and nothing behind a button: a string select is the one select a message may
-            // carry with options we choose, which is exactly what an enumerated field is, and
-            // the set that comes back is the set that is sent.
-            text(format!(
-                "**アプリケーションの種類**（`application_type`）\n{}",
-                fields.application_type
-            )),
-            action_row(vec![select_many(
-                &crate::custom_id::ui::developer::custom_id_for_field(
-                    crate::custom_id::ui::developer::Screen::Edit,
-                    client_id,
-                    "application_type",
-                ),
-                Some("種類を選ぶ"),
-                APPLICATION_TYPES
-                    .iter()
-                    .map(|kind| select_option(kind, kind, None))
-                    .collect(),
-                1,
-                1,
-            )]),
-            text(format!(
-                "**グラントタイプ**（`grant_types`）\n{}",
-                listing(fields.grant_types)
-            )),
-            action_row(vec![select_many(
-                &crate::custom_id::ui::developer::custom_id_for_field(
-                    crate::custom_id::ui::developer::Screen::Edit,
-                    client_id,
-                    "grant_types",
-                ),
-                Some("グラントタイプを選ぶ"),
-                GRANT_TYPES
-                    .iter()
-                    .map(|kind| select_option(kind, kind, None))
-                    .collect(),
-                0,
-                GRANT_TYPES.len() as u8,
-            )]),
-            text(format!(
-                "**レスポンスタイプ**（`response_types`）\n{}",
-                listing(fields.response_types)
-            )),
-            action_row(vec![select_many(
-                &crate::custom_id::ui::developer::custom_id_for_field(
-                    crate::custom_id::ui::developer::Screen::Edit,
-                    client_id,
-                    "response_types",
-                ),
-                Some("レスポンスタイプを選ぶ"),
-                RESPONSE_TYPES
-                    .iter()
-                    .map(|kind| select_option(kind, kind, None))
-                    .collect(),
-                0,
-                RESPONSE_TYPES.len() as u8,
-            )]),
-            // The events the webhook wants, as the `type` values the deliveries
-            // carry: 2 for a claim update, 3 for a grant decision. A string
-            // select is the one select a message may carry with options we
-            // choose, which is exactly what an enumerated field is — the same
-            // shape as the two menus above, and for the same reason. The set
-            // that comes back is the set that is stored: checked is sent,
-            // unchecked is not, and empty is nothing — which needs no
-            // enforcement, because Discord lets the menu come back empty.
-            text(format!(
-                "**通知イベント**（`subscribed_events`）\n{}",
-                event_listing(fields.subscribed_events)
-            )),
-            action_row(vec![select_many(
-                &crate::custom_id::ui::developer::custom_id_for_field(
-                    crate::custom_id::ui::developer::Screen::Edit,
-                    client_id,
-                    "subscribed_events",
-                ),
-                Some("イベントを選ぶ"),
-                EVENT_TYPES
-                    .iter()
-                    .map(|kind| select_option(&kind.to_string(), event_name(*kind), None))
-                    .collect(),
-                0,
-                EVENT_TYPES.len() as u8,
-            )]),
-            // The secret is written on the screen rather than behind a button. The
-            // button was mine, not the page's: every response here is ephemeral, so
-            // revealing it on request shows it to the person already reading.
-            secret_block(secret),
-            // A row holds either buttons or one select, so the picker is on its own. It is a
-            // picker rather than a button because a button has no bot to connect with, and a bot
-            // is a user — Discord has the menu for that, so nobody types a snowflake.
-            action_row(vec![user_select(
-                &crate::custom_id::ui::developer::custom_id_for(
-                    crate::custom_id::ui::developer::Screen::Connect,
-                    client_id,
-                ),
-                "接続する Bot を選ぶ",
-            )]),
-        ],
-    )
+            Some("イベントを選ぶ"),
+            EVENT_TYPES
+                .iter()
+                .map(|kind| select_option(&kind.to_string(), event_name(*kind), None))
+                .collect(),
+            0,
+            EVENT_TYPES.len() as u8,
+        )]),
+        // The secret is written on the screen rather than behind a button. The
+        // button was mine, not the page's: every response here is ephemeral, so
+        // revealing it on request shows it to the person already reading.
+        secret_block(secret),
+        // A row holds either buttons or one select, so the picker is on its own. It is a
+        // picker rather than a button because a button has no bot to connect with, and a bot
+        // is a user — Discord has the menu for that, so nobody types a snowflake.
+        action_row(vec![user_select(
+            &crate::custom_id::ui::developer::custom_id_for(
+                crate::custom_id::ui::developer::Screen::Connect,
+                client_id,
+            ),
+            "接続する Bot を選ぶ",
+        )]),
+    ]);
+
+    container(Some(if connected { WORKING } else { REFUSED }), children)
 }
 
 /// One field that is free text: what it is now, and the button that opens its form.
@@ -532,6 +543,7 @@ mod tests {
                 false,
                 None,
                 Some("the-secret"),
+                Some("https://example.test/applications/verification?q=id"),
                 Fields {
                     client_name: None,
                     redirect_uris: &[],
@@ -578,6 +590,7 @@ mod tests {
                 None,
                 true,
                 Some("https://example.test/logo.png"),
+                None,
                 None,
                 Fields {
                     client_name: None,

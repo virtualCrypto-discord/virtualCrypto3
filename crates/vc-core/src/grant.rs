@@ -491,41 +491,19 @@ pub async fn allow_in_guild(
     write_grant(&mut connection, application_id, guild_id, &scopes, now).await
 }
 
-/// What taking a permission back did: which application, or nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Revoked {
-    /// A pending ask's `user_code` un-asked it: the application keeps nothing
-    /// to poll for.
-    Ask(i64),
-    /// A granted application's `client_id` dropped the issuing scope: the
-    /// grant row stays and the scope is gone.
-    Grant(i64),
-}
-
-/// Take a permission back, by the code the guild was shown or the application's
-/// own id.
+/// Take a permission back, by the application's own id.
 ///
-/// A pending ask's `user_code` un-asks it: the row stays, decided as nothing,
-/// and the application's poll reads the ask as gone. A granted application's
-/// `client_id` drops the issuing scope instead, and a guild token already issued
-/// stops issuing because its scopes are read from the grant. `None` is neither
-/// having been there to take back.
-pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<Option<Revoked>> {
-    let unasked = sqlx::query!(
-        r#"UPDATE grant_requests SET status = 'approved', updated_at = $3
-          WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'
-        RETURNING application_id"#,
-        guild_id,
-        code,
-        crate::model::utc_now()
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some(unasked) = unasked {
-        return Ok(Some(Revoked::Ask(unasked.application_id)));
-    }
-
+/// The permission is the `vc.issue` scope on the grant the application holds in
+/// this guild, so the grant is named by its `client_id` — the thing the guild's
+/// screen shows and the thing the application's own page sends. The grant row
+/// stays and the scope is gone, and a guild token already issued stops issuing
+/// because its scopes are read from the grant. `None` is nothing having been
+/// there to take back, which is the answer its caller wanted anyway.
+///
+/// An ask that is still pending is not this: it is the application's own
+/// business until the guild answers it, and a permission nobody was granted
+/// cannot be taken away.
+pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<Option<i64>> {
     let Ok(client_id) = Uuid::parse_str(code) else {
         return Ok(None);
     };
@@ -550,7 +528,7 @@ pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<Op
     .await?;
 
     match ungranted {
-        Some(row) => Ok(row.application_id.map(Revoked::Grant)),
+        Some(row) => Ok(row.application_id),
         None => Ok(None),
     }
 }
@@ -592,6 +570,97 @@ pub async fn grants_of(pool: &PgPool, application_id: i64) -> Result<Vec<Granted
             updated_at: row.updated_at,
         })
         .collect())
+}
+
+/// An application a guild has allowed to issue: the row the guild's screen shows
+/// and the subject of the button that takes the permission back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizedApplication {
+    pub client_id: String,
+    pub client_name: Option<String>,
+}
+
+/// A page of them, and where the pages around it are — the shape a screen that
+/// shows five rows and four arrows needs, as `OpenContracts` is for contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizedApplications {
+    pub applications: Vec<AuthorizedApplication>,
+    /// How many there are altogether, which is the number the screen may say.
+    pub total: i64,
+    /// Which page this is, counting from one, as the claim list's does.
+    pub page: i64,
+    /// The four places the arrows move to, each `None` when there is nowhere to
+    /// go — which is what makes a button disabled rather than absent.
+    pub first: Option<i64>,
+    pub prev: Option<i64>,
+    pub next: Option<i64>,
+    pub last: Option<i64>,
+}
+
+/// One page of the applications this guild has allowed to issue, newest grant
+/// first, and the count behind it.
+///
+/// The filter is in the statement rather than in the caller: only a grant that
+/// carries `vc.issue` is one the guild can take anything back from, and a page
+/// filled with grants that carry something else would hide the ones it can.
+///
+/// A pending ask is not here at all. It is the application's own business until
+/// the guild answers it, and the application holds both codes it needs to hear
+/// the answer with.
+pub async fn authorized_in_guild(
+    pool: &PgPool,
+    guild_id: i64,
+    page: i64,
+    limit: i64,
+) -> Result<AuthorizedApplications> {
+    let page = page.max(1);
+
+    let total = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!" FROM grants g
+            WHERE g.guild_id = $1
+              AND EXISTS (SELECT 1 FROM grant_scopes s
+                           WHERE s.grant_id = g.id
+                             AND s.scope = 'vc.issue'::virtual_crypto_scope_type)"#,
+        guild_id
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let rows = sqlx::query!(
+        r#"SELECT a.client_id::text AS "client_id!", a.client_name
+             FROM grants g
+             JOIN applications a ON a.id = g.application_id
+            WHERE g.guild_id = $1
+              AND EXISTS (SELECT 1 FROM grant_scopes s
+                           WHERE s.grant_id = g.id
+                             AND s.scope = 'vc.issue'::virtual_crypto_scope_type)
+            ORDER BY g.inserted_at DESC, g.id DESC
+            LIMIT $2
+           OFFSET $3"#,
+        guild_id,
+        limit,
+        limit * (page - 1)
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let last_page = ((total + limit - 1) / limit).max(1);
+
+    Ok(AuthorizedApplications {
+        applications: rows
+            .into_iter()
+            .map(|row| AuthorizedApplication {
+                client_id: row.client_id,
+                client_name: row.client_name,
+            })
+            .collect(),
+        total,
+        page,
+        first: (page > 1).then_some(1),
+        prev: (page > 1).then_some(page - 1),
+        next: (page < last_page).then_some(page + 1),
+        last: (page < last_page).then_some(last_page),
+    })
 }
 
 /// What a guild token turned out to be: which application, for which guild, and
@@ -696,56 +765,6 @@ pub async fn request_grant(
         status: row.status,
         expires_in: row.expires_in,
     })
-}
-
-/// A pending request as the guild's command lists it: the code the administrator
-/// types, the name to show, and the scopes being asked for — the three the
-/// approval is an answer to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingRequest {
-    pub id: i64,
-    pub application_id: i64,
-    pub client_id: String,
-    pub client_name: Option<String>,
-    pub user_code: String,
-    pub scopes: Vec<String>,
-}
-
-/// What a guild has been asked for and not yet answered, and still alive:
-/// an ask older than its `expires_in` is not shown, because the application
-/// has already been told it is gone.
-pub async fn requests_in_guild(
-    pool: &PgPool,
-    guild_id: i64,
-    now: OffsetDateTime,
-) -> Result<Vec<PendingRequest>> {
-    let rows = sqlx::query!(
-        r#"SELECT r.id, r.application_id, a.client_id::text AS "client_id!", a.client_name,
-                  r.user_code AS "user_code!: String", r.scopes AS "scopes!: Vec<String>",
-                  EXTRACT(EPOCH FROM (r.inserted_at + make_interval(secs => r.expires_in)))::bigint AS "expires_at!: i64"
-             FROM grant_requests r
-             JOIN applications a ON a.id = r.application_id
-            WHERE r.guild_id = $1 AND r.status = 'pending'
-            ORDER BY r.id"#,
-        guild_id
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let now = now.unix_timestamp();
-
-    Ok(rows
-        .into_iter()
-        .filter(|row| row.expires_at > now)
-        .map(|row| PendingRequest {
-            id: row.id,
-            application_id: row.application_id,
-            client_id: row.client_id,
-            client_name: row.client_name,
-            user_code: row.user_code,
-            scopes: row.scopes,
-        })
-        .collect())
 }
 
 /// A request as the application that made it reads it: the codes it polls with

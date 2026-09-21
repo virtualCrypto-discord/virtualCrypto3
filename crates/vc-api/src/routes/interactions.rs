@@ -188,18 +188,21 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         };
     }
 
-    // No grant component space: `/grant` answers with text and takes a typed
-    // code, so there are no buttons to dispatch.
+    // The grant buttons carry a head byte of their own, for the same reason: each
+    // names the application whose permission it takes back.
+    if let Some(custom_id) = custom_id
+        && crate::custom_id::ui::grant::parse(&crate::custom_id::parse(custom_id)).is_ok()
+    {
+        return match crate::command::grant::component(state, custom_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     match (component_type, custom_id) {
         (Some(2), Some(custom_id)) => {
             match crate::command::claim::button::handle(state, custom_id, payload).await {
-                Ok(body) => (StatusCode::OK, Json(body)).into_response(),
-                Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
-                Err(CommandError::Internal(error)) => error.into_response(),
-            }
-        }
-        (Some(3), Some(custom_id)) => {
-            match crate::command::claim::button::select(state, custom_id, payload).await {
                 Ok(body) => (StatusCode::OK, Json(body)).into_response(),
                 Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
                 Err(CommandError::Internal(error)) => error.into_response(),

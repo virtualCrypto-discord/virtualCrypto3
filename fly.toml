@@ -1,8 +1,8 @@
 # The application this replaces: the same internal port this server defaults to and
 # the same region. No `[env]` — a deploy sets the secrets under the names
-# `docs/deploy.md` lists, which are the ones this server reads. The `VCRYPTO_*`
-# spellings the app carries are not among them, except for the certificate pair,
-# which matches.
+# `docs/deploy.md` lists, which are the ones this server reads. The Elixir read only
+# two names from the environment itself (`VCRYPTO_WEBHOOK_PROXY_CERT` and `_KEY`), so
+# that pair is one name in both deployments and the rest are this service's.
 app = "virtualcrypto-prod"
 primary_region = "phx"
 

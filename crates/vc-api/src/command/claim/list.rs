@@ -9,12 +9,9 @@ use crate::command::{
     mention,
 };
 use crate::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
-use crate::custom_id::ui::select_menu::claim_select;
 use crate::state::AppState;
 
-/// `Listing.@max_column_count`: how many claims a page holds, and where the
-/// payloads of the rows below it start counting from.
-const MAX_COLUMN_COUNT: u8 = 5;
+/// `Listing.@max_column_count`: how many claims one page holds.
 const LIMIT: i64 = 5;
 
 /// `List.Component.page/2`: re-render the list for the operator, which is the
@@ -51,11 +48,16 @@ pub async fn page(state: &AppState, me: i64, options: ListOptions) -> Result<Val
     )
     .await?;
 
+    // The caller's own balances, because a row's approval button has to know whether the
+    // money is there before it can be offered as pressable.
+    let balances = vc_core::balance::for_discord_user(state.pool(), me).await?;
+
     Ok(render(
         options.position,
         &page,
         me,
         &options,
+        &balances,
         UPDATE_MESSAGE,
     ))
 }
@@ -135,11 +137,14 @@ pub async fn handle(
     )
     .await?;
 
+    let balances = vc_core::balance::for_discord_user(state.pool(), me).await?;
+
     Ok(render(
         position,
         &page,
         me,
         &options,
+        &balances,
         CHANNEL_MESSAGE_WITH_SOURCE,
     ))
 }
@@ -187,37 +192,21 @@ fn render(
     page: &ClaimPage,
     me: i64,
     options: &ListOptions,
+    balances: &[Balance],
     kind: i64,
 ) -> Value {
-    let pending: Vec<&ClaimView> = page
-        .claims
-        .iter()
-        .filter(|claim| claim.status.as_deref() == Some("pending"))
-        .collect();
-
     // The page's title was an embed's title: a bold line, with the list under it.
     let mut children = vec![crate::components::text(format!("**{}**", title(position)))];
 
     if page.claims.is_empty() {
         children.push(crate::components::text("表示する内容がありません。"));
     } else {
-        children.extend(fields(position, &page.claims, me, &[]));
+        children.extend(rows(position, &page.claims, me, options, balances));
     }
 
-    // The rows first: pagination and the menu change what is on the page rather than say
-    // anything about it.
-    let mut rows = vec![pagination_row(position, page, options)];
-
-    // The select menu lists what can still be acted on, so it is absent from an
-    // empty page.
-    if !pending.is_empty() {
-        rows.push(select_row(MAX_COLUMN_COUNT, &pending, me, options, &[]));
-    }
-
-    // The action row only appears once something has been selected, which a
-    // command cannot do.
-
-    children.extend(rows);
+    // The rows first: pagination changes what is on the page rather than saying anything
+    // about it.
+    children.push(pagination_row(position, page, options));
 
     json!({
         "type": kind,
@@ -238,40 +227,121 @@ fn title(position: Position) -> &'static str {
     }
 }
 
-/// `Listing.render_claim/3`.
-fn fields(position: Position, claims: &[ClaimView], me: i64, selected: &[i64]) -> Vec<Value> {
-    claims
-        .iter()
-        .map(|claim| {
-            let unit = claim.currency.unit.clone().unwrap_or_default();
-            let mut lines = vec![
-                format!("状態　: {}", render_status(claim.status.as_deref())),
-                format!("請求額: **{}** `{unit}`", claim.amount.unwrap_or_default()),
-            ];
-            lines.extend(users(position, claim));
-            lines.push(format!("請求日: {}", format_date_time(claim.inserted_at)));
+/// `Listing.render_claim/3`, one claim at a time: the lines it shows, then the buttons its
+/// own row offers.
+///
+/// A pending claim can be answered from its own row, under the same rules its own screen
+/// uses. A claim that is already decided shows no buttons: a screen that offers what it will
+/// refuse is a screen that lies.
+fn rows(
+    position: Position,
+    claims: &[ClaimView],
+    me: i64,
+    options: &ListOptions,
+    balances: &[Balance],
+) -> Vec<Value> {
+    let mut children = Vec::new();
 
-            let name = format!(
-                "{}{}{}",
-                render_selection(claim.status.as_deref(), selected.contains(&claim.id)),
-                render_rs_icon(me, claim.claimant.discord_id, claim.payer.discord_id),
-                claim.id
-            );
+    for claim in claims {
+        children.push(field(position, claim, me));
 
-            // The field's name and its value as one Text Display: a component has no `name`.
-            crate::components::text(format!("**{name}**\n{}", lines.join("\n")))
-        })
-        .collect()
+        if let Some(row) = claim_row(claim, me, options, balances) {
+            children.push(row);
+        }
+    }
+
+    children
 }
 
-/// `Listing.render_selection/2`: a pending claim is the only one that can be
-/// ticked, so every other status contributes nothing.
-fn render_selection(status: Option<&str>, selected: bool) -> &'static str {
-    match (status, selected) {
-        (Some("pending"), true) => "☑",
-        (Some("pending"), false) => "◻️",
-        _ => "",
+/// One claim's lines, as a Text Display: a component has no `name` for the field the
+/// Elixir's embed carried it as.
+fn field(position: Position, claim: &ClaimView, me: i64) -> Value {
+    let unit = claim.currency.unit.clone().unwrap_or_default();
+    let mut lines = vec![
+        format!("状態　: {}", render_status(claim.status.as_deref())),
+        format!("請求額: **{}** `{unit}`", claim.amount.unwrap_or_default()),
+    ];
+    lines.extend(users(position, claim));
+    lines.push(format!("請求日: {}", format_date_time(claim.inserted_at)));
+
+    let name = format!(
+        "{}{}",
+        render_rs_icon(me, claim.claimant.discord_id, claim.payer.discord_id),
+        claim.id
+    );
+
+    crate::components::text(format!("**{name}**\n{}", lines.join("\n")))
+}
+
+/// The three buttons one claim offers, under the same rules its own screen uses: an approval
+/// belongs to the payer and only with the money, a refusal belongs to the payer, and taking
+/// the claim back belongs to the claimant.
+///
+/// The payload is the bulk action's with a single id in it, so a press goes through the same
+/// handler a selection does and the list is redrawn the same way.
+fn claim_row(
+    claim: &ClaimView,
+    me: i64,
+    options: &ListOptions,
+    balances: &[Balance],
+) -> Option<Value> {
+    if claim.status.as_deref() != Some("pending") {
+        return None;
     }
+
+    let unit = claim.currency.unit.clone().unwrap_or_default();
+    let current = balances
+        .iter()
+        .find(|balance| balance.unit == unit)
+        .map(|balance| balance.amount)
+        .unwrap_or(0);
+
+    let payer = claim.payer.discord_id == Some(me);
+    let claimant = claim.claimant.discord_id == Some(me);
+    let amount = claim.amount.unwrap_or_default();
+
+    let button = |k: u8,
+                  emoji: &str,
+                  style: crate::components::ButtonStyle,
+                  action: Action,
+                  disabled: bool| {
+        let mut payload = claim_action(action).to_vec();
+        payload.extend_from_slice(&options.encode());
+        payload.extend_from_slice(&encode_claim_ids(&[claim.id]));
+
+        crate::components::icon_button(
+            &crate::custom_id::encode(k, &payload),
+            emoji,
+            style,
+            Some(disabled),
+        )
+    };
+
+    Some(crate::components::action_row(vec![
+        button(
+            5,
+            "✅",
+            crate::components::ButtonStyle::Success,
+            Action::Approve,
+            !(payer && current >= amount),
+        ),
+        // Grey rather than red, as the selection's row is: the ❌ is a red cross, and a red
+        // cross on a red button is the one button nobody can read.
+        button(
+            6,
+            "❌",
+            crate::components::ButtonStyle::Secondary,
+            Action::Deny,
+            !payer,
+        ),
+        button(
+            7,
+            "🗑️",
+            crate::components::ButtonStyle::Primary,
+            Action::Cancel,
+            !claimant,
+        ),
+    ]))
 }
 
 fn render_status(status: Option<&str>) -> &'static str {
@@ -355,260 +425,4 @@ fn page_custom_id(k: u8, position: Position, target: PageTarget, options: &ListO
     payload.extend_from_slice(&options.encode());
 
     crate::custom_id::encode(k, &payload)
-}
-
-/// `Listing.selection_select_row/5`: the claims that can still be acted on, with
-/// the options and the ids they are, so the selection comes back with them.
-fn select_row(
-    k: u8,
-    pending: &[&ClaimView],
-    me: i64,
-    options: &ListOptions,
-    selected: &[i64],
-) -> Value {
-    let ids: Vec<i64> = pending.iter().map(|claim| claim.id).collect();
-
-    let mut payload = claim_select().to_vec();
-    payload.extend_from_slice(&options.encode());
-    payload.extend_from_slice(&encode_claim_ids(&ids));
-
-    let choices: Vec<Value> = pending
-        .iter()
-        .map(|claim| {
-            json!({
-                "label": format!(
-                    "{}{}",
-                    render_rs_icon(me, claim.claimant.discord_id, claim.payer.discord_id),
-                    claim.id
-                ),
-                "value": claim.id.to_string(),
-                "description": format!(
-                    "{} {}",
-                    claim.amount.unwrap_or_default(),
-                    claim.currency.unit.clone().unwrap_or_default()
-                ),
-                "default": selected.contains(&claim.id),
-            })
-        })
-        .collect();
-
-    crate::components::action_row(vec![crate::components::select_many(
-        &crate::custom_id::encode(k, &payload),
-        // The options are the claims themselves, so there is no sentence to put above them.
-        None,
-        choices,
-        0,
-        u8::try_from(pending.len()).unwrap_or(u8::MAX),
-    )])
-}
-
-/// One currency's share of a selection: what the operator holds, against what is
-/// being asked of them.
-struct Quotation {
-    name: String,
-    unit: String,
-    current: i64,
-    // A selection can contain several individually valid bigint amounts.
-    quoted: i128,
-}
-
-fn quotations(selected: &[&ClaimView], me: i64, balances: &[Balance]) -> Vec<Quotation> {
-    let mut quotations: Vec<Quotation> = Vec::new();
-
-    for claim in selected {
-        let unit = claim.currency.unit.clone().unwrap_or_default();
-
-        let index = match quotations
-            .iter()
-            .position(|quotation| quotation.unit == unit)
-        {
-            Some(index) => index,
-            None => {
-                let current = balances
-                    .iter()
-                    .find(|balance| balance.unit == unit)
-                    .map(|balance| balance.amount)
-                    .unwrap_or(0);
-
-                quotations.push(Quotation {
-                    name: claim.currency.name.clone().unwrap_or_default(),
-                    unit,
-                    current,
-                    quoted: 0,
-                });
-
-                quotations.len() - 1
-            }
-        };
-
-        // Only what this operator would pay counts against them.
-        if claim.payer.discord_id == Some(me) {
-            quotations[index].quoted += i128::from(claim.amount.unwrap_or_default());
-        }
-    }
-
-    quotations
-}
-
-/// `Listing.render_quotation/1`: a lone balance when nothing is asked of them,
-/// and the arithmetic with a warning when more is asked than they hold.
-fn quotation_text(quotation: &Quotation) -> String {
-    let Quotation {
-        name,
-        unit,
-        current,
-        quoted,
-    } = quotation;
-
-    if *quoted == 0 {
-        return format!("**{name}**: `{current}{unit}`");
-    }
-
-    let warning = if i128::from(*current) < *quoted {
-        "⚠"
-    } else {
-        ""
-    };
-
-    format!(
-        "**{name}**: `{current}{unit}` - `{quoted}{unit}` => `{}{unit}`{warning}",
-        i128::from(*current) - quoted
-    )
-}
-
-/// `Listing.render/2` for `:select`: the page with the selection marked, what
-/// the selection would spend, and the buttons that act on it.
-pub fn selection(
-    position: Position,
-    claims: &[ClaimView],
-    me: i64,
-    options: &ListOptions,
-    selected: &[i64],
-    balances: &[Balance],
-) -> Value {
-    let pending: Vec<&ClaimView> = claims
-        .iter()
-        .filter(|claim| claim.status.as_deref() == Some("pending"))
-        .collect();
-    let selected_claims: Vec<&ClaimView> = pending
-        .iter()
-        .copied()
-        .filter(|claim| selected.contains(&claim.id))
-        .collect();
-
-    let quotations = quotations(&selected_claims, me, balances);
-
-    let mut children = vec![crate::components::text(format!("**{}**", title(position)))];
-
-    if claims.is_empty() {
-        children.push(crate::components::text("表示する内容がありません。"));
-    } else {
-        children.extend(fields(position, claims, me, selected));
-    }
-
-    if !quotations.is_empty() {
-        children.push(crate::components::text(format!(
-            "**残高**\n{}",
-            quotations
-                .iter()
-                .map(quotation_text)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )));
-    }
-
-    let mut rows = Vec::new();
-
-    if !pending.is_empty() {
-        rows.push(select_row(0, &pending, me, options, selected));
-    }
-
-    if let Some(row) = action_row(&selected_claims, &quotations, me, options) {
-        rows.push(row);
-    }
-
-    children.extend(rows);
-
-    json!({
-        "type": UPDATE_MESSAGE,
-        "data": crate::components::ephemeral(vec![crate::components::container(
-            Some(COLOR_BRAND as u32),
-            children,
-        )]),
-    })
-}
-
-/// `Listing.selection_execute_row/5`: what the selection allows, which is
-/// nothing to act on until something is selected.
-fn action_row(
-    selected: &[&ClaimView],
-    quotations: &[Quotation],
-    me: i64,
-    options: &ListOptions,
-) -> Option<Value> {
-    if selected.is_empty() {
-        return None;
-    }
-
-    let cancelable = selected
-        .iter()
-        .all(|claim| claim.claimant.discord_id == Some(me));
-    let deniable = selected
-        .iter()
-        .all(|claim| claim.payer.discord_id == Some(me));
-    let approvable = deniable
-        && quotations
-            .iter()
-            .all(|quotation| i128::from(quotation.current) >= quotation.quoted);
-
-    let ids: Vec<i64> = selected.iter().map(|claim| claim.id).collect();
-
-    let button = |k: u8,
-                  emoji: &str,
-                  style: crate::components::ButtonStyle,
-                  action: Action,
-                  disabled: Option<bool>| {
-        let mut payload = claim_action(action).to_vec();
-        payload.extend_from_slice(&options.encode());
-        payload.extend_from_slice(&encode_claim_ids(&ids));
-
-        crate::components::icon_button(
-            &crate::custom_id::encode(k, &payload),
-            emoji,
-            style,
-            // Only the actions that can be refused carry the flag; going back is always possible.
-            disabled,
-        )
-    };
-
-    Some(crate::components::action_row(vec![
-        button(
-            5,
-            "⬅️",
-            crate::components::ButtonStyle::Secondary,
-            Action::Back,
-            None,
-        ),
-        button(
-            6,
-            "✅",
-            crate::components::ButtonStyle::Success,
-            Action::Approve,
-            Some(!approvable),
-        ),
-        button(
-            7,
-            "❌",
-            crate::components::ButtonStyle::Danger,
-            Action::Deny,
-            Some(!deniable),
-        ),
-        button(
-            8,
-            "🗑️",
-            crate::components::ButtonStyle::Primary,
-            Action::Cancel,
-            Some(!cancelable),
-        ),
-    ]))
 }

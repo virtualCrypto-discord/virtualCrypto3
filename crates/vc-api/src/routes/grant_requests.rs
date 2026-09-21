@@ -4,9 +4,9 @@
 //! Not the Elixir's. There the only way an application got a grant was a person
 //! redeeming an authorization code in a browser, so an application had no call of
 //! its own that could ask. This is that ask, for the flows that have no browser:
-//! the row it writes is the one `/grant list` shows the guild, and a guild's yes
-//! is the grant the code flow would have written — after which the device poll
-//! answers with the token the endpoint wants.
+//! the row it writes is what a guild's yes answers, and that yes is the grant the
+//! code flow would have written — after which the device poll answers with the
+//! token the endpoint wants.
 //!
 //! The token is the application's own: `Kind::App` with `oauth2.register`, which
 //! is exactly the token registration answered with. A user token cannot ask a

@@ -3,24 +3,13 @@
 #
 #   . scripts/discord-env.sh
 #
-# The bot token is read from `.env` (gitignored); the application's id and
-# Ed25519 public key are then read back from Discord, so they can never drift
-# from whichever token is in `.env`. Anything already exported wins.
+# The bot token is `VCRYPTO_BOT_TOKEN`, the name the service reads; the application's
+# id and Ed25519 public key are then read back from Discord, so they can never drift
+# from whichever token was exported. Anything already exported wins.
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-if [[ -f "$repo_root/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$repo_root/.env"
-  set +a
-fi
-
-: "${DISCORD_API_KEY:?DISCORD_API_KEY (a bot token) must be set in .env}"
-
 # The names the service reads; `docs/deploy.md` has the full list.
-export VCRYPTO_BOT_TOKEN="${VCRYPTO_BOT_TOKEN:-$DISCORD_API_KEY}"
+: "${VCRYPTO_BOT_TOKEN:?VCRYPTO_BOT_TOKEN (a bot token) must be set in the environment}"
 
 application="$(
   curl -sS -H "Authorization: Bot $VCRYPTO_BOT_TOKEN" \

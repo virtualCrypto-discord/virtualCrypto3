@@ -178,37 +178,6 @@ async fn the_back_button_shows_the_list_again(pool: PgPool) {
     assert!(rendered.contains("**/bal**"), "{rendered}");
 }
 
-/// `/application help` is the screen `/help command:application` shows, with the
-/// way into the developer screens under it: the prose is written once and both
-/// read it.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn application_help_is_the_help_commands_screen(pool: PgPool) {
-    let response = interaction(
-        router(pool),
-        execute_from_guild(
-            json!({ "name": "application", "options": [{ "name": "help", "type": 1 }] }),
-            12,
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-
-    let rendered = response.body["data"].to_string();
-
-    assert!(rendered.contains("**/application**"), "{rendered}");
-    assert!(
-        rendered.contains("`register` 新しいアプリケーションを登録します。"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains(&vc_api::custom_id::ui::developer::custom_id(
-            vc_api::custom_id::ui::developer::Screen::List
-        )),
-        "the way into the developer screens: {rendered}"
-    );
-}
-
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn invite(pool: PgPool) {
     let response = interaction(
@@ -698,7 +667,8 @@ async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool)
 }
 
 /// Connect, which is a guild's: the id is already in the interaction, so nothing is typed,
-/// and the proof is Discord's — the guild's integration for this bot says the client id.
+/// and the proof is Discord's — the guild's integration for this bot carries the token the
+/// application's own screen shows.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
     const USER: i32 = 1;
@@ -708,10 +678,14 @@ async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
     support::insert_user(&pool, USER, DISCORD).await;
     let application = support::insert_application(&pool, DISCORD, "テスト").await;
     let client_id = support::client_id_of(&pool, application).await;
+    let described = format!(
+        "{}/applications/verification?q={client_id}",
+        support::links().site_url
+    );
 
     let discord = Arc::new(support::FakeDiscord::with_integrations(
         json!({ "name": "TestGuild" }),
-        &[(BOT, &client_id)],
+        &[(BOT, &described)],
     ));
 
     let response = interaction(
@@ -739,8 +713,8 @@ async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
     assert_eq!(bound, Some(BOT));
 }
 
-/// A bot whose integration does not name this application, and the answer is the service's
-/// own sentence about it — which is the thing a person has to act on, unchanged.
+/// A bot whose integration does not carry this application's token, and the answer is the
+/// service's own sentence about it — which is the thing a person has to act on, unchanged.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
     const USER: i32 = 1;
@@ -767,9 +741,8 @@ async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(
-        rendered.contains(
-            "the integration's description does not contain this application's client id"
-        ),
+        rendered
+            .contains("the integration's description does not contain this application's token"),
         "the service's own sentence, not a friendlier one: {rendered}"
     );
 

@@ -97,11 +97,8 @@ pub async fn revoke(
 
     // The page names the guild, and the application's own id comes from the
     // path: the revoke is the owner's, so the code is the `client_id` itself.
-    // A granted revoke pings the way an approval does — the device learns its
-    // token is dead without reading the diff — and there is no ask to un-ask
-    // here, only a grant to narrow.
     match vc_core::grant::revoke_grant(state.pool(), &client_id, guild_id).await {
-        Ok(Some(vc_core::grant::Revoked::Grant(application_id))) => {
+        Ok(Some(application_id)) => {
             state
                 .notifier()
                 .notify_grant_decided(application_id, guild_id);
@@ -109,10 +106,8 @@ pub async fn revoke(
             StatusCode::NO_CONTENT.into_response()
         }
         // Nothing to take back is the answer the caller wanted, which is what RFC
-        // 7009 says about revocation too. An un-asked pending ask cannot arrive
-        // here either: the page names a guild, not a code, so a revoke that
-        // names nothing pending is the same nothing.
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        // 7009 says about revocation too.
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => internal("the grant could not be written").response(),
     }
 }

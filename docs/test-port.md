@@ -36,7 +36,7 @@ screen's `vc.issue`. The following hold additions, all from `docs/issue.md`:
 | Area | Rust test file | cases |
 | --- | --- | --- |
 | the issuing endpoint | `tests/v2_issue.rs` | 16: guild tokens that issue and record themselves as given, scopeless grants refused before and after the body, user/app/unknown/expired/scopeless tokens refused, empty and guildless grants, pool and amount failures, and the key that issues once |
-| `/grant` in Discord | `tests/interactions_grant.rs` | 10: the list with the codes to type, approving by code, the grant carrying the asked scopes, an unknown code, revoking a pending code and a granted client id, a revoke that names nothing, the administrator bit, and the DM |
+| `/grant` in Discord | `tests/interactions_grant.rs` | 12: an ask that is not on the list, the list of what the guild allowed, approving by code, the approved application on the list, the grant carrying the asked scopes, an unknown code, the revoke button taking the scope back, a press without the administrator bit, six applications across two pages of five, the approval and the taking-back pinging the application, the administrator bit, and the DM |
 | the application's grants | `tests/guild_grants.rs` | 11: the empty list, the list with names and scopes, allowing by an administrator, issuing with what was allowed, the member refused, the unreadable guild, the snowflake that is not one, revoking by scope, somebody else's application, an application token, and a missing scope |
 | the application's asks and the device poll | `tests/grant_requests.rs` | 11: asking with scopes, the device and user codes, an ask without scopes, an unknown scope, the same ask twice, the list that reads the answer back, the poll pending then answering with the guild token that issues, unknown and expired codes, a poll without credentials, a user token, a missing scope, and the snowflake that is not one |
 | the scope a consent screen may ask for | `tests/oauth2_preauthorize.rs` (2 of) | `vc.issue` passes `preauthorize`, and an approval records it on the code the exchange writes the grant from |
@@ -72,7 +72,7 @@ checked against the locked balances before anything is written.
 | `claim/list/claim_list_approve_test.exs` | 16 | `tests/interactions_claim.rs` | ported |
 | `claim/list/claim_list_deny_test.exs` | 13 | `tests/interactions_claim.rs` | ported |
 | `claim/list/claim_list_cancel_test.exs` | 13 | `tests/interactions_claim.rs` | ported |
-| `claim/list/claim_list_select_test.exs` | 3 | `tests/interactions_claim.rs` | ported |
+| `claim/list/claim_list_select_test.exs` | 3 | | removed — the selection screen is gone: every pending row carries its own buttons, so there is nothing to select and no selection to act on |
 | `claim/list/claim_list_options_test.exs` | 1 | `src/claim_list.rs` unit tests | ported |
 | `claim/list/claim_list_received_test.exs` | 0 | | empty in Elixir too |
 | `claim/list/claim_list_claimed_test.exs` | 0 | | empty in Elixir too |

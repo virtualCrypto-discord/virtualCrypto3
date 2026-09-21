@@ -125,9 +125,17 @@ pub mod ui {
             Approve,
             Deny,
             Cancel,
-            Back,
         }
 
+        /// What a claim's button is about. The numbers are the space's own and the two
+        /// sets are not the same one: `Act` is a list row's action, which carries the list
+        /// options after the id, and `ActionSingle` is a claim's own screen, which carries
+        /// the id and nothing else.
+        ///
+        /// `Back` was here — the selection screen's way out, and the selection itself — and
+        /// the numbers it had are gone rather than reused: a message already in a DM carries
+        /// them, and an id this service no longer issues should be refused, not read as
+        /// something else.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Path {
             List(ListScope),
@@ -150,7 +158,6 @@ pub mod ui {
                 Action::Approve => 4,
                 Action::Deny => 5,
                 Action::Cancel => 6,
-                Action::Back => 7,
             };
 
             [0xF0, id]
@@ -161,7 +168,6 @@ pub mod ui {
                 Action::Approve => 8,
                 Action::Deny => 9,
                 Action::Cancel => 10,
-                Action::Back => 11,
             };
 
             [0xF0, id]
@@ -177,7 +183,6 @@ pub mod ui {
                 4 => Path::Act(Action::Approve),
                 5 => Path::Act(Action::Deny),
                 6 => Path::Act(Action::Cancel),
-                7 => Path::Act(Action::Back),
                 8 => Path::ActionSingle(Action::Approve),
                 9 => Path::ActionSingle(Action::Deny),
                 10 => Path::ActionSingle(Action::Cancel),
@@ -185,23 +190,6 @@ pub mod ui {
             };
 
             Ok((path, data))
-        }
-    }
-
-    pub mod select_menu {
-        use super::{UiError, parse_id};
-
-        pub fn claim_select() -> [u8; 2] {
-            [0xF0, 1]
-        }
-
-        pub fn parse(source: &[u8]) -> Result<([&'static str; 2], Vec<u8>), UiError> {
-            let (id, data) = parse_id(source)?;
-
-            match id {
-                1 => Ok((["claim", "select"], data)),
-                _ => Err(UiError::Unknown(id)),
-            }
         }
     }
 
@@ -467,6 +455,116 @@ pub mod ui {
             let number = text.parse().map_err(|_| UiError::Head)?;
 
             Ok(read(number))
+        }
+    }
+
+    /// The buttons a guild's `/grant` screen offers: taking an application's
+    /// permission back, or moving between pages of the list.
+    ///
+    /// Not from the Elixir — it had no list of what a guild had allowed and no
+    /// call that took a permission away — so what this mirrors is the shape of
+    /// the spaces beside it, and a head byte of its own for the contract space's
+    /// reason: these ids carry a `client_id` after the action, and a parser that
+    /// only accepts its own head refuses every other space's bytes rather than
+    /// reading them as its own.
+    pub mod grant {
+        use super::UiError;
+
+        const HEAD: u8 = 0xF4;
+
+        /// The head this space writes, so a test and a screen agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        /// Where a pagination button moves the list, which is the contract
+        /// list's four moves rather than a cursor: a cursor cannot say "back".
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Page {
+            First,
+            Previous,
+            Next,
+            Last,
+        }
+
+        /// What a button in this space is about: one application's permission, or
+        /// a move from one page of the list to another.
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum Pressed {
+            Revoked(String),
+            Paged(Page, i64),
+        }
+
+        fn page_id(page: Page) -> u8 {
+            match page {
+                Page::First => 2,
+                Page::Previous => 3,
+                Page::Next => 4,
+                Page::Last => 5,
+            }
+        }
+
+        /// The string the revoke button carries: the action, then the application
+        /// it is about.
+        ///
+        /// The `client_id` travels as its own text rather than packed into bits,
+        /// as the developer space's does: it is 36 characters, the limit is a
+        /// hundred, and the readable form is one a test can write down and a
+        /// person can recognise in a log.
+        pub fn revoke_custom_id(client_id: &str) -> String {
+            let mut data = vec![HEAD, 1];
+            data.extend_from_slice(client_id.as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        /// The string a pagination button carries: which move, then where to.
+        ///
+        /// The same shape as a revoke's, because it is the same space: the text
+        /// is a page number here and a `client_id` there, and the id says which.
+        pub fn page_custom_id(page: Page, number: i64) -> String {
+            let mut data = vec![HEAD, page_id(page)];
+            data.extend_from_slice(number.to_string().as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<Pressed, UiError> {
+            let [head, id, rest @ ..] = source else {
+                return Err(UiError::Head);
+            };
+
+            if *head != HEAD {
+                return Err(UiError::Head);
+            }
+
+            // The packing left-aligns the last group, so a decoded payload comes
+            // back padded with NULs — the module above says so. Neither a uuid nor
+            // a number contains one, which is what makes cutting them the inverse
+            // of what went in.
+            let trimmed = rest
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&rest[..0], |end| &rest[..=end]);
+            let text = || String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head);
+
+            match id {
+                1 => Ok(Pressed::Revoked(text()?)),
+                2..=5 => {
+                    let page = match id {
+                        2 => Page::First,
+                        3 => Page::Previous,
+                        4 => Page::Next,
+                        _ => Page::Last,
+                    };
+
+                    Ok(Pressed::Paged(
+                        page,
+                        text()?.parse().map_err(|_| UiError::Head)?,
+                    ))
+                }
+                other => Err(UiError::Unknown(u16::from(*other))),
+            }
         }
     }
 
@@ -754,6 +852,50 @@ mod tests {
         );
         assert_eq!(
             ui::help::parse(&[ui::help::head(), 9]),
+            Err(UiError::Unknown(9))
+        );
+    }
+
+    /// What the guild's screen would show and what its button says have to
+    /// survive the round trip together: Discord sends the `custom_id` back and
+    /// nothing else, and the revoke is about exactly one application.
+    #[test]
+    fn a_grant_button_survives_the_round_trip() {
+        let client_id = "3f1c2f4e-9a11-4d2b-8c3e-5f6a7b8c9d0e";
+        let encoded = ui::grant::revoke_custom_id(client_id);
+        let pressed = ui::grant::parse(&parse(&encoded)).expect("a known action");
+
+        assert_eq!(pressed, ui::grant::Pressed::Revoked(client_id.to_owned()));
+        assert!(
+            encoded.chars().count() <= 100,
+            "{} chars",
+            encoded.chars().count()
+        );
+    }
+
+    /// And a page's number survives the same way, in the same space: what tells
+    /// them apart is the id byte, which is why the text may mean an application
+    /// or a page.
+    #[test]
+    fn a_grant_page_survives_the_round_trip() {
+        let encoded = ui::grant::page_custom_id(ui::grant::Page::Last, 3);
+        let pressed = ui::grant::parse(&parse(&encoded)).expect("a known page");
+
+        assert_eq!(pressed, ui::grant::Pressed::Paged(ui::grant::Page::Last, 3));
+    }
+
+    /// Its own head is what keeps it out of the other spaces of a guild's
+    /// screen, and theirs out of it: the contract buttons carry a number where
+    /// this one carries a `client_id`.
+    #[test]
+    fn another_spaces_head_is_not_a_grants() {
+        assert_eq!(ui::grant::parse(&[0xF0, 1, b'7']), Err(UiError::Head));
+        assert_eq!(
+            ui::grant::parse(&[ui::contract::head(), 1, b'7']),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::grant::parse(&[ui::grant::head(), 9, b'7']),
             Err(UiError::Unknown(9))
         );
     }

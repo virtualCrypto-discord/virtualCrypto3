@@ -79,8 +79,8 @@ The 201 answers the device flow's four values: `device_code` (what the poll
 names), `user_code` (what the administrator types, eight characters), and
 `expires_in` (how long the ask lives, ten minutes unless asked shorter).
 `verification_uri` is `"discord"`: there is no URI to open, because the
-approval happens in the guild — `/grant list` shows the pending asks with the
-codes to type.
+approval happens in the guild, where the administrator types the code the
+application put in front of them.
 
 ### 1. The application's own page
 
@@ -101,14 +101,18 @@ For the guild that never opens a browser — and the only way a guild that is no
 the application's owner says yes. `/grant` is guild-only and asks the
 administrator bit, like `/issue` beside it:
 
-- `/grant list` shows what the guild has been asked and not answered: the name,
-  the `user_code` to type, and the scopes being asked for. Read-only on
-  purpose — the approval is typed, not pressed.
-- `/grant approve code:<user_code>` approves that ask and writes the grant from
+- `/grant list` shows the applications this guild has allowed to issue, five to a
+  page, each with the button that takes the permission back. Asks are not here:
+  they are the application's own business, and
+  `GET /oauth2/clients/@me/grant-requests` is where the application reads them.
+- `/grant approve code:<user_code>` approves an ask and writes the grant from
   its scopes. A code that names nothing pending here is refused the same way
   whether it never existed, belongs to another guild, or already expired.
-- `/grant revoke code:<user_code|client_id>` takes a permission back: a pending
-  code un-asks it, and a granted `client_id` drops the issuing scope.
+- The list's revoke button takes a permission back by the application it belongs
+  to: the issuing scope goes and the grant row stays, which is what a guild token
+  already issued is read from — it stops issuing without being told. The owner's
+  page has the same taking-back behind
+  `DELETE /applications/{client_id}/grants/{guild_id}`.
 
 There is no refusal anywhere in this command on purpose: an approval is the
 only decision, and an ask that is never approved simply stays pending until it

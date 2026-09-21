@@ -1,9 +1,11 @@
 //! Contract tests for `POST /applications/{id}/connect`.
 //!
-//! These cover the request rather than the conversation with Discord. The happy path
-//! needs a guild whose integrations contain this application's client id, which the
-//! fake does not model yet — it answers an empty guild — so what is here is what can be
-//! reached: the caller's kind, ownership, and the ids.
+//! These cover the request rather than the conversation with Discord: the caller's kind,
+//! ownership, the ids, and the one thing the caller cannot put in the request — the
+//! description. What a bot's description has to carry is the token the application's own
+//! screen shows, this site's `/applications/verification?q=<client_id>` address, and the
+//! fake answers integrations whose description a test writes, so both sides are
+//! reachable.
 //!
 //! The ids are the part worth testing. A Discord id is a snowflake around 10^18 and
 //! JSON's number is a double that stops counting exactly at 2^53, so the ids arrive as
@@ -38,8 +40,8 @@ const A_CLIENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 const A_SNOWFLAKE: i64 = 900_000_000_000_000_001;
 const A_SNOWFLAKE_AS_TEXT: &str = "900000000000000001";
 
-/// The application's `client_id`, which is the string the integration's description
-/// must contain for a connect to be allowed.
+/// The application's `client_id`, which is the string a connect names the application
+/// by, and what the token is built from.
 async fn client_id_of(pool: &PgPool, application: i64) -> String {
     sqlx::query_scalar!(
         "SELECT client_id::text FROM applications WHERE id = $1",
@@ -50,6 +52,16 @@ async fn client_id_of(pool: &PgPool, application: i64) -> String {
     .expect("the row")
     // The column is nullable, but an application without a client id is not one.
     .expect("a client id")
+}
+
+/// The token a bot's description has to carry: the site's address for the page that warns
+/// about pasting it there, with this application named — what the application's own screen
+/// shows the operator.
+fn token_of(client_id: &str) -> String {
+    format!(
+        "{}/applications/verification?q={client_id}",
+        support::links().site_url
+    )
 }
 
 async fn connect(pool: PgPool, token: &str, client_id: &str, body: Value) -> Response {
@@ -221,18 +233,19 @@ async fn an_app_token_is_401(pool: PgPool) {
 }
 
 /// The whole of a connect: the integration is found by the bot's id, its description is
-/// checked for the client id, and the bot's id is written onto the application's own
-/// account. That account had no discord id, which is what makes it the application's.
+/// checked for the token, and the bot's id is written onto the application's own account.
+/// That account had no discord id, which is what makes it the application's.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_bot_described_with_the_client_id_is_bound(pool: PgPool) {
+async fn a_bot_described_with_the_token_is_bound(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
     let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+    let described = token_of(&client_id);
 
     let discord = Arc::new(FakeDiscord::with_integrations(
         json!({ "name": "TestGuild" }),
-        &[(BOT_ID, &client_id)],
+        &[(BOT_ID, &described)],
     ));
 
     let response = connect_with(
@@ -257,11 +270,49 @@ async fn a_bot_described_with_the_client_id_is_bound(pool: PgPool) {
     assert_eq!(bound, Some(BOT_ID));
 }
 
-/// The bot is in the guild and the integration is there, but the description does not
-/// name this application — so nothing is written. This is the check that keeps a bot
-/// from being claimed by an application that merely knows its id.
+/// And the token is the address rather than the `client_id` inside it: a description that
+/// merely names the application is not one somebody wrote this handshake into, and the
+/// `client_id` is public — the screen prints it beside the token.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_bot_described_without_the_client_id_is_400(pool: PgPool) {
+async fn a_bot_described_with_the_client_id_alone_is_400(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({ "name": "TestGuild" }),
+        &[(BOT_ID, &client_id)],
+    ));
+
+    let response = connect_with(
+        pool.clone(),
+        discord,
+        &token,
+        &client_id,
+        json!({ "bot_id": BOT_ID.to_string(), "guild_id": A_SNOWFLAKE_AS_TEXT }),
+    )
+    .await;
+
+    assert_eq!(response.status, 400, "{:?}", response.body);
+    assert_eq!(response.body["error"], "invalid_description");
+
+    let bound = sqlx::query_scalar!(
+        "SELECT discord_id FROM users WHERE application_id = $1",
+        application
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the account");
+
+    assert_eq!(bound, None, "nothing was written");
+}
+
+/// The bot is in the guild and the integration is there, but the description says
+/// something else — so nothing is written. This is the check that keeps a bot from being
+/// claimed by an application that merely knows its id.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_bot_described_without_the_token_is_400(pool: PgPool) {
     insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
     let client_id = client_id_of(&pool, application).await;
@@ -314,10 +365,11 @@ async fn a_bot_another_application_holds_is_409(pool: PgPool) {
     let second = insert_application(&pool, OWNER_DISCORD_ID, "second").await;
     let client_id = client_id_of(&pool, second).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+    let described = token_of(&client_id);
 
     let discord = Arc::new(FakeDiscord::with_integrations(
         json!({ "name": "TestGuild" }),
-        &[(BOT_ID, &client_id)],
+        &[(BOT_ID, &described)],
     ));
 
     let response = connect_with(
@@ -431,15 +483,16 @@ async fn the_id_the_list_hands_out_is_the_id_a_connect_takes(pool: PgPool) {
     let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
     let client_id = client_id_of(&pool, application).await;
     let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+    let described = token_of(&client_id);
 
     let discord = Arc::new(FakeDiscord::with_integrations(
         json!({ "name": "TestGuild" }),
-        &[(BOT_ID, &client_id)],
+        &[(BOT_ID, &described)],
     ));
 
-    // What the application list shows, read the way the page reads it: the description
-    // on the connect page has to name this string, so it is the one Discord is asked
-    // about below.
+    // What the application list shows, read the way the page reads it: the description on
+    // the connect screen has to carry this application's token, which is built from this
+    // string, and it is the id the request below names as well.
     let listed = get(
         vc_api::router(state(pool.clone(), discord.clone())),
         "/oauth2/clients",

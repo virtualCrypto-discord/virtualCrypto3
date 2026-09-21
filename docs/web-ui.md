@@ -285,12 +285,16 @@ assigns the application, its owner account and the entered `bot_id`/`guild_id`, 
 
 `verify` (l.41) is the check, and the mechanism is worth stating: it reads the
 guild's **integrations** from Discord (`get_guild_integrations_with_status_code`,
-l.46) and looks for one whose `application.description` **contains the
-application's uuid** (l.60). The bot's integration description is therefore the
-thing the application's owner writes the uuid into, and the service verifies
-ownership by reading it back from Discord rather than by trusting the browser. On a
-match it records the bot's id and answers 「認証成功しました。トークンは削除して差し支えありません。」
-— the token may be deleted (l.65-70).
+l.46) and looks for one whose `application.description` **contains the token the
+page assigned** (l.60). `mount` set that token to
+`"https://vcrypto.sumidora.com/applications/verification?q=" <> UUID.uuid4()` — a
+fresh one per page view — so what the operator pastes is a URL, and not the
+application's `client_id`, which the same page prints above it as 「アプリケーションID」.
+The bot's integration description is therefore the thing the owner writes the token
+into, and the service verifies ownership by reading it back from Discord rather than
+by trusting the browser. On a match it records the bot's id and answers
+「認証成功しました。トークンは削除して差し支えありません。」 — the token may be deleted
+(l.65-70).
 
 Two failure paths read the guild (l.73) and the user (l.97) for a message. One
 of them, at l.66, calls `String.to_integer` on the bot id — the same shape as the
@@ -308,16 +312,17 @@ in front of it, and the frontend work starts by writing them.
 
 What those endpoints have to do is the part that *is* read here: read the guild's
 integrations from Discord (`get_guild_integrations_with_status_code`, l.46) and find
-one whose `application.description` contains the application's uuid (l.60). That is the
-whole verification — ownership is proved by reading back from Discord what the
-operator wrote into the bot's integration description, not by trusting the form.
+one whose `application.description` contains the token the page assigns (l.60) —
+which is this address with an application named in it. That is the whole verification
+— ownership is proved by reading back from Discord what the operator wrote into the
+bot's integration description, not by trusting the form.
 
 ### What it actually does, now read
 
 Two conditions, and the first is the one that is easy to miss: the target integration
 is the one whose `application.bot.id` **equals** the submitted bot id (l.50-57), and
-only then must its `application.description` **contain** the application's uuid (l.60).
-So the uuid is a second signature on an integration already identified by its bot, not
+only then must its `application.description` **contain** the page's token (l.60).
+So the token is a second signature on an integration already identified by its bot, not
 the way it is found.
 
 And it writes something. On success it calls
@@ -325,7 +330,7 @@ And it writes something. On success it calls
 application account's `discord_id` is set to the bot's. That is the point of the whole
 flow: an application's account is created with no Discord id, and connecting binds it
 to the bot that speaks for it, having checked with Discord that the bot is in the guild
-and that its description carries this application's uuid.
+and that its description carries this application's token.
 
 The failures are distinguished rather than collapsed, which is most of the file:
 
@@ -463,9 +468,9 @@ The remaining branches are all about the two ids being wrong in different ways:
 - the bot id names a **user rather than a bot** → said by reading the user and checking
   `bot`, naming them (l.108-113).
 - the bot id names **nobody** → 404, and said so (l.115-120).
-- the integration was found but its description **does not contain the uuid** → the
+- the integration was found but its description **does not contain the token** → the
   bot's own username is given, because the operator is looking at it when they edit
-  the description (l.123-136). The message calls the uuid 「トークン」, which is the
+  the description (l.123-136). The message calls the token 「トークン」, which is the
   word the page's own copy uses.
 
 And one branch that is a rule rather than a message:

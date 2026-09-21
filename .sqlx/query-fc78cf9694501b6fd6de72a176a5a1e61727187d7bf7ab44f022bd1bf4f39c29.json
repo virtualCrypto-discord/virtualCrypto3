@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM grants g\n            WHERE g.guild_id = $1\n              AND EXISTS (SELECT 1 FROM grant_scopes s\n                           WHERE s.grant_id = g.id\n                             AND s.scope = 'vc.issue'::virtual_crypto_scope_type)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fc78cf9694501b6fd6de72a176a5a1e61727187d7bf7ab44f022bd1bf4f39c29"
+}

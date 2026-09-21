@@ -10,8 +10,8 @@ const USER_DISCORD_ID: i64 = 500_000_000_000_000_001;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_002;
 const GUILD: i64 = 900_000_000_000_000_001;
 
-/// One expired row and one still-good row in each of the three tables, so that
-/// what the purge does and what it leaves are both visible.
+/// One expired row and one still-good row in every table the purge covers, so
+/// that what it does and what it leaves are both visible.
 async fn rows(pool: &PgPool) {
     insert_user(pool, USER, USER_DISCORD_ID).await;
     let application = insert_application(pool, OWNER_DISCORD_ID, "an application").await;
@@ -84,6 +84,31 @@ async fn rows(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("a code row");
+
+        // An ask, whose expiry is the moment it was made plus what it asked for
+        // rather than a column of its own — so an hour ago is what puts the first
+        // one past its ten minutes, where the other rows' second would not. A guild
+        // each, because one guild may hold only one pending ask at a time.
+        let asked_at = if name == "live" {
+            "0 seconds"
+        } else {
+            "-1 hour"
+        };
+
+        sqlx::query(
+            "INSERT INTO grant_requests
+                 (application_id, guild_id, scopes, device_code, user_code, expires_in,
+                  inserted_at, updated_at)
+             VALUES ($1, $2, ARRAY['vc.issue']::virtual_crypto_scope_type[],
+                     gen_random_uuid(), $3, 600, now() + $4::interval, now())",
+        )
+        .bind(application)
+        .bind(GUILD + i64::from(name == "live"))
+        .bind(name)
+        .bind(asked_at)
+        .execute(pool)
+        .await
+        .expect("an ask");
     }
 }
 
@@ -99,16 +124,18 @@ async fn counted(pool: &PgPool, statement: &'static str) -> i64 {
 /// One expired and one still-good row per table, except `refresh_tokens`: it
 /// holds one per grant — that is what rotating a refresh token means — so its
 /// only row is the expired one.
-const COUNTS: [(&str, i64); 5] = [
+const COUNTS: [(&str, i64); 6] = [
     ("SELECT count(*) FROM user_access_tokens", 1),
     ("SELECT count(*) FROM payments_idempotency", 1),
     ("SELECT count(*) FROM authorization_codes", 1),
     ("SELECT count(*) FROM access_tokens", 1),
     ("SELECT count(*) FROM refresh_tokens", 0),
+    ("SELECT count(*) FROM grant_requests", 1),
 ];
 
-/// An expired row goes and a live one stays, in every table that carries an
-/// `expires` — which is what makes the tables the size of what is still usable.
+/// An expired row goes and a live one stays, in every table the purge covers —
+/// which is what makes the tables the size of what is still usable, and what keeps
+/// an ask's dead codes from being rows nothing reads.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn expired_rows_go_and_live_ones_stay(pool: PgPool) {
     rows(&pool).await;

@@ -151,15 +151,17 @@ fn contract() -> Value {
 /// an application helped itself to.
 ///
 /// There is no refusal here on purpose: an approval is the only decision, and an
-/// ask that is never approved simply stays pending until it expires.
+/// ask that is never approved simply stays pending until it expires. The approval
+/// takes a code because only the application can put one in front of a person;
+/// taking a permission back is the list's own button, which names the application.
 fn grant() -> Value {
     json!({
         "name": "grant",
-        "description": "申請コードを指定してこのサーバーでの発行を許可します。管理者権限が必要です。",
+        "description": "アプリケーションにこのサーバーでの発行を許可します。管理者権限が必要です。",
         "options": [
             {
                 "name": "list",
-                "description": "発行を申請しているアプリケーションの一覧を表示します。",
+                "description": "発行を許可しているアプリケーションの一覧を表示します。",
                 "type": 1,
             },
             {
@@ -169,20 +171,7 @@ fn grant() -> Value {
                 "options": [
                     {
                         "name": "code",
-                        "description": "承認する申請のコードです。/grant list で確認できます。",
-                        "type": 3,
-                        "required": true,
-                    },
-                ],
-            },
-            {
-                "name": "revoke",
-                "description": "このサーバーでの発行の許可を取り消します。",
-                "type": 1,
-                "options": [
-                    {
-                        "name": "code",
-                        "description": "取り消す申請のコード、または許可済みの client_id です。",
+                        "description": "アプリケーションが表示する申請コードです。",
                         "type": 3,
                         "required": true,
                     },
@@ -333,11 +322,6 @@ fn application() -> Value {
                 "description": "アプリケーションの詳細を表示します。",
                 "type": 1,
                 "options": [client_id_option()],
-            },
-            {
-                "name": "help",
-                "description": "このコマンドの使い方を表示します。",
-                "type": 1,
             },
         ],
     })

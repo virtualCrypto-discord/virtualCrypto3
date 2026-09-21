@@ -124,7 +124,9 @@ fn action_row(claim: &ClaimView, me: i64, current: Option<i64>) -> Value {
         crate::components::icon_button(
             &action_custom_id(2, ButtonAction::Deny, claim.id),
             "❌",
-            crate::components::ButtonStyle::Danger,
+            // Grey rather than red, for the list's reason: the ❌ is a red cross, and a red
+            // cross on a red button is the one button on this row nobody can read.
+            crate::components::ButtonStyle::Secondary,
             Some(deny),
         ),
         crate::components::icon_button(

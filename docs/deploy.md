@@ -6,10 +6,13 @@ correct as this list.
 
 ## What the server requires
 
-**The names are the deployment's own**: the `VCRYPTO_*` secrets `virtualcrypto-prod`
-already carries, which is what the Elixir reads, plus `DATABASE_URL` and
-`SECRET_KEY_BASE`, which are Phoenix's and sqlx's. The port reads them as they are —
-there is no second spelling of them to keep in step.
+**The names are this service's own**: the `VCRYPTO_*` secrets `virtualcrypto-prod`
+carries, plus `DATABASE_URL` and `SECRET_KEY_BASE`, which are Phoenix's and sqlx's.
+The port reads them as they are — there is no second spelling of them to keep in step.
+Two of them are older than the port: `VCRYPTO_WEBHOOK_PROXY_CERT` and
+`VCRYPTO_WEBHOOK_PROXY_KEY` are the names the Elixir itself read from the environment
+(`config/runtime.exs`). The rest were config-file values there, so a name for them in
+the environment is one this service introduced.
 
 This is what `require_env` refuses to start without, each named in the error it exits
 with.

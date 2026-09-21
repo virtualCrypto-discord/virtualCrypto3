@@ -2,9 +2,10 @@
   // The old site's `readme.html.eex`, whose text the markup below is. It was a
   // server-rendered page there and is a client route here.
   //
-  // It is worth a page of its own because of what the connect flow checks: an
-  // application's id has to appear in a bot's description, so anything that gets
-  // somebody to put an id there is doing it for a reason that is not theirs.
+  // It is worth a page of its own because of what the connect token is: this address
+  // with an application in the query, which the operator pastes into a bot's own
+  // description. So anything that gets somebody to put this address in a description is
+  // doing it for a reason that is not theirs.
   //
   // The old page's spelling is kept as it was, `紐つける` and all.
 </script>

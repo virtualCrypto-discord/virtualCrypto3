@@ -22,7 +22,7 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use vc_core::contract::{Contract, ContractError};
 
-/// How many contracts one screen shows, for `/grant list`'s reason: five fits in
+/// How many contracts one screen shows, for the grant list's reason: five fits in
 /// one message without scrolling it off the screen, and a sixth waits for the
 /// screen the next answer redraws.
 const MAX_CONTRACTS: usize = 5;

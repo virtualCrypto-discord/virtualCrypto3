@@ -289,6 +289,26 @@ Elixir's own wording for this clause cannot be checked from here (`Rest.md` is n
 in this repository), so this is recorded as a deliberate difference rather than a
 correction.
 
+### The claim list's rows act, and nothing is selected
+
+The Elixir's list answered a multi-select menu and one action row that appeared
+once something was chosen: a claim could be ticked, several could be approved or
+refused at once, and a quotation line said what the selection would spend. The
+port kept that and has now dropped it. Every **pending** claim carries its own
+`✅`／`❌`／`🗑️` row, under the same rules the claim's own screen uses — an
+approval is the payer's and only with the money, a refusal is the payer's, and
+taking the claim back is the claimant's — and a claim that is already decided
+carries none, because a screen that offers what it will refuse is a screen that
+lies.
+
+What is gone with it: the menu, the selection screen with its quotation, and the
+`☑`／`◻️` marks a ticked row used to carry. The action row's ids (7 and 11,
+`Act::Back` and `ActionSingle::Back`) are refused rather than reused, because a
+message already in a DM carries them. Bulk approval is still one request
+(`vc_core::claim::update_claims/2` takes a list), but the Discord surface no
+longer offers a way to build one: a page of five is four presses fewer than it
+was, and the person pressing them sees which claim each press is about.
+
 ### The claim is in the write's transaction
 
 The Elixir's idempotency plug claims the key and *then* calls the controller, in a

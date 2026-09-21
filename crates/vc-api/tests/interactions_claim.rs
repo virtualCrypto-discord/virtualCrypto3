@@ -10,7 +10,6 @@ use sqlx::PgPool;
 use support::{ClaimSet, execute_from_guild, fake, get_amount, interaction, setup_claim, state};
 use vc_api::claim_list::{ListOptions, Page, Position};
 use vc_api::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
-use vc_api::custom_id::ui::select_menu::claim_select;
 
 const COLOR_ERROR: i64 = 0x00EA_3875;
 const COLOR_BRAND: i64 = 6_431_213;
@@ -96,7 +95,7 @@ fn assert_shown(response: &support::Response, claim_id: i64, claim: &ClaimSet, i
     let buttons = row["components"].as_array().expect("the buttons");
     assert_eq!(buttons.len(), 3);
 
-    for (button, (style, emoji)) in buttons.iter().zip([(3, "✅"), (4, "❌"), (1, "🗑️")]) {
+    for (button, (style, emoji)) in buttons.iter().zip([(3, "✅"), (2, "❌"), (1, "🗑️")]) {
         assert_eq!(button["type"], json!(2));
         assert_eq!(button["style"], json!(style));
         assert_eq!(button["emoji"]["name"], json!(emoji));
@@ -828,15 +827,6 @@ fn page_custom_id(k: u8, position: Position, page: Page, options: &ListOptions) 
     vc_api::custom_id::encode(k, &payload)
 }
 
-/// `Listing.selection_select_row/5`'s payload.
-fn select_custom_id(ids: &[i64], options: &ListOptions) -> String {
-    let mut payload = claim_select().to_vec();
-    payload.extend_from_slice(&options.encode());
-    payload.extend_from_slice(&vc_api::claim_list::encode_claim_ids(ids));
-
-    vc_api::custom_id::encode(5, &payload)
-}
-
 fn claim_icon(me: i64, claim: &vc_core::claim::ClaimView) -> &'static str {
     let claimant = claim.claimant.discord_id == Some(me);
     let payer = claim.payer.discord_id == Some(me);
@@ -971,7 +961,7 @@ async fn list_renders_the_first_page(pool: PgPool) {
             json!({
                 "type": 10,
                 "content": format!(
-                    "**◻️{}{}**\n状態　: ⌛未決定\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
+                    "**{}{}**\n状態　: ⌛未決定\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
                     claim_icon(money.user1, claim),
                     claim.id,
                     claim.amount.unwrap_or_default(),
@@ -984,28 +974,78 @@ async fn list_renders_the_first_page(pool: PgPool) {
         })
         .collect();
 
-    // The title is a bold line, the accent is the container's, and the list comes after the
-    // rows: how many rows there are depends on the page, so the list is read from the end.
+    // The title, then each claim with the buttons its own row offers. The rows are read from
+    // the front for what was said and from the back for the controls, because how many rows
+    // there are depends on the page.
     let container = &response.body["data"]["components"][0];
     assert_eq!(container["type"], json!(17));
     assert_eq!(container["accent_color"], json!(COLOR_BRAND));
     let children = container["components"].as_array().expect("the children");
 
-    // The title, and then the list; the rows are last, and how many there are depends on the
-    // page. So the reading is from the front for what was said and from the back for what was
-    // offered.
     assert_eq!(children[0]["content"], json!("**請求一覧(all)**"));
+
+    let said: Vec<Value> = children
+        .iter()
+        .filter(|child| child["type"] == json!(10))
+        .cloned()
+        .collect();
+
     assert_eq!(
-        &children[1..1 + expected.len()],
+        &said[1..1 + expected.len()],
         expected.as_slice(),
         "the list: {container}"
     );
 
-    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
+    // And a pending claim's buttons come with the claim they belong to: the same three the
+    // claim's own screen offers, under the same rules — the approval is the payer's and only
+    // with the money, the refusal is the payer's, and taking it back is the claimant's.
+    let balances = vc_core::balance::for_discord_user(&pool, money.user1)
+        .await
+        .expect("the caller's balances");
+
+    let mut read = 1;
+    let mut offered = children.iter().filter(|child| child["type"] == json!(1));
+
+    for claim in &page.claims {
+        let row = children.get(read + 1).expect("the claim's own row").clone();
+
+        assert_eq!(row["type"], json!(1), "after its claim: {container}");
+        assert_eq!(&row, offered.next().expect("a row"));
+
+        let unit = claim.currency.unit.clone().unwrap_or_default();
+        let current = balances
+            .iter()
+            .find(|balance| balance.unit == unit)
+            .map(|balance| balance.amount)
+            .unwrap_or(0);
+        let payer = claim.payer.discord_id == Some(money.user1);
+        let claimant = claim.claimant.discord_id == Some(money.user1);
+
+        let buttons = row["components"].as_array().expect("the buttons");
+
+        assert_eq!(buttons.len(), 3);
+        assert_eq!(buttons[0]["emoji"]["name"], json!("✅"));
+        assert_eq!(buttons[0]["style"], json!(3));
+        assert_eq!(
+            buttons[0]["disabled"],
+            json!(!(payer && current >= claim.amount.unwrap_or_default())),
+            "an approval needs the money"
+        );
+        assert_eq!(buttons[1]["emoji"]["name"], json!("❌"));
+        assert_eq!(buttons[1]["style"], json!(2));
+        assert_eq!(buttons[1]["disabled"], json!(!payer));
+        assert_eq!(buttons[2]["emoji"]["name"], json!("🗑️"));
+        assert_eq!(buttons[2]["disabled"], json!(!claimant));
+
+        read += 2;
+    }
+
     let options = list_options(Position::All);
 
+    // The pagination row is the last thing on the screen: the claims above carry their own
+    // buttons, so nothing else follows them.
     assert_eq!(
-        container["components"][container["components"].as_array().expect("children").len() - 2]["components"],
+        container["components"][container["components"].as_array().expect("children").len() - 1]["components"],
         json!([
             { "type": 2, "style": 2, "emoji": { "name": "⏪" }, "custom_id": "disabled-0", "disabled": true },
             { "type": 2, "style": 2, "emoji": { "name": "⏮️" }, "custom_id": "disabled-1", "disabled": true },
@@ -1018,22 +1058,6 @@ async fn list_renders_the_first_page(pool: PgPool) {
                 "custom_id": page_custom_id(4, Position::All, Page::Number(1), &options),
             },
         ])
-    );
-
-    let select = &container["components"]
-        [container["components"].as_array().expect("children").len() - 1]["components"][0];
-    assert_eq!(select["type"], json!(3));
-    assert_eq!(select["min_values"], json!(0));
-    assert_eq!(select["max_values"], json!(ids.len()));
-    assert_eq!(select["custom_id"], json!(select_custom_id(&ids, &options)));
-    assert_eq!(
-        select["options"]
-            .as_array()
-            .expect("the choices")
-            .iter()
-            .map(|choice| choice["default"].clone())
-            .collect::<Vec<_>>(),
-        vec![json!(false); ids.len()]
     );
 }
 
@@ -1142,15 +1166,15 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     let remaining = first_page(&pool, 2).await;
     assert_eq!(remaining.claims.len(), 1);
     assert_eq!(remaining.claims[0].id, claims.id(1));
-    // The menu is the last row: the page's list comes first, then the rows that move through it.
+    // The pagination row is the last thing on the screen: the claim above carries its own
+    // buttons, and nothing follows them.
     let children = response.body["data"]["components"][0]["components"]
         .as_array()
         .expect("the children");
+    let last = children.last().expect("a row");
 
-    assert_eq!(
-        children[children.len() - 1]["components"][0]["max_values"],
-        json!(1)
-    );
+    assert_eq!(last["type"], json!(1));
+    assert_eq!(last["components"][4]["emoji"]["name"], json!("🔄"));
 
     let claim = vc_core::claim::view(&pool, 1, claim_id)
         .await
@@ -1692,212 +1716,4 @@ async fn button_cancel_reports_an_unknown_claim(pool: PgPool) {
     let money = &claims.money;
 
     assert_action_error(pool, Action::Cancel, 0, money.user1, BUTTON_NOT_FOUND).await;
-}
-
-/// The menu's own payload, which the `:select` render numbers from zero.
-fn select_menu_custom_id(k: u8, ids: &[i64]) -> String {
-    let mut payload = claim_select().to_vec();
-    payload.extend_from_slice(&list_options(Position::All).encode());
-    payload.extend_from_slice(&vc_api::claim_list::encode_claim_ids(ids));
-
-    vc_api::custom_id::encode(k, &payload)
-}
-
-fn selection_values(ids: &[i64]) -> Value {
-    json!(ids.iter().map(|id| id.to_string()).collect::<Vec<_>>())
-}
-
-fn ticked(response: &support::Response) -> Vec<bool> {
-    response.body["data"]["components"][0]["components"]
-        .as_array()
-        .expect("the children")
-        .iter()
-        // The title is the first Text Display and the quotation is the last: the claims are the
-        // ones between them. A claim nobody has ticked carries no mark at all, so filtering on
-        // one would drop exactly the claims this is asked about.
-        .filter_map(|child| child["content"].as_str())
-        .skip(1)
-        .take_while(|content| !content.starts_with("**残高"))
-        .map(|content| content.starts_with("**☑"))
-        .collect()
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn selecting_everything_marks_it_and_warns(pool: PgPool) {
-    let claims = setup_claim(&pool).await;
-    let money = &claims.money;
-
-    let page = first_page(&pool, 1).await;
-    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
-    assert_eq!(ids.len(), 3);
-
-    let response = interaction(
-        router(pool),
-        support::select_from_guild(
-            json!({
-                "custom_id": select_menu_custom_id(0, &ids),
-                "values": selection_values(&ids),
-            }),
-            money.user1,
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    // The selection answers by replacing the message the menu was on.
-    assert_eq!(response.body["type"], json!(7));
-    assert_eq!(response.body["data"]["flags"], json!(32832));
-
-    assert_eq!(ticked(&response), vec![true, true, true]);
-
-    // user1 holds 200000 and is being asked for 10000099, so the quotation warns.
-    let children = response.body["data"]["components"][0]["components"]
-        .as_array()
-        .expect("the children");
-
-    assert_eq!(
-        children[children.len() - 3]["content"],
-        json!(format!(
-            "**残高**\n**{}**: `200000{}` - `10000099{}` => `-9800099{}`⚠",
-            money.name, money.unit, money.unit, money.unit
-        ))
-    );
-
-    let children = response.body["data"]["components"][0]["components"]
-        .as_array()
-        .expect("the children");
-
-    // The menu is the first row, and the rows are last: the quotation is between them.
-    let menu = &children[children.len() - 2]["components"][0];
-    assert_eq!(menu["type"], json!(3));
-    assert_eq!(menu["max_values"], json!(3));
-    assert_eq!(menu["custom_id"], json!(select_menu_custom_id(0, &ids)));
-
-    // user1 is not the payer of all three, so nothing can be acted on.
-    let children = response.body["data"]["components"][0]["components"]
-        .as_array()
-        .expect("the children");
-    let buttons = children[children.len() - 1]["components"]
-        .as_array()
-        .expect("the buttons");
-    assert_eq!(buttons.len(), 4);
-    assert!(
-        buttons[0]["disabled"].is_null(),
-        "going back is always possible"
-    );
-    for button in &buttons[1..] {
-        assert_eq!(button["disabled"], json!(true));
-    }
-}
-
-/// c6 is user1's claim on themselves for 100, which they can afford and are both
-/// sides of, so every action is offered.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn selecting_one_affordable_claim_enables_the_actions(pool: PgPool) {
-    let claims = setup_claim(&pool).await;
-    let money = &claims.money;
-    let selected = claims.id(5);
-
-    let page = first_page(&pool, 1).await;
-    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
-
-    let response = interaction(
-        router(pool),
-        support::select_from_guild(
-            json!({
-                "custom_id": select_menu_custom_id(0, &ids),
-                "values": selection_values(&[selected]),
-            }),
-            money.user1,
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status, 200, "body: {}", response.body);
-    let children = response.body["data"]["components"][0]["components"]
-        .as_array()
-        .expect("the children");
-
-    assert_eq!(
-        children[children.len() - 3]["content"],
-        json!(format!(
-            "**残高**\n**{}**: `200000{}` - `100{}` => `199900{}`",
-            money.name, money.unit, money.unit, money.unit
-        ))
-    );
-
-    // The page is newest first, and c6 is the newest of the three.
-    assert_eq!(ticked(&response), vec![true, false, false]);
-
-    let children = response.body["data"]["components"][0]["components"]
-        .as_array()
-        .expect("the children");
-    let buttons = children[children.len() - 1]["components"]
-        .as_array()
-        .expect("the buttons");
-    for button in &buttons[1..] {
-        assert_eq!(button["disabled"], json!(false));
-    }
-}
-
-/// user2 is a party to two of the three, but not all three, and the menu only
-/// ever offered their own.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn selecting_someone_elses_claims_is_refused(pool: PgPool) {
-    let claims = setup_claim(&pool).await;
-    let money = &claims.money;
-
-    let page = first_page(&pool, 1).await;
-    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
-
-    let response = interaction(
-        router(pool),
-        support::select_from_guild(
-            json!({
-                "custom_id": select_menu_custom_id(0, &ids),
-                "values": selection_values(&ids),
-            }),
-            money.user2,
-        ),
-    )
-    .await;
-
-    // Elixir raises `ArgumentError, "Illegal request"`, which is a 500.
-    assert_eq!(response.status, 500, "body: {}", response.body);
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn selecting_claims_above_bigint_shows_the_total_and_disables_approval(pool: PgPool) {
-    let claims = setup_claim(&pool).await;
-    let money = &claims.money;
-    sqlx::query("UPDATE claims SET amount=$1 WHERE status='pending'")
-        .bind(i64::MAX)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let page = first_page(&pool, 1).await;
-    let ids: Vec<i64> = page.claims.iter().map(|claim| claim.id).collect();
-    let expected: i128 = page
-        .claims
-        .iter()
-        .filter(|claim| claim.payer.discord_id == Some(money.user1))
-        .map(|claim| i128::from(claim.amount.unwrap()))
-        .sum();
-    assert!(expected > i128::from(i64::MAX));
-    let response = interaction(
-        router(pool),
-        support::select_from_guild(
-            json!({
-                "custom_id":select_menu_custom_id(0, &ids), "values":selection_values(&ids)
-            }),
-            money.user1,
-        ),
-    )
-    .await;
-    assert_eq!(response.status, 200, "{}", response.body);
-    assert!(response.body.to_string().contains(&expected.to_string()));
-    let children = response.body["data"]["components"][0]["components"]
-        .as_array()
-        .unwrap();
-    assert_eq!(children.last().unwrap()["components"][1]["disabled"], true);
 }
