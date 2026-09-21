@@ -77,7 +77,9 @@ permission nobody asked for.
 
 The 201 answers the device flow's four values: `device_code` (what the poll
 names), `user_code` (what the administrator types, eight characters), and
-`expires_in` (how long the ask lives, ten minutes unless asked shorter).
+`expires_in` (seconds remaining until the ask expires, ten minutes by default).
+Repeating a pending request keeps its codes and original deadline; the response
+reports the remaining time rather than restarting its lifetime.
 `verification_uri` is `"discord"`: there is no URI to open, because the
 approval happens in the guild, where the administrator types the code the
 application put in front of them.

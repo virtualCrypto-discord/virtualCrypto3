@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO grant_requests (application_id, guild_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)\n         VALUES ($1, $2, $3, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $4, $5, $5)\n         ON CONFLICT (application_id, guild_id) WHERE status = 'pending'\n         DO UPDATE SET updated_at = EXCLUDED.updated_at\n         RETURNING id, scopes AS \"scopes!: Vec<String>\", device_code AS \"device_code!: Uuid\",\n                   user_code AS \"user_code!: String\", status AS \"status!: String\", expires_in AS \"expires_in!: i64\"",
+  "query": "INSERT INTO grant_requests (application_id, guild_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)\n         VALUES ($1, $2, $3, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $4, $5, $5)\n         ON CONFLICT (application_id, guild_id) WHERE status = 'pending'\n         DO UPDATE SET updated_at = EXCLUDED.updated_at\n         RETURNING id, scopes AS \"scopes!: Vec<String>\", device_code AS \"device_code!: Uuid\",\n                   user_code AS \"user_code!: String\", status AS \"status!: String\",\n                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($5 - inserted_at))::bigint) AS \"expires_in!: i64\"",
   "describe": {
     "columns": [
       {
@@ -62,12 +62,7 @@
         "ordinal": 5,
         "name": "expires_in!: i64",
         "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "grant_requests",
-            "name": "expires_in"
-          }
-        }
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -85,8 +80,8 @@
       false,
       false,
       false,
-      false
+      null
     ]
   },
-  "hash": "a33056bf0741a4f02dbac7cbd2d9c4c9aa8c8e3544ac69ab497f0b372d5059a0"
+  "hash": "2d351428bb724b9f6f4061785747e2e81dace37303d64c9ec5f2684dcd4e1278"
 }

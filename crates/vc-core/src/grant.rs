@@ -439,6 +439,40 @@ pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Res
     Ok(found)
 }
 
+/// Mint a device token only while every approved scope is still granted.
+/// Lock the scope rows until the token is committed so revocation cannot slip
+/// between checking permission and issuing the token.
+pub async fn create_device_token(
+    pool: &PgPool,
+    request: &GrantRequest,
+    now: OffsetDateTime,
+) -> Result<Option<String>> {
+    let mut tx = pool.begin().await?;
+    let grant_id = sqlx::query_scalar!(
+        "SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2",
+        request.application_id,
+        request.guild_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(grant_id) = grant_id else {
+        return Ok(None);
+    };
+    let scopes = sqlx::query_scalar!(
+        r#"SELECT scope::text AS "scope!" FROM grant_scopes
+            WHERE grant_id = $1 FOR SHARE"#,
+        grant_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    if request.scopes.iter().any(|scope| !scopes.contains(scope)) {
+        return Ok(None);
+    }
+    let token = create_access_token(&mut *tx, grant_id, now).await?;
+    tx.commit().await?;
+    Ok(Some(token))
+}
+
 /// The grant's row and the scopes it carries, written as one act.
 ///
 /// The upsert does not touch `latest_code`: that column is how a code exchange
@@ -761,7 +795,8 @@ pub async fn request_grant(
          ON CONFLICT (application_id, guild_id) WHERE status = 'pending'
          DO UPDATE SET updated_at = EXCLUDED.updated_at
          RETURNING id, scopes AS "scopes!: Vec<String>", device_code AS "device_code!: Uuid",
-                   user_code AS "user_code!: String", status AS "status!: String", expires_in AS "expires_in!: i64""#,
+                   user_code AS "user_code!: String", status AS "status!: String",
+                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($5 - inserted_at))::bigint) AS "expires_in!: i64""#,
         application_id,
         guild_id,
         scopes,

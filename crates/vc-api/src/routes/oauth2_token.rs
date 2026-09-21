@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use vc_auth::issue::{app_scopes_are_valid, app_token, revoke_by_jti};
 use vc_core::application::{Application, verify_secret};
 use vc_core::grant::{
-    EXPIRES_IN, ExchangeError, create_access_token, exchange_code, exchange_refresh_token,
+    EXPIRES_IN, ExchangeError, create_device_token, exchange_code, exchange_refresh_token,
     revoke_access_token, revoke_refresh_token,
 };
 
@@ -177,22 +177,12 @@ async fn device(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Respo
         return error("invalid_grant", "invalid_device_code");
     }
 
-    let Some(grant_id) = vc_core::grant::grant_for(state.pool(), application.id, asked.guild_id)
-        .await
-        .ok()
-        .flatten()
-    else {
-        // The ask is approved but the grant is gone: it was revoked between the
-        // two reads. The device must ask again rather than wait on an approval
-        // that no longer means anything.
-        return error("invalid_grant", "invalid_device_code");
-    };
-
-    let now = OffsetDateTime::now_utc();
-
-    let Ok(access_token) = create_access_token(state.pool(), grant_id, now).await else {
-        return invalid_client();
-    };
+    let access_token =
+        match create_device_token(state.pool(), &asked, OffsetDateTime::now_utc()).await {
+            Ok(Some(token)) => token,
+            Ok(None) => return error("invalid_grant", "invalid_device_code"),
+            Err(_) => return invalid_client(),
+        };
 
     Json(json!({
         "access_token": access_token,

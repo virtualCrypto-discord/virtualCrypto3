@@ -522,3 +522,106 @@ async fn concurrent_replacements_share_one_live_ask_at_expiry(pool: PgPool) {
             .is_some()
     );
 }
+
+async fn poll_after_discord_revocation(pool: PgPool, keep_openid: bool) {
+    let (application, _) = fixture(&pool).await;
+    let scopes = if keep_openid {
+        vec!["vc.issue".to_owned(), "openid".to_owned()]
+    } else {
+        vec!["vc.issue".to_owned()]
+    };
+    let asked = vc_core::grant::request_grant(
+        &pool,
+        application,
+        GUILD,
+        &scopes,
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        vc_core::grant::decide_request(
+            &pool,
+            &asked.user_code,
+            GUILD,
+            time::OffsetDateTime::now_utc()
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    let client_id = support::client_id_of(&pool, application).await;
+    let revoked = support::interaction(vc_api::router(state(pool.clone(), fake())), json!({
+        "type": 3,
+        "data": {"component_type": 2, "custom_id": vc_api::custom_id::ui::grant::revoke_custom_id(&client_id)},
+        "member": {"user": {"id": OWNER_DISCORD_ID.to_string()}, "permissions": support::DEFAULT_PERMISSIONS.to_string()},
+        "guild_id": GUILD.to_string()
+    })).await;
+    assert_eq!(revoked.status, 200, "{}", revoked.body);
+    let remaining = vc_core::grant::grants_of(&pool, application)
+        .await
+        .unwrap()
+        .remove(0)
+        .scopes;
+    assert_eq!(remaining, if keep_openid { vec!["openid"] } else { vec![] });
+    let (status, body) = device_poll(&pool, application, &asked.device_code.to_string()).await;
+    assert_eq!(status, 400, "revoked poll returned {body}");
+    assert_eq!(body["error"], "invalid_grant");
+    let tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM access_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tokens, 0, "a refused poll must not persist a token");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_poll_after_discord_revocation_is_invalid_grant(pool: PgPool) {
+    poll_after_discord_revocation(pool, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_remaining_openid_scope_does_not_replace_revoked_issue_permission(pool: PgPool) {
+    poll_after_discord_revocation(pool, true).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_repeated_ask_reports_its_remaining_lifetime(pool: PgPool) {
+    let (application, token) = fixture(&pool).await;
+    let asked = vc_core::grant::request_grant(
+        &pool,
+        application,
+        GUILD,
+        &["vc.issue".to_owned()],
+        600,
+        time::OffsetDateTime::now_utc() - time::Duration::seconds(590),
+    )
+    .await
+    .unwrap();
+    let response = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        Some(&token),
+        json!({"guild_id": GUILD.to_string(), "scopes": ["vc.issue"], "expires_in": 1200}),
+    )
+    .await;
+    assert_eq!(response.status, 201);
+    assert_eq!(response.body["device_code"], asked.device_code.to_string());
+    assert_eq!(response.body["user_code"], asked.user_code);
+    assert!(
+        vc_core::grant::poll_request(
+            &pool,
+            application,
+            asked.device_code,
+            time::OffsetDateTime::now_utc() + time::Duration::seconds(11)
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    let expires_in = response.body["expires_in"].as_i64().unwrap();
+    assert!(
+        (1..=10).contains(&expires_in),
+        "only 10 seconds remain, but returned {expires_in}"
+    );
+}
