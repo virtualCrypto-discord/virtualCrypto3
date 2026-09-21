@@ -244,7 +244,7 @@ fn info() -> Value {
 fn create() -> Value {
     json!({
         "name": "create",
-        "description": "新しい通貨を作成します",
+        "description": "新しい通貨を作成します。",
         "options": [
             {
                 "name": "name",
@@ -274,7 +274,7 @@ fn create() -> Value {
 fn delete() -> Value {
     json!({
         "name": "delete",
-        "description": "通貨を削除します。削除は、作成後72時間の間のみ可能です",
+        "description": "通貨を削除します。削除は、作成後72時間の間のみ可能です。",
         "contexts": [0],
         "integration_types": [0, 1],
         "default_member_permissions": "0",

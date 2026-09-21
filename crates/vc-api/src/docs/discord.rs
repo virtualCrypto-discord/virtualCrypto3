@@ -130,11 +130,6 @@ fn options_text(options: &[OptionLine]) -> String {
     let mut lines = vec!["## 引数".to_owned(), String::new()];
     lines.extend(option_lines(options, 0));
 
-    if marked(options, |option| option.autocomplete) {
-        lines.push(String::new());
-        lines.push("候補から選べる引数は、入力しながら候補が表示されます。".to_owned());
-    }
-
     lines.join("\n")
 }
 
@@ -162,12 +157,6 @@ fn option_lines(options: &[OptionLine], depth: usize) -> Vec<String> {
     }
 
     lines
-}
-
-fn marked(options: &[OptionLine], predicate: impl Fn(&OptionLine) -> bool + Copy) -> bool {
-    options
-        .iter()
-        .any(|option| predicate(option) || marked(&option.children, predicate))
 }
 
 /// A section as one Text Display: a heading, then its blocks with a blank line
@@ -253,25 +242,8 @@ mod tests {
              - `unit`（必須） 送信したい通貨の単位です。\n\
              - `amount`（必須） 送信する通貨の量です。\n\
              - `list` 一覧を表示します。\n\
-             \x20\x20- `pending`（任意） 未処理の請求を表示します。\n\
-             \n\
-             候補から選べる引数は、入力しながら候補が表示されます。"
+             \x20\x20- `pending`（任意） 未処理の請求を表示します。"
         );
-    }
-
-    /// A command whose options are all typed says nothing about autocomplete.
-    #[test]
-    fn the_autocomplete_note_appears_only_when_something_offers_one() {
-        let typed = vec![OptionLine {
-            name: "amount".to_owned(),
-            description: "量です。".to_owned(),
-            required: true,
-            kind: OptionKind::Integer,
-            autocomplete: false,
-            children: Vec::new(),
-        }];
-
-        assert!(!options_text(&typed).contains("候補"));
     }
 
     /// The three blocks, as Discord reads them: a fence keeps its newlines, a

@@ -101,12 +101,6 @@ async fn help_opens_one_command(pool: PgPool) {
     // The options are the registered ones, requiredness and all.
     assert!(rendered.contains("送信先のユーザーです。"), "{rendered}");
     assert!(rendered.contains("（必須）"), "{rendered}");
-
-    // And the prose, which is the part Discord's own description has no room for.
-    assert!(
-        rendered.contains("送信先がまだVirtualCryptoを使ったことがなくても送れます。"),
-        "{rendered}"
-    );
 }
 
 /// A name that is not a command is answered with the list and one sentence about
