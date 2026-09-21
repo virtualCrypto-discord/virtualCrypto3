@@ -77,6 +77,12 @@ pub async fn component(
                 None => discord::index(links, ids),
             }
         }
+        Screen::Start => match docs::page_of("start") {
+            Some(page) => discord::page(page, links),
+            // A page this service does not have is a button nobody drew; the list is where
+            // the person already was.
+            None => discord::index(links, ids),
+        },
         Screen::Index => discord::index(links, ids),
     };
 

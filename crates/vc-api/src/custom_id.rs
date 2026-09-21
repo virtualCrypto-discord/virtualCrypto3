@@ -653,13 +653,16 @@ pub mod ui {
 
         const HEAD: u8 = 0xF3;
 
-        /// Which of the two components an id belongs to.
+        /// Which of the components an id belongs to. The numbers are this space's, and they
+        /// must not be renumbered: a message already in a DM carries them.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Screen {
             /// The menu a command is chosen from.
             Select,
             /// The button that goes back to the list of commands.
             Index,
+            /// The button that opens 「はじめに」 — the page, not a link to it.
+            Start,
         }
 
         /// The head this space writes, so a test and a screen agree on it.
@@ -671,6 +674,7 @@ pub mod ui {
             match screen {
                 Screen::Select => 1,
                 Screen::Index => 2,
+                Screen::Start => 3,
             }
         }
 
@@ -688,11 +692,16 @@ pub mod ui {
             custom_id(Screen::Index)
         }
 
+        pub fn start() -> String {
+            custom_id(Screen::Start)
+        }
+
         pub fn parse(source: &[u8]) -> Result<Screen, UiError> {
             match source {
                 [head, id, ..] if *head == HEAD => match id {
                     1 => Ok(Screen::Select),
                     2 => Ok(Screen::Index),
+                    3 => Ok(Screen::Start),
                     other => Err(UiError::Unknown(u16::from(*other))),
                 },
                 _ => Err(UiError::Head),

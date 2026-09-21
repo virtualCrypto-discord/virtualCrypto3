@@ -17,13 +17,6 @@ pub struct Links {
     pub support_guild_invite_url: String,
 }
 
-impl Links {
-    /// `Command.logo_url/0`: the site's logo, which Phoenix serves from `/static`.
-    pub fn logo_url(&self) -> String {
-        format!("{}/static/images/logo.jpg", self.site_url)
-    }
-}
-
 /// What the service signs with: the API's bearer tokens, and the browser's
 /// session. Held together because they are the same kind of decision, and kept
 /// as two *separate* secrets because both are JWTs — signing them with one

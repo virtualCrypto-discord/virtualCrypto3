@@ -172,25 +172,45 @@ async fn the_back_button_shows_the_list_again(pool: PgPool) {
     assert!(rendered.contains("**/bal**"), "{rendered}");
 }
 
-/// `/help` sends somebody who has just been handed the bot to the page they need, with a
-/// button rather than a line of text — the one page a new person is looking for.
+/// `/help` sends somebody who has just been handed the bot to 「はじめに」 — the page itself,
+/// rendered here, rather than a jump to the site.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn help_offers_the_starting_page_as_a_button(pool: PgPool) {
+async fn help_opens_the_starting_page(pool: PgPool) {
     let response = interaction(
-        router(pool),
+        router(pool.clone()),
         execute_from_guild(json!({ "name": "help" }), 12),
     )
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-
-    let rendered = response.body["data"].to_string();
-
     assert!(
-        rendered.contains(&format!("{SITE_URL}/document/start")),
-        "the way in: {rendered}"
+        response.body["data"].to_string().contains(&format!(
+            "\"custom_id\":\"{}\"",
+            vc_api::custom_id::ui::help::start()
+        )),
+        "the way in: {}",
+        response.body
     );
+
+    // Pressing it draws the page, which is the document the site shows rather than a link to it.
+    let pressed = interaction(
+        router(pool),
+        support::button_from_guild(
+            json!({ "custom_id": vc_api::custom_id::ui::help::start() }),
+            12,
+        ),
+    )
+    .await;
+
+    assert_eq!(pressed.status, 200, "body: {}", pressed.body);
+
+    let rendered = pressed.body["data"].to_string();
+
     assert!(rendered.contains("はじめに"), "{rendered}");
+    assert!(
+        rendered.contains("独自の通貨を使えるようにするBotです"),
+        "the page's own prose: {rendered}"
+    );
 }
 
 /// A command is a mention — `</name:id>`, which Discord makes pressable — when the
@@ -236,17 +256,10 @@ async fn invite(pool: PgPool) {
         json!([{
             "type": 17,
             "accent_color": 0x0062_21ED,
-            "components": [{
-                "type": 9,
-                "components": [
-                    { "type": 10, "content": "**VirtualCrypto**" },
-                    { "type": 10, "content": description },
-                ],
-                "accessory": {
-                    "type": 11,
-                    "media": { "url": "https://vcrypto.sumidora.com/static/images/logo.jpg" },
-                },
-            }],
+            "components": [
+                { "type": 10, "content": "**VirtualCrypto**" },
+                { "type": 10, "content": description },
+            ],
         }])
     );
     assert_eq!(response.body["data"]["flags"], json!(32832));

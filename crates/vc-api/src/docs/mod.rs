@@ -205,6 +205,11 @@ pub fn showing_of(name: &str) -> Option<Showing> {
     showings().into_iter().find(|showing| showing.name == name)
 }
 
+/// One page of the site, by its slug — what a Discord screen that shows a page reads.
+pub fn page_of(slug: &str) -> Option<&'static Page> {
+    pages::all().iter().find(|page| page.slug == slug)
+}
+
 /// A registered command, with the prose that was written for it.
 ///
 /// `None` is a payload without a name, which the registration tests already

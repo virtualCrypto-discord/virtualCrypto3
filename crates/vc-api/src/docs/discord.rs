@@ -14,10 +14,9 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::{Block, INTRO, OptionKind, OptionLine, Section, Showing, resolve};
+use super::{Block, INTRO, OptionKind, OptionLine, Page, Section, Showing, resolve};
 use crate::components::{
-    ButtonStyle, action_row, button, link_button, section, select, select_option, separator, text,
-    thumbnail,
+    ButtonStyle, action_row, button, link_button, select, select_option, separator, text,
 };
 use crate::state::Links;
 
@@ -35,15 +34,17 @@ pub fn index(links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
         .join("\n");
 
     vec![
-        greeting("**VirtualCrypto**", INTRO, links),
+        greeting("**VirtualCrypto**", INTRO),
         separator(),
         text(format!("## コマンド\n\n{listing}")),
         menu(),
-        // 「はじめに」 was a line in the footer and nothing a person could press, which is the
-        // wrong place for the one page somebody who has just been handed the bot needs.
-        action_row(vec![link_button(
-            &format!("{}/document/start", links.site_url),
+        // 「はじめに」 was a line in the footer and nothing a person could press, and the page
+        // is a screen of this service's rather than a jump to the site: the same document the
+        // site renders, which is what makes it a button and not a link.
+        action_row(vec![button(
+            &crate::custom_id::ui::help::start(),
             "はじめに",
+            ButtonStyle::Primary,
         )]),
         text(resolve(FOOTER, links)),
     ]
@@ -61,14 +62,37 @@ fn named(name: &str, ids: &BTreeMap<String, u64>) -> String {
     }
 }
 
+/// A page of the site, in Discord: its title, then its sections as the command screens render
+/// theirs.
+///
+/// The same blocks the site shows, rendered from the same document — the point of one document
+/// with three renderings is that this is not prose written twice.
+pub fn page(page: &Page, links: &Links) -> Vec<Value> {
+    let mut children = vec![greeting(&format!("**{}**", page.title), page.summary)];
+
+    for section in page.sections {
+        children.push(text(section_text(section, links)));
+    }
+
+    children.push(action_row(vec![
+        button(
+            &crate::custom_id::ui::help::index(),
+            "一覧に戻る",
+            ButtonStyle::Secondary,
+        ),
+        link_button(
+            &format!("{}/document/{}", links.site_url, page.slug),
+            "サイトで見る",
+        ),
+    ]));
+
+    children
+}
+
 /// One command: how it is typed, what its options are, and what has been written
 /// about it.
 pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
-    let mut children = vec![greeting(
-        &named(&showing.name, ids),
-        &showing.description,
-        links,
-    )];
+    let mut children = vec![greeting(&named(&showing.name, ids), &showing.description)];
 
     if !showing.usage.is_empty() {
         children.push(text(format!(
@@ -138,15 +162,14 @@ fn listing_line(showing: &Showing, ids: &BTreeMap<String, u64>) -> String {
     }
 }
 
-/// The title and the sentence under it, with the logo beside them.
+/// The title and the sentence under it.
 ///
-/// A section is text with something next to it, and the logo is the only
-/// accessory these screens have — the shape `/help` and `/invite` already had.
-fn greeting(title: &str, description: &str, links: &Links) -> Value {
-    section(
-        vec![text(title), text(description)],
-        thumbnail(&links.logo_url()),
-    )
+/// Both screens carried a thumbnail of the site's logo, which this deployment does not serve:
+/// `/static/images/logo.jpg` was the old site's path and the SPA has no `static/` at all, so
+/// what a person saw was a broken image. A screen that cannot show a picture is a screen with
+/// no accessory, which a section requires — so the title and the sentence are a Text Display.
+fn greeting(title: &str, description: &str) -> Value {
+    text(format!("{title}\n{description}"))
 }
 
 /// The options as a list, a subcommand's own options nested under it.

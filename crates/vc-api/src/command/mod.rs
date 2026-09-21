@@ -213,7 +213,7 @@ pub fn invite(state: &AppState) -> Value {
         support = links.support_guild_invite_url,
     );
 
-    embed(description, links.logo_url())
+    embed(description)
 }
 
 /// The ephemeral, brand-coloured message `/invite` answers with.
@@ -222,21 +222,19 @@ pub fn invite(state: &AppState) -> Value {
 /// which is a container of its own: this is what is left of the shape they had
 /// in common.
 ///
-/// It was an embed with a title, a description and a thumbnail. A section is the shape for text
-/// with something beside it, so the title and the description are its text and the logo is its
-/// accessory — which is where a thumbnail may go, and the only place one may.
-fn embed(description: String, logo_url: String) -> Value {
+/// It was an embed with a title, a description and a thumbnail, and the thumbnail was the site's
+/// logo at `/static/images/logo.jpg` — the old site's path, which this deployment does not serve:
+/// the SPA has no `static/` at all. A picture that is not there is worse than no picture, so what
+/// is left is the title and the two invites.
+fn embed(description: String) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_BRAND as u32),
-            vec![crate::components::section(
-                vec![
-                    crate::components::text("**VirtualCrypto**"),
-                    crate::components::text(description),
-                ],
-                crate::components::thumbnail(&logo_url),
-            )],
+            vec![
+                crate::components::text("**VirtualCrypto**"),
+                crate::components::text(description),
+            ],
         )]),
     })
 }
