@@ -37,7 +37,7 @@ const A_REQUEST: &str = "/oauth2/authorize\
     ?response_type=code\
     &client_id=a-client\
     &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback\
-    &scope=openid\
+    &scope=vc.issue\
     &guild_id=1";
 
 /// A browser is a person: where an SPA's own request would be answered `401`,
@@ -98,7 +98,7 @@ const AN_APPROVAL: &str = "action=approve\
     &response_type=code\
     &client_id=a-client\
     &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback\
-    &scope=openid\
+    &scope=vc.issue\
     &guild_id=1";
 
 /// The Elixir has no clause for anything but `approve`, so a request without it

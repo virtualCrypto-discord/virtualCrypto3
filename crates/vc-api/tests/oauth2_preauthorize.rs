@@ -173,7 +173,7 @@ async fn an_application_that_cannot_take_a_code_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_scope_that_is_not_openid_is_refused(pool: PgPool) {
+async fn a_scope_that_is_not_vc_issue_is_refused(pool: PgPool) {
     let client_id = Uuid::new_v4();
     application(
         &pool,
@@ -185,7 +185,7 @@ async fn a_scope_that_is_not_openid_is_refused(pool: PgPool) {
 
     let checked = preauthorize(
         &pool,
-        &scopes(&["profile"]),
+        &scopes(&["openid"]),
         "https://app.example/callback",
         &client_id.to_string(),
     )
@@ -234,13 +234,12 @@ async fn an_approved_vc_issue_is_permitted(pool: PgPool) {
     )
     .await;
 
-    // Openid is what the consent screen grants by default and `vc.issue` what it
-    // grants alongside it: both have to pass `check` for the exchange that follows
-    // to write them onto the grant.
+    // The consent screen's one scope, which has to pass `check` for the exchange
+    // that follows to write it onto the grant.
     let code = authorize(
         &pool,
         900_000_000_000_000_001,
-        &scopes(&["openid", "vc.issue"]),
+        &scopes(&["vc.issue"]),
         "https://app.example/callback",
         &client_id.to_string(),
         OffsetDateTime::now_utc(),
@@ -278,7 +277,7 @@ async fn the_first_failure_is_the_one_that_answers(pool: PgPool) {
 
     let checked = preauthorize(
         &pool,
-        &scopes(&["profile"]),
+        &scopes(&["openid"]),
         "https://app.example/elsewhere",
         &client_id.to_string(),
     )

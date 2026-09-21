@@ -34,7 +34,6 @@ pub fn router() -> Router<AppState> {
             get(contracts::index).post(contracts::create),
         )
         .route("/api/v2/contracts/{id}", get(contracts::show))
-        .route("/api/v2/contracts/{id}/balances", get(contracts::balances))
         .route(
             "/api/v2/contracts/{id}/approval",
             axum::routing::post(contracts::approve).delete(contracts::withdraw),

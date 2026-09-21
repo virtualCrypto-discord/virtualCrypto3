@@ -448,7 +448,7 @@ async fn an_expired_ask_can_be_replaced_before_the_next_purge(pool: PgPool) {
         &pool,
         application,
         GUILD,
-        &["openid".to_owned()],
+        &["vc.issue".to_owned()],
         600,
         now - time::Duration::seconds(601),
     )
@@ -523,10 +523,10 @@ async fn concurrent_replacements_share_one_live_ask_at_expiry(pool: PgPool) {
     );
 }
 
-async fn poll_after_discord_revocation(pool: PgPool, keep_openid: bool) {
+async fn poll_after_discord_revocation(pool: PgPool, keep_another: bool) {
     let (application, _) = fixture(&pool).await;
-    let scopes = if keep_openid {
-        vec!["vc.issue".to_owned(), "openid".to_owned()]
+    let scopes = if keep_another {
+        vec!["vc.issue".to_owned(), "vc.contract".to_owned()]
     } else {
         vec!["vc.issue".to_owned()]
     };
@@ -564,7 +564,14 @@ async fn poll_after_discord_revocation(pool: PgPool, keep_openid: bool) {
         .unwrap()
         .remove(0)
         .scopes;
-    assert_eq!(remaining, if keep_openid { vec!["openid"] } else { vec![] });
+    assert_eq!(
+        remaining,
+        if keep_another {
+            vec!["vc.contract"]
+        } else {
+            vec![]
+        }
+    );
     let (status, body) = device_poll(&pool, application, &asked.device_code.to_string()).await;
     assert_eq!(status, 400, "revoked poll returned {body}");
     assert_eq!(body["error"], "invalid_grant");
@@ -581,7 +588,7 @@ async fn a_poll_after_discord_revocation_is_invalid_grant(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_remaining_openid_scope_does_not_replace_revoked_issue_permission(pool: PgPool) {
+async fn another_remaining_scope_does_not_replace_revoked_issue_permission(pool: PgPool) {
     poll_after_discord_revocation(pool, true).await;
 }
 

@@ -489,7 +489,7 @@ mod tests {
             ("response_type", "code"),
             ("client_id", "a-client"),
             ("redirect_uri", "https://app.example/callback"),
-            ("scope", "openid"),
+            ("scope", "vc.issue"),
             ("guild_id", "42"),
         ]
     }
@@ -500,7 +500,7 @@ mod tests {
 
         assert_eq!(parsed.client_id, "a-client");
         assert_eq!(parsed.redirect_uri, "https://app.example/callback");
-        assert_eq!(parsed.scopes, ["openid"]);
+        assert_eq!(parsed.scopes, ["vc.issue"]);
         assert_eq!(parsed.guild_id, 42);
         assert_eq!(parsed.state, None);
     }
@@ -572,11 +572,11 @@ mod tests {
     #[test]
     fn several_scopes_arrive_split_on_spaces() {
         let mut pairs = complete();
-        pairs[3] = ("scope", "openid profile");
+        pairs[3] = ("scope", "vc.issue vc.pay");
 
         let parsed = Request::parse(query(&pairs)).expect("a request");
 
-        assert_eq!(parsed.scopes, ["openid", "profile"]);
+        assert_eq!(parsed.scopes, ["vc.issue", "vc.pay"]);
     }
 
     fn location(response: &Response) -> String {

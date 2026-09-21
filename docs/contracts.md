@@ -114,7 +114,7 @@ document said before the scheduler existed.
 
 | | |
 | --- | --- |
-| create, read, spend, read balances | the application, with an `app` token carrying `vc.contract` |
+| create, read, spend | the application, with an `app` token carrying `vc.contract` |
 | approve, refuse, withdraw | the party, with a `user` token — the caller *is* the user named |
 | read a contract | the application that wrote it, and its parties |
 | anything else | 404, whether the contract exists or not |
@@ -125,21 +125,19 @@ ask. A contract its caller is not a party to is answered as a contract that is
 not there — the same nothing a wrong id is, so neither can be used to ask which
 ids are real.
 
-## Reading balances
+## Reading the numbers
 
-A party that approved gave the application the right to *see* what it is
-operating on: `GET /api/v2/contracts/{id}/balances` answers the parties' balances
-in the contract's currency, and nothing else — not their other currencies, not
-the guild's pool. An application that cannot read a balance cannot decide how
-much to pay out, which is why this travels with the operation authority rather
-than being a separate permission to ask for.
+Everything about the money is in the contract itself: `GET /api/v2/contracts/{id}` answers the
+contract's `remaining`, and every party's `amount`, `remaining` and `status`, which is what an
+application decides how much to pay out from.
 
-Only approved parties are included while the contract is pending or active and
-its deadline has not passed. Pending parties are omitted even if another party
-has approved. Refusal, withdrawal, or expiry ends balance access for the whole
-contract; expiry takes effect immediately, without waiting for the scheduler.
-An owned contract with no authorized parties returns `200 []`. An authorized
-party with no available balance is still included with `"amount": "0"`.
+**There is no balance read beside it, and there was one.** `GET /api/v2/contracts/{id}/balances`
+answered each approved party's `assets.amount` — their *wallet* in the contract's currency —
+while the contract is live. It is gone, for three reasons that all say the same thing: what a
+party holds outside the contract is not what the contract operates on; an application can spend
+the locked amount whatever the wallet says, so the read decided nothing; and a user who locked
+one coin had handed the application a window into the rest of their balance, which is not what
+they agreed to. The number an application needs was in the contract's own answer all along.
 
 ## Retrying a charge
 

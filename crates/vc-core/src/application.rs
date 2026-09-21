@@ -197,9 +197,6 @@ pub async fn redirect_uri_is_registered<'e, E: sqlx::Executor<'e, Database = sql
     Ok(found)
 }
 
-/// The one scope the Elixir ever accepted.
-pub const OPENID: &str = "openid";
-
 /// The scope a guild grants an application so that it may issue from the guild's
 /// pool. Not the Elixir's: it issues no token that could do it.
 pub const ISSUE: &str = "vc.issue";
@@ -212,20 +209,21 @@ pub enum ScopeError {
     Invalid,
 }
 
-/// `is_valid_scopes?/1`: no repeats, and nothing but `openid` — and, since the
-/// issuing grant, `vc.issue`.
+/// `is_valid_scopes?/1`: no repeats, and nothing but [`ISSUE`].
 ///
-/// The Elixir's rule was `openid` alone, which left exactly two acceptable
-/// answers, `[]` and `["openid"]`. `vc.issue` is the second scope a consent screen
-/// may ask for, and it is what gives the code flow's guild token something to do:
-/// the grant the scope is recorded on is what the issuing endpoint reads. Written
-/// as the two rules the Elixir states rather than as a list membership test,
-/// because "no repeats" is the half a caller would not think to check.
+/// The Elixir's rule was 「`openid` and nothing else」, which left exactly two acceptable
+/// answers, `[]` and `["openid"]`. `openid` is gone here — nothing in this service reads a
+/// user's OpenID Connect identity, so a token carrying it could do nothing a token without it
+/// could not, and `docs/known-gaps.md` records the difference. `vc.issue` is the scope a
+/// consent screen may ask for instead: it is what gives the code flow's guild token something
+/// to do, because the grant it is recorded on is what the issuing endpoint reads.
+///
+/// Written as the two rules the Elixir states rather than as a list membership test, because
+/// 「no repeats」 is the half a caller would not think to check.
 pub fn check_scopes(scopes: &[String]) -> Result<(), ScopeError> {
     let unique: std::collections::HashSet<&String> = scopes.iter().collect();
 
-    if unique.len() != scopes.len() || scopes.iter().any(|scope| scope != OPENID && scope != ISSUE)
-    {
+    if unique.len() != scopes.len() || scopes.iter().any(|scope| scope != ISSUE) {
         Err(ScopeError::Invalid)
     } else {
         Ok(())
@@ -1068,17 +1066,18 @@ mod tests {
     }
 
     #[test]
-    fn the_acceptable_scopes_are_openid_and_vc_issue() {
+    fn the_acceptable_scope_is_vc_issue() {
         assert_eq!(scopes(&[]), Ok(()));
-        assert_eq!(scopes(&["openid"]), Ok(()));
         assert_eq!(scopes(&["vc.issue"]), Ok(()));
-        assert_eq!(scopes(&["openid", "vc.issue"]), Ok(()));
     }
 
+    /// `openid` was the Elixir's one scope, and it is not a scope here: nothing in this service
+    /// reads a user's OpenID Connect identity, so a token carrying it could do nothing.
     #[test]
     fn an_unknown_scope_is_refused() {
+        assert_eq!(scopes(&["openid"]), Err(ScopeError::Invalid));
         assert_eq!(scopes(&["profile"]), Err(ScopeError::Invalid));
-        assert_eq!(scopes(&["openid", "profile"]), Err(ScopeError::Invalid));
+        assert_eq!(scopes(&["vc.issue", "profile"]), Err(ScopeError::Invalid));
         assert_eq!(scopes(&[""]), Err(ScopeError::Invalid));
     }
 
@@ -1121,7 +1120,7 @@ mod tests {
     /// two rules rather than a length.
     #[test]
     fn a_repeated_scope_is_refused() {
-        assert_eq!(scopes(&["openid", "openid"]), Err(ScopeError::Invalid));
+        assert_eq!(scopes(&["vc.issue", "vc.issue"]), Err(ScopeError::Invalid));
     }
 
     #[test]

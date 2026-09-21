@@ -177,10 +177,10 @@ Two items in the original plan were dropped by decision, not forgotten:
 
 - **`GET /api/v2/users/@me/balances` was one of them, and is implemented now** —
   the wait was for the frontend, and the endpoint arrived with it
-  (`routes/v2/users.rs`, and four goldens under `tests/golden/`). An application
-  that wants to see what the people it deals with hold has its own read for that:
-  `GET /api/v2/contracts/{id}/balances`, which answers for a contract's parties
-  and works from the moment the contract is written.
+  (`routes/v2/users.rs`, and four goldens under `tests/golden/`). What an
+  application may see about the people it deals with is the contract it holds with
+  them and nothing else: the separate balance read this paragraph used to point at
+  is gone (`docs/contracts.md` says why).
 - The differential harness — replaying a recorded request corpus against both the
   Elixir and the Rust service — is not built. The ported contract tests and the
   captured goldens are the evidence of compatibility instead.
@@ -234,6 +234,34 @@ a 500. Discord only sends registered command names, so this is unreachable in
 practice; it is recorded because it is not a faithful reproduction.
 
 ## Deliberate differences
+
+### The consent screen's scope is `vc.issue`, where the Elixir's was `openid`
+
+`is_valid_scopes?/1` accepted `openid` and nothing else, and this port did the same until now.
+It is gone: this service is not an OpenID provider — it issues no `id_token`, has no `userinfo`
+and no `jwks`, and no route, extractor or token check reads a scope of that name — so an
+application was handed a permission that granted nothing, and the page that listed it said
+「利用者の情報を読む」, which was not true of any endpoint here.
+
+What a consent screen may ask for is `vc.issue`, the scope that gives the code flow's guild token
+something to do, and nothing else about the flow moved: the exchange, the grant and the token are
+the same. A request asking for `openid` is answered `invalid_scope`, which is what the Elixir
+answered for every other name.
+
+The schema keeps the value — `virtual_crypto_scope_type` is the baseline's and `'openid'` is one
+of its members, which `just baseline-check` holds the migrations to — and a grant written before
+this may still carry the name. Nothing reads it.
+
+### A party's *wallet* is not readable through a contract
+
+`GET /api/v2/contracts/{id}/balances` answered each approved party's `assets.amount` — what they
+hold in the contract's currency, not what the contract holds. It is gone, and `docs/contracts.md`
+says why: the number an application decides with is the contract's own `remaining`, which every
+contract read already carries, so the separate read decided nothing and showed a user's wallet to
+an application they had only lent one amount to.
+
+The rest of the contract family is unmoved: `GET /api/v2/contracts/{id}` answers the contract's
+`remaining` and each party's `amount`, `remaining` and `status`.
 
 ### A client's typo is a 400 here, where the Elixir answered 500
 

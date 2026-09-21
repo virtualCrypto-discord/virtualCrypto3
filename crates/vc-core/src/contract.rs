@@ -103,13 +103,6 @@ pub struct Payed {
     pub party_remaining: Option<i64>,
 }
 
-/// One party, and what they hold of the contract's currency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PartyBalance {
-    pub discord_id: i64,
-    pub amount: i64,
-}
-
 fn at(now: OffsetDateTime) -> PrimitiveDateTime {
     PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second()
 }
@@ -988,59 +981,6 @@ pub async fn pay_in(
     })
 }
 
-/// What each party holds of the contract's currency, which is the balance read
-/// an approval gives the application: it cannot decide what to pay out without
-/// knowing what the people it pays hold.
-///
-/// Only currently approved parties of a live contract are visible. Check the
-/// deadline in the balance query itself, so scheduler lag cannot extend access.
-/// An owned contract with no current approvals answers an empty list.
-///
-/// A party with no balance is a zero rather than an absence: the `assets` trigger
-/// deletes a row that reaches zero, and the application asked about a person
-/// rather than about a row.
-pub async fn party_balances(
-    pool: &PgPool,
-    contract_id: i64,
-    application_id: i64,
-) -> std::result::Result<Vec<PartyBalance>, ContractError> {
-    let contract = find(pool, contract_id)
-        .await?
-        .ok_or(ContractError::NotFound)?;
-
-    if contract.application_id != application_id {
-        return Err(ContractError::NotFound);
-    }
-
-    let currency_id = currency_of(pool, contract_id).await?;
-
-    let rows = sqlx::query!(
-        "SELECT p.discord_id, COALESCE(a.amount, 0) AS \"amount!\"
-           FROM contract_parties p
-           JOIN contracts c ON c.id = p.contract_id
-           LEFT JOIN users u ON u.discord_id = p.discord_id
-           LEFT JOIN assets a ON a.user_id = u.id AND a.currency_id = $2
-          WHERE p.contract_id = $1
-            AND p.status = 'approved'
-            AND c.status IN ('pending', 'active')
-            AND (c.expires_at IS NULL OR c.expires_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'))
-          ORDER BY p.id",
-        contract_id,
-        currency_id
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(ContractError::Database)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| PartyBalance {
-            discord_id: row.discord_id,
-            amount: row.amount,
-        })
-        .collect())
-}
-
 /// One payment a contract made, in the shape a statement names it: which party's
 /// remainder was drawn on, how much of it, where it went, and when.
 ///
@@ -1128,17 +1068,6 @@ fn cursors(cursor: Cursor) -> (Option<i64>, Option<i64>) {
         Cursor::OnNext(value) => (None, Some(value)),
         Cursor::First => (None, None),
     }
-}
-
-async fn currency_of(pool: &PgPool, contract_id: i64) -> std::result::Result<i64, ContractError> {
-    sqlx::query_scalar!(
-        "SELECT currency_id FROM contracts WHERE id = $1",
-        contract_id
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(ContractError::Database)?
-    .ok_or(ContractError::NotFound)
 }
 
 fn has_expired(expires_at: Option<PrimitiveDateTime>, now: PrimitiveDateTime) -> bool {

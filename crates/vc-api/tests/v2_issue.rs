@@ -168,7 +168,7 @@ async fn a_receiver_without_an_account_gets_one(pool: PgPool) {
 async fn a_grant_without_the_issuing_scope_may_not_issue(pool: PgPool) {
     let money = setup_money(&pool).await;
     let application = insert_application(&pool, OWNER, "an application").await;
-    let token = insert_grant(&pool, application, money.guild, &["openid"]).await;
+    let token = insert_grant(&pool, application, money.guild, &["vc.contract"]).await;
 
     let response = send(router(pool), &token, issue(money.user2, json!("100")), None).await;
 
@@ -185,7 +185,7 @@ async fn a_grant_without_the_issuing_scope_may_not_issue(pool: PgPool) {
 async fn a_key_does_not_make_a_scopeless_token_able_to_issue(pool: PgPool) {
     let money = setup_money(&pool).await;
     let application = insert_application(&pool, OWNER, "an application").await;
-    let token = insert_grant(&pool, application, money.guild, &["openid"]).await;
+    let token = insert_grant(&pool, application, money.guild, &["vc.contract"]).await;
 
     let response = send(
         router(pool),

@@ -121,7 +121,6 @@ findings.
 | `GET /api/v2/users/@me/contracts` | user token | `contracts`, `contract_pagination` |
 | `GET`/`POST /api/v2/contracts` | app token + `vc.contract` | `contracts`, `contract_pagination` |
 | `GET /api/v2/contracts/{id}` | app or party | `contracts` |
-| `GET /api/v2/contracts/{id}/balances` | app token | `contracts` |
 | `POST`/`DELETE /api/v2/contracts/{id}/approval`, `POST …/refusal` | party | `contracts`, `contract_notification` |
 | `GET`/`POST /api/v2/contracts/{id}/payments` | app token (GET also party) | `contract_payments`, `contract_idempotency`, `contract_metered`, `contract_party`, `contract_escrow`, `contract_expiry` |
 | `GET /api/v2/currencies`, `GET /api/v2/currencies/{id}` | — | `v2_currencies` |

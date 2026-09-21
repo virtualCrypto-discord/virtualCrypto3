@@ -92,8 +92,8 @@ async fn issue(
 }
 
 /// The scopes a `client_credentials` token may carry, which are **not** the
-/// browser flow's: that one allows `openid` and nothing else, and neither check
-/// can be reused for the other.
+/// consent screen's: that one takes `vc.issue` and nothing else, and neither check can be
+/// reused for the other.
 pub const APP_SCOPES: &[&str] = &["vc.pay", "vc.claim", "vc.contract", "oauth2.register"];
 
 /// Whether a `client_credentials` request's scopes are acceptable: no repeats,
@@ -142,11 +142,11 @@ mod tests {
         assert!(!app_scopes_are_valid(&["vc.pay", "vc.pay"]));
     }
 
-    /// And `openid` is not one of them, which is the reason the two checks are
-    /// two: the browser flow's set and this one do not overlap.
+    /// And the consent screen's scope is not one of them, which is the reason the two checks
+    /// are two: the two sets do not overlap.
     #[test]
     fn an_app_scope_that_is_not_one_is_refused() {
-        assert!(!app_scopes_are_valid(&["openid"]));
+        assert!(!app_scopes_are_valid(&["vc.issue"]));
         assert!(!app_scopes_are_valid(&["vc.pay", "root"]));
     }
 }

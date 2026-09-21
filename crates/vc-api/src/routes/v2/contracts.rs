@@ -110,35 +110,6 @@ pub async fn show(
     Ok(Json(render(&found)))
 }
 
-/// `GET /api/v2/contracts/{id}/balances`: what the parties hold of the
-/// contract's currency.
-///
-/// The balance read the parties' approvals carry: an application cannot decide
-/// what to pay out without knowing what the people it pays hold.
-pub async fn balances(
-    State(state): State<AppState>,
-    user: Limited,
-    Path(id): Path<i64>,
-) -> Result<Json<Value>, ApiError> {
-    let application = application(&state, &user).await?;
-
-    let balances = contract::party_balances(state.pool(), id, application)
-        .await
-        .map_err(contract_error)?;
-
-    Ok(Json(Value::Array(
-        balances
-            .iter()
-            .map(|balance| {
-                json!({
-                    "discord_id": balance.discord_id.to_string(),
-                    "amount": balance.amount.to_string(),
-                })
-            })
-            .collect(),
-    )))
-}
-
 /// `POST /api/v2/contracts/{id}/approval`: a party locking their amount.
 ///
 /// Approving twice is not a second decision, and it is answered the same way:

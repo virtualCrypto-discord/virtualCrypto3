@@ -15,6 +15,11 @@ use crate::state::AppState;
 /// user, take its stored Discord authorization (refreshing it first when it is
 /// near expiry), fetch the Discord profile, and return
 /// `{"id": "<local user id>", "discord": <filtered profile>}`.
+///
+/// `@me` is whoever holds the token, which is not only a person: an application's token asks
+/// about the application's own account, and that account has no Discord behind it. That case is
+/// `{"id": …, "discord": null}` rather than an error — there is nothing to read, and a caller
+/// asking about itself is not asking for something that is missing.
 pub async fn me(State(state): State<AppState>, user: Limited) -> Result<Json<Value>, ApiError> {
     let local_id = i32::try_from(user.subject)
         .map_err(|_| ApiError::Internal("subject out of range".into()))?;
@@ -23,9 +28,12 @@ pub async fn me(State(state): State<AppState>, user: Limited) -> Result<Json<Val
         .await?
         .ok_or(vc_core::Error::UserNotFound(user.subject))?;
 
-    let discord_id = account
-        .discord_id
-        .ok_or_else(|| ApiError::Internal(format!("user {local_id} has no discord id")))?;
+    let Some(discord_id) = account.discord_id else {
+        return Ok(Json(json!({
+            "id": account.id.to_string(),
+            "discord": Value::Null,
+        })));
+    };
 
     let authorization = vc_core::user::find_discord_auth(state.pool(), discord_id)
         .await?

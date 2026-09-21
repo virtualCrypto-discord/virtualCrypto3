@@ -181,11 +181,13 @@ Three things in it are worth knowing before writing any of it.
 `Plug.BasicAuth.parse_basic_auth/1`. Both are legal; this service picked the body
 for that one grant and basic auth for the others.
 
-**There are two scope sets, for different grants.** The browser flow's scopes go
-through `is_valid_scopes?/1`, which allows `openid` and nothing else; client
-credentials are checked against `vc.pay`, `vc.claim` and `oauth2.register` — no
-duplicates, and nothing outside that set. A set of one is not a set of all, so
-neither check can be reused for the other.
+**There are two scope sets, for different grants.** The consent screen's scopes go
+through `is_valid_scopes?/1`, which here allows `vc.issue` and nothing else — the
+Elixir's `openid` is gone, because nothing in this service reads a user's OpenID
+Connect identity and a token carrying it could do nothing (`docs/known-gaps.md`);
+client credentials are checked against `vc.pay`, `vc.claim`, `vc.contract` and
+`oauth2.register` — no duplicates, and nothing outside that set. A set of one is
+not a set of all, so neither check can be reused for the other.
 
 **A `client_credentials` request with only a `scope` missing answers
 `unsupported_grant_type`.** The grant's one clause names `scope`, so a request

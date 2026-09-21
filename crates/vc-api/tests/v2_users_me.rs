@@ -202,3 +202,21 @@ async fn users_me_refreshes_an_expiring_authorization(pool: PgPool) {
     // updated_at, so the original value must survive the refresh.
     assert_eq!(updated_at, stale, "updated_at is not modified by a refresh");
 }
+
+/// `@me` is whoever holds the token, and an application holds one: its own account has no
+/// Discord behind it, so what it reads about itself is its id and no profile — an answer rather
+/// than the failure of a lookup there was nothing to make.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_account_without_a_discord_link_has_no_profile(pool: PgPool) {
+    let application = support::insert_application(&pool, DISCORD_ID, "Shop").await;
+    let account = support::account_of(&pool, application).await;
+    let token = support::mint_app(&pool, account, &["vc.pay"]).await;
+
+    let response = get(vc_api::router(state(pool, fake())), URI, Some(&token)).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body,
+        serde_json::json!({ "id": account.to_string(), "discord": null })
+    );
+}

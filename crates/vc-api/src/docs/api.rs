@@ -75,6 +75,10 @@ const PROSE: &[Section] = &[
             text(
                 "登録の `grant_types` に `refresh_token` を含めておくと、認可コードの交換のときにリフレッシュトークン（有効期間180日）も発行されます。有効期間が切れる前に `grant_type=refresh_token` で新しいトークンを取り直してください。更新のたびにリフレッシュトークンは入れ替わり、古いものは使えなくなります。",
             ),
+            text(
+                "`/api/v2/users/@me` の `@me` は、**トークンの持ち主のアカウント**です。利用者のトークンならその人、アプリケーションのトークンならそのアプリケーション自身の口座になります。\
+                 アプリケーションも自分の残高・請求・契約をこれで読み書きします。スコープは同じように要ります（`vc.claim`・`vc.pay`）。",
+            ),
         ],
     ),
     section(
@@ -89,7 +93,6 @@ const PROSE: &[Section] = &[
                 "`vc.issue` サーバーの発行枠から発行する（サーバーのトークンだけ）。",
                 "`vc.contract` 契約を作り、ロックされた通貨を動かす（アプリケーションのトークンだけ）。",
                 "`oauth2.register` アプリケーションを登録・参照・編集する。",
-                "`openid` 同意画面で求められるスコープです。",
             ]),
         ],
     ),
@@ -159,14 +162,14 @@ const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         method: "GET",
         path: "/api/v2/users/@me",
-        summary: "呼び出した利用者と、そのDiscordのプロフィールです。",
-        access: "利用者のトークン",
+        summary: "呼び出したアカウントと、そのDiscordのプロフィールです。",
+        access: "利用者かアプリケーションのトークン",
         fields: &[],
         // `tests/golden/v2_users_me.json`, body and all.
         example: Some(Example {
             request: &[
                 "GET /api/v2/users/@me",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Accept: application/json",
             ],
             response: &[
@@ -187,21 +190,22 @@ const ENDPOINTS: &[Endpoint] = &[
             ],
         }),
         notes: &[
-            "`id` はVirtualCryptoの利用者ID、`discord` はDiscordから読んだプロフィールです。`discord` はDiscordを読めないとき `null` になります。",
+            "`id` はVirtualCryptoのアカウントID、`discord` はDiscordから読んだプロフィールです。",
+            "`@me` はトークンの持ち主です。アプリケーションのトークンなら、そのアプリケーション自身のアカウントになります。Discordの連携が無いアカウントでは `discord` は `null` です。",
         ],
     },
     Endpoint {
         method: "GET",
         path: "/api/v2/users/@me/balances",
-        summary: "呼び出した利用者の残高の一覧です。",
-        access: "利用者のトークン",
+        summary: "呼び出したアカウントの残高の一覧です。",
+        access: "利用者かアプリケーションのトークン",
         fields: &[],
         // `tests/golden/v2_users_me_balances.json`, body and all: one object per currency the
         // caller holds, and none for a currency they do not.
         example: Some(Example {
             request: &[
                 "GET /api/v2/users/@me/balances",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Accept: application/json",
             ],
             response: &[
@@ -219,14 +223,15 @@ const ENDPOINTS: &[Endpoint] = &[
             ],
         }),
         notes: &[
-            "空の配列は、その利用者がまだどの通貨も持っていないという意味です。`amount` も `pool_amount` も文字列です。",
+            "空の配列は、そのアカウントがまだどの通貨も持っていないという意味です。`amount` も `pool_amount` も文字列です。",
+            "`@me` はトークンの持ち主のアカウントです。アプリケーションのトークンなら、そのアプリケーション自身の口座になります。",
         ],
     },
     Endpoint {
         method: "GET",
         path: "/api/v2/users/@me/claims",
-        summary: "呼び出した利用者に関係する請求の一覧です。",
-        access: "利用者のトークン + `vc.claim`",
+        summary: "呼び出したアカウントに関係する請求の一覧です。",
+        access: "利用者かアプリケーションのトークン + `vc.claim`",
         fields: &[
             "`statuses[]`（文字列・任意） 読む状態です。`pending` `approved` `denied` `canceled`。省略すると `pending` だけになります。",
             "`type`（文字列・任意） 立場です。`all`（既定） `received`（自分が支払う） `claimed`（自分が請求した）。",
@@ -240,7 +245,7 @@ const ENDPOINTS: &[Endpoint] = &[
         example: Some(Example {
             request: &[
                 "GET /api/v2/users/@me/claims?limit=1",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Accept: application/json",
             ],
             response: &[
@@ -273,7 +278,7 @@ const ENDPOINTS: &[Endpoint] = &[
         method: "POST",
         path: "/api/v2/users/@me/claims",
         summary: "請求を作ります。",
-        access: "利用者のトークン + `vc.claim`",
+        access: "利用者かアプリケーションのトークン + `vc.claim`",
         fields: &[
             "`payer_discord_id`（文字列・必須） 支払う相手のDiscord IDです。まだアカウントが無ければ作られます。",
             "`unit`（文字列・必須） 通貨の単位です。",
@@ -284,7 +289,7 @@ const ENDPOINTS: &[Endpoint] = &[
         example: Some(Example {
             request: &[
                 "POST /api/v2/users/@me/claims",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Content-Type: application/json",
                 "",
                 "{",
@@ -321,7 +326,7 @@ const ENDPOINTS: &[Endpoint] = &[
         method: "GET",
         path: "/api/v2/users/@me/claims/{id}",
         summary: "請求を1件読みます。",
-        access: "利用者のトークン + `vc.claim`",
+        access: "利用者かアプリケーションのトークン + `vc.claim`",
         fields: &["`{id}`（パス・必須） 請求の番号です。"],
         example: None,
         notes: &[
@@ -333,7 +338,7 @@ const ENDPOINTS: &[Endpoint] = &[
         method: "PATCH",
         path: "/api/v2/users/@me/claims/{id}",
         summary: "請求の状態を変えるか、メタデータを書き換えます。",
-        access: "利用者のトークン + `vc.claim`",
+        access: "利用者かアプリケーションのトークン + `vc.claim`",
         fields: &[
             "`status`（文字列・任意） `approved` `denied` `canceled` のどれかです。",
             "`metadata`（オブジェクトか `null`・任意） 送ると書き換え、`null` を送ると削除します。省略すると変えません。",
@@ -341,7 +346,7 @@ const ENDPOINTS: &[Endpoint] = &[
         example: Some(Example {
             request: &[
                 "PATCH /api/v2/users/@me/claims/1",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Content-Type: application/json",
                 "",
                 "{ \"status\": \"approved\" }",
@@ -374,7 +379,7 @@ const ENDPOINTS: &[Endpoint] = &[
         method: "POST",
         path: "/api/v2/users/@me/transactions",
         summary: "通貨を送ります。1件でも、配列でまとめてでも送れます。",
-        access: "利用者のトークン + `vc.pay`",
+        access: "利用者かアプリケーションのトークン + `vc.pay`",
         fields: &[
             "`unit`（文字列・必須） 送る通貨の単位です。",
             "`receiver_discord_id`（文字列・必須） 送る相手のDiscord IDです。相手の分は無くても送れます。",
@@ -383,7 +388,7 @@ const ENDPOINTS: &[Endpoint] = &[
         example: Some(Example {
             request: &[
                 "POST /api/v2/users/@me/transactions",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Content-Type: application/json",
                 "Idempotency-Key: 8f1c…（任意）",
                 "",
@@ -404,15 +409,15 @@ const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         method: "GET",
         path: "/api/v2/users/@me/contracts",
-        summary: "呼び出した利用者が対象になっている契約の一覧です。",
-        access: "利用者のトークン",
+        summary: "呼び出したアカウントが対象になっている契約の一覧です。",
+        access: "利用者かアプリケーションのトークン",
         fields: &["`limit`（数値・任意） 1ページの件数です。既定50、上限200。"],
         // `contracts.rs`'s `render/1`, which is what every contract-returning endpoint answers
         // with: the party the caller is, and what the contract still holds.
         example: Some(Example {
             request: &[
                 "GET /api/v2/users/@me/contracts?limit=1",
-                "Authorization: Bearer <利用者のトークン>",
+                "Authorization: Bearer <利用者かアプリケーションのトークン>",
                 "Accept: application/json",
             ],
             response: &[
@@ -441,6 +446,7 @@ const ENDPOINTS: &[Endpoint] = &[
         notes: &[
             "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
             "`status` は `pending` `active` `canceled` で、各対象者の `status` は `pending` `approved` `refused` `withdrawn` です。",
+            "対象者はDiscordの利用者なので、アプリケーションが対象者になることはありません。アプリケーションのトークンでは空の配列になり、自分が作った契約は `GET /api/v2/contracts` です。",
         ],
     },
     Endpoint {
@@ -467,7 +473,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "`parties[].discord_id`（文字列・必須） 対象者のDiscord IDです。",
             "`parties[].amount`（文字列・必須） その人がロックする枚数です。1以上。",
             "`receiver_discord_id`（文字列か `null`・任意） 支払いを受け取る相手です。省略すると契約ごとに決められます。",
-            "`expires_in`（数値か `null`・任意） ロックする期間の秒数です。省略すると期限なしになり、そのときはいつでも取り消せます。",
+            "`expires_in`（数値か `null`・任意） 期限までの秒数です。**契約を作った時点**から数えるので、承認が遅れても期限は延びません。1以上365日（31536000）以下です。省略すると期限なしになり、そのときはいつでも取り消せます。",
         ],
         example: Some(Example {
             request: &[
@@ -504,7 +510,7 @@ const ENDPOINTS: &[Endpoint] = &[
         }),
         notes: &[
             "成功は 201 です。作っただけでは何もロックされず、対象者が承認して初めてロックされます。",
-            "`expires_in` は秒です。期限のある契約は、その期間が終わるまで取り消せません。",
+            "`expires_in` の期限は秒です。期限のある契約は、その期間が終わるまで取り消せません。終わると、残りは対象者に戻ります。",
         ],
     },
     Endpoint {
@@ -515,26 +521,6 @@ const ENDPOINTS: &[Endpoint] = &[
         fields: &["`{id}`（パス・必須） 契約の番号です。"],
         example: None,
         notes: &["見えない契約は 404 です。", "本文は一覧の1件と同じ形です。"],
-    },
-    Endpoint {
-        method: "GET",
-        path: "/api/v2/contracts/{id}/balances",
-        summary: "契約の対象者が、それぞれいくら持っているかを返します。",
-        access: "アプリケーションのトークン + `vc.contract`",
-        fields: &["`{id}`（パス・必須） 契約の番号です。"],
-        example: Some(Example {
-            request: &[
-                "GET /api/v2/contracts/1/balances",
-                "Authorization: Bearer <アプリケーションのトークン>",
-                "Accept: application/json",
-            ],
-            response: &[
-                "[",
-                "  { \"discord_id\": \"100000000000000001\", \"amount\": \"199500\" }",
-                "]",
-            ],
-        }),
-        notes: &["金額は文字列です。対象者でない人は含まれません。"],
     },
     Endpoint {
         method: "POST",
@@ -729,14 +715,14 @@ const ENDPOINTS: &[Endpoint] = &[
             "`response_type`（文字列・必須） `code` だけです。",
             "`client_id`（文字列・必須） アプリケーションの `client_id` です。",
             "`redirect_uri`（文字列・必須） 登録した戻り先のどれかです。",
-            "`scope`（文字列・必須） 求めるスコープです。空白区切りで、`openid` と `vc.issue` が置けます。",
+            "`scope`（文字列・必須） 求めるスコープです。空白区切りで、`vc.issue` だけが置けます（無くても構いません）。",
             "`guild_id`（文字列・必須） 発行を許可するサーバーのDiscord IDです。",
             "`state`（文字列・任意） そのまま返ります。",
         ],
         // `oauth2::Consent`, which is what the screen reads the consent out of.
         example: Some(Example {
             request: &[
-                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=openid&guild_id=900000000000000001",
+                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=vc.issue&guild_id=900000000000000001",
                 "Cookie: <セッション>",
             ],
             response: &[
@@ -744,7 +730,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "  \"client_name\": \"my-application\",",
                 "  \"client_id\": \"e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f\",",
                 "  \"redirect_uri\": \"https://app.example/callback\",",
-                "  \"scopes\": [\"openid\"],",
+                "  \"scopes\": [\"vc.issue\"],",
                 "  \"guild_id\": 900000000000000001,",
                 "  \"state\": null",
                 "}",
@@ -803,7 +789,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "  \"access_token\": \"f2b7c1a4-0d2e-4f5a-9b6c-1e2d3f4a5b6c\",",
                 "  \"token_type\": \"Bearer\",",
                 "  \"expires_in\": 3600,",
-                "  \"scopes\": [\"openid\"],",
+                "  \"scopes\": [\"vc.issue\"],",
                 "  \"refresh_token\": \"9a6d5c4b-3e2f-4a1b-8c7d-6e5f4a3b2c1d\"",
                 "}",
             ],
@@ -1002,7 +988,7 @@ const ENDPOINTS: &[Endpoint] = &[
         access: "アプリケーションのトークン + `oauth2.register`",
         fields: &[
             "`guild_id`（文字列・必須） 発行を許可してほしいサーバーのDiscord IDです。",
-            "`scopes`（配列・必須） 求めるスコープです。`openid` と `vc.issue` だけが置けます。",
+            "`scopes`（配列・必須） 求めるスコープです。`vc.issue` だけが置けます。",
             "`expires_in`（数値・任意） 申請が生きる秒数です。既定600、上限3600。",
         ],
         // `tests/grant_requests.rs`'s `an_application_may_ask_a_guild`.
