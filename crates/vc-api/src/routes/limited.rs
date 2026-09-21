@@ -40,9 +40,15 @@ use vc_core::grant::Target;
 pub struct Limited {
     user: AuthUser,
     resources: Vec<i64>,
+    delegated: bool,
 }
 
 impl Limited {
+    /// Whether this credential acts under a grant rather than as the account itself.
+    pub fn is_delegated(&self) -> bool {
+        self.delegated
+    }
+
     /// The currencies the token is for. Empty is every currency — the empty set a
     /// grant written before resources existed carries, the collection form of
     /// `resource`, and every credential that is not a grant's at all.
@@ -124,7 +130,11 @@ impl FromRequestParts<AppState> for Limited {
                 .into_response());
         }
 
-        Ok(Limited { user, resources })
+        Ok(Limited {
+            user,
+            resources,
+            delegated: grant.is_some(),
+        })
     }
 }
 

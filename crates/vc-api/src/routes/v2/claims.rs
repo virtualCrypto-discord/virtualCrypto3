@@ -34,6 +34,7 @@ pub async fn get_by_id(
     // Ecto would cast the raw path segment into the bigint column and raise on a
     // non-numeric value; PATCH already answers those with 404, so do the same.
     let claim_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
+    crate::resource::ensure_claim(state.pool(), user.resources(), claim_id).await?;
 
     let view = vc_core::claim::view(state.pool(), operator_id, claim_id)
         .await?
@@ -244,6 +245,8 @@ pub async fn create(
             .and_then(Value::as_str)
             .ok_or(ApiError::InvalidRequest("not_found_currency"))?;
 
+        crate::resource::ensure_unit(state.pool(), user.resources(), unit).await?;
+
         let claim_id = vc_core::claim::create(
             state.pool(),
             operator_id,
@@ -334,6 +337,7 @@ pub async fn patch(
 
     // `Integer.parse(id)` with a clean tail; anything else is not found.
     let claim_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
+    crate::resource::ensure_claim(state.pool(), user.resources(), claim_id).await?;
 
     let object = body.as_object();
     let status = object

@@ -123,6 +123,10 @@ pub async fn approve(
     user: Limited,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
+    // Contract decisions require the account's own credential, never a delegation.
+    if user.is_delegated() {
+        return Err(ApiError::PermissionDenied);
+    }
     let account = account(&user)?;
 
     let decided = contract::approve(state.pool(), id, account, OffsetDateTime::now_utc())
@@ -150,6 +154,10 @@ pub async fn refuse(
     user: Limited,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
+    // Contract decisions require the account's own credential, never a delegation.
+    if user.is_delegated() {
+        return Err(ApiError::PermissionDenied);
+    }
     let account = account(&user)?;
 
     let decided = contract::refuse(state.pool(), id, account, OffsetDateTime::now_utc())
@@ -177,6 +185,10 @@ pub async fn withdraw(
     user: Limited,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
+    // Contract decisions require the account's own credential, never a delegation.
+    if user.is_delegated() {
+        return Err(ApiError::PermissionDenied);
+    }
     let account = account(&user)?;
 
     let decided = contract::withdraw(state.pool(), id, account, OffsetDateTime::now_utc())

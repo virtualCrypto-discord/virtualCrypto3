@@ -656,3 +656,185 @@ async fn unrestricted_grants_still_cover_replacement_currencies(pool: PgPool) {
     .await;
     assert_eq!(allowed.status, 201);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn read_only_grant_cannot_approve_a_contract(pool: PgPool) {
+    fixture(&pool).await;
+    let (application, token, _) = ask_and_approve(
+        &pool,
+        Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
+        &["vc.read"],
+    )
+    .await;
+    let contract = vc_core::contract::create(
+        &pool,
+        application,
+        UNIT_B,
+        &[vc_core::contract::NewParty {
+            discord_id: PERSON,
+            amount: 100,
+        }],
+        Some(RECEIVER),
+        None,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let approved = request(
+        router(pool.clone()),
+        "POST",
+        &format!("/api/v2/contracts/{contract}/approval"),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id = $1 AND currency_id = $2")
+            .bind(i64::from(PERSON_ACCOUNT))
+            .bind(CURRENCY_B)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        approved.status == 401 || approved.status == 403,
+        "read-only grant for A approved a contract in B: status {}, B wallet {balance} (was 1000)",
+        approved.status
+    );
+    assert_eq!(balance, 1000);
+    let refused = request(
+        router(pool.clone()),
+        "POST",
+        &format!("/api/v2/contracts/{contract}/refusal"),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(refused.status, 403);
+    let own = mint(&pool, PERSON_ACCOUNT, &[]).await;
+    let approved = request(
+        router(pool.clone()),
+        "POST",
+        &format!("/api/v2/contracts/{contract}/approval"),
+        Some(&own),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(approved.status, 200);
+    let withdrawn = request(
+        router(pool.clone()),
+        "DELETE",
+        &format!("/api/v2/contracts/{contract}/approval"),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(withdrawn.status, 403);
+    let still_active = vc_core::contract::find(&pool, contract)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(still_active.status, "active");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn currency_restriction_applies_to_claim_approval(pool: PgPool) {
+    fixture(&pool).await;
+    let (_, token, _) = ask_and_approve(
+        &pool,
+        Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
+        &["vc.claim"],
+    )
+    .await;
+    insert_claim(
+        &pool,
+        1,
+        100,
+        "pending",
+        RECEIVER_ACCOUNT,
+        PERSON_ACCOUNT,
+        CURRENCY_B,
+    )
+    .await;
+    let approved = request(
+        router(pool.clone()),
+        "PATCH",
+        "/api/v2/users/@me/claims/1",
+        Some(&token),
+        json!({"status":"approved"}),
+    )
+    .await;
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id = $1 AND currency_id = $2")
+            .bind(i64::from(PERSON_ACCOUNT))
+            .bind(CURRENCY_B)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        approved.status, 403,
+        "grant restricted to A approved a claim in B: B wallet {balance} (was 1000)"
+    );
+    assert_eq!(balance, 1000);
+    let read = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/claims/1",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(read.status, 403);
+    for body in [
+        json!({"status":"denied"}),
+        json!({"metadata":{"key":"value"}}),
+    ] {
+        assert_eq!(
+            request(
+                router(pool.clone()),
+                "PATCH",
+                "/api/v2/users/@me/claims/1",
+                Some(&token),
+                body
+            )
+            .await
+            .status,
+            403
+        );
+    }
+    let created = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/users/@me/claims",
+        Some(&token),
+        json!({"unit":UNIT_B,"amount":"100","payer_discord_id":RECEIVER.to_string()}),
+    )
+    .await;
+    assert_eq!(created.status, 403);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM claims")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    let claim_status: String = sqlx::query_scalar("SELECT status::text FROM claims WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(claim_status, "pending");
+    insert_claim(
+        &pool,
+        2,
+        100,
+        "pending",
+        RECEIVER_ACCOUNT,
+        PERSON_ACCOUNT,
+        CURRENCY_A,
+    )
+    .await;
+    let allowed = request(
+        router(pool.clone()),
+        "PATCH",
+        "/api/v2/users/@me/claims/2",
+        Some(&token),
+        json!({"status":"approved"}),
+    )
+    .await;
+    assert_eq!(allowed.status, 200);
+}
