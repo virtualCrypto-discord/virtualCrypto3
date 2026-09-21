@@ -116,7 +116,10 @@ const PROSE: &[Section] = &[
         "エラー",
         &[
             text(
-                "失敗は、共通の形のJSONで返ります。`error` に失敗の名前が入り、`error_description` か `error_info` のどちらかが、その失敗の詳しい名前を運びます。どちらが付くかは失敗ごとに決まっています。",
+                "失敗は、共通の形のJSONで返ります。`error` に失敗の種類が入り、詳しい理由は `error_info` に入ります。",
+            ),
+            text(
+                "仕様に含まれるのは、ステータスコードと `error` と `error_info` だけです。`error_description` の中身も、付くかどうかも仕様の範囲外です。",
             ),
             text(
                 "どのエンドポイントが何を返すかは、エンドポイントごとの「エラー」に、ステータスから書いています。ここにあるのは、どこでも同じ答えです。",
@@ -190,7 +193,7 @@ const INVALID_CURSOR: &str = "400 `{\"error\": \"invalid_request\", \"error_desc
 /// A write under an `Idempotency-Key`: the key's own refusals, and the wait.
 const INVALID_KEY: &str = "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_idempotency_key\"}` `Idempotency-Key` が仕様の形（二重引用符で囲んだ256文字まで）でないとき。";
 const MULTIPLE_KEYS: &str = "400 `{\"error\": \"invalid_request\", \"error_description\": \"multiple_idempotency_key_header_is_not_supported\"}` `Idempotency-Key` を2つ以上送ったとき。";
-const KEY_IN_FLIGHT: &str = "409 `{\"error\": \"processing\", \"error_description\": \"should_retry_after_in_seconds\"}` 同じキーの要求がまだ処理中で、1秒待っても答えが出なかったとき。`Retry-After` が1秒を、`Idempotency-Status` が `Duplicate` を示します。";
+const KEY_IN_FLIGHT: &str = "409 `{\"error\": \"processing\", \"error_description\": \"should_retry_after_in_seconds\"}` 同じキーの要求がまだ処理中で、1秒待っても答えが出なかったとき。応答には `Retry-After: 1` と `Idempotency-Status: Duplicate` が付きます。";
 
 const ENDPOINTS: &[Endpoint] = &[
     // The v2 API, in the order the router registers it.
@@ -494,7 +497,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_format_of_receiver_discord_id\"}` `receiver_discord_id` が数値でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_format_of_amount\"}` `amount` が数値でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_amount\"}` `amount` が1以上でないとき。",
-            "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_<項目>_at_<番号>\"}` 配列で送ったとき、その番号の項目が読めないとき。項目は `unit` `receiver_discord_id` `amount` です。",
+            "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_<項目>_at_<番号>\"}` 配列で送り、その番号の項目が読めないとき。項目は `unit` `receiver_discord_id` `amount` です。",
             "400 `{\"error\": \"invalid_request\", \"error_info\": \"not_found_currency\"}` `unit` の通貨が無いとき。",
             "409 `{\"error\": \"conflict\", \"error_info\": \"not_enough_amount\"}` 残高が足りないとき。",
             INVALID_KEY,
@@ -624,7 +627,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"missing_parameter\"}` 本文がオブジェクトでない、`unit` か `parties` が無いとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_type_of_variable\"}` `receiver_discord_id` が文字列か `null` でない、または `expires_in` が数値か `null` でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_format_of_receiver_discord_id\"}` `receiver_discord_id` が数値でないとき。",
-            "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_<項目>_at_<番号>\"}` その番号の対象者の `discord_id` か `amount` が、文字列の数値でないとき。",
+            "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_<項目>_at_<番号>\"}` その番号の対象者の `discord_id` か `amount` が文字列の数値でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"not_found_currency\"}` `unit` の通貨が無いとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_amount\"}` 対象者の `amount` が1以上でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_parties\"}` 対象者が1人もいない、50人を超える、または同じ人が2回書かれているとき。",
@@ -939,7 +942,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "拒否を `redirect_uri` へ送れるのは、`client_id` と `redirect_uri` が登録と合っていると確かめられたあとだけです。それ以外はどこへも送りません。",
         ],
         errors: &[
-            "400 `{\"error\": \"invalid_request\"}` `response_type` が `code` でない、`client_id` `redirect_uri` `guild_id` が無い・読めない、`scope` が無い、または `client_id` と `redirect_uri` が登録と合わないとき。どこへも送りません。",
+            "400 `{\"error\": \"invalid_request\"}` `response_type` が `code` でない、`client_id` `redirect_uri` `guild_id` が無いか読めない、`scope` が無い、または `client_id` と `redirect_uri` が登録と合わないとき。どこへも送りません。",
             "303 `redirect_uri?error=unauthorized_client&error_description=invalid_application_grant_type` そのアプリケーションが `authorization_code` を許可されていないとき。",
             "303 `redirect_uri?error=invalid_request&error_description=invalid_scope` `scope` に `vc.issue` 以外を求めたとき。",
             "303 `redirect_uri?error=invalid_request&error_description=invalid_guild_id` `guild_id` のサーバーを読めないとき。",
@@ -1012,8 +1015,8 @@ const ENDPOINTS: &[Endpoint] = &[
         errors: &[
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"grant_type_parameter_missing\"}` `grant_type` が無いとき。",
             "400 `{\"error\": \"unsupported_grant_type\"}` 知らない `grant_type` のとき。",
-            "400 `{\"error\": \"invalid_client\"}` `client_credentials` かデバイスコードで、Basicの資格情報が無い・合わないとき。",
-            "400 `{\"error\": \"invalid_request\", \"error_description\": \"client_id\"|\"redirect_uri\"|\"code\"|\"refresh_token\"|\"device_code\"}` そのグラントに必要な項目が無いとき。無い項目の名前が入ります。",
+            "400 `{\"error\": \"invalid_client\"}` `client_credentials` かデバイスコードで、Basicの資格情報が無いか、合わないとき。",
+            "400 `{\"error\": \"invalid_request\", \"error_description\": \"client_id\"|\"redirect_uri\"|\"code\"|\"refresh_token\"|\"device_code\"}` そのグラントに必要な項目が無いとき。`error_description` に、無い項目の名前が入ります。",
             "400 `{\"error\": \"invalid_grant\", \"error_description\": \"invalid_code\"}` 認可コードが無い、または期限切れのとき。",
             "400 `{\"error\": \"invalid_grant\", \"error_description\": \"used_code\"}` 認可コードがすでに使われているとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"not_found_client\"}` `client_id` が登録に無いとき。",
@@ -1048,7 +1051,7 @@ const ENDPOINTS: &[Endpoint] = &[
         }),
         notes: &["知らないトークンでも 200 です。"],
         errors: &[
-            "400 `{\"error\": \"invalid_request\", \"error_description\": \"token_or_token_id_type_and_kind_is_not_found_or_invalid_kind_or_type\"}` `token` も、`jti`・`typ`・`kind` の組も無いとき。",
+            "400 `{\"error\": \"invalid_request\", \"error_description\": \"token_or_token_id_type_and_kind_is_not_found_or_invalid_kind_or_type\"}` `token` も `jti`・`typ`・`kind` の組も無いとき。",
         ],
     },
     Endpoint {
@@ -1115,7 +1118,7 @@ const ENDPOINTS: &[Endpoint] = &[
             BAD_TOKEN,
             "401 `{\"error\": \"invalid_kind\", \"error_description\": \"a user token is required\"}` アプリケーションのトークンで呼んだとき。",
             "403 `{\"error\": \"insufficient_scope\", \"error_description\": \"oauth2.register is required\"}` `oauth2.register` を持たないとき。",
-            "400 `{\"error\": \"invalid_client_metadata\", \"error_description\": \"<規則>\"}` `response_types` `grant_types` `application_type` `client_uri` `logo_uri` `webhook_url` `discord_support_server_invite_slug` `subscribed_events` のどれかが規則に合わないとき。説明がどの規則かを言います。",
+            "400 `{\"error\": \"invalid_client_metadata\", \"error_description\": \"<規則>\"}` `response_types` `grant_types` `application_type` `client_uri` `logo_uri` `webhook_url` `discord_support_server_invite_slug` `subscribed_events` のどれかが規則に合わないとき。`error_description` に、どの規則に反したかが入ります。",
             "400 `{\"error\": \"invalid_redirect_uri\", \"error_description\": \"redirect_uris_must_be_array\"}` `redirect_uris` が無いとき。",
             "400 `{\"error\": \"invalid_redirect_uri\", \"error_description\": \"redirect_uri_scheme_must_be_http_or_https\"}` `redirect_uris` に http でも https でもないURLがあるとき。",
             "400 `{\"error\": \"user_verification_failed\", \"error_description\": \"a bot account may not register\"}` 登録する人がDiscordのBotのとき。",
@@ -1203,7 +1206,7 @@ const ENDPOINTS: &[Endpoint] = &[
             BAD_TOKEN,
             "401 `{\"error\": \"invalid_kind\", \"error_description\": \"an application token is required\"}` 利用者のトークンで呼んだとき。",
             "403 `{\"error\": \"insufficient_scope\", \"error_description\": \"oauth2.register is required\"}` `oauth2.register` を持たないとき。",
-            "400 `{\"error\": \"invalid_client_metadata\", \"error_description\": \"<規則>\"}` 送った項目が規則に合わないとき。説明がどの規則かを言います。",
+            "400 `{\"error\": \"invalid_client_metadata\", \"error_description\": \"<規則>\"}` 送った項目が規則に合わないとき。`error_description` に、どの規則に反したかが入ります。",
             "400 `{\"error\": \"invalid_redirect_uri\", \"error_description\": \"redirect_uri_scheme_must_be_http_or_https\"}` `redirect_uris` に http でも https でもないURLがあるとき。",
             "400 `{\"error\": \"webhook_verification_failed\", \"error_description\": \"the webhook did not verify\"}` 変えた `webhook_url` が確認のPINGに答えないとき。",
             "429 `{\"error\": \"rate_limit_exceeded\"}`（`error_description` が `retry_after_3_seconds` `retry_after_1_hour` `retry_after_1_day` のどれか） 確認のPINGを続けて送りすぎたとき。",
