@@ -465,3 +465,46 @@ async fn an_unregistered_related_discord_user_matches_no_claims(pool: PgPool) {
     let response = list(pool, "related_discord_user_id=777777777777777777", &token).await;
     assert_json(&response, 200, json!([]));
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn following_links_preserves_related_users(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+    for (key, id) in [
+        ("related_vc_user_id", i64::from(USER2)),
+        ("related_discord_user_id", DISCORD2),
+    ] {
+        let first = list(pool.clone(), &format!("{key}={id}&limit=1"), &token).await;
+        assert_eq!(first.status, 200, "{}", first.body);
+        assert_eq!(first.body[0]["id"], "2");
+        let link = first.headers.get("link").unwrap().to_str().unwrap();
+        let query = link.split_once('?').unwrap().1.split_once('>').unwrap().0;
+        assert!(query.contains(&format!("{key}={id}")), "{link}");
+        let next = list(pool.clone(), query, &token).await;
+        assert_eq!(next.status, 200, "link: {link}; body: {}", next.body);
+        assert_eq!(next.body.as_array().unwrap().len(), 1);
+        assert_eq!(next.body[0]["id"], "1");
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn related_user_ids_require_unsigned_positive_decimal_digits(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+    for key in ["related_vc_user_id", "related_discord_user_id"] {
+        for value in [
+            "%2B2",
+            "-2",
+            "0",
+            "",
+            "%202",
+            "2%20",
+            "2.0",
+            "9223372036854775808",
+        ] {
+            let response = list(pool.clone(), &format!("{key}={value}"), &token).await;
+            assert_eq!(response.status, 400, "{key}={value}: {}", response.body);
+            assert_eq!(response.body["error_description"], "invalid_related_user");
+        }
+    }
+}

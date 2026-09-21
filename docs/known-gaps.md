@@ -560,3 +560,12 @@ send `Content-Type: application/json` and a JSON body instead. Form-encoded
 requests receive HTTP 415. This is an accepted compatibility gap, not an
 outstanding bug. The token and revocation endpoints' form support is separate
 and remains supported.
+
+## Related-user IDs reject signs
+
+For `GET /api/v2/users/@me/claims`, `related_vc_user_id` and
+`related_discord_user_id` must be positive ASCII decimal IDs within the supported
+integer range. Leading `+` or `-`, zero, and whitespace are rejected with HTTP 400
+(`invalid_request`, `invalid_related_user`). Unlike Elixir's general integer
+parser, this intentionally treats the parameters as IDs rather than signed
+numbers. A leading `+` is rejected, not normalized in pagination links.

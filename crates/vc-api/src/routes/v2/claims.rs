@@ -83,14 +83,17 @@ pub async fn index(
     let related_vc = params.one("related_vc_user_id");
     let (related_param, related_user_id) = match (&related_discord, &related_vc) {
         (Some(_), Some(_)) => return Err(ApiError::InvalidRequest("invalid_related_user")),
-        (Some(value), None) => (
-            Some(("related_discord_user_id", value.clone())),
-            Some(parse_related_discord(&state, value).await?),
-        ),
-        (None, Some(value)) => (
-            Some(("related_vc_user_id", value.clone())),
-            Some(parse_number(value).ok_or(ApiError::InvalidRequest("invalid_related_user"))?),
-        ),
+        (Some(value), None) => {
+            let discord_id = parse_related_id(value)?;
+            (
+                Some(("related_discord_user_id", value.clone())),
+                Some(parse_related_discord(&state, discord_id).await?),
+            )
+        }
+        (None, Some(value)) => {
+            let user_id = parse_related_id(value)?;
+            (Some(("related_vc_user_id", value.clone())), Some(user_id))
+        }
         (None, None) => (None, None),
     };
 
@@ -434,11 +437,20 @@ async fn discord_user(state: &AppState, discord_id: Option<i64>) -> Result<Value
     }
 }
 
+/// Related-user IDs must be positive ASCII decimal IDs, without a sign.
+fn parse_related_id(value: &str) -> Result<i64, ApiError> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ApiError::InvalidRequest("invalid_related_user"));
+    }
+    parse_number(value)
+        .filter(|id| *id > 0)
+        .ok_or(ApiError::InvalidRequest("invalid_related_user"))
+}
+
 /// `related_discord_user_id` is resolved to a virtualCrypto user, which is what
 /// the claim filter needs. Elixir's resolver may create the user; a lookup is
 /// enough here because a user without claims matches nothing either way.
-async fn parse_related_discord(state: &AppState, value: &str) -> Result<i64, ApiError> {
-    let discord_id = parse_number(value).ok_or(ApiError::InvalidRequest("invalid_related_user"))?;
+async fn parse_related_discord(state: &AppState, discord_id: i64) -> Result<i64, ApiError> {
     let user = vc_core::user::find_by_discord_id(state.pool(), discord_id).await?;
 
     // An unregistered user has no claims. Keep the filter (rather than
