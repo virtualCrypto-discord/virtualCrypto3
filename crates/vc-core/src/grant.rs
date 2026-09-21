@@ -739,6 +739,22 @@ pub async fn request_grant(
 ) -> Result<GrantRequest> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
+    let mut tx = pool.begin().await?;
+
+    // Expired pending requests still occupy the unique slot until the purge.
+    // Remove ours and create its replacement in one transaction; concurrent
+    // requests then share the newly inserted live request through the upsert.
+    sqlx::query!(
+        "DELETE FROM grant_requests
+          WHERE application_id = $1 AND guild_id = $2 AND status = 'pending'
+            AND inserted_at + make_interval(secs => expires_in) <= $3",
+        application_id,
+        guild_id,
+        at
+    )
+    .execute(&mut *tx)
+    .await?;
+
     let row = sqlx::query!(
         r#"INSERT INTO grant_requests (application_id, guild_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)
          VALUES ($1, $2, $3, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $4, $5, $5)
@@ -752,8 +768,10 @@ pub async fn request_grant(
         expires_in,
         at
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(GrantRequest {
         id: row.id,

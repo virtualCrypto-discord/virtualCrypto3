@@ -405,3 +405,25 @@ async fn login_cannot_redirect_to_an_external_continue(pool: PgPool) {
         assert_eq!(stored.count, Some(1), "the authorization was recorded");
     }
 }
+
+#[test]
+fn real_discord_authorization_url_preserves_the_endpoint_and_parameters() {
+    use vc_api::discord::{DiscordApi, HttpDiscordApi};
+    let redirect = "https://vc.example/callback/discord?first=1&second=2";
+    let state = "state+with&reserved=characters";
+    let discord = HttpDiscordApi::new("123", "unused", "unused", redirect);
+    let address = reqwest::Url::parse(&discord.authorize_url(state)).unwrap();
+    assert_eq!(
+        address.origin().ascii_serialization(),
+        "https://discord.com"
+    );
+    assert_eq!(address.path(), "/api/oauth2/authorize");
+    let parameters: std::collections::HashMap<_, _> = address.query_pairs().collect();
+    assert_eq!(parameters.len(), 6);
+    assert_eq!(parameters["client_id"], "123");
+    assert_eq!(parameters["redirect_uri"], redirect);
+    assert_eq!(parameters["state"], state);
+    assert_eq!(parameters["response_type"], "code");
+    assert_eq!(parameters["scope"], "identify");
+    assert_eq!(parameters["prompt"], "none");
+}

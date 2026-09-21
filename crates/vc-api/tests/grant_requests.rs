@@ -439,3 +439,86 @@ async fn a_guild_id_that_is_not_a_snowflake_is_400(pool: PgPool) {
     assert_eq!(response.status, 400, "body: {}", response.body);
     assert_eq!(response.body["error"], "invalid_request");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_expired_ask_can_be_replaced_before_the_next_purge(pool: PgPool) {
+    let (application, token) = fixture(&pool).await;
+    let now = time::OffsetDateTime::now_utc();
+    let old = vc_core::grant::request_grant(
+        &pool,
+        application,
+        GUILD,
+        &["openid".to_owned()],
+        600,
+        now - time::Duration::seconds(601),
+    )
+    .await
+    .unwrap();
+    let response = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        Some(&token),
+        json!({"guild_id": GUILD.to_string(), "scopes": ["vc.issue"], "expires_in": 1200}),
+    )
+    .await;
+    assert_eq!(response.status, 201, "{}", response.body);
+    assert_eq!(response.body["expires_in"], 1200);
+    assert_ne!(response.body["device_code"], old.device_code.to_string());
+    assert_ne!(response.body["user_code"], old.user_code);
+    assert_eq!(
+        device_poll(&pool, application, &old.device_code.to_string())
+            .await
+            .0,
+        400
+    );
+    let code = response.body["user_code"].as_str().unwrap();
+    assert_eq!(
+        vc_core::grant::decide_request(&pool, code, GUILD, now)
+            .await
+            .unwrap(),
+        Some(application)
+    );
+    let device_code = response.body["device_code"].as_str().unwrap();
+    assert_eq!(device_poll(&pool, application, device_code).await.0, 200);
+    let grants = vc_core::grant::grants_of(&pool, application).await.unwrap();
+    assert_eq!(grants[0].scopes, ["vc.issue"]);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_replacements_share_one_live_ask_at_expiry(pool: PgPool) {
+    let (application, _) = fixture(&pool).await;
+    let now = time::OffsetDateTime::now_utc();
+    let scopes = ["vc.issue".to_owned()];
+    let old = vc_core::grant::request_grant(
+        &pool,
+        application,
+        GUILD,
+        &scopes,
+        600,
+        now - time::Duration::seconds(600),
+    )
+    .await
+    .unwrap();
+    let (first, second) = tokio::join!(
+        vc_core::grant::request_grant(&pool, application, GUILD, &scopes, 600, now),
+        vc_core::grant::request_grant(&pool, application, GUILD, &scopes, 600, now),
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_ne!(first.device_code, old.device_code);
+    assert_eq!(first.device_code, second.device_code);
+    assert_eq!(first.user_code, second.user_code);
+    assert_eq!(
+        vc_core::grant::requests_of(&pool, application)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        vc_core::grant::poll_request(&pool, application, first.device_code, now)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

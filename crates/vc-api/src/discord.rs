@@ -761,10 +761,17 @@ impl DiscordApi for HttpDiscordApi {
     /// the bot only ever needs to know who someone is, and `prompt=none`,
     /// because Discord should not ask again someone who already agreed.
     fn authorize_url(&self, state: &str) -> String {
-        format!(
-            "https://discord.com/api/oauth2/authorize             ?client_id={}&redirect_uri={}&response_type=code&scope=identify&prompt=none&state={}",
-            self.client_id, self.redirect_uri, state
-        )
+        let mut url = reqwest::Url::parse("https://discord.com/api/oauth2/authorize")
+            .expect("the authorization endpoint is a valid URL");
+        url.query_pairs_mut().extend_pairs([
+            ("client_id", self.client_id.as_str()),
+            ("redirect_uri", self.redirect_uri.as_str()),
+            ("response_type", "code"),
+            ("scope", "identify"),
+            ("prompt", "none"),
+            ("state", state),
+        ]);
+        url.into()
     }
 }
 

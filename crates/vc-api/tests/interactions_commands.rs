@@ -1072,3 +1072,53 @@ async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
     // rest of the connect command.
     assert!(rendered.contains("`/application show`"), "{rendered}");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn optional_application_fields_can_be_cleared_through_the_modal(pool: PgPool) {
+    use vc_api::custom_id::ui::developer::{Screen, custom_id_for_field};
+    let owner = 500_000_000_000_000_001;
+    support::insert_user(&pool, 1, owner).await;
+    let application = support::insert_application(&pool, owner, "mine").await;
+    sqlx::query(
+        "UPDATE applications SET webhook_url = 'https://example.test/webhook' WHERE id = $1",
+    )
+    .bind(application)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let client_id = support::client_id_of(&pool, application).await;
+    for name in [
+        "client_name",
+        "redirect_uris",
+        "client_uri",
+        "logo_uri",
+        "webhook_url",
+        "discord_support_server_invite_slug",
+    ] {
+        let custom_id = custom_id_for_field(Screen::Edit, &client_id, name);
+        let payload = json!({"type":3,"user":{"id":owner.to_string()},"data":{"component_type":2,"custom_id":custom_id}});
+        let response = interaction(router(pool.clone()), payload).await;
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(response.body["type"], 9);
+        assert_eq!(
+            response.body["data"]["components"][0]["component"]["required"], false,
+            "{name}"
+        );
+    }
+    let custom_id = custom_id_for_field(Screen::Edit, &client_id, "webhook_url");
+    let response = interaction(
+        router(pool.clone()),
+        submitted_form(
+            &custom_id,
+            json!([field("webhook URL", "webhook_url", "")]),
+            owner,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    let details = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(details.webhook_url.is_none());
+}

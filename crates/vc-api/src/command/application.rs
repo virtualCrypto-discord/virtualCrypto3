@@ -551,7 +551,7 @@ async fn edit_field(
             } else {
                 None
             },
-            crate::components::text_input(field, style, true, longest, now, None),
+            crate::components::text_input(field, style, false, longest, now, None),
         )],
     ))
 }
