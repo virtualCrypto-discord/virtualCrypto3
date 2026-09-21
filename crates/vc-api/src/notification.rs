@@ -155,6 +155,9 @@ pub trait Transport: Send + Sync {
     fn status(&self, response: &reqwest::Response) -> Option<u16>;
 }
 
+/// Bound each delivery, including connection setup and reading the response body.
+const DELIVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Send a delivery, however this service reaches applications.
 pub async fn send(
     transport: &dyn Transport,
@@ -163,6 +166,8 @@ pub async fn send(
     let response = transport
         .http()
         .post(transport.endpoint(delivery))
+        .timeout(DELIVERY_TIMEOUT)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header("X-Signature-Ed25519", &delivery.signature)
         .header("X-Signature-Timestamp", delivery.timestamp.to_string())
         // The proxy needs to be told where to relay to. Sending it to an application that does not
@@ -176,7 +181,11 @@ pub async fn send(
     let status = transport.status(&response);
     // A refusal needs only its status. A successful PING still has to carry
     // {"type": 1}; a missing or invalid JSON body cannot satisfy that check.
-    let body = response.json::<Value>().await.unwrap_or(Value::Null);
+    let body = match response.json::<Value>().await {
+        Ok(body) => body,
+        Err(error) if error.is_timeout() => return Err(error),
+        Err(_) => Value::Null,
+    };
 
     Ok(status.map(|status| (status, body)))
 }
