@@ -67,6 +67,12 @@ pub struct FakeDiscord {
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
     webhooks: Mutex<Vec<Value>>,
+    callbacks: Mutex<Vec<Value>>,
+    followup_gate: Option<Arc<tokio::sync::Semaphore>>,
+    followup_error: bool,
+    callback_error: bool,
+    followup_started: tokio::sync::Notify,
+    followup_finished: tokio::sync::Notify,
 }
 
 impl FakeDiscord {
@@ -124,6 +130,12 @@ impl FakeDiscord {
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             webhooks: Mutex::new(Vec::new()),
+            callbacks: Mutex::new(Vec::new()),
+            followup_gate: None,
+            followup_error: false,
+            callback_error: false,
+            followup_started: tokio::sync::Notify::new(),
+            followup_finished: tokio::sync::Notify::new(),
         }
     }
 
@@ -193,6 +205,31 @@ impl FakeDiscord {
     /// shown to have answered instead.
     pub fn user_calls(&self) -> usize {
         self.user_calls.load(Ordering::SeqCst)
+    }
+
+    pub fn with_followup(error: bool, gate: Option<Arc<tokio::sync::Semaphore>>) -> Arc<Self> {
+        let mut api = Self::new();
+        api.followup_error = error;
+        api.followup_gate = gate;
+        Arc::new(api)
+    }
+
+    pub fn with_callback_error() -> Arc<Self> {
+        let mut api = Self::new();
+        api.callback_error = true;
+        Arc::new(api)
+    }
+
+    pub fn callbacks(&self) -> Vec<Value> {
+        self.callbacks.lock().unwrap().clone()
+    }
+
+    pub async fn followup_started(&self) {
+        self.followup_started.notified().await;
+    }
+
+    pub async fn followup_finished(&self) {
+        self.followup_finished.notified().await;
     }
 
     /// The bodies `post_webhook_message` has been handed, in order — what the
@@ -283,17 +320,46 @@ impl DiscordApi for FakeDiscord {
         Ok(Some(guild))
     }
 
+    async fn create_interaction_response(
+        &self,
+        interaction_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        assert!(!interaction_id.is_empty());
+        assert!(!token.is_empty());
+        discord_schema::Payload::InteractionResponse.assert_valid(body);
+        if self.callback_error {
+            return Err(DiscordError::Request("simulated callback failure".into()));
+        }
+        self.callbacks.lock().unwrap().push(body.clone());
+        Ok(())
+    }
+
     async fn post_webhook_message(
         &self,
         _application_id: &str,
         _token: &str,
         body: &Value,
     ) -> Result<(), DiscordError> {
+        assert!(
+            !self.callbacks().is_empty(),
+            "follow-up sent before initial response"
+        );
+        self.followup_started.notify_one();
+        if let Some(gate) = &self.followup_gate {
+            let _permit = gate.acquire().await.unwrap();
+        }
+        if self.followup_error {
+            self.followup_finished.notify_one();
+            return Err(DiscordError::Request("simulated follow-up failure".into()));
+        }
         discord_schema::Payload::Followup.assert_valid(body);
         self.webhooks
             .lock()
             .expect("the fake is not poisoned")
             .push(body.clone());
+        self.followup_finished.notify_one();
 
         Ok(())
     }
@@ -1026,7 +1092,12 @@ pub async fn interaction(app: Router, payload: Value) -> Response {
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
     };
 
-    if (200..300).contains(&status) {
+    if status == 202 {
+        assert!(
+            bytes.is_empty(),
+            "callback acknowledgement must have no body"
+        );
+    } else if (200..300).contains(&status) {
         discord_schema::Payload::InteractionResponse.assert_valid(&body);
     }
 

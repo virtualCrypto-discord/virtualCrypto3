@@ -191,3 +191,24 @@ async fn status_aware_readers_keep_the_status_for_their_callers() {
         403
     );
 }
+
+#[tokio::test]
+async fn interaction_callback_accepts_empty_204_and_rejects_errors() {
+    let (client, server) = server(vec![(204, Value::Null), (404, json!({"code": 10062}))]).await;
+    let cached = CachedDiscord::new(Arc::new(client));
+    let body = json!({"type": 7, "data": {"content": "updated"}});
+    cached
+        .create_interaction_response("123", "test-token", &body)
+        .await
+        .unwrap();
+    assert!(
+        cached
+            .create_interaction_response("123", "test-token", &body)
+            .await
+            .is_err()
+    );
+    let requests = server.wire.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].0, "/api/interactions/123/test-token/callback");
+    assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);
+}

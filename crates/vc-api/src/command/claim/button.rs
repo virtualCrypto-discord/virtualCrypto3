@@ -1,3 +1,8 @@
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::Value;
 use vc_core::claim::{PartialClaim, UpdateClaimsError};
 
@@ -19,7 +24,7 @@ pub async fn handle(
     state: &AppState,
     custom_id: &str,
     payload: &Value,
-) -> Result<Value, CommandError> {
+) -> Result<Response, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
 
     let (path, data) = parse(&crate::custom_id::parse(custom_id))
@@ -30,11 +35,16 @@ pub async fn handle(
         // reload. It only redraws, and the page to draw is in the options the button
         // carries rather than in the path, which is why the scope is not read: the
         // Elixir's `handle_listing/2` reads the options too.
-        Path::List(_) => return list::page(state, me, options(&data)?).await,
+        Path::List(_) => {
+            return Ok(Json(list::page(state, me, options(&data)?).await?).into_response());
+        }
         // `[:claim, :action_single, action]`: one claim's own screen, which answers with
         // itself rather than with a list.
         Path::ActionSingle(action) => {
-            return show::pressed(state, me, action, single_claim_id(&data)?).await;
+            return Ok(
+                Json(show::pressed(state, me, action, single_claim_id(&data)?).await?)
+                    .into_response(),
+            );
         }
         Path::Act(action) => action,
     };
@@ -42,9 +52,6 @@ pub async fn handle(
     let (options, rest) = ListOptions::parse(&data).ok_or_else(|| {
         CommandError::Internal(ApiError::Internal("the button payload is malformed".into()))
     })?;
-
-    let ids = claim_ids(rest);
-    let body = patch(state, me, action, &ids).await?;
 
     let application_id = payload
         .get("application_id")
@@ -55,12 +62,39 @@ pub async fn handle(
         .and_then(Value::as_str)
         .ok_or_else(|| CommandError::missing("interaction has no token"))?;
 
+    let interaction_id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CommandError::missing("interaction has no id"))?;
+    let ids = claim_ids(rest);
+    let body = patch(state, me, action, &ids).await?;
+    let page = list::page(state, me, options).await?;
+
+    // Await Discord's acknowledgement before sending a follow-up. Spawning the
+    // follow-up beside an inline response would race delivery of that response.
     state
         .discord()
-        .post_webhook_message(application_id, token, &body)
+        .create_interaction_response(interaction_id, token, &page)
         .await?;
+    let discord = state.discord().clone();
+    let application_id = application_id.to_owned();
+    let token = token.to_owned();
+    tokio::spawn(async move {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            discord.post_webhook_message(&application_id, &token, &body),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "claim outcome follow-up failed"),
+            Err(_) => tracing::warn!("claim outcome follow-up timed out"),
+        }
+    });
 
-    list::page(state, me, options).await
+    // The callback already supplied the interaction response. Discord requires
+    // an empty 202 on the incoming HTTP request in this case.
+    Ok(StatusCode::ACCEPTED.into_response())
 }
 
 /// The options a list button carries, which is the whole state of the page it draws.

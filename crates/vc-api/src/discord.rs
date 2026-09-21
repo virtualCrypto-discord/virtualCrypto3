@@ -115,6 +115,15 @@ pub trait DiscordApi: Send + Sync {
     /// bot cannot see is not a guild it can grant anything in.
     fn bot_user_id(&self) -> i64;
 
+    /// Send the initial response through Discord's callback endpoint and wait
+    /// for acknowledgement before any follow-up is allowed.
+    async fn create_interaction_response(
+        &self,
+        interaction_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError>;
+
     /// `post_webhook_message/3`: the follow-up a component answers with, which
     /// is where a button's result is shown. The Elixir tests swap the service
     /// for one that records the body instead of sending it.
@@ -332,6 +341,17 @@ impl DiscordApi for CachedDiscord {
 
     fn bot_user_id(&self) -> i64 {
         self.inner.bot_user_id()
+    }
+
+    async fn create_interaction_response(
+        &self,
+        interaction_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.inner
+            .create_interaction_response(interaction_id, token, body)
+            .await
     }
 
     async fn post_webhook_message(
@@ -678,6 +698,31 @@ impl DiscordApi for HttpDiscordApi {
         }
     }
 
+    async fn create_interaction_response(
+        &self,
+        interaction_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        let response = self
+            .http
+            .post(self.endpoint(&format!("/interactions/{interaction_id}/{token}/callback")))
+            .json(body)
+            .send()
+            .await
+            // reqwest errors contain the URL, including the interaction token.
+            .map_err(|_| {
+                DiscordError::Request("the interaction callback could not be sent".into())
+            })?;
+        if !response.status().is_success() {
+            return Err(DiscordError::Request(format!(
+                "the interaction callback answered {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
     async fn post_webhook_message(
         &self,
         application_id: &str,
@@ -690,7 +735,7 @@ impl DiscordApi for HttpDiscordApi {
             .json(body)
             .send()
             .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+            .map_err(|_| DiscordError::Request("the follow-up could not be sent".into()))?;
 
         if !response.status().is_success() {
             return Err(DiscordError::Request(format!(

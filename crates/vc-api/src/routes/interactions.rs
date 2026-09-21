@@ -214,7 +214,7 @@ async fn component(state: &AppState, payload: &Value) -> Response {
     match (component_type, custom_id) {
         (Some(2), Some(custom_id)) => {
             match crate::command::claim::button::handle(state, custom_id, payload).await {
-                Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+                Ok(response) => response,
                 Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
                 Err(CommandError::Internal(error)) => error.into_response(),
             }

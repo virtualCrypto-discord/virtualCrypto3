@@ -1075,6 +1075,7 @@ const BUTTON_NOT_FOUND: &str = "エラー: そのidの請求は見つかりま�
 /// button press, carrying the token the follow-up is posted to.
 fn action_data(custom_id: String, user: i64) -> Value {
     json!({
+        "id": "123456789012345678",
         "type": 3,
         "data": { "custom_id": custom_id, "component_type": 2 },
         "member": {
@@ -1112,6 +1113,21 @@ async fn press(
     )
     .await;
 
+    assert_eq!(response.status, 202, "{}", response.body);
+    assert_eq!(response.body, Value::Null);
+    // Existing rendering assertions inspect the response delivered through the
+    // callback now; the incoming request has only an empty acknowledgement.
+    let response = support::Response {
+        status: response.status,
+        headers: response.headers,
+        body: api
+            .callbacks()
+            .pop()
+            .expect("an initial response was posted"),
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_finished())
+        .await
+        .expect("follow-up completed");
     let mut posted = api.webhooks();
     let body = posted.pop().expect("a follow-up was posted");
 
@@ -1122,7 +1138,7 @@ async fn assert_action_error(pool: PgPool, action: Action, claim: i64, user: i64
     let api = fake();
     let (response, body) = press(&api, pool, action, &[claim], user).await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
         json!([{ "type": 17, "components": [{ "type": 10, "content": content }] }])
@@ -1158,7 +1174,7 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     assert_eq!(body["flags"], json!(32832));
 
     // The press answers with the list redrawn, not with the outcome.
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(7));
     assert_eq!(response.body["data"]["flags"], json!(32832));
     assert_eq!(
@@ -1387,7 +1403,7 @@ async fn pressing_deny_leaves_the_money_where_it_is(pool: PgPool) {
     let api = fake();
     let (response, body) = press(&api, pool.clone(), Action::Deny, &[claim_id], money.user2).await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
         json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を拒否しました。") }] }])
@@ -1567,7 +1583,7 @@ async fn pressing_cancel_is_the_claimants_move(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
         json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求をキャンセルしました。") }] }])
@@ -1879,4 +1895,80 @@ async fn pressing_the_show_screens_approve_as_the_claimant_is_refused(pool: PgPo
         .expect("a lookup")
         .expect("the claim exists");
     assert_eq!(claim.status.as_deref(), Some("pending"));
+}
+
+/// A notification outage cannot turn an already-paid claim into a failed interaction.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn followup_failure_does_not_fail_the_paid_claim_response(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let id = claims.id(0);
+    let api = support::FakeDiscord::with_followup(true, None);
+    let before = get_amount(&pool, claims.money.user2, claims.money.currency).await;
+    let response = interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        action_data(action_custom_id(Action::Approve, &[id]), claims.money.user2),
+    )
+    .await;
+    assert_eq!(response.status, 202);
+    tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_finished())
+        .await
+        .unwrap();
+    assert_eq!(api.callbacks().len(), 1);
+    assert_eq!(api.callbacks()[0]["type"], 7);
+    assert!(api.webhooks().is_empty());
+    let claim = vc_core::claim::view(&pool, 1, id).await.unwrap().unwrap();
+    assert_eq!(claim.status.as_deref(), Some("approved"));
+    assert_eq!(
+        get_amount(&pool, claims.money.user2, claims.money.currency).await,
+        before - 500
+    );
+}
+
+/// Hold delivery indefinitely: neither the callback nor the HTTP acknowledgement waits for it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn slow_followup_does_not_block_initial_response(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let api = support::FakeDiscord::with_followup(false, Some(gate.clone()));
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        interaction(
+            vc_api::router(state(pool, api.clone())),
+            action_data(
+                action_custom_id(Action::Approve, &[claims.id(0)]),
+                claims.money.user2,
+            ),
+        ),
+    )
+    .await
+    .expect("initial response must not wait for delivery");
+    assert_eq!(response.status, 202);
+    tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_started())
+        .await
+        .unwrap();
+    assert_eq!(api.callbacks().len(), 1);
+    assert_eq!(api.callbacks()[0]["type"], 7);
+    assert!(api.webhooks().is_empty());
+    gate.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_finished())
+        .await
+        .unwrap();
+    assert_eq!(api.webhooks().len(), 1);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_initial_callback_does_not_send_a_followup(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let api = support::FakeDiscord::with_callback_error();
+    let response = interaction(
+        vc_api::router(state(pool, api.clone())),
+        action_data(
+            action_custom_id(Action::Deny, &[claims.id(0)]),
+            claims.money.user2,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 500);
+    assert!(api.callbacks().is_empty());
+    assert!(api.webhooks().is_empty());
 }
