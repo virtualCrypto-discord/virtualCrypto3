@@ -385,8 +385,8 @@ async fn a_body_that_does_not_parse_does_not_spend_the_key(pool: PgPool) {
 
     assert_eq!(malformed.status, 400, "body: {}", malformed.body);
     assert_eq!(
-        malformed.body["error_description"],
-        "invalid_format_of_convert_amount"
+        malformed.body["error_description"], "invalid_format_of_amount",
+        "the amount's own name, as charge and issue give it"
     );
     assert_eq!(idempotency_status(&malformed), None, "nothing was claimed");
     assert_eq!(

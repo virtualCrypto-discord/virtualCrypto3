@@ -82,8 +82,14 @@ fn asked(body: &Value) -> Result<Asked, ApiError> {
             receiver_discord_id: parse_number(receiver.as_str().unwrap_or_default()).ok_or(
                 ApiError::InvalidRequest("invalid_format_of_receiver_discord_id"),
             )?,
+            // The name is the *list* clause's, which is where the port carried it
+            // from, and it points at a field this request does not have: the
+            // mistake is the amount's, so it is named after the amount, as the
+            // charge and issue endpoints name it. `docs/known-gaps.md` records the
+            // difference, since the Elixir's wording for this clause cannot be
+            // checked from here.
             amount: parse_number(amount.as_str().unwrap_or_default())
-                .ok_or(ApiError::InvalidRequest("invalid_format_of_convert_amount"))?,
+                .ok_or(ApiError::InvalidRequest("invalid_format_of_amount"))?,
         });
     }
 
