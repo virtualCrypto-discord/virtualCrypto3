@@ -104,6 +104,26 @@ const PROSE: &[Section] = &[
         ],
     ),
     section(
+        "操作できる通貨（`resource`）",
+        &[
+            text(
+                "グラントは、何をしてよいか（スコープ）だけでなく、どの通貨を扱ってよいかも決められます。\
+                 求めるときに `resource` で通貨を名指しすると、そのグラントのトークンは、名指しされた通貨にしか効きません。",
+            ),
+            text(
+                "`resource` はこのサービスの絶対URIです。1つの通貨は `https://{site}/api/v2/currencies/<通貨の番号>`、\
+                 対象のすべての通貨は `https://{site}/api/v2/currencies` です。\
+                 何も置かない場合と、すべての通貨の形を置く場合は、同じ意味になります。",
+            ),
+            list(&[
+                "金額を動かす操作（発行する・支払う・請求を決める）が、グラントの対象でない通貨に届くと 403 `insufficient_scope` です。",
+                "通貨を名指しする読み取りも、同じ 403 で拒否されます。",
+                "一覧（`GET /api/v2/users/@me/balances`、`GET /api/v2/users/@me/claims`）は拒否されません。答えが、そのグラントの対象の通貨だけに絞られます。",
+                "狭められるのは、誰かが求め、誰かが承認したグラントだけです。個人アクセストークンと、アプリケーションが自分のために取るトークン（`client_credentials`）は、本人の資格情報なので狭められません。",
+            ]),
+        ],
+    ),
+    section(
         "すべての呼び出しに共通すること",
         &[list(&[
             "`Accept: application/json` を送ってください。`Accept` を省いた場合は `*/*` として扱われます。満たせない場合は 406 です。",
@@ -184,6 +204,12 @@ const BAD_TOKEN: &str = "401 `{\"error\": \"invalid_token\"}` トークンが不
 const NO_CLAIM_SCOPE: &str = "403 `{\"error\": \"invalid_token\", \"error_description\": \"permission_denied\"}` `vc.claim` を持たないトークンのとき。";
 /// The payment-shaped endpoints' scope, which names what the token is missing.
 const NO_SCOPE: &str = "403 `{\"error\": \"insufficient_scope\", \"error_description\": \"token_verification_failed\"}` 必要なスコープを持たないトークンのとき。";
+/// The refusal a *grant's* token gets for a currency the grant does not name.
+/// The body is the scope refusal's because there is one answer for both: the
+/// token is a real one, and it is for something else. Only a grant is narrowed
+/// this way — a personal access token and an application's own
+/// `client_credentials` token are the account's own credentials and are not.
+const OUTSIDE_RESOURCE: &str = "403 `{\"error\": \"insufficient_scope\", \"error_description\": \"token_verification_failed\"}` グラントが対象にしていない通貨を使おうとしたとき（発行する・支払う・請求を決める・その通貨を読む）。";
 /// The contract endpoints that only an application, or only a person, may call.
 const APP_TOKEN_ONLY: &str = "403 `{\"error\": \"invalid_token\", \"error_description\": \"permission_denied\"}` アプリケーションのトークンではないとき。";
 const USER_TOKEN_ONLY: &str = "403 `{\"error\": \"invalid_token\", \"error_description\": \"permission_denied\"}` 利用者のトークンではないとき。";
@@ -264,6 +290,7 @@ const ENDPOINTS: &[Endpoint] = &[
         notes: &[
             "空の配列は、そのアカウントがまだどの通貨も持っていないという意味です。`amount` も `pool_amount` も文字列です。",
             "`@me` はトークンの持ち主のアカウントです。アプリケーションのトークンなら、そのアプリケーション自身の口座になります。",
+            "グラントのトークンで読むと、答えはそのグラントが対象にしている通貨だけになります。対象でない通貨は、エラーではなく、この一覧に出てきません。",
         ],
         errors: &[NO_TOKEN, BAD_TOKEN],
     },
@@ -312,6 +339,7 @@ const ENDPOINTS: &[Endpoint] = &[
         notes: &[
             "1ページぶん返すと `link` ヘッダーが次のページのURLを示します。",
             "`discord` はDiscordから読んだプロフィールで、読めないときは `null` です。",
+            "グラントのトークンで読むと、答えはそのグラントが対象にしている通貨の請求だけになります。対象でない通貨の請求は、エラーではなく、この一覧に出てきません。",
         ],
         errors: &[
             NO_TOKEN,
@@ -449,6 +477,7 @@ const ENDPOINTS: &[Endpoint] = &[
             NO_TOKEN,
             BAD_TOKEN,
             NO_CLAIM_SCOPE,
+            OUTSIDE_RESOURCE,
             "403 `{\"error\": \"forbidden\", \"error_description\": \"invalid_operator\"}` その状態にできる人ではないとき。",
             "404 `{\"error\": \"not_found\", \"error_description\": \"not_found\"}` 請求が無い、または番号が数値でないとき。",
             "409 `{\"error\": \"conflict\", \"error_info\": \"invalid_status\"}` その状態からその状態へは変えられないとき。",
@@ -492,6 +521,7 @@ const ENDPOINTS: &[Endpoint] = &[
             NO_TOKEN,
             BAD_TOKEN,
             NO_SCOPE,
+            OUTSIDE_RESOURCE,
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"missing_parameter\"}` 本文が1件のオブジェクトでも配列でもない、または `unit` `receiver_discord_id` `amount` のどれかが無いとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_type_of_variable\"}` 送った値が文字列でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_format_of_receiver_discord_id\"}` `receiver_discord_id` が数値でないとき。",
@@ -580,7 +610,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "`parties[].discord_id`（文字列・必須） 対象者のDiscord IDです。",
             "`parties[].amount`（文字列・必須） その人がロックする枚数です。1以上。",
             "`receiver_discord_id`（文字列か `null`・任意） 支払いを受け取る相手です。省略すると契約ごとに決められます。",
-            "`expires_in`（数値か `null`・任意） 期限までの秒数です。**契約を作った時点**から数えるので、承認が遅れても期限は延びません。1以上365日（31536000）以下です。省略すると期限なしになり、そのときはいつでも取り消せます。",
+            "`expires_in`（数値か `null`・任意） 期限までの秒数です。**契約を作った時点**から数えるので、承認が遅れても期限は延びません。1秒以上、365日（31536000秒）以下です。省略すると期限なしになり、そのときはいつでも取り消せます。",
         ],
         example: Some(Example {
             request: &[
@@ -617,7 +647,7 @@ const ENDPOINTS: &[Endpoint] = &[
         }),
         notes: &[
             "成功は 201 です。作っただけでは何もロックされず、対象者が承認して初めてロックされます。",
-            "`expires_in` の期限は秒です。期限のある契約は、その期間が終わるまで取り消せません。終わると、残りは対象者に戻ります。",
+            "`expires_in` の秒数は、契約を作った時点から数えます。対象者の承認が遅れても期限は延びません。期限のある契約は、その期間が終わるまで取り消せません。終わると契約は終わり、まだ使われていないロックは、ロックした対象者それぞれに戻ります。",
         ],
         errors: &[
             NO_TOKEN,
@@ -853,10 +883,14 @@ const ENDPOINTS: &[Endpoint] = &[
         access: "認証は要りません",
         fields: &["`{id}`（パス・必須） 通貨の番号です。"],
         example: None,
-        notes: &["本文は `/api/v2/currencies` と同じ形です。"],
+        notes: &[
+            "本文は `/api/v2/currencies` と同じ形です。",
+            "認証は要りませんが、グラントのトークンを送ったときは、そのグラントが対象にしている通貨だけを返します。対象でない通貨は、拒否されます。",
+        ],
         errors: &[
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"need_one_parameter_from_id_guild_name_or_unit\"}` クエリで `guild` `name` `unit` のどれかを指定したとき（パスの番号と合わせて2つになるため）。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"id_must_be_positive_integer\"}` パスの番号が1以上の整数でないとき。",
+            "403 `{\"error\": \"insufficient_scope\", \"error_description\": \"token_verification_failed\"}` グラントのトークンを送り、そのグラントが対象にしていない通貨を読もうとしたとき。",
             "404 `{\"error\": \"not_found\", \"error_description\": \"not_found\"}` その通貨が無いとき。",
         ],
     },
@@ -894,6 +928,7 @@ const ENDPOINTS: &[Endpoint] = &[
         errors: &[
             "401 `{\"error\": \"invalid_token\"}` トークンが無い、またはサーバーのトークンではないとき。",
             NO_SCOPE,
+            OUTSIDE_RESOURCE,
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"missing_parameter\"}` 本文がオブジェクトでない、`receiver_discord_id` か `amount` が無いとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_type_of_variable\"}` 送った値が文字列でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_format_of_receiver_discord_id\"}` `receiver_discord_id` が数値でないとき。",
@@ -918,12 +953,13 @@ const ENDPOINTS: &[Endpoint] = &[
             "`redirect_uri`（文字列・必須） 登録した戻り先のどれかです。",
             "`scope`（文字列・必須） 求めるスコープです。空白区切りで、`vc.issue` だけが置けます（無くても構いません）。",
             "`guild_id`（文字列・必須） 発行を許可するサーバーのDiscord IDです。",
+            "`resource`（配列・任意） このグラントで操作する通貨を、絶対URIで並べます。1つの通貨は `https://{site}/api/v2/currencies/{id}`、対象のすべての通貨は `https://{site}/api/v2/currencies` です。何も置かない場合と、すべての通貨の形を置く場合は、同じ意味になります。同じ名前を繰り返して置きます。",
             "`state`（文字列・任意） そのまま返ります。",
         ],
         // `oauth2::Consent`, which is what the screen reads the consent out of.
         example: Some(Example {
             request: &[
-                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=vc.issue&guild_id=900000000000000001",
+                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=vc.issue&guild_id=900000000000000001&resource=https%3A%2F%2Fvcrypto.sumidora.com%2Fapi%2Fv2%2Fcurrencies",
                 "Cookie: <セッション>",
             ],
             response: &[
@@ -932,6 +968,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "  \"client_id\": \"e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f\",",
                 "  \"redirect_uri\": \"https://app.example/callback\",",
                 "  \"scopes\": [\"vc.issue\"],",
+                "  \"resources\": [],",
                 "  \"guild_id\": 900000000000000001,",
                 "  \"state\": null",
                 "}",
@@ -947,6 +984,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "303 `redirect_uri?error=invalid_request&error_description=invalid_scope` `scope` に `vc.issue` 以外を求めたとき。",
             "303 `redirect_uri?error=invalid_request&error_description=invalid_guild_id` `guild_id` のサーバーを読めないとき。",
             "303 `redirect_uri?error=invalid_request&error_description=permission_denied` 呼び出した人がそのサーバーの管理者でないとき。",
+            "303 `redirect_uri?error=invalid_target&error_description=invalid_target` `resource` が絶対URIでない、このサービスのものでない、通貨でない、またはそのサーバーの通貨でないとき。",
         ],
     },
     Endpoint {
@@ -961,6 +999,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "`redirect_uri`（文字列・必須） 登録した戻り先のどれかです。",
             "`scope`（文字列・必須） 同意するスコープです。",
             "`guild_id`（文字列・必須） 発行を許可するサーバーのDiscord IDです。",
+            "`resource`（配列・任意） 承認するグラントが操作する通貨を、絶対URIで並べます。求めたときと同じ値を送ります。1つの通貨は `https://{site}/api/v2/currencies/{id}`、対象のすべての通貨は `https://{site}/api/v2/currencies` です。何も置かない場合と、すべての通貨の形を置く場合は、同じ意味になります。",
             "`state`（文字列・任意） そのまま返ります。",
         ],
         example: None,
@@ -970,6 +1009,7 @@ const ENDPOINTS: &[Endpoint] = &[
         ],
         errors: &[
             "400 `{\"error\": \"invalid_request\"}` `action` が `approve` でない、項目が足りない、`client_id` と `redirect_uri` が登録と合わない、`scope` が `vc.issue` 以外、またはそのサーバーの管理者でないとき。",
+            "400 `{\"error\": \"invalid_target\"}` `resource` が絶対URIでない、このサービスのものでない、通貨でない、またはそのサーバーの通貨でないとき。",
             "401 `{\"error\": \"invalid_token\"}` セッションが無いとき。",
         ],
     },
@@ -1263,6 +1303,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "`guild_id`（文字列・任意） 発行を許可してほしいサーバーのDiscord IDです。`discord_id` とどちらか一方だけを置きます。",
             "`discord_id`（文字列・任意） 自分の口座を任せたい相手のDiscord IDです。`guild_id` とどちらか一方だけを置きます。",
             "`scopes`（配列・必須） 求めるスコープです。`guild_id` の申請では `vc.issue` だけ、`discord_id` の申請では `vc.read` `vc.pay` `vc.claim` だけが置けます。",
+            "`resource`（配列・任意） このグラントで操作する通貨を、絶対URIで並べます。1つの通貨は `https://{site}/api/v2/currencies/{id}`、対象のすべての通貨は `https://{site}/api/v2/currencies` です。何も置かない場合と、すべての通貨の形を置く場合は、同じ意味になります。どの通貨を扱うか前もって分からないアプリケーション（口座に合わせてから決まるもの）は、すべての通貨の形を置いてください。",
             "`expires_in`（数値・任意） 申請が生きる秒数です。既定600、上限3600。",
         ],
         // `tests/grant_requests.rs`'s `an_application_may_ask_a_guild`.
@@ -1274,7 +1315,8 @@ const ENDPOINTS: &[Endpoint] = &[
                 "",
                 "{",
                 "  \"guild_id\": \"900000000000000001\",",
-                "  \"scopes\": [\"vc.issue\"]",
+                "  \"scopes\": [\"vc.issue\"],",
+                "  \"resource\": [\"https://vcrypto.sumidora.com/api/v2/currencies/12\"]",
                 "}",
             ],
             response: &[
@@ -1299,6 +1341,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"the guild id must be a Discord id, as a string\"}` `guild_id` がDiscordのIDでないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"scopes are required\"}` `scopes` が無いとき。",
             "400 `{\"error\": \"invalid_scope\", \"error_description\": \"unknown scope\"}` `scopes` に `vc.issue` 以外を求めたとき。",
+            "400 `{\"error\": \"invalid_target\", \"error_description\": \"invalid_target\"}` `resource` が絶対URIでない、このサービスのものでない、通貨でない、またはサーバーの申請でそのサーバーの通貨でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"expires_in must be between 1 and 3600\"}` `expires_in` が1未満か3600を超えるとき。",
         ],
     },

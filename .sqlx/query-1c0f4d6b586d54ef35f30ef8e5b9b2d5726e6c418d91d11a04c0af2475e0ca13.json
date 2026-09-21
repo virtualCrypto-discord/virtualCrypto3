@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE((SELECT array_agg(r.currency_id) FROM grant_resources r\n                              WHERE r.grant_id = g.id), ARRAY[]::bigint[]) AS \"resources!\"\n             FROM grants g\n            WHERE g.application_id = $1 AND g.discord_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resources!",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1c0f4d6b586d54ef35f30ef8e5b9b2d5726e6c418d91d11a04c0af2475e0ca13"
+}

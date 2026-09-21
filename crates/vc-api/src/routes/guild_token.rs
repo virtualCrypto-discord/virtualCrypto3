@@ -38,6 +38,11 @@ pub struct GuildToken {
     pub account_id: i32,
     pub guild_id: i64,
     pub scopes: Scopes,
+    /// The currencies the grant is for. Empty is every currency of the guild,
+    /// which is what a grant that named none — or was written before resources
+    /// existed — carries; a non-empty set is the guild's own currency and no
+    /// other, because a guild has exactly one.
+    pub resources: Vec<i64>,
 }
 
 impl FromRequestParts<AppState> for GuildToken {
@@ -96,6 +101,7 @@ impl FromRequestParts<AppState> for GuildToken {
             account_id: resolved.account_id,
             guild_id,
             scopes: Scopes::from_list(&resolved.scopes),
+            resources: resolved.resources,
         })
     }
 }

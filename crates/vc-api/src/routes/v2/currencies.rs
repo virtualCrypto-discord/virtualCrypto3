@@ -2,12 +2,15 @@ use std::collections::HashMap;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::json;
 use vc_core::currency::{CurrencyInfo, CurrencySelector};
 
+use crate::error::ApiError;
 use crate::state::AppState;
 
 /// The only parameters the controller looks at; anything else is ignored.
@@ -37,22 +40,39 @@ pub async fn index(
     State(state): State<AppState>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    respond(&state, &query, None).await
+    respond(&state, &query, None, None).await
 }
 
 /// `GET /api/v2/currencies/:id` — the same action, with `id` supplied by the path.
+///
+/// It takes a token it does not require, which is why it is the one read that
+/// rules on a grant: the currency read is public, and what it has to refuse is a
+/// *grant* that named a currency outside its own reach. An account's own
+/// credential — a session, a PAT, an application's `client_credentials` token —
+/// is not a grant and is not narrowed, which [`crate::resource::of_bearer`] is
+/// what tells apart.
 pub async fn show(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Response {
-    respond(&state, &query, Some(id)).await
+    let grant = crate::resource::of_bearer(
+        &state,
+        headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+    )
+    .await;
+
+    respond(&state, &query, Some(id), grant).await
 }
 
 async fn respond(
     state: &AppState,
     query: &HashMap<String, String>,
     path_id: Option<String>,
+    grant: Option<Vec<i64>>,
 ) -> Response {
     // Phoenix merges path parameters over query parameters, so a path id wins.
     let mut parameters = query.clone();
@@ -83,6 +103,16 @@ async fn respond(
         "unit" => CurrencySelector::Unit(value),
         _ => unreachable!("parameter names are constrained above"),
     };
+
+    // A read that names a currency is refused like a write, because the request
+    // asked for something the token is not worth — the same 403 an act outside a
+    // grant gets. It is only the path form that names one here; the collection's
+    // own query form is a public read and rules nothing.
+    if let (Some(resources), CurrencySelector::Id(id)) = (&grant, &selector)
+        && crate::resource::ensure(resources, *id).is_err()
+    {
+        return ApiError::InsufficientScope.into_response();
+    }
 
     match vc_core::currency::info(state.pool(), selector).await {
         Ok(Some(info)) => Json(into_response(info)).into_response(),

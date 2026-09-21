@@ -5,7 +5,8 @@
 //! each link of it lands on one of these.
 
 use axum::Json;
-use axum::extract::{Form, Query, State};
+use axum::extract::{FromRequest, Query, RawQuery, Request as HttpRequest, State};
+use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use reqwest::Url;
@@ -105,6 +106,17 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
+/// The answer to an approval that named something which is not a resource of
+/// this service. It is RFC 8707's own error rather than the generic page, so
+/// that the client is told which of the two mistakes it made.
+fn invalid_target() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "invalid_target" })),
+    )
+        .into_response()
+}
+
 /// The body the consent form posts back.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AuthorizeForm {
@@ -115,6 +127,99 @@ pub struct AuthorizeForm {
     pub scope: Option<String>,
     pub guild_id: Option<String>,
     pub state: Option<String>,
+}
+
+/// The approval form, with `resource` read as the repeated parameter RFC 8707
+/// says it is.
+///
+/// `serde_urlencoded`, which `Form` and `Query` both use, cannot collect a
+/// repeated key into a `Vec` — it hands each occurrence to the field as a single
+/// string and the sequence visitor refuses it. So the body is read once here and
+/// both halves are parsed from the same pairs, which keeps the one parameter the
+/// specification repeats from being the one parameter this flow cannot read.
+///
+/// Everything `Form` did is still done: the content type is required, the body
+/// is bounded, and the pairs are percent-decoded.
+pub struct Approval {
+    pub form: AuthorizeForm,
+    pub resources: Vec<String>,
+}
+
+impl FromRequest<AppState> for Approval {
+    type Rejection = Response;
+
+    async fn from_request(
+        request: HttpRequest,
+        _state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let is_form = request
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/x-www-form-urlencoded"));
+
+        if !is_form {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "expected an application/x-www-form-urlencoded body",
+            )
+                .into_response());
+        }
+
+        let body = axum::body::to_bytes(request.into_body(), 2 * 1024 * 1024)
+            .await
+            .map_err(|_| page())?;
+        let Ok(raw) = std::str::from_utf8(&body) else {
+            return Err(page());
+        };
+
+        let pairs = raw_query_pairs(raw);
+        let mut form = AuthorizeForm::default();
+        for (name, value) in &pairs {
+            match name.as_str() {
+                "response_type" => form.response_type = Some(value.clone()),
+                "action" => form.action = Some(value.clone()),
+                "client_id" => form.client_id = Some(value.clone()),
+                "redirect_uri" => form.redirect_uri = Some(value.clone()),
+                "scope" => form.scope = Some(value.clone()),
+                "guild_id" => form.guild_id = Some(value.clone()),
+                "state" => form.state = Some(value.clone()),
+                // Everything the request does not name is ignored, as a form
+                // deserialized into a struct with no field for it is.
+                _ => {}
+            }
+        }
+
+        Ok(Approval {
+            form,
+            resources: values_named(&pairs, "resource"),
+        })
+    }
+}
+
+/// The pairs of an `application/x-www-form-urlencoded` string, decoded.
+///
+/// `Url` does the decoding because it is already here and it does it the way the
+/// specification says: `+` is a space, `%xx` is the byte, and a repeated name is
+/// simply a second pair.
+fn raw_query_pairs(raw: &str) -> Vec<(String, String)> {
+    let Ok(mut url) = Url::parse("http://placeholder/") else {
+        return Vec::new();
+    };
+    url.set_query(Some(raw));
+
+    url.query_pairs()
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect()
+}
+
+/// Every value the pairs give one name, in the order they appear.
+fn values_named(pairs: &[(String, String)], name: &str) -> Vec<String> {
+    pairs
+        .iter()
+        .filter(|(key, _)| key == name)
+        .map(|(_, value)| value.clone())
+        .collect()
 }
 
 impl From<AuthorizeForm> for AuthorizeQuery {
@@ -138,8 +243,10 @@ impl From<AuthorizeForm> for AuthorizeQuery {
 pub async fn approve(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Form(form): Form<AuthorizeForm>,
+    approval: Approval,
 ) -> Response {
+    let form = approval.form;
+
     // The only action there is. There is no deny: the Elixir has no clause for
     // one, so its answer to a request without `approve` is a crash rather than
     // a decision, and a refusal is the decision that was missing.
@@ -170,6 +277,14 @@ pub async fn approve(
         return page();
     }
 
+    // The currencies this approval is for, resolved the way the `GET` resolves
+    // them and refused the same way. A refusal is not a redirect here: nothing
+    // has been approved, and this path never sends the browser to the client.
+    let resources = match resources_of(&state, request.guild_id, approval.resources).await {
+        Ok(resources) => resources,
+        Err(_) => return invalid_target(),
+    };
+
     if describe(&state, &request, account_id).await.is_err() {
         return page();
     }
@@ -178,6 +293,7 @@ pub async fn approve(
         state.pool(),
         request.guild_id,
         &request.scopes,
+        &resources,
         &request.redirect_uri,
         &request.client_id,
         time::OffsetDateTime::now_utc(),
@@ -299,12 +415,19 @@ impl Request {
 }
 
 /// What the screen shows, and what it has to post back to approve.
+///
+/// `resources` is the currencies the ask is narrowed to, as the units the screen
+/// can name: empty is every currency of the guild, and one unit is a screen that
+/// says so. It is what tells a person approving a grant for everything apart
+/// from one approving a grant for one currency, which is the whole point of the
+/// narrowing being visible rather than something only the API knows.
 #[derive(Debug, Serialize)]
 pub struct Consent {
     pub client_name: Option<String>,
     pub client_id: String,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
+    pub resources: Vec<String>,
     pub guild_id: i64,
     pub state: Option<String>,
 }
@@ -319,6 +442,7 @@ pub async fn authorize(
     headers: HeaderMap,
     uri: Uri,
     Query(query): Query<AuthorizeQuery>,
+    RawQuery(raw): RawQuery,
 ) -> Response {
     // Parsing happens before the client and redirect URI have been verified.
     // No parse error may redirect to a destination supplied by the request.
@@ -352,18 +476,59 @@ pub async fn authorize(
         }
     };
 
+    // The currencies the ask is for. This is after the client and the redirect
+    // URI, so a refusal here may go back to the client — which is the only way
+    // it learns the ask named something that is not ours.
+    let resources = match resources_of(
+        &state,
+        request.guild_id,
+        values_named(
+            &raw_query_pairs(raw.as_deref().unwrap_or_default()),
+            "resource",
+        ),
+    )
+    .await
+    {
+        Ok(resources) => resources,
+        Err(refusal) => return answer(refusal, &request.redirect_uri, request.state.as_deref()),
+    };
+
     match describe(&state, &request, account_id).await {
         Ok(guild_id) => Json(Consent {
             client_name: preauthorized.client_name,
             client_id: request.client_id,
             redirect_uri: request.redirect_uri,
             scopes: request.scopes,
+            resources: crate::resource::units(state.pool(), &resources)
+                .await
+                .unwrap_or_default(),
             guild_id,
             state: request.state,
         })
         .into_response(),
         Err(refusal) => answer(refusal, &request.redirect_uri, request.state.as_deref()),
     }
+}
+
+/// Resolve an ask's `resource` values, as the refusal the consent screen answers
+/// an invalid one with.
+///
+/// The browser flow's ask is always a guild's — the consent screen exists to
+/// issue from a guild's pool — so the target the check is made against is the
+/// guild the request named.
+async fn resources_of(
+    state: &AppState,
+    guild_id: i64,
+    values: Vec<String>,
+) -> Result<Vec<i64>, Refusal> {
+    crate::resource::resolve(
+        state.pool(),
+        &state.links().site_url,
+        vc_core::grant::Target::Guild(guild_id),
+        &values,
+    )
+    .await
+    .map_err(|_| Refusal::redirect("invalid_target", "invalid_target"))
 }
 
 /// Send the browser to log in and come back here.

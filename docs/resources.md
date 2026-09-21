@@ -72,8 +72,8 @@ storing the id is what keeps a grant working when the site moves.
 
 ## Where it is asked for
 
-Both ways of asking — the browser's `POST /oauth2/preauthorize` and the device's
-`POST /oauth2/clients/@me/grant-requests` — take the same field:
+Both ways of asking — the browser's `GET`・`POST /oauth2/authorize` and the
+device's `POST /oauth2/clients/@me/grant-requests` — take the same field:
 
 ```json
 {

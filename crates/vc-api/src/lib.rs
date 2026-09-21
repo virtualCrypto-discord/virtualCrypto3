@@ -13,6 +13,7 @@ pub mod error;
 pub mod notification;
 pub mod permissions;
 pub mod rate_limit;
+pub mod resource;
 pub mod routes;
 pub mod scheduler;
 pub mod session;

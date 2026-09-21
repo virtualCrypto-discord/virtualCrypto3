@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT currency_id FROM claims WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "currency_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "claims",
+            "name": "currency_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f11d0ca1edd6ee553109c9117b9ef8cdca36266b5a5ce59610177fedc142c0e1"
+}

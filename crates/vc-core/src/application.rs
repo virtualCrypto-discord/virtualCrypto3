@@ -94,10 +94,17 @@ pub const CODE_TTL: time::Duration = time::Duration::minutes(15);
 
 /// `make_code/4`: the same questions again, and then a code to hand to the
 /// browser.
+///
+/// `resources` is RFC 8707's `resource` already resolved to currency ids — the
+/// route above this is where the URIs were checked and narrowed to this
+/// service's own currencies. It travels on the code so that the exchange that
+/// writes the grant can write the same narrowing: without it the ids would have
+/// nowhere to wait between the consent screen and the exchange.
 pub async fn authorize(
     pool: &sqlx::PgPool,
     guild_id: i64,
     scopes: &[String],
+    resources: &[i64],
     redirect_uri: &str,
     client_id: &str,
     now: time::OffsetDateTime,
@@ -112,14 +119,15 @@ pub async fn authorize(
 
     sqlx::query!(
         "INSERT INTO authorization_codes
-             (code, redirect_uri, application_id, guild_id, scopes, expires,
+             (code, redirect_uri, application_id, guild_id, scopes, resources, expires,
               inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5::text[]::virtual_crypto_scope_type[], $6, $7, $7)",
+         VALUES ($1, $2, $3, $4, $5::text[]::virtual_crypto_scope_type[], $6, $7, $8, $8)",
         code,
         redirect_uri,
         application.id,
         guild_id,
         scopes,
+        resources,
         at + CODE_TTL,
         at
     )
@@ -321,6 +329,10 @@ pub struct TakenCode {
     pub guild_id: Option<i64>,
     pub redirect_uri: Option<String>,
     pub scopes: Vec<String>,
+    /// The currencies the consent screen resolved `resource` to, waiting to be
+    /// written onto the grant. Empty is every currency of the guild, as it is
+    /// everywhere else.
+    pub resources: Vec<i64>,
     pub expires: Option<time::PrimitiveDateTime>,
 }
 
@@ -338,7 +350,7 @@ pub async fn take_code<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
         TakenCode,
         r#"DELETE FROM authorization_codes WHERE code = $1
         RETURNING application_id, guild_id, redirect_uri,
-                  scopes::text[] AS "scopes!", expires"#,
+                  scopes::text[] AS "scopes!", resources AS "resources!", expires"#,
         code
     )
     .fetch_optional(executor)

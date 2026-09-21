@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, application_id, guild_id, discord_id, scopes AS \"scopes!\",\n                  device_code AS \"device_code!: Uuid\", user_code AS \"user_code!\",\n                  status AS \"status!\", expires_in AS \"expires_in!\"\n             FROM grant_requests\n            WHERE application_id = $1\n            ORDER BY id",
+  "query": "INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, resources, device_code, user_code, expires_in, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $6, $7, $7)\n         ON CONFLICT (application_id, (COALESCE(guild_id, discord_id))) WHERE status = 'pending'\n         DO UPDATE SET updated_at = EXCLUDED.updated_at\n         RETURNING id, guild_id, discord_id, scopes AS \"scopes!: Vec<String>\", resources AS \"resources!: Vec<i64>\",\n                   device_code AS \"device_code!: Uuid\",\n                   user_code AS \"user_code!: String\", status AS \"status!: String\",\n                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($7 - inserted_at))::bigint) AS \"expires_in!: i64\"",
   "describe": {
     "columns": [
       {
@@ -16,17 +16,6 @@
       },
       {
         "ordinal": 1,
-        "name": "application_id",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "grant_requests",
-            "name": "application_id"
-          }
-        }
-      },
-      {
-        "ordinal": 2,
         "name": "guild_id",
         "type_info": "Int8",
         "origin": {
@@ -37,7 +26,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "discord_id",
         "type_info": "Int8",
         "origin": {
@@ -48,13 +37,24 @@
         }
       },
       {
-        "ordinal": 4,
-        "name": "scopes!",
+        "ordinal": 3,
+        "name": "scopes!: Vec<String>",
         "type_info": "TextArray",
         "origin": {
           "Table": {
             "table": "grant_requests",
             "name": "scopes"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "resources!: Vec<i64>",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "resources"
           }
         }
       },
@@ -71,7 +71,7 @@
       },
       {
         "ordinal": 6,
-        "name": "user_code!",
+        "name": "user_code!: String",
         "type_info": "Varchar",
         "origin": {
           "Table": {
@@ -82,7 +82,7 @@
       },
       {
         "ordinal": 7,
-        "name": "status!",
+        "name": "status!: String",
         "type_info": "Varchar",
         "origin": {
           "Table": {
@@ -93,32 +93,33 @@
       },
       {
         "ordinal": 8,
-        "name": "expires_in!",
+        "name": "expires_in!: i64",
         "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "grant_requests",
-            "name": "expires_in"
-          }
-        }
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Int8",
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Timestamp"
       ]
     },
     "nullable": [
       false,
-      false,
       true,
       true,
       false,
       false,
       false,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "dfe62cf78820f4258f15e3e6ed40015865ad01ce21fe82647b734ff4feefd2ac"
+  "hash": "b55564ac25fa348e20d029a580243df801970a7880152e7f2e3905235e619a16"
 }

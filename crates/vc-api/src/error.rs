@@ -56,6 +56,14 @@ pub enum ApiError {
     #[error("insufficient scope")]
     InsufficientScope,
 
+    /// 400 `invalid_target`: RFC 8707's own error, for a `resource` that is not a
+    /// resource of this service — not absolute, not ours, not a currency, or a
+    /// currency of a guild the ask was not put to. It is a 400 rather than a 403
+    /// because the *request* is wrong about what it is asking for: nothing about
+    /// the caller has been found wanting.
+    #[error("invalid target")]
+    InvalidTarget,
+
     /// 400 `invalid_request` / `invalid_<tag>_at_<index>` from a bulk body entry.
     #[error("invalid {tag} at {index}")]
     BulkInvalid { tag: &'static str, index: usize },
@@ -117,6 +125,10 @@ impl ApiError {
                     "error": "insufficient_scope",
                     "error_description": "token_verification_failed",
                 }),
+            ),
+            ApiError::InvalidTarget => (
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "invalid_target" }),
             ),
             ApiError::BulkInvalid { tag, index } => (
                 StatusCode::BAD_REQUEST,

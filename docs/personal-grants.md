@@ -22,7 +22,8 @@ scope it could name, and no column either could live in. There is no golden and 
 `discord_id` where it used to be `guild_id`:
 
 ```json
-{ "discord_id": "123456789012345678", "scopes": ["vc.read", "vc.pay"], "expires_in": 600 }
+{ "discord_id": "123456789012345678", "scopes": ["vc.read", "vc.pay"],
+  "resource": ["https://vcrypto.sumidora.com/api/v2/currencies/12"], "expires_in": 600 }
 ```
 
 Exactly one of `guild_id` and `discord_id` is required, and which one is there says which kind of
@@ -30,6 +31,15 @@ grant is being asked for: a server grant (an administrator of that guild decides
 or a personal grant (that user decides, this document). Both are still one pending ask per
 application and target, both answer `{device_code, user_code, verification_uri, expires_in}`, and
 both are polled the same way.
+
+**Which currencies** the application may touch is the ask's other half: RFC 8707's `resource`, an
+array of absolute URIs — `https://<site>/api/v2/currencies/{id}` for one currency,
+`https://<site>/api/v2/currencies` for all of them (`docs/resources.md`). An ask that names none
+and one that names the collection both mean every currency of the person's account, and an
+application that cannot know which currencies it will work with — a wallet, which learns them from
+the account it is approved against — asks with the collection. A `resource` that is not absolute,
+not this service's, or not a currency is `400 invalid_target`. What the grant keeps is the currency
+*ids*, never the URIs, so it survives the site moving.
 
 The scopes an application may ask a person for are the three a person's own account has to give:
 
@@ -69,8 +79,14 @@ therefore costs nothing but the code being visible to whoever is reading — and
 half a person chose to show, which is how the server grant's has always worked as well.
 
 `/grant user list` reads the applications this account has approved, with the day each grant was
-written and a button that revokes one. Revoking deletes the grant row, and every token issued for
-it goes with it — the same cascade `/grant server revoke` has, for the same reason.
+written and a button that revokes one. It names the currencies each application may touch, by unit
+rather than by id — an application narrowed to one currency reads as 「この申請は、通貨 nyan だけを
+操作できます」, and one that named none as 「この申請は、すべての通貨を操作できます」 — so the person
+deciding can see the narrowing the API will enforce. Together the two commands are the whole
+decision: `/grant user approve` writes the grant from the ask's own scopes and its own currencies,
+never from anything the approver names, and the list says back what was written. Revoking deletes
+the grant row, and every token issued for it goes with it — the same cascade `/grant server revoke`
+has, for the same reason.
 
 ## The token
 
@@ -81,12 +97,21 @@ Exactly the shape the server grant's token has, because it is the same machinery
 | On the wire | the UUID of an `access_tokens` row — not a JWT |
 | Lifetime | one hour, with a refresh token (180 days) from the same poll |
 | Resolves to | the granting user's account, the application that asked, and the grant's scopes read at use |
+| Currencies | the ones the grant names, by id, read at use — an empty set is every currency of the account |
 | Revocation | the grant row deleted — the token row is a child of it — or the token deleted on its own |
 
 Resolving to the *user's* account is the whole of what makes it a delegation: an application
 holding it is that user for the endpoints it is accepted on, and for the scopes it carries.
 Because the scopes are read from `grant_scopes` when the token is used rather than carried in it,
 taking a scope away takes it away from tokens already issued.
+
+The same reading applies to the currencies, which live in `grant_resources` beside the scopes: an
+act that lands on a currency the grant does not name — issuing from a pool, paying, deciding a
+claim, or a read that names a currency — is `403 insufficient_scope`, and the two lists
+(`/api/v2/users/@me/balances`, `/api/v2/users/@me/claims`) are *filtered* to the grant's currencies
+rather than refused. What is narrowed is a grant: a personal access token, and the token an
+application takes for itself with `client_credentials`, are the account's own credentials and are
+not narrowed this way.
 
 **Where it is accepted.** Only the endpoints that take the extractor this adds: the v2 reads, the
 transactions, and the claims. Everything else — registration, the consent screen, a contract's
@@ -127,6 +152,9 @@ take them. `/users/@me/contracts` is a read like any other, and it needs `vc.rea
   write families, take that extractor instead of `Limited`.
 - `docs/issue.md` gains a pointer here, `docs/oauth2.md`'s grant-request paragraph says which
   target it names, and `docs/qa.md`'s surface tables gain the new rows.
+- `crates/vc-core/migrations/0014_grant_resources.sql` and `crates/vc-api/src/resource.rs` — the
+  currencies beside the scopes in the ask, the grant, the decision and the token, and the one
+  function that rules on whether an act lands inside them (`docs/resources.md`).
 
 ## The event
 

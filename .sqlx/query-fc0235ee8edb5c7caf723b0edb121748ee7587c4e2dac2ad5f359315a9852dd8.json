@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, application_id, guild_id, discord_id, scopes AS \"scopes!\",\n                  device_code AS \"device_code!: Uuid\", user_code AS \"user_code!\",\n                  status AS \"status!\", expires_in AS \"expires_in!\"\n             FROM grant_requests\n            WHERE application_id = $1 AND device_code = $2\n              AND inserted_at + make_interval(secs => expires_in) > $3",
+  "query": "SELECT id, application_id, guild_id, discord_id, scopes AS \"scopes!\", resources AS \"resources!\",\n                  device_code AS \"device_code!: Uuid\", user_code AS \"user_code!\",\n                  status AS \"status!\", expires_in AS \"expires_in!\"\n             FROM grant_requests\n            WHERE application_id = $1\n            ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -60,6 +60,17 @@
       },
       {
         "ordinal": 5,
+        "name": "resources!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "resources"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "device_code!: Uuid",
         "type_info": "Uuid",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "user_code!",
         "type_info": "Varchar",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "status!",
         "type_info": "Varchar",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "expires_in!",
         "type_info": "Int8",
         "origin": {
@@ -105,9 +116,7 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Uuid",
-        "Timestamp"
+        "Int8"
       ]
     },
     "nullable": [
@@ -119,8 +128,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "0b8d2abc9a5bd58e604581365601e3dca614da666604ffb5724de300424bf27f"
+  "hash": "fc0235ee8edb5c7caf723b0edb121748ee7587c4e2dac2ad5f359315a9852dd8"
 }

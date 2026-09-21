@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT unit FROM currencies WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "6a5a45210b9183a4d8f585d3901b962a84e4227684ed4565cfd471569e8f0933"
+}

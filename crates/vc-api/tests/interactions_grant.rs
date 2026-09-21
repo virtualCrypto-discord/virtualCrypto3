@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
     DEFAULT_GUILD, DEFAULT_PERMISSIONS, Recorded, Response, button_from_guild, client_id_of, fake,
-    insert_application, interaction, state, state_with_notifier,
+    insert_application, insert_currency, interaction, state, state_with_notifier,
 };
 use vc_api::custom_id::ui::grant::{Page, page_custom_id, revoke_custom_id};
 
@@ -64,6 +64,7 @@ async fn fixture(pool: &PgPool) -> (i64, String) {
             .iter()
             .map(|scope| (*scope).to_owned())
             .collect::<Vec<_>>(),
+        &[],
         600,
         time::OffsetDateTime::now_utc(),
     )
@@ -83,6 +84,7 @@ async fn authorized(pool: &PgPool, owner: i64, name: &str) -> (i64, String) {
         application,
         DEFAULT_GUILD,
         SCOPES,
+        &[],
         time::OffsetDateTime::now_utc(),
     )
     .await
@@ -200,10 +202,46 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
             "**発行を許可しているアプリケーション** (1件)\n\
              取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
                 .to_string(),
-            format!("**an application**\n`{client_id}`"),
+            format!("**an application**\n`{client_id}`\nこの申請は、すべての通貨を操作できます。"),
         ]
     );
     assert_eq!(buttons(&response), [revoke_custom_id(&client_id)]);
+}
+
+/// A grant narrowed to one currency reads as such: the screen names it by unit,
+/// so the narrowing is visible rather than something only the API enforces. A
+/// grant that named none beside it reads as 「すべての通貨」, which is the
+/// difference the screen exists to show.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
+    const CURRENCY: i64 = 7;
+
+    insert_currency(&pool, CURRENCY, "nyan", "nyan", DEFAULT_GUILD, 500).await;
+
+    let application = insert_application(&pool, FIRST_OWNER, "an application").await;
+    vc_core::grant::allow_in_guild(
+        &pool,
+        application,
+        DEFAULT_GUILD,
+        SCOPES,
+        &[CURRENCY],
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("a grant");
+    let client_id = client_id_of(&pool, application).await;
+
+    let response = interaction(
+        router(pool),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        texts(&response)[1],
+        format!("**an application**\n`{client_id}`\nこの申請は、通貨 nyan だけを操作できます。")
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -217,9 +255,54 @@ async fn approving_the_code_writes_the_grant(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(texts(&response), ["発行を許可しました。"]);
+    assert_eq!(
+        texts(&response),
+        ["発行を許可しました。この申請は、すべての通貨を操作できます。"]
+    );
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
     assert_eq!(request_status(&pool, application).await, "approved");
+}
+
+/// And an approval of a narrowed ask says what it was for: the currencies are
+/// the ask's own, so a person who typed a code they were shown learns here what
+/// the narrowing they just approved was.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
+    const CURRENCY: i64 = 7;
+
+    insert_currency(&pool, CURRENCY, "nyan", "nyan", DEFAULT_GUILD, 500).await;
+
+    let application = insert_application(&pool, FIRST_OWNER, "an application").await;
+    let asked = vc_core::grant::request_grant(
+        &pool,
+        application,
+        vc_core::grant::Target::Guild(DEFAULT_GUILD),
+        &SCOPES
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect::<Vec<_>>(),
+        &[CURRENCY],
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("an ask");
+
+    let response = interaction(
+        router(pool),
+        grant_from_guild(
+            ADMIN,
+            DEFAULT_PERMISSIONS,
+            approve_options(&asked.user_code),
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        texts(&response),
+        ["発行を許可しました。この申請は、通貨 nyan だけを操作できます。"]
+    );
 }
 
 /// And the application it was written for is what the list then shows.
@@ -242,7 +325,7 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
 
     assert_eq!(
         texts(&response)[1],
-        format!("**an application**\n`{client_id}`")
+        format!("**an application**\n`{client_id}`\nこの申請は、すべての通貨を操作できます。")
     );
     assert_eq!(buttons(&response), [revoke_custom_id(&client_id)]);
 }
@@ -391,7 +474,10 @@ async fn the_list_pages(pool: PgPool) {
             "**発行を許可しているアプリケーション** (6件)\n\
              取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
                 .to_string(),
-            format!("**an application 0**\n`{}`", client_ids[0]),
+            format!(
+                "**an application 0**\n`{}`\nこの申請は、すべての通貨を操作できます。",
+                client_ids[0]
+            ),
         ]
     );
     assert_eq!(
@@ -450,7 +536,10 @@ async fn the_list_pages(pool: PgPool) {
             "**発行を許可しているアプリケーション** (6件)\n\
              取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
                 .to_string(),
-            format!("**an application 0**\n`{}`", client_ids[0]),
+            format!(
+                "**an application 0**\n`{}`\nこの申請は、すべての通貨を操作できます。",
+                client_ids[0]
+            ),
         ]
     );
 }

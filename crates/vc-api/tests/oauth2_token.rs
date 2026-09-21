@@ -290,6 +290,7 @@ async fn a_code_can_only_be_taken_once(pool: PgPool) {
         &pool,
         42,
         &["vc.issue".to_string()],
+        &[],
         "https://app.example/callback",
         &client_id,
         now,
@@ -351,6 +352,7 @@ async fn a_code_is_exchanged_once(pool: PgPool) {
         &pool,
         42,
         &["vc.issue".to_string()],
+        &[],
         callback,
         &client_id,
         now,
@@ -552,9 +554,17 @@ async fn failed_code_exchange_preserves_code(pool: PgPool) {
     let (_, client) = application_with_callback(&pool).await;
     let now = OffsetDateTime::now_utc();
     let callback = "https://app.example/callback";
-    let code = authorize(&pool, 42, &["vc.issue".to_string()], callback, &client, now)
-        .await
-        .unwrap();
+    let code = authorize(
+        &pool,
+        42,
+        &["vc.issue".to_string()],
+        &[],
+        callback,
+        &client,
+        now,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         exchange_code(&pool, &client, "https://wrong.example/", &code, now).await,
         Err(ExchangeError::RedirectUriMismatch)
@@ -572,9 +582,17 @@ async fn replayed_code_revokes_issued_tokens(pool: PgPool) {
     sqlx::query("UPDATE applications SET grant_types=ARRAY['authorization_code','refresh_token']::openid_connect_grant_types[] WHERE id=$1").bind(app).execute(&pool).await.unwrap();
     let now = OffsetDateTime::now_utc();
     let callback = "https://app.example/callback";
-    let code = authorize(&pool, 42, &["vc.issue".to_string()], callback, &client, now)
-        .await
-        .unwrap();
+    let code = authorize(
+        &pool,
+        42,
+        &["vc.issue".to_string()],
+        &[],
+        callback,
+        &client,
+        now,
+    )
+    .await
+    .unwrap();
     let tokens = exchange_code(&pool, &client, callback, &code, now)
         .await
         .unwrap();
@@ -664,9 +682,17 @@ async fn failed_code_token_write_rolls_back_the_grant_and_code(pool: PgPool) {
     let (_, client) = application_with_callback(&pool).await;
     let now = OffsetDateTime::now_utc();
     let callback = "https://app.example/callback";
-    let code = authorize(&pool, 42, &["vc.issue".to_string()], callback, &client, now)
-        .await
-        .unwrap();
+    let code = authorize(
+        &pool,
+        42,
+        &["vc.issue".to_string()],
+        &[],
+        callback,
+        &client,
+        now,
+    )
+    .await
+    .unwrap();
     sqlx::query("ALTER TABLE access_tokens ADD CONSTRAINT injected_failure CHECK (false)")
         .execute(&pool)
         .await
@@ -697,9 +723,17 @@ async fn simultaneous_code_exchanges_detect_reuse_and_revoke(pool: PgPool) {
     let (_, client) = application_with_callback(&pool).await;
     let now = OffsetDateTime::now_utc();
     let callback = "https://app.example/callback";
-    let code = authorize(&pool, 42, &["vc.issue".to_string()], callback, &client, now)
-        .await
-        .unwrap();
+    let code = authorize(
+        &pool,
+        42,
+        &["vc.issue".to_string()],
+        &[],
+        callback,
+        &client,
+        now,
+    )
+    .await
+    .unwrap();
     let (first, second) = tokio::join!(
         exchange_code(&pool, &client, callback, &code, now),
         exchange_code(&pool, &client, callback, &code, now)
@@ -727,6 +761,7 @@ async fn json_code_exchange_remains_supported(pool: PgPool) {
         &pool,
         42,
         &["vc.issue".to_string()],
+        &[],
         callback,
         &client,
         OffsetDateTime::now_utc(),

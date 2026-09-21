@@ -75,6 +75,20 @@ approval answers. The grant is written from the ask's own scopes, never from
 anything the approver names: an approval that granted something else would be a
 permission nobody asked for.
 
+A grant also says **which currencies** the application may operate on, and the
+ask is where they are named: RFC 8707's `resource`, an array of absolute URIs —
+`https://<site>/api/v2/currencies/{id}` for one currency,
+`https://<site>/api/v2/currencies` for all of them (`docs/resources.md`). An ask
+that names none and one that names the collection say the same thing: every
+currency of the guild. The grant is written from the ask's own resources as it is
+written from its own scopes — a guild that approves an ask narrowed to one
+currency hands out a token that may issue only that currency — and a `resource`
+that is not absolute, not this service's, not a currency, or not a currency of
+this guild is `400 invalid_target`, RFC 8707's own error. A guild has one
+currency, so a guild's ask narrowed to it and one narrowed to nothing are the
+same grant; where the narrowing is visible is a *person's* grant, which spans the
+currencies they hold (`docs/personal-grants.md`).
+
 The 201 answers the device flow's four values: `device_code` (what the poll
 names), `user_code` (what the administrator types, eight characters), and
 `expires_in` (seconds remaining until the ask expires, ten minutes by default).
@@ -104,11 +118,14 @@ the application's owner says yes. `/grant` is guild-only and asks the
 administrator bit, like `/issue` beside it:
 
 - `/grant list` shows the applications this guild has allowed to issue, five to a
-  page, each with the button that takes the permission back. Asks are not here:
-  they are the application's own business, and
+  page, each with the button that takes the permission back. It names the
+  currency each one may issue — the guild's own, by unit rather than by id — so
+  the list says what an application may touch as well as what it may do. Asks
+  are not here: they are the application's own business, and
   `GET /oauth2/clients/@me/grant-requests` is where the application reads them.
 - `/grant approve code:<user_code>` approves an ask and writes the grant from
-  its scopes. A code that names nothing pending here is refused the same way
+  its scopes and its currencies, so a narrowed ask is approved narrowed, not
+  widened. A code that names nothing pending here is refused the same way
   whether it never existed, belongs to another guild, or already expired.
 - The list's revoke button takes a permission back by the application it belongs
   to: the issuing scope goes and the grant row stays, which is what a guild token

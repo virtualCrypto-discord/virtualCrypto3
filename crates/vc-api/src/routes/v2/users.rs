@@ -61,6 +61,20 @@ pub async fn balances(
 
     let holdings = vc_core::balance::holdings_for_user(state.pool(), account.id).await?;
 
+    // A list is *filtered* rather than refused, unlike a read that names a
+    // currency: a holding the token is not for is one the answer does not
+    // mention, which is the same shape a holding that never existed has, and a
+    // list that cannot mention a currency is no reason to fail a request that
+    // did not name one. An empty grant covers every currency of the account and
+    // filters nothing.
+    let covered = crate::resource::covered_units(state.pool(), user.resources())
+        .await
+        .map_err(vc_core::Error::from)?;
+    let holdings: Vec<_> = holdings
+        .into_iter()
+        .filter(|holding| crate::resource::covers_unit(covered.as_deref(), holding.unit.as_deref()))
+        .collect();
+
     Ok(Json(Value::Array(
         holdings.iter().map(render_holding).collect(),
     )))

@@ -155,12 +155,21 @@ async fn approve(
     .await?;
 
     match decided {
-        Some(application_id) => {
+        Some(decided) => {
             state
                 .notifier()
-                .notify_grant_decided(application_id, guild_id);
+                .notify_grant_decided(decided.application_id, guild_id);
 
-            Ok(render_ok("発行を許可しました。"))
+            // What the code asked for, said back: an approval is of the ask, so
+            // the currencies are the ask's own and not anything the approver
+            // chose. A person who typed a code they were shown learns here what
+            // the narrowing they just approved was.
+            let units = crate::resource::units(state.pool(), &decided.resources).await?;
+
+            Ok(render_ok(&format!(
+                "発行を許可しました。この申請は、{}を操作できます。",
+                currencies(&units),
+            )))
         }
         None => Ok(render_error(
             "エラー: そのコードの申請はこのサーバーにありません。",
@@ -206,10 +215,17 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
         }
 
         for application in &authorized.applications {
+            // What the application may touch, by unit rather than by id: the
+            // screen is where the narrowing stops being something only the API
+            // knows, so a grant for one currency and one for all of them have to
+            // read differently.
+            let units = crate::resource::units(state.pool(), &application.resources).await?;
+
             children.push(text(format!(
-                "**{}**\n`{}`",
+                "**{}**\n`{}`\nこの申請は、{}を操作できます。",
                 name_of(application.client_name.as_deref()),
                 application.client_id,
+                currencies(&units),
             )));
             children.push(action_row(vec![button(
                 &revoke_custom_id(&application.client_id),
@@ -264,6 +280,19 @@ fn name_of(client_name: Option<&str>) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or("(名前なし)")
         .to_string()
+}
+
+/// The currencies a grant covers, as the screens name them: 「すべての通貨」 when
+/// the grant named none (or named the collection), and 「通貨 nyan だけ」 when it
+/// named one. The two are what tell a narrowed grant from a wide one, which is
+/// the whole reason the screen shows them — nothing else about the screen would
+/// change, so the difference would otherwise be something only the API knows.
+fn currencies(units: &[String]) -> String {
+    if units.is_empty() {
+        "すべての通貨".to_string()
+    } else {
+        format!("通貨 {} だけ", units.join("、"))
+    }
 }
 
 /// A screen as the answer to what was typed or pressed: a new ephemeral message

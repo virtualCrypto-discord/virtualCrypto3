@@ -136,6 +136,10 @@ findings.
       only), `Limited` (auth plus the per-account limit), `GuildToken` (a grant).
       `crates/vc-api/src/routes/limited.rs` says what is limited; a v2 handler taking `AuthUser`
       instead of `Limited` is an unlimited endpoint and a finding.
+- [ ] A grant's currencies against the handlers: `crates/vc-api/src/resource.rs`'s `ensure` is
+      what refuses an act outside a grant, and the balances and claims lists filter rather than
+      refuse (`docs/resources.md`). A v2 handler that names a currency without asking `resource`
+      is a finding.
 - [ ] The two findings above: `POST /oauth2/token/revoke` is what a client calls
       when a token leaked, and `PATCH /oauth2/clients/@me` is the only way an
       application changes its own webhook. Either add the test, or say in §4 why
@@ -368,6 +372,9 @@ belief into a fact, and each of these was run while the code was written:
 | `party_discord_id` naming a party whose remainder is short | charge | 409 `not_enough_amount`, even when the contract holds more |
 | a fixed receiver, and a receiver that is neither it nor the party drawn on | charge | 400 `receiver_is_fixed` |
 | a charge after the deadline | charge | 409 `expired` |
+| a payment in a currency the grant does not name | payment, with a personal grant's token | 403 `insufficient_scope` |
+| a currency read outside the grant | `GET /api/v2/currencies/{id}`, with a grant's token | 403 `insufficient_scope` |
+| the balances and claims lists | with a grant narrowed to one currency | 200, the rows of that currency only — filtered, not refused |
 | `Accept` of `text/html` alone | any `/api` route | 406, before any handler |
 | three handshakes within three seconds | a webhook | the third is `retry_after_3_seconds` |
 | `RATE_LIMIT_PER_MINUTE=1`, two requests | any v2 route | 429 on the second |

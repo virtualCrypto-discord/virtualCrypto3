@@ -130,6 +130,47 @@ pub async fn create_grant_scopes(
     Ok(())
 }
 
+/// What a grant is *for*: the currencies it may be used in, as `grant_resources`
+/// rows. The array scopes beside it is what it may *do*.
+///
+/// An empty set is every currency of the target, which is what the collection
+/// form of RFC 8707's `resource` asks for and what an ask that names nothing
+/// asks for too — they are the same fact written two ways, and neither writes a
+/// row. It is also what a grant written before resources existed means, so a
+/// migration does not have to rewrite those rows.
+///
+/// Unlike [`create_grant_scopes`], which only ever adds, this **replaces** the
+/// set: a grant carries what was last approved, so an application that
+/// re-asks for one currency where it had two is narrowed rather than quietly
+/// keeping the wider permission. The collection form and the omitted form are
+/// therefore able to clear a grant back to "every currency", which adding
+/// could never do.
+pub async fn create_grant_resources(
+    connection: &mut sqlx::PgConnection,
+    grant_id: i64,
+    resources: &[i64],
+    now: OffsetDateTime,
+) -> Result<()> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+
+    sqlx::query!("DELETE FROM grant_resources WHERE grant_id = $1", grant_id)
+        .execute(&mut *connection)
+        .await?;
+
+    sqlx::query!(
+        "INSERT INTO grant_resources (grant_id, currency_id, inserted_at, updated_at)
+         SELECT $1, t.currency_id, $3, $3
+           FROM UNNEST($2::bigint[]) AS t(currency_id)",
+        grant_id,
+        resources,
+        at
+    )
+    .execute(&mut *connection)
+    .await?;
+
+    Ok(())
+}
+
 /// How long a refresh token lasts: the Elixir's `180 * 24 * 60 * 60` seconds.
 pub const REFRESH_TOKEN_TTL: Duration = Duration::days(180);
 
@@ -347,6 +388,13 @@ async fn exchange_code_in(
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
 
+    // The browser flow's own narrowing, written the same way the device flow's
+    // is: the code carried the ids the consent screen resolved, and the grant
+    // they land on is the same grant.
+    create_grant_resources(&mut *connection, grant_id, &taken.resources, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidCode)?;
+
     let access_token = create_access_token(&mut *connection, grant_id, now)
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
@@ -529,6 +577,7 @@ async fn write_grant(
     application_id: i64,
     target: Target,
     scopes: &[String],
+    resources: &[i64],
     now: OffsetDateTime,
 ) -> Result<i64> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
@@ -552,6 +601,7 @@ async fn write_grant(
     .await?;
 
     create_grant_scopes(connection, grant_id, scopes, now).await?;
+    create_grant_resources(connection, grant_id, resources, now).await?;
 
     Ok(grant_id)
 }
@@ -564,11 +614,16 @@ async fn write_grant(
 /// without a person opening an authorization URL. Discord's own yes goes through
 /// [`decide_request`], because it answers an ask; this one is the owner acting
 /// for a guild they administer, so the ask is theirs to skip.
+///
+/// `resources` is the currency ids the permission is narrowed to, and an empty
+/// slice is every currency of the guild — the caller has no ask to read them
+/// from, so it names them itself.
 pub async fn allow_in_guild(
     pool: &PgPool,
     application_id: i64,
     guild_id: i64,
     scopes: &[&str],
+    resources: &[i64],
     now: OffsetDateTime,
 ) -> Result<i64> {
     let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_string()).collect();
@@ -579,6 +634,7 @@ pub async fn allow_in_guild(
         application_id,
         Target::Guild(guild_id),
         &scopes,
+        resources,
         now,
     )
     .await
@@ -671,6 +727,10 @@ pub async fn grants_of(pool: &PgPool, application_id: i64) -> Result<Vec<Granted
 pub struct AuthorizedApplication {
     pub client_id: String,
     pub client_name: Option<String>,
+    /// The currencies the grant covers, as `grant_resources` ids. Empty is every
+    /// currency of the guild, which is what the screen names 「すべての通貨」, so
+    /// that a narrowed grant and one that named nothing can be told apart.
+    pub resources: Vec<i64>,
 }
 
 /// A page of them, and where the pages around it are — the shape a screen that
@@ -720,7 +780,9 @@ pub async fn authorized_in_guild(
     .await?;
 
     let rows = sqlx::query!(
-        r#"SELECT a.client_id::text AS "client_id!", a.client_name
+        r#"SELECT a.client_id::text AS "client_id!", a.client_name,
+                  COALESCE((SELECT array_agg(r.currency_id) FROM grant_resources r
+                             WHERE r.grant_id = g.id), ARRAY[]::bigint[]) AS "resources!"
              FROM grants g
              JOIN applications a ON a.id = g.application_id
             WHERE g.guild_id = $1
@@ -745,6 +807,7 @@ pub async fn authorized_in_guild(
             .map(|row| AuthorizedApplication {
                 client_id: row.client_id,
                 client_name: row.client_name,
+                resources: row.resources,
             })
             .collect(),
         total,
@@ -756,8 +819,8 @@ pub async fn authorized_in_guild(
     })
 }
 
-/// What a grant token turned out to be: which application, for which target, and
-/// what that grant carries.
+/// What a grant token turned out to be: which application, for which target,
+/// what that grant carries, and which currencies it is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenGrant {
     pub application_id: i64,
@@ -768,6 +831,10 @@ pub struct TokenGrant {
     pub account_id: i32,
     pub target: Target,
     pub scopes: Vec<String>,
+    /// The currencies the token is worth, as `grant_resources` rows. Empty is
+    /// every currency of the target, which is what a grant written before this
+    /// existed carries — see [`create_grant_resources`].
+    pub resources: Vec<i64>,
 }
 
 /// A grant token, resolved: the grant an `access_tokens` row belongs to.
@@ -796,7 +863,9 @@ pub async fn resolve_token(
                   g.guild_id,
                   g.discord_id,
                   COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
-                           ARRAY[]::text[]) AS "scopes!"
+                           ARRAY[]::text[]) AS "scopes!",
+                  COALESCE((SELECT array_agg(r.currency_id) FROM grant_resources r
+                             WHERE r.grant_id = g.id), ARRAY[]::bigint[]) AS "resources!"
              FROM access_tokens t
              JOIN grants g ON g.id = t.grant_id
              LEFT JOIN users a ON a.application_id = g.application_id
@@ -826,6 +895,7 @@ pub async fn resolve_token(
         account_id: row.account_id,
         target,
         scopes: row.scopes,
+        resources: row.resources,
     }))
 }
 
@@ -840,11 +910,18 @@ pub async fn resolve_token(
 /// `expires_in` is how long the ask lives, in seconds, and it is the caller's
 /// to name within reason: a device that will poll for ten minutes asks for ten
 /// minutes, and the screen stops showing it after that.
+///
+/// `resources` is what the ask is *for*: the currency ids RFC 8707's `resource`
+/// resolved to, or an empty slice for the collection form and for an ask that
+/// named nothing — the two say the same thing, and both mean every currency of
+/// the target, now and later. Neither writes a row, which is what lets a
+/// currency the target creates tomorrow be covered by a grant made today.
 pub async fn request_grant(
     pool: &PgPool,
     application_id: i64,
     target: Target,
     scopes: &[String],
+    resources: &[i64],
     expires_in: i64,
     now: OffsetDateTime,
 ) -> Result<GrantRequest> {
@@ -870,17 +947,19 @@ pub async fn request_grant(
     .await?;
 
     let row = sqlx::query!(
-        r#"INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $5, $6, $6)
+        r#"INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, resources, device_code, user_code, expires_in, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $6, $7, $7)
          ON CONFLICT (application_id, (COALESCE(guild_id, discord_id))) WHERE status = 'pending'
          DO UPDATE SET updated_at = EXCLUDED.updated_at
-         RETURNING id, guild_id, discord_id, scopes AS "scopes!: Vec<String>", device_code AS "device_code!: Uuid",
+         RETURNING id, guild_id, discord_id, scopes AS "scopes!: Vec<String>", resources AS "resources!: Vec<i64>",
+                   device_code AS "device_code!: Uuid",
                    user_code AS "user_code!: String", status AS "status!: String",
-                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($6 - inserted_at))::bigint) AS "expires_in!: i64""#,
+                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($7 - inserted_at))::bigint) AS "expires_in!: i64""#,
         application_id,
         target.guild(),
         target.user(),
         scopes,
+        resources,
         expires_in,
         at
     )
@@ -894,6 +973,7 @@ pub async fn request_grant(
         application_id,
         target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
         scopes: row.scopes,
+        resources: row.resources,
         device_code: row.device_code,
         user_code: row.user_code,
         status: row.status,
@@ -902,13 +982,16 @@ pub async fn request_grant(
 }
 
 /// A request as the application that made it reads it: the codes it polls with
-/// and shows, the scopes it asked for, who it is put to, and how long it lives.
+/// and shows, the scopes it asked for, the currencies it asked for, who it is
+/// put to, and how long it lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantRequest {
     pub id: i64,
     pub application_id: i64,
     pub target: Target,
     pub scopes: Vec<String>,
+    /// The currency ids the ask named, or empty for every currency of the target.
+    pub resources: Vec<i64>,
     pub device_code: Uuid,
     pub user_code: String,
     pub status: String,
@@ -918,7 +1001,7 @@ pub struct GrantRequest {
 /// What an application has asked for, answered or not.
 pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantRequest>> {
     let rows = sqlx::query!(
-        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!",
+        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!", resources AS "resources!",
                   device_code AS "device_code!: Uuid", user_code AS "user_code!",
                   status AS "status!", expires_in AS "expires_in!"
              FROM grant_requests
@@ -936,6 +1019,7 @@ pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<Grant
                 application_id: row.application_id,
                 target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
                 scopes: row.scopes,
+                resources: row.resources,
                 device_code: row.device_code,
                 user_code: row.user_code,
                 status: row.status,
@@ -949,9 +1033,15 @@ pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<Grant
 ///
 /// The grant is written from the ask's own scopes, never from anything the
 /// caller names: an approval that granted something else would be a permission
-/// nobody asked for. There is no no — `None` is a request that is not this
+/// nobody asked for. Its currencies travel the same way, for the same reason:
+/// an approval is of the ask, so what this target could not choose is what it
+/// could not widen. There is no no — `None` is a request that is not this
 /// target's, not there, expired, or already answered, and all four are answered
 /// the same way, because an unapproved ask simply stays pending until it dies.
+///
+/// The answer carries the currencies the ask named as well as the application,
+/// because the screen that shows the decision has to name what was approved
+/// rather than look it up again.
 ///
 /// Whichever kind of target it is, the code has to be *that target's*: a guild
 /// administrator answering a person's ask, or a person answering a guild's, is
@@ -964,7 +1054,7 @@ pub async fn decide_request(
     user_code: &str,
     target: Target,
     now: OffsetDateTime,
-) -> Result<Option<i64>> {
+) -> Result<Option<Decided>> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let mut tx = pool.begin().await?;
@@ -977,7 +1067,7 @@ pub async fn decide_request(
               AND discord_id IS NOT DISTINCT FROM $3
               AND status = 'pending'
               AND inserted_at + make_interval(secs => expires_in) > $4
-         RETURNING application_id, scopes AS "scopes!""#,
+         RETURNING application_id, scopes AS "scopes!", resources AS "resources!""#,
         user_code,
         target.guild(),
         target.user(),
@@ -995,13 +1085,30 @@ pub async fn decide_request(
         decided.application_id,
         target,
         &decided.scopes,
+        &decided.resources,
         now,
     )
     .await?;
 
     tx.commit().await?;
 
-    Ok(Some(decided.application_id))
+    Ok(Some(Decided {
+        application_id: decided.application_id,
+        resources: decided.resources,
+    }))
+}
+
+/// What an approval wrote, as the screen that shows the decision reads it: the
+/// application, and the currencies the ask named.
+///
+/// The currencies are the ask's own — the same rows [`write_grant`] wrote — so
+/// the screen names what was approved rather than looking it up again. Empty is
+/// every currency of the target, which is what the collection form of
+/// RFC 8707's `resource` and an ask that named nothing both mean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decided {
+    pub application_id: i64,
+    pub resources: Vec<i64>,
 }
 
 /// A device poll: what the application's `device_code` names, while it is still
@@ -1020,7 +1127,7 @@ pub async fn poll_request(
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let row = sqlx::query!(
-        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!",
+        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!", resources AS "resources!",
                   device_code AS "device_code!: Uuid", user_code AS "user_code!",
                   status AS "status!", expires_in AS "expires_in!"
              FROM grant_requests
@@ -1042,6 +1149,7 @@ pub async fn poll_request(
         application_id: row.application_id,
         target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
         scopes: row.scopes,
+        resources: row.resources,
         device_code: row.device_code,
         user_code: row.user_code,
         status: row.status,

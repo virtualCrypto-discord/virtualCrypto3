@@ -41,6 +41,12 @@ pub async fn post(
         return Err(ApiError::InsufficientScope);
     }
 
+    // The grant's currencies, checked the same way and for the same reason: an
+    // issue lands on the guild's one currency, and a guild token whose grant did
+    // not name it is a real token for something else. Before the key, like the
+    // scope above.
+    crate::resource::ensure_guild(state.pool(), &guild.resources, guild.guild_id).await?;
+
     idempotency::guard(
         &state,
         &headers,

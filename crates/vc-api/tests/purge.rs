@@ -21,6 +21,7 @@ async fn rows(pool: &PgPool) {
         application,
         GUILD,
         &["vc.issue"],
+        &[],
         time::OffsetDateTime::now_utc(),
     )
     .await

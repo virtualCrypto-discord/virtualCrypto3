@@ -193,6 +193,7 @@ async fn a_poll_for_an_expired_ask_is_invalid_grant(pool: PgPool) {
         application,
         Target::Guild(GUILD),
         &["vc.issue".to_owned()],
+        &[],
         600,
         time::OffsetDateTime::now_utc() - time::Duration::hours(2),
     )
@@ -463,6 +464,7 @@ async fn an_expired_ask_can_be_replaced_before_the_next_purge(pool: PgPool) {
         application,
         Target::Guild(GUILD),
         &["vc.issue".to_owned()],
+        &[],
         600,
         now - time::Duration::seconds(601),
     )
@@ -489,7 +491,8 @@ async fn an_expired_ask_can_be_replaced_before_the_next_purge(pool: PgPool) {
     assert_eq!(
         vc_core::grant::decide_request(&pool, code, Target::Guild(GUILD), now)
             .await
-            .unwrap(),
+            .unwrap()
+            .map(|decided| decided.application_id),
         Some(application)
     );
     let device_code = response.body["device_code"].as_str().unwrap();
@@ -508,14 +511,31 @@ async fn concurrent_replacements_share_one_live_ask_at_expiry(pool: PgPool) {
         application,
         Target::Guild(GUILD),
         &scopes,
+        &[],
         600,
         now - time::Duration::seconds(600),
     )
     .await
     .unwrap();
     let (first, second) = tokio::join!(
-        vc_core::grant::request_grant(&pool, application, Target::Guild(GUILD), &scopes, 600, now),
-        vc_core::grant::request_grant(&pool, application, Target::Guild(GUILD), &scopes, 600, now),
+        vc_core::grant::request_grant(
+            &pool,
+            application,
+            Target::Guild(GUILD),
+            &scopes,
+            &[],
+            600,
+            now
+        ),
+        vc_core::grant::request_grant(
+            &pool,
+            application,
+            Target::Guild(GUILD),
+            &scopes,
+            &[],
+            600,
+            now
+        ),
     );
     let first = first.unwrap();
     let second = second.unwrap();
@@ -549,6 +569,7 @@ async fn poll_after_discord_revocation(pool: PgPool, keep_another: bool) {
         application,
         Target::Guild(GUILD),
         &scopes,
+        &[],
         600,
         time::OffsetDateTime::now_utc(),
     )
@@ -614,6 +635,7 @@ async fn a_repeated_ask_reports_its_remaining_lifetime(pool: PgPool) {
         application,
         Target::Guild(GUILD),
         &["vc.issue".to_owned()],
+        &[],
         600,
         time::OffsetDateTime::now_utc() - time::Duration::seconds(590),
     )
@@ -691,7 +713,8 @@ async fn a_person_is_asked_and_only_their_code_answers_it(pool: PgPool) {
     assert_eq!(
         vc_core::grant::decide_request(&pool, &code, Target::User(PERSON), now)
             .await
-            .unwrap(),
+            .unwrap()
+            .map(|decided| decided.application_id),
         Some(application)
     );
 

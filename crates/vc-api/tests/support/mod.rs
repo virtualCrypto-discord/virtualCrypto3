@@ -786,23 +786,84 @@ pub async fn mint_app(pool: &PgPool, subject: i32, scopes: &[&str]) -> String {
 /// This is the `guild` kind: not a JWT but the `access_tokens` row the code flow
 /// answers with, which is why a test builds it through the same two functions
 /// production does rather than by signing anything.
+///
+/// The grant covers every currency of the guild: the narrowed form is
+/// [`insert_grant_for`], which exists separately so that a test that does not
+/// care about resources reads as it did before there were any.
 pub async fn insert_grant(
     pool: &PgPool,
     application: i64,
     guild_id: i64,
     scopes: &[&str],
 ) -> String {
+    insert_grant_for(pool, application, guild_id, scopes, &[]).await
+}
+
+/// The same, narrowed to the currencies `resources` names. An empty slice is
+/// every currency of the guild, which is what [`insert_grant`] builds.
+pub async fn insert_grant_for(
+    pool: &PgPool,
+    application: i64,
+    guild_id: i64,
+    scopes: &[&str],
+    resources: &[i64],
+) -> String {
     vc_core::grant::allow_in_guild(
         pool,
         application,
         guild_id,
         scopes,
+        resources,
         OffsetDateTime::now_utc(),
     )
     .await
     .expect("a grant");
 
     mint_guild_token(pool, application, guild_id).await
+}
+
+/// A personal grant — an ask put to a person — approved and handed its token,
+/// built the way production builds one: an ask, a decision, and the device
+/// poll's token.
+///
+/// `resources` is what the ask is for: the currency ids a `resource` value
+/// resolved to, or an empty slice for every currency of the person's account.
+pub async fn insert_personal_grant(
+    pool: &PgPool,
+    application: i64,
+    discord_id: i64,
+    scopes: &[&str],
+    resources: &[i64],
+) -> String {
+    let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_string()).collect();
+    let now = OffsetDateTime::now_utc();
+
+    let asked = vc_core::grant::request_grant(
+        pool,
+        application,
+        vc_core::grant::Target::User(discord_id),
+        &scopes,
+        resources,
+        600,
+        now,
+    )
+    .await
+    .expect("an ask");
+
+    vc_core::grant::decide_request(
+        pool,
+        &asked.user_code,
+        vc_core::grant::Target::User(discord_id),
+        now,
+    )
+    .await
+    .expect("the answer")
+    .expect("the person answered");
+
+    vc_core::grant::create_device_token(pool, &asked, now)
+        .await
+        .expect("a token")
+        .expect("the approved ask hands one out")
 }
 
 /// The token for a grant that is already there: `create_access_token/2`, which is

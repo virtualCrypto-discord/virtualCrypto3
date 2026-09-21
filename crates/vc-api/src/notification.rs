@@ -1074,6 +1074,7 @@ mod tests {
             application,
             GUILD,
             &["vc.issue"],
+            &[],
             time::OffsetDateTime::now_utc(),
         )
         .await
@@ -1122,6 +1123,7 @@ mod tests {
             application,
             GUILD,
             &["vc.issue"],
+            &[],
             time::OffsetDateTime::now_utc(),
         )
         .await

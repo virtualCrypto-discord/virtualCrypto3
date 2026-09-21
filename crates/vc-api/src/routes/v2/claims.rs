@@ -133,7 +133,25 @@ pub async fn index(
     )
     .await?;
 
+    // The continuation is read off the page the database returned, before the
+    // filter: a full page is what says another one follows, and a narrowed token
+    // must not silently lose the pages its own currencies are on.
     let next = page.next_cursor(&claims, |claim| claim.id);
+
+    // A list is filtered rather than refused: a claim the token is not for is one
+    // the answer does not mention, which is the same shape a claim that never
+    // existed has. An empty grant covers every currency of the account and filters
+    // nothing.
+    let covered = crate::resource::covered_units(state.pool(), user.resources())
+        .await
+        .map_err(vc_core::Error::from)?;
+    let claims: Vec<_> = claims
+        .into_iter()
+        .filter(|claim| {
+            crate::resource::covers_unit(covered.as_deref(), claim.currency.unit.as_deref())
+        })
+        .collect();
+
     let mut body = Vec::with_capacity(claims.len());
     for claim in claims {
         body.push(serialize_claim(&state, claim).await);

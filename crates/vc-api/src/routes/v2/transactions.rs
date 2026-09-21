@@ -37,10 +37,33 @@ pub async fn post(
         return Err(ApiError::InsufficientScope);
     }
 
+    // And the currencies the token is for, in the same place and for the same
+    // reason: a payment names its currency by unit, so each one is resolved to the
+    // currency it names and checked. A unit no currency has is left to the payment
+    // itself to refuse as `not_found_currency`.
+    ensure_currency(&state, &user, &asked).await?;
+
     idempotency::guard(&state, &headers, operator_id, user.scopes.vc_pay, |tx| {
         Box::pin(async move { paid(tx, operator_id, asked).await })
     })
     .await
+}
+
+/// Refuse a payment that names a currency the grant does not cover, whether the
+/// body carried one or a list of them.
+async fn ensure_currency(state: &AppState, user: &Limited, asked: &Asked) -> Result<(), ApiError> {
+    match asked {
+        Asked::Single { unit, .. } => {
+            crate::resource::ensure_unit(state.pool(), user.resources(), unit).await
+        }
+        Asked::Bulk(payments) => {
+            for payment in payments {
+                crate::resource::ensure_unit(state.pool(), user.resources(), &payment.unit).await?;
+            }
+
+            Ok(())
+        }
+    }
 }
 
 /// What the body asked for: one payment, or a list of them.

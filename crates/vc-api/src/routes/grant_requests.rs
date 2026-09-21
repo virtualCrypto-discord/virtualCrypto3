@@ -41,16 +41,24 @@ const DEFAULT_EXPIRES_IN: i64 = 600;
 const MAX_EXPIRES_IN: i64 = 3600;
 
 /// What one request is: who is being asked — a guild's pool, or one person's own
-/// account — the scopes it is asked for, and how long the ask lives.
+/// account — the scopes it is asked for, the currencies it is for, and how long
+/// the ask lives.
 ///
 /// Exactly one of the two targets, which is also the database's rule: a body that
 /// names both is not a request this service can file, because the answer it would
 /// be waiting on is two different people's.
+///
+/// `resource` is RFC 8707's parameter, carried as an array because that is how a
+/// JSON request carries the repeated form parameter the specification describes.
+/// It is optional, and an ask that names none is an ask for everything — within
+/// the target it already names, which is the whole of what it could mean. The
+/// collection form says the same thing out loud.
 #[derive(Deserialize)]
 pub struct GrantRequest {
     pub guild_id: Option<String>,
     pub discord_id: Option<String>,
     pub scopes: Option<Vec<String>>,
+    pub resource: Option<Vec<String>>,
     pub expires_in: Option<i64>,
 }
 
@@ -127,6 +135,23 @@ pub async fn create(
         return refused(StatusCode::BAD_REQUEST, "invalid_scope", "unknown scope");
     }
 
+    // What the ask is *for*, resolved the moment the scopes pass for the same
+    // reason they are checked here: an approval grants exactly the ask, so a
+    // target that is not a currency of this service — or, for a guild's ask, not
+    // a currency of that guild — is refused here rather than approved into a
+    // permission nobody can use.
+    let resources = match crate::resource::resolve(
+        state.pool(),
+        &state.links().site_url,
+        target,
+        body.resource.as_deref().unwrap_or_default(),
+    )
+    .await
+    {
+        Ok(resources) => resources,
+        Err(_) => return refused(StatusCode::BAD_REQUEST, "invalid_target", "invalid_target"),
+    };
+
     let expires_in = match body.expires_in {
         None => DEFAULT_EXPIRES_IN,
         Some(expires_in) if expires_in > 0 && expires_in <= MAX_EXPIRES_IN => expires_in,
@@ -144,6 +169,7 @@ pub async fn create(
         application,
         target,
         &scopes,
+        &resources,
         expires_in,
         OffsetDateTime::now_utc(),
     )
