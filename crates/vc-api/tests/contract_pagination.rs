@@ -6,8 +6,8 @@
 //! the machinery is `routes/pagination.rs` and these pin that these lists are
 //! wired to it. The difference is the default: an absent `limit` still means
 //! every row for the two lists that existed before they could be paged, and a
-//! page for the statement, whose rows are written by every use an application
-//! bills for.
+//! page for every one of them — the first version answered every row for the two
+//! older lists, which is the thing a list endpoint must not do.
 
 mod support;
 
@@ -204,9 +204,11 @@ fn next_of(response: &Response) -> Option<i64> {
         .ok()
 }
 
-/// Without a `limit` a list is what it always was: every row.
+/// A list is a page whether or not the caller asked for one: what came back the
+/// first time this endpoint existed was every row, which spends the caller's
+/// memory in proportion to their data on a request that did not ask for it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_absent_limit_is_every_contract(pool: PgPool) {
+async fn an_absent_limit_is_a_page(pool: PgPool) {
     let fixture = fixture(&pool).await;
 
     for _ in 0..3 {
@@ -216,8 +218,31 @@ async fn an_absent_limit_is_every_contract(pool: PgPool) {
     let response = list(&pool, &fixture, "").await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(ids(&response).len(), 3, "body: {}", response.body);
-    assert_eq!(next_of(&response), None, "nothing to continue to");
+    assert_eq!(ids(&response).len(), 3, "a short page, so all three");
+    assert_eq!(next_of(&response), None, "and nothing to continue to");
+}
+
+/// The default page's size, and that it is a page: fifty come back and the header
+/// says where the fifty-first is.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_default_page_is_fifty(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    for _ in 0..51 {
+        open(&pool, &fixture).await;
+    }
+
+    let first = list(&pool, &fixture, "").await;
+
+    assert_eq!(first.status, 200, "body: {}", first.body);
+    assert_eq!(ids(&first).len(), 50, "the default page");
+    assert_eq!(next_of(&first), Some(ids(&first)[49]), "the last row of it");
+
+    let next = next_of(&first).expect("a cursor");
+    let rest = list(&pool, &fixture, &format!("next={next}")).await;
+
+    assert_eq!(ids(&rest).len(), 1, "the rest of it");
+    assert_eq!(next_of(&rest), None);
 }
 
 /// A page that came back full is continued by the header it carries, and the

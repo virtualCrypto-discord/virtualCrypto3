@@ -30,11 +30,16 @@ use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
 use vc_core::contract::{self, Contract, ContractError, NewParty};
 
-/// How many payments a statement page holds when the caller does not say. A
-/// statement is paged whether or not anyone asked, because unlike the lists
-/// beside it — whose absent `limit` still means every row — its rows are written
-/// by every use an application bills for.
-const PAYMENTS_PER_PAGE: i64 = 50;
+/// How many rows a page of a list holds when the caller does not say.
+///
+/// **All three lists answer a page**, and the first version of this file was wrong
+/// about the two older ones: it kept "an absent `limit` means every row" for
+/// compatibility with a behaviour nothing depended on, which left a list endpoint
+/// doing the one thing a list endpoint must not — spending a caller's memory in
+/// proportion to their data, on a request that did not ask for it. A page is
+/// bounded and the `link` header is how the next one is asked for; `limit` says
+/// something else if the caller wants to.
+const PER_PAGE: i64 = 50;
 
 /// `POST /api/v2/contracts`: the application asking.
 ///
@@ -67,9 +72,9 @@ pub async fn create(
 
 /// `GET /api/v2/contracts`: the ones this application wrote, newest first.
 ///
-/// `limit` is what makes it a page. Without it the answer is every contract, the
-/// way it was before it could be paged; with it, a page that came back full
-/// carries the `link` header that continues from its last id.
+/// A page, like every list here: fifty rows unless `limit` says otherwise, and a
+/// page that came back full carries the `link` header that continues from its last
+/// id.
 pub async fn index(
     State(state): State<AppState>,
     user: Limited,
@@ -80,7 +85,7 @@ pub async fn index(
     let application = application(&state, &user).await?;
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
-    let page = pagination::Page::asked(&params)?;
+    let page = pagination::Page::asked(&params)?.limited_to(PER_PAGE);
 
     let contracts = contract::of_application(state.pool(), application, page.cursor, page.limit)
         .await
@@ -327,7 +332,7 @@ async fn charge(
 }
 
 /// `GET /api/v2/users/@me/contracts`: the contracts this user is named in,
-/// newest first, paged the way the application's own list is.
+/// newest first, a page of the same size — and the same `link` header.
 pub async fn mine(
     State(state): State<AppState>,
     user: Limited,
@@ -344,7 +349,7 @@ pub async fn mine(
     };
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
-    let page = pagination::Page::asked(&params)?;
+    let page = pagination::Page::asked(&params)?.limited_to(PER_PAGE);
 
     let contracts = contract::of_party(state.pool(), named, page.cursor, page.limit)
         .await
@@ -388,7 +393,7 @@ pub async fn payments(
     }
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
-    let page = pagination::Page::asked(&params)?.limited_to(PAYMENTS_PER_PAGE);
+    let page = pagination::Page::asked(&params)?.limited_to(PER_PAGE);
 
     let entries = contract::payments(state.pool(), id, page.cursor, page.limit)
         .await

@@ -208,10 +208,10 @@ honest thing for it to say.
 
 Both contract lists and the statement take `limit`, `next` and `on_next`, the way
 the claim list does, and a page that came back exactly full carries the `link`
-header that continues it. They differ in their default: an absent `limit` still
-means every contract, because those two lists answered that way before they could
-be paged, while the statement pages at fifty — its rows are written by every use
-an application bills for.
+header that continues it. **All three answer fifty rows when the caller does not
+say** — a list endpoint that answers every row by default spends a caller's memory
+in proportion to their data, on a request that did not ask for it, and that is
+what the first version of these two did.
 
 ## The event
 
