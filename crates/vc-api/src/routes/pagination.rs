@@ -16,6 +16,14 @@ use vc_core::page::Cursor;
 
 use crate::error::ApiError;
 
+/// The most rows one page may hold, however the caller asks.
+///
+/// Fifty is the default ([`crate::routes::v2::contracts`]'s `PER_PAGE`); this is
+/// the ceiling. A limit the service has to honour is a request to read a table —
+/// the first version of this took whatever number it was given, so a caller could
+/// ask for a million rows with a straight face and one query.
+const MAX_LIMIT: i64 = 200;
+
 /// What a list was asked for: how many rows, and where to resume from.
 pub struct Page {
     pub limit: Option<i64>,
@@ -36,11 +44,14 @@ impl Page {
                     parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?;
 
                 // A negative limit is a client's typo, and Postgres answers it with
-                // an error of its own — a 500 for something the caller can fix. Zero
-                // is a page of nothing and is allowed, and this is not one of the
-                // crashes `docs/known-gaps.md` reproduces: the non-numeric case
-                // beside it is already a 400.
-                if limit < 0 {
+                // an error of its own — a 500 for something the caller can fix. A
+                // limit above [`MAX_LIMIT`] is a page size this service will not
+                // honour, and saying so is better than quietly answering a page and
+                // letting the caller think it asked for everything. Zero is a page of
+                // nothing and is allowed. Neither is one of the crashes
+                // `docs/known-gaps.md` reproduces: the non-numeric case beside them is
+                // already a 400.
+                if !(0..=MAX_LIMIT).contains(&limit) {
                     return Err(ApiError::InvalidRequest("invalid_limit"));
                 }
 

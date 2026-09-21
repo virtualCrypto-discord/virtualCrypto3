@@ -262,6 +262,55 @@ pub async fn of_application(
     read_all(pool, rows).await
 }
 
+/// The contracts one user is named in that are **not over**, newest first, at
+/// most `limit` of them — what a screen that shows a handful of rows needs.
+///
+/// The filter is in the statement rather than in the caller because a page that
+/// could be filled by contracts which are already over would hide the ones that
+/// are not: five is five rows of the thing being asked about.
+pub async fn open_of_party(
+    pool: &PgPool,
+    discord_id: i64,
+    limit: i64,
+) -> std::result::Result<Vec<Contract>, ContractError> {
+    let rows = sqlx::query_as!(
+        ContractRow,
+        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
+           FROM contracts c
+           JOIN currencies ON currencies.id = c.currency_id
+           JOIN applications ON applications.id = c.application_id
+           JOIN contract_parties p ON p.contract_id = c.id
+          WHERE p.discord_id = $1 AND c.status <> 'canceled'
+          ORDER BY c.id DESC
+          LIMIT $2",
+        discord_id,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(ContractError::Database)?;
+
+    read_all(pool, rows).await
+}
+
+/// How many contracts one user is named in that are not over, which is the number
+/// a screen can say without reading the rows it is not going to show.
+pub async fn count_open_of_party(
+    pool: &PgPool,
+    discord_id: i64,
+) -> std::result::Result<i64, ContractError> {
+    sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM contracts c
+           JOIN contract_parties p ON p.contract_id = c.id
+          WHERE p.discord_id = $1 AND c.status <> 'canceled'",
+        discord_id
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(ContractError::Database)
+}
+
 /// The contracts one user is named in, newest first.
 ///
 /// `limit` absent is every one of them, the same as [`of_application`].

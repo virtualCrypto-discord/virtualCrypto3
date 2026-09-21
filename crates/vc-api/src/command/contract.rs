@@ -21,7 +21,6 @@ use crate::custom_id::ui::contract::{Action, custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
 use vc_core::contract::{Contract, ContractError};
-use vc_core::page::Cursor;
 
 /// How many contracts one screen shows, for `/grant list`'s reason: five fits in
 /// one message without scrolling it off the screen, and a sixth waits for the
@@ -115,16 +114,16 @@ pub async fn component(
 async fn page(state: &AppState, payload: &Value) -> Result<Value, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
 
-    // Every contract this user is named in, not a page of them: the screen says
-    // how many are left over, and a number it cannot count is not one it can say.
-    let contracts = vc_core::contract::of_party(state.pool(), me, Cursor::First, None)
+    // The screen shows five, and the two things it says about the rest are the
+    // page and the count: reading every contract this person is named in — with
+    // every one's parties — to print a number was the one unbounded read on the
+    // Discord side, and the number itself is one statement.
+    let total = vc_core::contract::count_open_of_party(state.pool(), me)
         .await
         .map_err(contract_error)?;
-
-    let open: Vec<&Contract> = contracts
-        .iter()
-        .filter(|contract| contract.status != "canceled")
-        .collect();
+    let open = vc_core::contract::open_of_party(state.pool(), me, MAX_CONTRACTS as i64)
+        .await
+        .map_err(contract_error)?;
 
     let mut children = Vec::new();
 
@@ -135,11 +134,10 @@ async fn page(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
         ));
     } else {
         children.push(text(format!(
-            "**契約** ({}件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
-            open.len()
+            "**契約** ({total}件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
         )));
 
-        for contract in open.iter().take(MAX_CONTRACTS) {
+        for contract in &open {
             children.push(text(describe(contract, me)));
 
             if let Some(row) = buttons(contract, me) {
@@ -147,11 +145,13 @@ async fn page(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
             }
         }
 
-        if open.len() > MAX_CONTRACTS {
-            children.push(text(format!(
-                "ほか{}件。答えると一覧が進みます。",
-                open.len() - MAX_CONTRACTS
-            )));
+        // What is left over is counted rather than the page's shortfall, so a
+        // contract that ended between the two statements cannot make the screen
+        // promise rows it will not show.
+        let left = total - open.len() as i64;
+
+        if left > 0 {
+            children.push(text(format!("ほか{left}件。答えると一覧が進みます。")));
         }
     }
 

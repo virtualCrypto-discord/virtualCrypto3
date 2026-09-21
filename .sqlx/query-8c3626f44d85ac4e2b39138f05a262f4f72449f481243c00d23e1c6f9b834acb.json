@@ -1,0 +1,113 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status <> 'canceled'\n          ORDER BY c.id DESC\n          LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "application_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "application_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "receiver_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "receiver_discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "expires_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "status!",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "guild_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "8c3626f44d85ac4e2b39138f05a262f4f72449f481243c00d23e1c6f9b834acb"
+}

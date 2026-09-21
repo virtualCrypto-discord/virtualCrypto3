@@ -209,9 +209,12 @@ honest thing for it to say.
 Both contract lists and the statement take `limit`, `next` and `on_next`, the way
 the claim list does, and a page that came back exactly full carries the `link`
 header that continues it. **All three answer fifty rows when the caller does not
-say** — a list endpoint that answers every row by default spends a caller's memory
-in proportion to their data, on a request that did not ask for it, and that is
-what the first version of these two did.
+say**, and **two hundred is the ceiling** however they ask — a list endpoint that
+answers every row by default spends a caller's memory in proportion to their data,
+on a request that did not ask for it, and that is what the first version of these
+two did. A `limit` above the ceiling is refused (`invalid_limit`) rather than
+quietly trimmed, because a caller given a smaller page than it asked for may take
+that page for everything.
 
 ## The event
 

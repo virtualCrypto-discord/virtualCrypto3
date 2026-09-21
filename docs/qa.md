@@ -330,9 +330,11 @@ Nothing here can be concluded from a terminal.
 - [ ] Is a second's bounded wait the right answer for a retry (`CLAIM_WAIT`)? Is
       `409 processing` with `should_retry_after_in_seconds` the right thing to tell
       a client?
-- [ ] Is a page of fifty right for the lists and the statement? Is the exact "ほかK
-      件" count worth reading every contract the caller is named in (the Discord
-      command does), or should it read a page and say "and more"?
+- [ ] Is a page of fifty, with a ceiling of two hundred, right for the lists and
+      the statement? (The ceiling and the contract screen's count are done; the
+      *size* is still a choice.) The claim screen answers the same question the
+      other way: `claim::list_page` fetches one row more than a page holds and says
+      "and more" rather than counting.
 - [ ] Does a request that fails leave the caller able to retry *the same* request?
       (`docs/contracts.md`'s three rules are the answer; a person checks the answer
       is the right one.)

@@ -249,6 +249,10 @@ the *service* failed, about something the caller can fix without help. Each is a
   both say the caller named a place to resume from that cannot be read.
 - **`order=nonsense`** found no clause in `parse_order/1` and raised. It is
   `invalid_order`.
+- **`limit=1000000`** would have been passed to Postgres as a page size and
+  answered with a million rows. Past two hundred it is refused (`invalid_limit`): a
+  page size the service must honour is a request to read a table, and a caller given
+  a smaller page than it asked for may take that page for everything it asked for.
 
 **This reverses what this file used to say**, which was that such client errors
 "are reproduced rather than invented differently". What decided it is whose error

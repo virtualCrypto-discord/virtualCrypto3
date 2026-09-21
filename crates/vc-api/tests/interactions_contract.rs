@@ -325,3 +325,48 @@ async fn the_list_answers_in_a_direct_message(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response).len(), 2, "the screen is the same one");
 }
+
+/// The screen shows five and says how many are left over, and it says that from a
+/// count and a page rather than by reading every contract the caller is named in —
+/// which is what the number used to cost.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_sixth_contract_is_a_count_and_a_page(pool: PgPool) {
+    let application = fixture(&pool).await;
+
+    let mut ids = Vec::new();
+    for _ in 0..7 {
+        ids.push(asking(&pool, application, None).await);
+    }
+
+    let response = interaction(
+        router(&pool, std::sync::Arc::new(Recorded::default())),
+        execute_from_guild(
+            json!({ "name": "contract", "options": [{ "name": "list", "type": 1 }] }),
+            PARTY_DISCORD_ID,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let said = texts(&response);
+    assert_eq!(
+        said[0],
+        "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。"
+    );
+    assert_eq!(
+        said.last().expect("a last line"),
+        "ほか2件。答えると一覧が進みます。"
+    );
+
+    // Five shown, newest first, and each with the two answers a pending contract
+    // takes: the page is the newest five, not any five.
+    assert_eq!(buttons(&response).len(), 10, "five contracts, two buttons");
+    assert_eq!(
+        buttons(&response)[0..2],
+        [
+            custom_id(Action::Approve, ids[6]),
+            custom_id(Action::Refuse, ids[6]),
+        ]
+    );
+}

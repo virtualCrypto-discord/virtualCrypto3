@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM contracts c\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status <> 'canceled'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e316c90027e4f2881cff986fa6be20db18d8b7802c85ba20d09d416c02df9aae"
+}

@@ -210,7 +210,7 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/contracts",
         summary: "呼び出した利用者が対象になっている契約の一覧です。",
         access: "利用者のトークン",
-        notes: &["既定は50件です。`limit` で変えられ、続きは `link` ヘッダーが示します。"],
+        notes: &["既定は50件、上限は200件です。続きは `link` ヘッダーが示します。"],
     },
     Endpoint {
         method: "GET",
@@ -218,7 +218,7 @@ const ENDPOINTS: &[Endpoint] = &[
         summary: "そのアプリケーションが作った契約の一覧です。",
         access: "アプリケーションのトークン + `vc.contract`",
         notes: &[
-            "既定は50件です。`limit` で変えられ、続きは `link` ヘッダーが示します。",
+            "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
             "負の `limit` は 400 `invalid_limit` です。",
         ],
     },
@@ -286,7 +286,7 @@ const ENDPOINTS: &[Endpoint] = &[
         access: "アプリケーションのトークン、または対象の利用者のトークン",
         notes: &[
             "1件は台帳の1行で、1回の支払いが複数行になることがあります。",
-            "既定は50件です。`limit` で変えられ、続きは `link` ヘッダーが示します。",
+            "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
         ],
     },
     Endpoint {

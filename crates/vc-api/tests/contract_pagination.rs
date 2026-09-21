@@ -381,3 +381,28 @@ async fn a_cursor_that_cannot_be_read_is_a_client_error(pool: PgPool) {
         assert_eq!(entries.body["error_description"], "invalid_cursor");
     }
 }
+
+/// A page size the service has to honour is a request to read a table, so past the
+/// ceiling the caller is refused rather than quietly given a smaller page it might
+/// take for everything it asked for.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_limit_above_the_ceiling_is_refused(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let contract = open(&pool, &fixture).await;
+
+    for query in ["limit=201", "limit=1000000"] {
+        let listed = list(&pool, &fixture, query).await;
+
+        assert_eq!(listed.status, 400, "{query}: {}", listed.body);
+        assert_eq!(listed.body["error_description"], "invalid_limit");
+
+        let entries = statement(&pool, &fixture, contract, query).await;
+
+        assert_eq!(entries.status, 400, "{query}: {}", entries.body);
+        assert_eq!(entries.body["error_description"], "invalid_limit");
+    }
+
+    let ceiling = list(&pool, &fixture, "limit=200").await;
+
+    assert_eq!(ceiling.status, 200, "body: {}", ceiling.body);
+}

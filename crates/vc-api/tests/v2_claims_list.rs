@@ -398,3 +398,16 @@ async fn a_cursor_or_an_order_that_cannot_be_read_is_400(pool: PgPool) {
         assert_eq!(response.body["error_description"], complaint, "{query}");
     }
 }
+
+/// The ceiling is the reader's, so the claim list has it too, and the refusal is
+/// the one it already answers a bad limit with.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_limit_above_the_ceiling_is_invalid(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+
+    let response = list(pool, "limit=1000000", &token).await;
+
+    assert_eq!(response.status, 400, "body: {}", response.body);
+    assert_eq!(response.body["error_description"], "invalid_limit");
+}
