@@ -335,3 +335,73 @@ async fn the_bot_and_guild_addresses_are_redirects(pool: PgPool) {
     assert_eq!(status, 307);
     assert_eq!(location, configured.support_guild_invite_url);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn login_cannot_redirect_to_an_external_continue(pool: PgPool) {
+    for target in [
+        "https%3A%2F%2Funtrusted.example%2Flogin",
+        "%2F%2Funtrusted.example",
+        "%2F%5Cuntrusted.example",
+        "%2F%09%2Funtrusted.example",
+        "javascript%3Aalert(1)",
+    ] {
+        let app = vc_api::router(state(pool.clone(), fake()));
+
+        let (_, location, cookie) = visit(app.clone(), &format!("/login?continue={target}")).await;
+        let sent = location
+            .split("state=")
+            .nth(1)
+            .expect("a state in the redirect")
+            .to_owned();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/callback/discord?state={sent}&code=the-code"))
+                    .header(COOKIE, cookie.split(';').next().expect("the cookie"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
+
+        assert_eq!(response.status().as_u16(), 303);
+        assert_eq!(
+            response
+                .headers()
+                .get(LOCATION)
+                .expect("a location")
+                .to_str()
+                .expect("a header"),
+            "/"
+        );
+
+        let value = response
+            .headers()
+            .get(SET_COOKIE)
+            .expect("a cookie")
+            .to_str()
+            .expect("a header")
+            .split(';')
+            .next()
+            .expect("the cookie itself")
+            .strip_prefix(&format!("{COOKIE_NAME}="))
+            .expect("the session cookie")
+            .to_owned();
+
+        let session = Session::parse(&value, SESSION_SECRET.as_bytes()).expect("a session");
+
+        assert!(session.user_id.is_some(), "somebody is logged in");
+        assert!(
+            session.discord_oauth2.is_none(),
+            "the login is no longer in flight"
+        );
+
+        let stored = sqlx::query!("SELECT COUNT(*) AS count FROM discord_users")
+            .fetch_one(&pool)
+            .await
+            .expect("count the authorizations");
+
+        assert_eq!(stored.count, Some(1), "the authorization was recorded");
+    }
+}

@@ -144,10 +144,9 @@ pub async fn create(
 
     // One amount per person: a second row for the same user would be a second
     // thing to approve rather than a larger one.
-    let mut named: Vec<i64> = parties.iter().map(|party| party.discord_id).collect();
-    named.sort_unstable();
-    named.dedup();
-    if named.len() != parties.len() {
+    let named: Vec<i64> = parties.iter().map(|party| party.discord_id).collect();
+    let unique: std::collections::HashSet<_> = named.iter().collect();
+    if unique.len() != parties.len() {
         return Err(ContractError::InvalidParties);
     }
 

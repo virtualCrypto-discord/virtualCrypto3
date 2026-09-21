@@ -968,3 +968,40 @@ async fn response_of(pool: &PgPool, token: &str, id: i64) -> Value {
 
     response.body
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn unsorted_parties_keep_their_own_amounts(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let id = id_of(
+        &pool,
+        &fixture.token,
+        asked("nyan", json!([bob_party(50), alice_party(100)])),
+    )
+    .await;
+    let token = user_token(&pool, ALICE).await;
+    let response = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{id}/approval"),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert!(response.status < 300, "{}", response.body);
+    assert_eq!(
+        balance(&pool, ALICE, 1).await,
+        900,
+        "Alice agreed to 100, not Bob's 50"
+    );
+    let token = user_token(&pool, BOB).await;
+    let response = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        &format!("/api/v2/contracts/{id}/approval"),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert!(response.status < 300, "{}", response.body);
+    assert_eq!(balance(&pool, BOB, 1).await, 150);
+}

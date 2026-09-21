@@ -82,22 +82,22 @@ pub async fn settle_expired(state: &AppState) {
 pub async fn refill_pools(state: &AppState) {
     let today = time::OffsetDateTime::now_utc().date();
 
-    match vc_core::job::claim_day(state.pool(), "reset_pool_amount", today).await {
-        Ok(true) => {}
-        Ok(false) => return,
-        Err(error) => {
-            tracing::warn!(?error, "the pool refill could not claim its day");
-            return;
+    let result: Result<u64, sqlx::Error> = async {
+        let mut tx = state.pool().begin().await?;
+        if !vc_core::job::claim_day(&mut tx, "reset_pool_amount", today).await? {
+            tx.rollback().await?;
+            return Ok(0);
         }
+        let updated = vc_core::currency::reset_pool_amount(&mut tx).await?;
+        tx.commit().await?;
+        Ok(updated)
     }
+    .await;
 
-    match vc_core::currency::reset_pool_amount(state.pool()).await {
+    match result {
         Ok(0) => {}
         Ok(updated) => tracing::info!(updated, "the pools were refilled"),
-        Err(error) => tracing::warn!(
-            ?error,
-            "the day was claimed and the pools were not refilled"
-        ),
+        Err(error) => tracing::warn!(?error, "the pool refill failed; it will retry next tick"),
     }
 }
 

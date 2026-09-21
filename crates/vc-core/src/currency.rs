@@ -227,7 +227,9 @@ pub async fn create(
 /// is run once a day, so running it twice is running two days' worth. That is
 /// what the schedule is for, and it is why this takes no `now` — nothing in the
 /// data says when it last ran.
-pub async fn reset_pool_amount(pool: &PgPool) -> std::result::Result<u64, sqlx::Error> {
+pub async fn reset_pool_amount(
+    connection: &mut sqlx::PgConnection,
+) -> std::result::Result<u64, sqlx::Error> {
     let updated = sqlx::query!(
         r#"WITH supplied_amounts AS (
              SELECT currency_id, SUM(amount) AS supplied_amount
@@ -254,7 +256,7 @@ pub async fn reset_pool_amount(pool: &PgPool) -> std::result::Result<u64, sqlx::
              FROM schedules
             WHERE schedules.currency_id = currencies.id"#
     )
-    .execute(pool)
+    .execute(connection)
     .await?;
 
     Ok(updated.rows_affected())

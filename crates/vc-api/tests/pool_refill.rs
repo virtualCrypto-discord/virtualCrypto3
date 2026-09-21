@@ -84,3 +84,43 @@ async fn a_day_is_claimed_once(pool: PgPool) {
     vc_api::scheduler::refill_pools(&state).await;
     assert_eq!(pool_amount(&pool).await, Some(17), "and the next day's");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_refill_can_retry_that_day(pool: PgPool) {
+    insert_user(&pool, 1, 100).await;
+    insert_currency(&pool, 1, "nyan", "nyan", 1, 5).await;
+    insert_asset(&pool, 1, 1, 1000).await;
+    sqlx::query(
+        "ALTER TABLE currencies ADD CONSTRAINT injected_refill_failure CHECK (pool_amount <= 5)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app_state = state(pool.clone(), fake());
+    vc_api::scheduler::refill_pools(&app_state).await;
+    assert_eq!(pool_amount(&pool).await, Some(5));
+    sqlx::query("ALTER TABLE currencies DROP CONSTRAINT injected_refill_failure")
+        .execute(&pool)
+        .await
+        .unwrap();
+    vc_api::scheduler::refill_pools(&app_state).await;
+    assert_eq!(
+        pool_amount(&pool).await,
+        Some(11),
+        "failure must not consume the daily refill"
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_refills_pay_only_once(pool: PgPool) {
+    insert_user(&pool, 1, 100).await;
+    insert_currency(&pool, 1, "nyan", "nyan", 1, 5).await;
+    insert_asset(&pool, 1, 1, 1000).await;
+    let state = state(pool.clone(), fake());
+    tokio::join!(
+        vc_api::scheduler::refill_pools(&state),
+        vc_api::scheduler::refill_pools(&state),
+        vc_api::scheduler::refill_pools(&state),
+    );
+    assert_eq!(pool_amount(&pool).await, Some(11));
+}

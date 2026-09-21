@@ -6,7 +6,7 @@
 //! A variable holds it until the process restarts, and a restart would buy
 //! another day's allowance — so the day is a row.
 
-use sqlx::PgPool;
+use sqlx::PgConnection;
 use time::Date;
 
 /// Claim `name`'s day: `true` when the job has not run on `today` yet.
@@ -14,9 +14,13 @@ use time::Date;
 /// The claim is the write itself, so two schedulers that tick in the same second
 /// — two machines behind one database — cannot both take the day: only the one
 /// that finds an earlier day updates a row, and only an updated row is returned.
-/// A claim that is taken and then fails loses that day rather than paying it
-/// twice, which is the side to lose on when paying is inflation.
-pub async fn claim_day(pool: &PgPool, name: &str, today: Date) -> Result<bool, sqlx::Error> {
+/// Execute this in the same transaction as the job so a failed job releases
+/// its claim and a successful job cannot be repeated that day.
+pub async fn claim_day(
+    connection: &mut PgConnection,
+    name: &str,
+    today: Date,
+) -> Result<bool, sqlx::Error> {
     let claimed = sqlx::query_scalar!(
         r#"
         INSERT INTO job_runs (name, ran_on) VALUES ($1, $2)
@@ -27,7 +31,7 @@ pub async fn claim_day(pool: &PgPool, name: &str, today: Date) -> Result<bool, s
         name,
         today
     )
-    .fetch_optional(pool)
+    .fetch_optional(connection)
     .await?;
 
     Ok(claimed.is_some())

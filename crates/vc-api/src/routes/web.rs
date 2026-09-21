@@ -32,11 +32,24 @@ fn site_root() -> String {
     "/".to_owned()
 }
 
+/// Only root-relative paths can be used as a login return address.
+fn login_return_path(value: &str) -> &str {
+    if value.starts_with('/')
+        && !value.starts_with("//")
+        && !value.contains('\\')
+        && !value.chars().any(char::is_control)
+    {
+        value
+    } else {
+        "/"
+    }
+}
+
 /// Send the browser to Discord, remembering a state to check the answer against.
 pub async fn login(State(state): State<AppState>, Query(query): Query<LoginQuery>) -> Response {
     let attempt = LoginAttempt {
         state: Uuid::new_v4().to_string(),
-        continue_to: query.continue_to,
+        continue_to: login_return_path(&query.continue_to).to_owned(),
     };
 
     let session = Session::awaiting_discord(attempt.clone());
@@ -166,7 +179,11 @@ pub async fn discord_callback(
         state.session_secret(),
         state.secure_cookies(),
     ) {
-        Ok(cookie) => ([(SET_COOKIE, cookie)], Redirect::to(&attempt.continue_to)).into_response(),
+        Ok(cookie) => (
+            [(SET_COOKIE, cookie)],
+            Redirect::to(login_return_path(&attempt.continue_to)),
+        )
+            .into_response(),
         Err(_) => refuse(&state, "the session could not be signed"),
     }
 }
