@@ -585,7 +585,18 @@ every field is optional, and a field that is absent is left alone. The Elixir
 writes it as a pipeline of setters, each of which either changes the query or
 returns `:nop` for "not in this request".
 
-Four things in it are worth knowing.
+The update rules are:
+
+**`client_secret: true` generates a new secret.** `false` or an omitted field
+keeps the current secret; any other type, including `null`, returns 400
+`invalid_client_metadata`. A successful rotation returns 204; the application
+reads the new secret through `GET /oauth2/clients/@me` using its registration
+token. The previous secret no longer authenticates the client.
+
+**Concurrent edits preserve omitted fields.** The application row is locked
+before reading its current values, and the lock is held through the metadata
+and redirect URI updates. Two successful requests changing different fields
+therefore retain both changes.
 
 **`redirect_uris` is replaced wholesale when it is given.** The rows for the
 application are deleted and the ones in the request inserted. So a PATCH that

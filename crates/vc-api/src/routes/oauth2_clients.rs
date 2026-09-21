@@ -816,7 +816,20 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
         })?
     }
 
+    let rotate_client_secret = match body.get("client_secret") {
+        None | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => {
+            return Err(refusal(
+                StatusCode::BAD_REQUEST,
+                "invalid_client_metadata",
+                "client_secret_must_be_boolean_or_not_set",
+            ));
+        }
+    };
+
     let changes = Changes {
+        rotate_client_secret,
         client_name: text(body, "client_name"),
         client_uri: text(body, "client_uri"),
         logo_uri: text(body, "logo_uri"),

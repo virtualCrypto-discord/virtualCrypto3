@@ -831,6 +831,8 @@ fn new_secret() -> String {
 /// this is a two-level option and why the write reads first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
+    /// Generate a fresh secret in the same transaction as the metadata edit.
+    pub rotate_client_secret: bool,
     pub client_name: Option<Option<String>>,
     pub client_uri: Option<Option<String>>,
     pub logo_uri: Option<Option<String>>,
@@ -863,6 +865,7 @@ pub async fn patch(
 ) -> crate::error::Result<()> {
     let mut tx = pool.begin().await?;
 
+    // Serialize the read and write so omitted fields retain concurrent edits.
     let current = sqlx::query!(
         r#"SELECT client_name, client_uri, logo_uri, webhook_url,
                   discord_support_server_invite_slug,
@@ -870,7 +873,7 @@ pub async fn patch(
                   grant_types::text[] AS "grant_types!",
                   response_types::text[] AS "response_types!",
                   subscribed_events AS "subscribed_events!: Vec<i64>"
-             FROM applications WHERE id = $1"#,
+             FROM applications WHERE id = $1 FOR UPDATE"#,
         application_id
     )
     .fetch_optional(&mut *tx)
@@ -889,6 +892,8 @@ pub async fn patch(
         }
     }
 
+    let client_secret = changes.rotate_client_secret.then(new_secret);
+
     sqlx::query!(
         "UPDATE applications
             SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5,
@@ -896,7 +901,8 @@ pub async fn patch(
                 application_type = $7::text::openid_connect_application_type,
                 grant_types = $8::text[]::openid_connect_grant_types[],
                 response_types = $9::text[]::openid_connect_response_types[],
-                subscribed_events = $10
+                subscribed_events = $10,
+                client_secret = COALESCE($11, client_secret)
           WHERE id = $1",
         application_id,
         applied(&changes.client_name, &current.client_name),
@@ -919,7 +925,8 @@ pub async fn patch(
         &changes
             .subscribed_events
             .clone()
-            .unwrap_or(current.subscribed_events)
+            .unwrap_or(current.subscribed_events),
+        client_secret
     )
     .execute(&mut *tx)
     .await?;
