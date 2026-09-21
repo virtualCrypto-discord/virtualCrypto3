@@ -257,12 +257,24 @@ fn client_id_of(sub_options: Option<&Value>) -> Result<&str, CommandError> {
 
 /// What the caller owns, as the menu [`developer::applications`] draws.
 async fn list(state: &AppState, payload: &Value) -> Result<Value, CommandError> {
+    list_page(state, payload, 1).await
+}
+
+async fn list_page(state: &AppState, payload: &Value, page: usize) -> Result<Value, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
 
     let mut owned = Vec::new();
 
-    for application_id in vc_core::application::owned_by(state.pool(), account).await? {
+    let application_ids = vc_core::application::owned_by(state.pool(), account).await?;
+    let total = application_ids.len();
+    let limit = developer::APPLICATIONS_PER_PAGE;
+    let page = page.clamp(1, total.div_ceil(limit).max(1));
+    for application_id in application_ids
+        .into_iter()
+        .skip((page - 1) * limit)
+        .take(limit)
+    {
         // The same render the HTTP reads answer with, so the menu and the page cannot
         // disagree about what an application is.
         let found = details(state.pool(), application_id)
@@ -274,8 +286,10 @@ async fn list(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
         }
     }
 
-    Ok(ephemeral(vec![developer::applications(
+    Ok(ephemeral(vec![developer::applications_page(
         &owned,
+        page,
+        total,
         state.command_ids().await,
     )]))
 }
@@ -471,7 +485,16 @@ pub async fn component(
             let (client_id, field) = crate::custom_id::ui::developer::field_of(&client_id);
             edit_field(state, client_id, field, payload).await
         }
-        (Some(2), Screen::List | Screen::Back) => Ok(update(list(state, payload).await?)),
+        (Some(2), Screen::List) => {
+            let (number, _) = crate::custom_id::ui::developer::field_of(&client_id);
+            let page = if number.is_empty() {
+                1
+            } else {
+                number.parse::<usize>().map_err(|_| CommandError::Unknown)?
+            };
+            Ok(update(list_page(state, payload, page).await?))
+        }
+        (Some(2), Screen::Back) => Ok(update(list(state, payload).await?)),
         _ => Err(CommandError::Unknown),
     }
 }

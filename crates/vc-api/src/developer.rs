@@ -30,8 +30,8 @@ use serde_json::Value;
 use vc_core::application::{APPLICATION_TYPES, EVENT_TYPES, GRANT_TYPES, RESPONSE_TYPES};
 
 use crate::components::{
-    ButtonStyle, action_row, button, container, section, select, select_many, select_option,
-    separator, text, thumbnail, user_select,
+    ButtonStyle, action_row, button, container, icon_button, section, select, select_many,
+    select_option, separator, text, thumbnail, user_select,
 };
 
 /// The accent each state carries, since the colour is the fastest thing a person reads.
@@ -43,6 +43,23 @@ const REFUSED: u32 = 0xED4245;
 /// Takes what `GET /oauth2/clients` answered. An empty list is not an error and says so
 /// with what to do about it, rather than showing an empty menu.
 pub fn applications(applications: &[Value], ids: &BTreeMap<String, u64>) -> Value {
+    applications_page(
+        &applications[..applications.len().min(APPLICATIONS_PER_PAGE)],
+        1,
+        applications.len(),
+        ids,
+    )
+}
+
+pub const APPLICATIONS_PER_PAGE: usize = 25;
+
+/// One page of the caller's applications, with the same four arrows as the balance list.
+pub fn applications_page(
+    applications: &[Value],
+    page: usize,
+    total: usize,
+    ids: &BTreeMap<String, u64>,
+) -> Value {
     if applications.is_empty() {
         return container(
             Some(WORKING),
@@ -67,22 +84,35 @@ pub fn applications(applications: &[Value], ids: &BTreeMap<String, u64>) -> Valu
         })
         .collect::<Vec<_>>();
 
-    container(
-        Some(WORKING),
-        vec![
-            text(format!(
-                "{} 件のアプリケーションがあります。",
-                options.len()
-            )),
-            action_row(vec![select(
-                &crate::custom_id::ui::developer::custom_id(
-                    crate::custom_id::ui::developer::Screen::Back,
-                ),
-                "アプリケーションを選ぶ",
-                options,
-            )]),
-        ],
-    )
+    let mut children = vec![
+        text(format!("{total} 件のアプリケーションがあります。")),
+        action_row(vec![select(
+            &crate::custom_id::ui::developer::custom_id(
+                crate::custom_id::ui::developer::Screen::Back,
+            ),
+            "アプリケーションを選ぶ",
+            options,
+        )]),
+    ];
+    let last = total.div_ceil(APPLICATIONS_PER_PAGE).max(1);
+    if last > 1 {
+        use crate::custom_id::ui::developer::{Screen, custom_id_for_field};
+        let arrow = |direction: &str, emoji: &str, target: usize, disabled: bool| {
+            icon_button(
+                &custom_id_for_field(Screen::List, &target.to_string(), direction),
+                emoji,
+                ButtonStyle::Secondary,
+                Some(disabled),
+            )
+        };
+        children.push(action_row(vec![
+            arrow("first", "⏪", 1, page == 1),
+            arrow("previous", "⏮️", page.saturating_sub(1).max(1), page == 1),
+            arrow("next", "⏭️", page.saturating_add(1).min(last), page == last),
+            arrow("last", "⏩", last, page == last),
+        ]));
+    }
+    container(Some(WORKING), children)
 }
 
 /// What an application is now, field by field: the nine the endpoint lets an edit change,
