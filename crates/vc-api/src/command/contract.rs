@@ -17,7 +17,7 @@ use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE, get_user,
 };
 use crate::components::{ButtonStyle, action_row, button, container, ephemeral, text};
-use crate::custom_id::ui::contract::{Action, custom_id};
+use crate::custom_id::ui::contract::{Action, Page, Pressed, custom_id, page_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
 use vc_core::contract::{Contract, ContractError};
@@ -26,6 +26,10 @@ use vc_core::contract::{Contract, ContractError};
 /// one message without scrolling it off the screen, and a sixth waits for the
 /// screen the next answer redraws.
 const MAX_CONTRACTS: usize = 5;
+
+/// Where a screen starts, and where a decision draws next: page numbers count from
+/// one, as the claim list's do.
+const FIRST_PAGE: i64 = 1;
 
 /// `Command.handle/4` for `contract`: the subcommand picks what to draw.
 pub async fn handle(
@@ -40,19 +44,19 @@ pub async fn handle(
 
     match subcommand {
         "list" => Ok(answered(
-            page(state, payload).await?,
+            page(state, payload, FIRST_PAGE).await?,
             CHANNEL_MESSAGE_WITH_SOURCE,
         )),
         _ => Err(CommandError::Unknown),
     }
 }
 
-/// A contract's button, pressed.
+/// A contract's button, pressed: an answer about one contract, or a move from one
+/// page of the list to another.
 ///
 /// The answer is the screen drawn again as a change to the message that carried
-/// the button: the contract it names is one of the ones listed, so the list the
-/// press came from is the list to show next — and Discord sends nothing back but
-/// the `custom_id`, which is why the contract id travelled in it.
+/// the button, and Discord sends nothing back but the `custom_id` — which is why
+/// the contract id, or the page, travelled in it.
 pub async fn component(
     state: &AppState,
     custom_id: &str,
@@ -60,9 +64,20 @@ pub async fn component(
 ) -> Result<Value, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
 
-    let (action, contract_id) =
-        crate::custom_id::ui::contract::parse(&crate::custom_id::parse(custom_id))
-            .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
+    let pressed = crate::custom_id::ui::contract::parse(&crate::custom_id::parse(custom_id))
+        .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
+
+    // A page button is the whole of its own answer: nothing is decided, and the
+    // screen it draws is the page it named.
+    let (action, contract_id) = match pressed {
+        Pressed::Paged(_, number) => {
+            return Ok(answered(
+                page(state, payload, number).await?,
+                UPDATE_MESSAGE,
+            ));
+        }
+        Pressed::Decided(action, contract_id) => (action, contract_id),
+    };
 
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
     let now = time::OffsetDateTime::now_utc();
@@ -92,7 +107,14 @@ pub async fn component(
                 }
             }
 
-            Ok(answered(page(state, payload).await?, UPDATE_MESSAGE))
+            // The first page, because a decision's button says which contract it is
+            // about and not which page it was on — the claim list's answer buttons
+            // carry no position either, and a decision that ends a contract moves
+            // the rows under it anyway.
+            Ok(answered(
+                page(state, payload, FIRST_PAGE).await?,
+                UPDATE_MESSAGE,
+            ))
         }
         Err(ContractError::NotFound) => Ok(error_screen("その契約はあなたを対象にしていません。")),
         Err(ContractError::NotEnoughAmount) => Ok(error_screen("お金が足りません。")),
@@ -106,38 +128,52 @@ pub async fn component(
     }
 }
 
-/// The screen: what this user was asked for, and what they can still answer.
+/// The screen: what this user was asked for, what they can still answer, and the
+/// arrows to the rest of it.
 ///
 /// A contract that is over is not shown — its money has gone home and there is
 /// nothing left to press — and one that is not is shown with the state of the
 /// caller's own part, which is the part they are deciding about.
-async fn page(state: &AppState, payload: &Value) -> Result<Value, CommandError> {
+///
+/// **The two mechanisms are both here, and each where it belongs**: the API pages
+/// this family with a cursor (`next`/`on_next`, and the statement's `link` header),
+/// and this screen pages it with numbers, because first, previous, next and last
+/// are page numbers and a cursor cannot say "back". `vc_core::contract` has one
+/// read for each — `of_party` for the cursor, `open_of_party` for the page.
+async fn page(state: &AppState, payload: &Value, page: i64) -> Result<Value, CommandError> {
     let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
 
-    // The screen shows five, and the two things it says about the rest are the
-    // page and the count: reading every contract this person is named in — with
-    // every one's parties — to print a number was the one unbounded read on the
-    // Discord side, and the number itself is one statement.
-    let total = vc_core::contract::count_open_of_party(state.pool(), me)
-        .await
-        .map_err(contract_error)?;
-    let open = vc_core::contract::open_of_party(state.pool(), me, MAX_CONTRACTS as i64)
+    // Five rows, the count behind them, and the four pages around this one: one
+    // call, because reading every contract this person is named in — with every
+    // one's parties — to print a number was the one unbounded read on the Discord
+    // side.
+    let open = vc_core::contract::open_of_party(state.pool(), me, page, MAX_CONTRACTS as i64)
         .await
         .map_err(contract_error)?;
 
     let mut children = Vec::new();
 
-    if open.is_empty() {
+    if open.total == 0 {
         children.push(text(
             "あなたが対象になっている契約はありません。アプリケーションが契約を作ると、\
              ここに承認待ちとして並びます。",
         ));
     } else {
         children.push(text(format!(
-            "**契約** ({total}件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
+            "**契約** ({}件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
+            open.total
         )));
 
-        for contract in &open {
+        if open.contracts.is_empty() {
+            // A page a button led to that the list has since shrunk past: the
+            // arrows below are the way back, and saying where the contracts are is
+            // better than saying there are none.
+            children.push(text(
+                "このページには何もありません。前のページに戻ってください。",
+            ));
+        }
+
+        for contract in &open.contracts {
             children.push(text(describe(contract, me)));
 
             if let Some(row) = buttons(contract, me) {
@@ -145,17 +181,42 @@ async fn page(state: &AppState, payload: &Value) -> Result<Value, CommandError> 
             }
         }
 
-        // What is left over is counted rather than the page's shortfall, so a
-        // contract that ended between the two statements cannot make the screen
-        // promise rows it will not show.
-        let left = total - open.len() as i64;
-
-        if left > 0 {
-            children.push(text(format!("ほか{left}件。答えると一覧が進みます。")));
+        // The claim list's pagination row without its reload button: that screen
+        // has one because its list carries filters, and this one has none. It is
+        // drawn whenever there is another page — or a page to come back from, which
+        // is what a contract ending under a button leaves behind.
+        if open.next.is_some() || open.page > 1 {
+            children.push(pagination_row(&open));
         }
     }
 
     Ok(container(Some(COLOR_BRAND as u32), children))
+}
+
+/// Where the arrows move to, each disabled where there is nowhere to go.
+fn pagination_row(open: &vc_core::contract::OpenContracts) -> Value {
+    let arrow = |at: u8, emoji: &str, target: Option<i64>, page: Page| -> Value {
+        let custom_id = match target {
+            // A page that is not there is a button that says so, and one Discord
+            // will not send: the id is a placeholder rather than this space's.
+            None => format!("disabled-{at}"),
+            Some(number) => page_custom_id(page, number),
+        };
+
+        crate::components::icon_button(
+            &custom_id,
+            emoji,
+            crate::components::ButtonStyle::Secondary,
+            Some(target.is_none()),
+        )
+    };
+
+    crate::components::action_row(vec![
+        arrow(0, "⏪", open.first, Page::First),
+        arrow(1, "⏮️", open.prev, Page::Previous),
+        arrow(2, "⏭️", open.next, Page::Next),
+        arrow(3, "⏩", open.last, Page::Last),
+    ])
 }
 
 /// One contract, in four lines: who is asking, what the caller's part is, how far

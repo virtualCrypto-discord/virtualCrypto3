@@ -137,6 +137,11 @@ nothing tests is a hole. Start with the idempotency layer:
 | refused by the isolation level | **no** | — the transaction names `READ COMMITTED` | `a_stricter_session_default_does_not_change_the_answer` |
 | a key that is unquoted, too long, or several | yes | a client's mistake | `an_unquoted_key_is_rejected`, `an_over_long_key_is_refused`, `two_keys_at_once_are_refused` |
 
+- [ ] **Two mechanisms, both kept**: the API pages with a cursor (`next`/`on_next`
+      through `Page::asked`, `vc_core::page::Cursor`) and the Discord screens page
+      with numbers (`claim::list_page`, `contract::open_of_party`). A reader
+      confirms neither has quietly replaced the other, and that each is used where
+      it is the right one.
 - [ ] **Re-derive the table** from `routes/idempotency.rs` and
       `vc_core/idempotency.rs`: every `match` arm is in it, and the unreachable one
       has a reason a reader can check rather than "should not happen".
@@ -331,10 +336,11 @@ Nothing here can be concluded from a terminal.
       `409 processing` with `should_retry_after_in_seconds` the right thing to tell
       a client?
 - [ ] Is a page of fifty, with a ceiling of two hundred, right for the lists and
-      the statement? (The ceiling and the contract screen's count are done; the
-      *size* is still a choice.) The claim screen answers the same question the
-      other way: `claim::list_page` fetches one row more than a page holds and says
-      "and more" rather than counting.
+      the statement? (The size is the judgement; the ceiling and the screens' pages
+      are done.) Two screens answer "how many are there" differently — the contract
+      screen counts (`open_of_party` says the total and the four pages around it),
+      the claim screen fetches one row more than a page holds and says "and more" —
+      and a person should confirm both read well.
 - [ ] Does a request that fails leave the caller able to retry *the same* request?
       (`docs/contracts.md`'s three rules are the answer; a person checks the answer
       is the right one.)

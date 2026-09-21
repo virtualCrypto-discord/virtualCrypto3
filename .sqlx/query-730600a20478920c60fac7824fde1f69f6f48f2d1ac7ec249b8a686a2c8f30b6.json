@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status <> 'canceled'\n          ORDER BY c.id DESC\n          LIMIT $2",
+  "query": "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status <> 'canceled'\n          ORDER BY c.id DESC\n          LIMIT $2\n         OFFSET $3",
   "describe": {
     "columns": [
       {
@@ -95,6 +95,7 @@
     "parameters": {
       "Left": [
         "Int8",
+        "Int8",
         "Int8"
       ]
     },
@@ -109,5 +110,5 @@
       true
     ]
   },
-  "hash": "8c3626f44d85ac4e2b39138f05a262f4f72449f481243c00d23e1c6f9b834acb"
+  "hash": "730600a20478920c60fac7824fde1f69f6f48f2d1ac7ec249b8a686a2c8f30b6"
 }

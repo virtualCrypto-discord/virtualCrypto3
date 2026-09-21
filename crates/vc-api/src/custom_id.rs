@@ -375,11 +375,38 @@ pub mod ui {
             Withdraw,
         }
 
+        /// Where a pagination button moves the list, whose page numbers are what
+        /// the screen's arrows are: a cursor cannot say "back".
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Page {
+            First,
+            Previous,
+            Next,
+            Last,
+        }
+
+        /// What a button in this space is about: an answer about one contract, or a
+        /// move from one page of the list to another.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Pressed {
+            Decided(Action, i64),
+            Paged(Page, i64),
+        }
+
         fn id(action: Action) -> u8 {
             match action {
                 Action::Approve => 1,
                 Action::Refuse => 2,
                 Action::Withdraw => 3,
+            }
+        }
+
+        fn page_id(page: Page) -> u8 {
+            match page {
+                Page::First => 4,
+                Page::Previous => 5,
+                Page::Next => 6,
+                Page::Last => 7,
             }
         }
 
@@ -396,7 +423,18 @@ pub mod ui {
             crate::custom_id::encode(0, &data)
         }
 
-        pub fn parse(source: &[u8]) -> Result<(Action, i64), UiError> {
+        /// The string a pagination button carries: which move, then where to.
+        ///
+        /// The same shape as a decision's, because it is the same space: the number
+        /// is a page here and a contract there, and the action says which.
+        pub fn page_custom_id(page: Page, number: i64) -> String {
+            let mut data = vec![HEAD, page_id(page)];
+            data.extend_from_slice(number.to_string().as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<Pressed, UiError> {
             let [head, id, rest @ ..] = source else {
                 return Err(UiError::Head);
             };
@@ -405,10 +443,14 @@ pub mod ui {
                 return Err(UiError::Head);
             }
 
-            let action = match id {
-                1 => Action::Approve,
-                2 => Action::Refuse,
-                3 => Action::Withdraw,
+            let read = match id {
+                1 => |number| Pressed::Decided(Action::Approve, number),
+                2 => |number| Pressed::Decided(Action::Refuse, number),
+                3 => |number| Pressed::Decided(Action::Withdraw, number),
+                4 => |number| Pressed::Paged(Page::First, number),
+                5 => |number| Pressed::Paged(Page::Previous, number),
+                6 => |number| Pressed::Paged(Page::Next, number),
+                7 => |number| Pressed::Paged(Page::Last, number),
                 other => return Err(UiError::Unknown(u16::from(*other))),
             };
 
@@ -422,9 +464,9 @@ pub mod ui {
                 .map_or(&rest[..0], |end| &rest[..=end]);
 
             let text = String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head)?;
-            let contract_id = text.parse().map_err(|_| UiError::Head)?;
+            let number = text.parse().map_err(|_| UiError::Head)?;
 
-            Ok((action, contract_id))
+            Ok(read(number))
         }
     }
 
@@ -631,10 +673,26 @@ mod tests {
     #[test]
     fn a_contract_button_survives_the_round_trip() {
         let encoded = ui::contract::custom_id(ui::contract::Action::Withdraw, 12_345);
-        let (action, contract_id) = ui::contract::parse(&parse(&encoded)).expect("a known action");
+        let pressed = ui::contract::parse(&parse(&encoded)).expect("a known action");
 
-        assert_eq!(action, ui::contract::Action::Withdraw);
-        assert_eq!(contract_id, 12_345);
+        assert_eq!(
+            pressed,
+            ui::contract::Pressed::Decided(ui::contract::Action::Withdraw, 12_345)
+        );
+    }
+
+    /// And a page's number survives the same way, in the same space: what tells
+    /// them apart is the action byte, which is why the number may mean a contract
+    /// or a page.
+    #[test]
+    fn a_contract_page_survives_the_round_trip() {
+        let encoded = ui::contract::page_custom_id(ui::contract::Page::Last, 3);
+        let pressed = ui::contract::parse(&parse(&encoded)).expect("a known page");
+
+        assert_eq!(
+            pressed,
+            ui::contract::Pressed::Paged(ui::contract::Page::Last, 3)
+        );
     }
 
     /// Its own head is what keeps it out of the other spaces, and theirs out of
@@ -648,7 +706,10 @@ mod tests {
         );
         assert_eq!(
             ui::contract::parse(&[ui::contract::head(), 1, b'7']),
-            Ok((ui::contract::Action::Approve, 7))
+            Ok(ui::contract::Pressed::Decided(
+                ui::contract::Action::Approve,
+                7
+            ))
         );
     }
 

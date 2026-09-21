@@ -257,6 +257,15 @@ caller's part of it is, how far the rest has come and how long it lasts, and
 offers only the answers that contract takes: 承認する and 拒否する while it is
 waiting, 取り消す once it is theirs to take back.
 
+**Five of them, and arrows to the rest** — the count and one page are two bounded
+reads, and the arrows carry page numbers. That is where this screen and the API
+differ about pagination on purpose: the API pages this family with a cursor
+(`next`/`on_next`, and the statement's `link` header), which is stable while rows
+are inserted, and a screen cannot say "back" with one — first, previous, next and
+last are numbers. `vc_core::contract` offers a read for each (`of_party`,
+`open_of_party`) for that reason, and the claim screen beside this one pages the
+same way, with numbers its list's API does not have either.
+
 **There is no page for it.** The frontend is the landing page and the
 verification warning, and nothing that manages anything: every operation this
 service has is one a command can do, so a screen that only repeats a command is a

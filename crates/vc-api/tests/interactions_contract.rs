@@ -15,7 +15,7 @@ use support::{
     Recorded, Response, button_from_guild, execute_from_guild, fake, insert_application,
     insert_asset, insert_currency, insert_user, interaction, state_with_notifier,
 };
-use vc_api::custom_id::ui::contract::{Action, custom_id};
+use vc_api::custom_id::ui::contract::{Action, Page, custom_id, page_custom_id};
 
 const OWNER: i32 = 1;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
@@ -326,11 +326,11 @@ async fn the_list_answers_in_a_direct_message(pool: PgPool) {
     assert_eq!(texts(&response).len(), 2, "the screen is the same one");
 }
 
-/// The screen shows five and says how many are left over, and it says that from a
-/// count and a page rather than by reading every contract the caller is named in —
-/// which is what the number used to cost.
+/// The screen shows five, says how many there are, and reaches the rest: the count
+/// and the page cost one bounded read each, where saying the number used to cost
+/// reading every contract the caller is named in — with every one's parties.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn the_sixth_contract_is_a_count_and_a_page(pool: PgPool) {
+async fn the_sixth_contract_is_a_page_and_a_count(pool: PgPool) {
     let application = fixture(&pool).await;
 
     let mut ids = Vec::new();
@@ -354,19 +354,83 @@ async fn the_sixth_contract_is_a_count_and_a_page(pool: PgPool) {
         said[0],
         "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。"
     );
-    assert_eq!(
-        said.last().expect("a last line"),
-        "ほか2件。答えると一覧が進みます。"
-    );
 
     // Five shown, newest first, and each with the two answers a pending contract
     // takes: the page is the newest five, not any five.
-    assert_eq!(buttons(&response).len(), 10, "five contracts, two buttons");
+    let offered = buttons(&response);
     assert_eq!(
-        buttons(&response)[0..2],
+        offered[0..2],
         [
             custom_id(Action::Approve, ids[6]),
             custom_id(Action::Refuse, ids[6]),
         ]
     );
+
+    // And the four arrows, with the two that have nowhere to go disabled: there is
+    // a second page, which is where the sixth and seventh contracts are.
+    assert!(
+        offered.contains(&page_custom_id(Page::Next, 2)),
+        "{offered:?}"
+    );
+    assert!(
+        offered.contains(&page_custom_id(Page::Last, 2)),
+        "{offered:?}"
+    );
+    assert!(offered.contains(&"disabled-0".to_owned()), "{offered:?}");
+    assert!(offered.contains(&"disabled-1".to_owned()), "{offered:?}");
+}
+
+/// The arrows are how the rest of the list is reached — which "答えると一覧が進み
+/// ます" could not do: a contract that is approved and running cannot be answered
+/// and cannot be withdrawn, so five of those would have hidden every one behind
+/// them with nothing to press.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_arrows_reach_the_rest_of_the_list(pool: PgPool) {
+    let application = fixture(&pool).await;
+
+    let mut ids = Vec::new();
+    for _ in 0..7 {
+        ids.push(asking(&pool, application, None).await);
+    }
+
+    let second = interaction(
+        router(&pool, std::sync::Arc::new(Recorded::default())),
+        button_from_guild(
+            json!({ "custom_id": page_custom_id(Page::Next, 2) }),
+            PARTY_DISCORD_ID,
+        ),
+    )
+    .await;
+
+    assert_eq!(second.status, 200, "body: {}", second.body);
+    assert_eq!(
+        second.body["type"], 7,
+        "the message is updated, not added to"
+    );
+    assert_eq!(
+        texts(&second)[0],
+        "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
+        "the count is the list's, not the page's"
+    );
+
+    // The two oldest, newest first, and the way back.
+    let offered = buttons(&second);
+    assert_eq!(
+        offered[0..2],
+        [
+            custom_id(Action::Approve, ids[1]),
+            custom_id(Action::Refuse, ids[1]),
+        ]
+    );
+    assert!(offered.contains(&custom_id(Action::Approve, ids[0])));
+    assert!(
+        offered.contains(&page_custom_id(Page::First, 1)),
+        "{offered:?}"
+    );
+    assert!(
+        offered.contains(&page_custom_id(Page::Previous, 1)),
+        "{offered:?}"
+    );
+    assert!(offered.contains(&"disabled-2".to_owned()), "{offered:?}");
+    assert!(offered.contains(&"disabled-3".to_owned()), "{offered:?}");
 }

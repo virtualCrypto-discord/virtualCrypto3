@@ -262,8 +262,29 @@ pub async fn of_application(
     read_all(pool, rows).await
 }
 
-/// The contracts one user is named in that are **not over**, newest first, at
-/// most `limit` of them — what a screen that shows a handful of rows needs.
+/// A page of those, and where the pages around it are — the shape a screen that
+/// shows five rows and four buttons needs.
+///
+/// One call rather than a read and a count the caller has to keep in step: the
+/// total is what the screen's first line says, the page is what its buttons move
+/// from, and both are asked here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenContracts {
+    pub contracts: Vec<Contract>,
+    /// How many there are altogether, which is the number the screen may say.
+    pub total: i64,
+    /// Which page this is, counting from one, as the claim list's does.
+    pub page: i64,
+    /// The four places the arrows move to, each `None` when there is nowhere to go
+    /// — which is what makes a button disabled rather than absent.
+    pub first: Option<i64>,
+    pub prev: Option<i64>,
+    pub next: Option<i64>,
+    pub last: Option<i64>,
+}
+
+/// One page of the contracts one user is named in that are **not over**, newest
+/// first, and the count behind it.
 ///
 /// The filter is in the statement rather than in the caller because a page that
 /// could be filled by contracts which are already over would hide the ones that
@@ -271,8 +292,21 @@ pub async fn of_application(
 pub async fn open_of_party(
     pool: &PgPool,
     discord_id: i64,
+    page: i64,
     limit: i64,
-) -> std::result::Result<Vec<Contract>, ContractError> {
+) -> std::result::Result<OpenContracts, ContractError> {
+    let page = page.max(1);
+
+    let total = sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM contracts c
+           JOIN contract_parties p ON p.contract_id = c.id
+          WHERE p.discord_id = $1 AND c.status <> 'canceled'",
+        discord_id
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(ContractError::Database)?;
+
     let rows = sqlx::query_as!(
         ContractRow,
         "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
@@ -283,32 +317,30 @@ pub async fn open_of_party(
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1 AND c.status <> 'canceled'
           ORDER BY c.id DESC
-          LIMIT $2",
+          LIMIT $2
+         OFFSET $3",
         discord_id,
-        limit
+        limit,
+        limit * (page - 1)
     )
     .fetch_all(pool)
     .await
     .map_err(ContractError::Database)?;
 
-    read_all(pool, rows).await
-}
+    let last_page = ((total + limit - 1) / limit).max(1);
 
-/// How many contracts one user is named in that are not over, which is the number
-/// a screen can say without reading the rows it is not going to show.
-pub async fn count_open_of_party(
-    pool: &PgPool,
-    discord_id: i64,
-) -> std::result::Result<i64, ContractError> {
-    sqlx::query_scalar!(
-        "SELECT count(*) AS \"count!\" FROM contracts c
-           JOIN contract_parties p ON p.contract_id = c.id
-          WHERE p.discord_id = $1 AND c.status <> 'canceled'",
-        discord_id
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(ContractError::Database)
+    Ok(OpenContracts {
+        contracts: read_all(pool, rows).await?,
+        total,
+        page,
+        // One and n - 1, or nothing on the first page; n + 1 and the last page, or
+        // nothing on the last. The claim list's arithmetic, which its arrows are
+        // the same shape as.
+        first: (page != 1).then_some(1),
+        prev: (page != 1).then_some(page - 1),
+        next: (page < last_page).then_some(page + 1),
+        last: (page < last_page).then_some(last_page),
+    })
 }
 
 /// The contracts one user is named in, newest first.
