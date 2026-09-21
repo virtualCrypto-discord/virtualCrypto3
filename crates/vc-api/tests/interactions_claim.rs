@@ -1818,6 +1818,73 @@ async fn pressing_the_next_arrow_draws_the_next_page(pool: PgPool) {
 
     assert_ne!(row["components"][0]["custom_id"], json!("disabled-0"));
     assert_eq!(row["components"][2]["custom_id"], json!("disabled-2"));
+
+    // And the two ways back, pressed: each carries the page it moves to beside the options
+    // the screen was showing, which is what makes them draw page one again.
+    for arrow in [0, 1] {
+        let back = interaction(
+            vc_api::router(state(pool.clone(), fake())),
+            action_data(
+                page_custom_id(arrow, Position::All, Page::Number(1), &options),
+                claims.money.user1,
+            ),
+        )
+        .await;
+
+        assert_eq!(back.status, 200, "body: {}", back.body);
+        assert_eq!(back.body["type"], json!(7), "a redraw: {}", back.body);
+        assert_eq!(
+            claims_on(back.body["data"].to_string().as_str()),
+            5,
+            "page one holds five: {}",
+            back.body
+        );
+    }
+}
+
+/// And the ⏩, whose id is the one this list writes differently: a page number nobody knows
+/// yet — `:last` — rather than the page itself. The handler counts the pages for it, which is
+/// a path no other arrow takes, so pressing it is the only way to know it draws the last page
+/// rather than the first.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_the_last_arrow_draws_the_last_page(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    // Four more of the caller's pending claims: seven of them, and the list holds five.
+    for id in 7..=10 {
+        insert_claim(&pool, id, 100, "pending", 1, 2, claims.money.currency).await;
+    }
+
+    let api = fake();
+    let options = list_options(Position::All);
+    let response = interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        action_data(
+            page_custom_id(3, Position::All, Page::Last, &options),
+            claims.money.user1,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(7));
+
+    // The two the first page left, which is what says this is page two and not page one.
+    assert_eq!(
+        claims_on(response.body["data"].to_string().as_str()),
+        2,
+        "the last page, not the first: {}",
+        response.body
+    );
+
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+    let row = children.last().expect("the pagination row");
+
+    assert_ne!(row["components"][0]["custom_id"], json!("disabled-0"));
+    assert_eq!(row["components"][2]["custom_id"], json!("disabled-2"));
+    assert_eq!(row["components"][3]["custom_id"], json!("disabled-3"));
 }
 
 /// `Show.action_custom_id/3`: the claim's own screen carries its id after the action.

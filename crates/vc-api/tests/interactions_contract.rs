@@ -433,4 +433,62 @@ async fn the_arrows_reach_the_rest_of_the_list(pool: PgPool) {
     );
     assert!(offered.contains(&"disabled-2".to_owned()), "{offered:?}");
     assert!(offered.contains(&"disabled-3".to_owned()), "{offered:?}");
+
+    // Every arrow, pressed, not just offered: the four are one call with the page in the id,
+    // so what a press has to show is the page it named. ⏪ and ⏮️ go back to the newest five.
+    let arrows = &offered[4..];
+
+    for arrow in [&arrows[0], &arrows[1]] {
+        let back = interaction(
+            router(&pool, std::sync::Arc::new(Recorded::default())),
+            button_from_guild(json!({ "custom_id": arrow }), PARTY_DISCORD_ID),
+        )
+        .await;
+
+        assert_eq!(back.status, 200, "body: {}", back.body);
+        assert_eq!(back.body["type"], 7, "the message is updated, not added to");
+        assert_eq!(
+            texts(&back)[0],
+            "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。"
+        );
+
+        let offered = buttons(&back);
+        assert_eq!(
+            offered[0..2],
+            [
+                custom_id(Action::Approve, ids[6]),
+                custom_id(Action::Refuse, ids[6]),
+            ],
+            "the newest five again"
+        );
+        assert!(
+            offered.contains(&page_custom_id(Page::Next, 2)),
+            "and ⏭️ has somewhere to go again: {offered:?}"
+        );
+    }
+
+    // And ⏩ — the id the first page carries, which the page above found among its buttons —
+    // which is the end of the list, where ⏭️ went.
+    let last = interaction(
+        router(&pool, std::sync::Arc::new(Recorded::default())),
+        button_from_guild(
+            json!({ "custom_id": page_custom_id(Page::Last, 2) }),
+            PARTY_DISCORD_ID,
+        ),
+    )
+    .await;
+
+    assert_eq!(last.status, 200, "body: {}", last.body);
+    assert_eq!(last.body["type"], 7);
+
+    let offered = buttons(&last);
+    assert_eq!(
+        offered[0..2],
+        [
+            custom_id(Action::Approve, ids[1]),
+            custom_id(Action::Refuse, ids[1]),
+        ]
+    );
+    assert!(offered.contains(&custom_id(Action::Approve, ids[0])));
+    assert!(offered.contains(&"disabled-3".to_owned()), "{offered:?}");
 }

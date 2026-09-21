@@ -379,7 +379,7 @@ async fn the_list_pages(pool: PgPool) {
     );
 
     let second = interaction(
-        router(pool),
+        router(pool.clone()),
         button_from_guild(json!({ "custom_id": page_custom_id(Page::Next, 2) }), ADMIN),
     )
     .await;
@@ -401,6 +401,56 @@ async fn the_list_pages(pool: PgPool) {
             page_custom_id(Page::Previous, 1),
             "disabled-2".to_string(),
             "disabled-3".to_string(),
+        ]
+    );
+
+    // Every arrow, pressed: the four are one call with the page in the id, so what a press
+    // has to show is the page the button named. ⏪ and ⏮️ are the two ways back from here —
+    // the arrows after this page's own row, which is where a button of a row is not.
+    let page_two = buttons(&second);
+    let arrows = &page_two[1..];
+
+    for arrow in [&arrows[0], &arrows[1]] {
+        let back = interaction(
+            router(pool.clone()),
+            button_from_guild(json!({ "custom_id": arrow }), ADMIN),
+        )
+        .await;
+
+        assert_eq!(back.status, 200, "body: {}", back.body);
+        assert_eq!(back.body["type"], 7, "a redraw: {}", back.body);
+        assert_eq!(
+            texts(&back)[0],
+            "**発行を許可しているアプリケーション** (6件)\n\
+             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+        );
+        assert_eq!(
+            buttons(&back).len(),
+            5 + 4,
+            "the page's five and the arrows"
+        );
+        assert_eq!(
+            buttons(&back)[7],
+            page_custom_id(Page::Next, 2),
+            "⏭️ has somewhere to go again"
+        );
+    }
+
+    // And ⏩ from the first screen: the end of the list, which is where ⏭️ went.
+    let last = interaction(
+        router(pool),
+        button_from_guild(json!({ "custom_id": buttons(&first)[8] }), ADMIN),
+    )
+    .await;
+
+    assert_eq!(last.status, 200, "body: {}", last.body);
+    assert_eq!(
+        texts(&last),
+        [
+            "**発行を許可しているアプリケーション** (6件)\n\
+             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+                .to_string(),
+            format!("**an application 0**\n`{}`", client_ids[0]),
         ]
     );
 }

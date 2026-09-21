@@ -120,9 +120,13 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
         arrows[2],
         vc_api::custom_id::ui::bal::page_custom_id(vc_api::custom_id::ui::bal::Page::Next, 2)
     );
+    assert_eq!(
+        arrows[3],
+        vc_api::custom_id::ui::bal::page_custom_id(vc_api::custom_id::ui::bal::Page::Last, 2)
+    );
 
     let second = interaction(
-        router(pool),
+        router(pool.clone()),
         support::button_from_guild(json!({ "custom_id": arrows[2] }), USER),
     )
     .await;
@@ -140,10 +144,46 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
     let arrows = buttons(&second.body);
 
     assert_eq!(
+        arrows[0],
+        vc_api::custom_id::ui::bal::page_custom_id(vc_api::custom_id::ui::bal::Page::First, 1)
+    );
+    assert_eq!(
         arrows[1],
         vc_api::custom_id::ui::bal::page_custom_id(vc_api::custom_id::ui::bal::Page::Previous, 1)
     );
     assert_eq!(arrows[2], "disabled-2");
+    assert_eq!(arrows[3], "disabled-3");
+
+    // Every arrow, pressed: the four are one call with a different number in the id, and
+    // the number is the page the screen that comes back shows.
+    for (arrow, rows) in [(0, 10), (1, 10)] {
+        let back = interaction(
+            router(pool.clone()),
+            support::button_from_guild(json!({ "custom_id": arrows[arrow] }), USER),
+        )
+        .await;
+
+        assert_eq!(back.status, 200, "body: {}", back.body);
+        assert_eq!(back.body["type"], 7, "a redraw: {}", back.body);
+        assert_eq!(texts(&back.body).len(), rows + 1, "the header and the page");
+        assert_eq!(texts(&back.body)[0], "**所持通貨一覧** (11件)");
+    }
+
+    // And ⏩ from the first screen: the last page, which is the same one ⏭️ reached.
+    let last = interaction(
+        router(pool),
+        support::button_from_guild(json!({ "custom_id": buttons(&first.body)[3] }), USER),
+    )
+    .await;
+
+    assert_eq!(last.status, 200, "body: {}", last.body);
+    assert_eq!(
+        texts(&last.body),
+        [
+            "**所持通貨一覧** (11件)".to_string(),
+            "**k**\n100 k".to_string(),
+        ]
+    );
 }
 
 /// The pagination row's `custom_id`s, in order.
