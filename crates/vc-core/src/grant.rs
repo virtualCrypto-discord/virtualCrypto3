@@ -423,6 +423,48 @@ pub async fn exchange_refresh_token(
     })
 }
 
+/// Who an ask is put to, and who a grant was written for: a guild whose pool the
+/// application may issue from, or a person whose account it may act as.
+///
+/// One value rather than a `guild_id` threaded through, because everything the
+/// device flow does — asking, deciding, polling, resolving a token — is the same
+/// act with a different answerer, and what differs in the details is the column
+/// the id goes in. A row sets exactly one of the two, which is the database's own
+/// rule and not a convention this type takes on trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Guild(i64),
+    User(i64),
+}
+
+impl Target {
+    /// The guild the ask names, when it names one.
+    pub fn guild(self) -> Option<i64> {
+        match self {
+            Target::Guild(id) => Some(id),
+            Target::User(_) => None,
+        }
+    }
+
+    /// The person the ask names, when it names one: a Discord id, the way a
+    /// contract's `receiver_discord_id` is and a `users.id` is not.
+    pub fn user(self) -> Option<i64> {
+        match self {
+            Target::User(id) => Some(id),
+            Target::Guild(_) => None,
+        }
+    }
+
+    /// What the two columns of a row amount to, when they amount to either.
+    fn of(guild_id: Option<i64>, discord_id: Option<i64>) -> Option<Target> {
+        match (guild_id, discord_id) {
+            (Some(guild), None) => Some(Target::Guild(guild)),
+            (None, Some(user)) => Some(Target::User(user)),
+            _ => None,
+        }
+    }
+}
+
 /// The grant an application holds in a guild, if it holds one.
 ///
 /// A client credentials request names a guild it wants a token for, and a guild
@@ -449,9 +491,13 @@ pub async fn create_device_token(
 ) -> Result<Option<String>> {
     let mut tx = pool.begin().await?;
     let grant_id = sqlx::query_scalar!(
-        "SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2",
+        "SELECT id FROM grants
+          WHERE application_id = $1
+            AND guild_id IS NOT DISTINCT FROM $2
+            AND discord_id IS NOT DISTINCT FROM $3",
         request.application_id,
-        request.guild_id
+        request.target.guild(),
+        request.target.user()
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -481,19 +527,25 @@ pub async fn create_device_token(
 async fn write_grant(
     connection: &mut sqlx::PgConnection,
     application_id: i64,
-    guild_id: i64,
+    target: Target,
     scopes: &[String],
     now: OffsetDateTime,
 ) -> Result<i64> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
+    // Two targets, one statement: the conflict is the pair the row is unique by,
+    // which is the application and whichever id it names. A guild and a Discord
+    // user can never share a snowflake, so the two live in one column space here
+    // the way they do in `grant_requests`' index.
     let grant_id = sqlx::query_scalar!(
-        "INSERT INTO grants (application_id, guild_id, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $3)
-         ON CONFLICT (application_id, guild_id) DO UPDATE SET updated_at = EXCLUDED.updated_at
+        "INSERT INTO grants (application_id, guild_id, discord_id, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, $4)
+         ON CONFLICT (application_id, (COALESCE(guild_id, discord_id)))
+         DO UPDATE SET updated_at = EXCLUDED.updated_at
          RETURNING id",
         application_id,
-        guild_id,
+        target.guild(),
+        target.user(),
         at
     )
     .fetch_one(&mut *connection)
@@ -522,7 +574,14 @@ pub async fn allow_in_guild(
     let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_string()).collect();
     let mut connection = pool.acquire().await?;
 
-    write_grant(&mut connection, application_id, guild_id, &scopes, now).await
+    write_grant(
+        &mut connection,
+        application_id,
+        Target::Guild(guild_id),
+        &scopes,
+        now,
+    )
+    .await
 }
 
 /// Take a permission back, by the application's own id.
@@ -697,26 +756,32 @@ pub async fn authorized_in_guild(
     })
 }
 
-/// What a guild token turned out to be: which application, for which guild, and
+/// What a grant token turned out to be: which application, for which target, and
 /// what that grant carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenGrant {
     pub application_id: i64,
-    /// The application's own account — `users.id`, which is an `integer` here and
-    /// not the `bigint` its Discord ids are — and the identity an idempotent
-    /// request is filed under.
+    /// Whose account the token acts as. For a guild grant it is the application's
+    /// own — `users.id`, which is an `integer` here and not the `bigint` its
+    /// Discord ids are, and the identity an idempotent request is filed under —
+    /// and for a personal grant it is the account of the person who approved it.
     pub account_id: i32,
-    pub guild_id: i64,
+    pub target: Target,
     pub scopes: Vec<String>,
 }
 
-/// A guild token, resolved: the grant an `access_tokens` row belongs to.
+/// A grant token, resolved: the grant an `access_tokens` row belongs to.
 ///
-/// This is the `guild` kind, and it is a row rather than a JWT because that is
-/// what the code flow has always handed out — `Authz.md` calls the claim a kind,
-/// and the kind here is the token's provenance. `None` is every way a token can
-/// fail to be one: unparsable, expired, revoked, or issued for a grant with no
-/// guild in it.
+/// This is the `guild` kind of `Authz.md`, and it is a row rather than a JWT
+/// because that is what the code flow has always handed out — the kind is the
+/// token's provenance, not a claim. A personal grant's token is the same row for
+/// the same reason, and what tells the two apart is the target: the account a
+/// resolution names is the application's own for a guild grant and the approving
+/// user's for a personal one.
+///
+/// `None` is every way a token can fail to be one: unparsable, expired, revoked,
+/// issued for a grant with no target in it, or naming a target whose account does
+/// not exist.
 pub async fn resolve_token(
     pool: &PgPool,
     token_id: Uuid,
@@ -726,47 +791,59 @@ pub async fn resolve_token(
 
     let found = sqlx::query!(
         r#"SELECT g.application_id AS "application_id!",
-                  u.id AS "account_id!",
-                  g.guild_id AS "guild_id!",
+                  CASE WHEN g.guild_id IS NOT NULL AND g.guild_id <> 0
+                       THEN a.id ELSE p.id END AS "account_id!",
+                  g.guild_id,
+                  g.discord_id,
                   COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
                            ARRAY[]::text[]) AS "scopes!"
              FROM access_tokens t
              JOIN grants g ON g.id = t.grant_id
-             JOIN users u ON u.application_id = g.application_id
+             LEFT JOIN users a ON a.application_id = g.application_id
+             LEFT JOIN users p ON p.discord_id = g.discord_id
              LEFT JOIN grant_scopes s ON s.grant_id = g.id
             WHERE t.token_id = $1
               AND t.expires >= $2
-              AND g.guild_id IS NOT NULL AND g.guild_id <> 0
-            GROUP BY g.id, u.id"#,
+              AND ((g.guild_id IS NOT NULL AND g.guild_id <> 0) OR g.discord_id IS NOT NULL)
+              AND (a.id IS NOT NULL OR p.id IS NOT NULL)
+            GROUP BY g.id, a.id, p.id"#,
         token_id,
         at
     )
     .fetch_optional(pool)
     .await?;
 
-    Ok(found.map(|row| TokenGrant {
+    let Some(row) = found else {
+        return Ok(None);
+    };
+
+    let Some(target) = Target::of(row.guild_id, row.discord_id) else {
+        return Ok(None);
+    };
+
+    Ok(Some(TokenGrant {
         application_id: row.application_id,
         account_id: row.account_id,
-        guild_id: row.guild_id,
+        target,
         scopes: row.scopes,
     }))
 }
 
-/// An application asking a guild for a permission.
+/// An application asking for a permission: a guild's pool, or a person's account.
 ///
 /// The ask names the scopes it wants, because the grant it may become is
 /// written from exactly those: an approval that granted something else would be
 /// a permission nobody asked for. Asking twice is the same ask, so a second
 /// request while one is pending keeps the request that is there — the codes
-/// with it, so the application's poll and the guild's screen keep agreeing.
+/// with it, so the application's poll and the target's screen keep agreeing.
 ///
 /// `expires_in` is how long the ask lives, in seconds, and it is the caller's
 /// to name within reason: a device that will poll for ten minutes asks for ten
-/// minutes, and the guild's screen stops showing it after that.
+/// minutes, and the screen stops showing it after that.
 pub async fn request_grant(
     pool: &PgPool,
     application_id: i64,
-    guild_id: i64,
+    target: Target,
     scopes: &[String],
     expires_in: i64,
     now: OffsetDateTime,
@@ -780,25 +857,29 @@ pub async fn request_grant(
     // requests then share the newly inserted live request through the upsert.
     sqlx::query!(
         "DELETE FROM grant_requests
-          WHERE application_id = $1 AND guild_id = $2 AND status = 'pending'
-            AND inserted_at + make_interval(secs => expires_in) <= $3",
+          WHERE application_id = $1 AND status = 'pending'
+            AND guild_id IS NOT DISTINCT FROM $2
+            AND discord_id IS NOT DISTINCT FROM $3
+            AND inserted_at + make_interval(secs => expires_in) <= $4",
         application_id,
-        guild_id,
+        target.guild(),
+        target.user(),
         at
     )
     .execute(&mut *tx)
     .await?;
 
     let row = sqlx::query!(
-        r#"INSERT INTO grant_requests (application_id, guild_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)
-         VALUES ($1, $2, $3, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $4, $5, $5)
-         ON CONFLICT (application_id, guild_id) WHERE status = 'pending'
+        r#"INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, device_code, user_code, expires_in, inserted_at, updated_at)
+         VALUES ($1, $2, $3, $4, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $5, $6, $6)
+         ON CONFLICT (application_id, (COALESCE(guild_id, discord_id))) WHERE status = 'pending'
          DO UPDATE SET updated_at = EXCLUDED.updated_at
-         RETURNING id, scopes AS "scopes!: Vec<String>", device_code AS "device_code!: Uuid",
+         RETURNING id, guild_id, discord_id, scopes AS "scopes!: Vec<String>", device_code AS "device_code!: Uuid",
                    user_code AS "user_code!: String", status AS "status!: String",
-                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($5 - inserted_at))::bigint) AS "expires_in!: i64""#,
+                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($6 - inserted_at))::bigint) AS "expires_in!: i64""#,
         application_id,
-        guild_id,
+        target.guild(),
+        target.user(),
         scopes,
         expires_in,
         at
@@ -811,7 +892,7 @@ pub async fn request_grant(
     Ok(GrantRequest {
         id: row.id,
         application_id,
-        guild_id,
+        target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
         scopes: row.scopes,
         device_code: row.device_code,
         user_code: row.user_code,
@@ -821,12 +902,12 @@ pub async fn request_grant(
 }
 
 /// A request as the application that made it reads it: the codes it polls with
-/// and shows, the scopes it asked for, and how long the ask lives.
+/// and shows, the scopes it asked for, who it is put to, and how long it lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantRequest {
     pub id: i64,
     pub application_id: i64,
-    pub guild_id: i64,
+    pub target: Target,
     pub scopes: Vec<String>,
     pub device_code: Uuid,
     pub user_code: String,
@@ -837,7 +918,7 @@ pub struct GrantRequest {
 /// What an application has asked for, answered or not.
 pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantRequest>> {
     let rows = sqlx::query!(
-        r#"SELECT id, application_id, guild_id, scopes AS "scopes!",
+        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!",
                   device_code AS "device_code!: Uuid", user_code AS "user_code!",
                   status AS "status!", expires_in AS "expires_in!"
              FROM grant_requests
@@ -848,35 +929,40 @@ pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<Grant
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| GrantRequest {
-            id: row.id,
-            application_id: row.application_id,
-            guild_id: row.guild_id,
-            scopes: row.scopes,
-            device_code: row.device_code,
-            user_code: row.user_code,
-            status: row.status,
-            expires_in: row.expires_in,
+    rows.into_iter()
+        .map(|row| {
+            Ok(GrantRequest {
+                id: row.id,
+                application_id: row.application_id,
+                target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
+                scopes: row.scopes,
+                device_code: row.device_code,
+                user_code: row.user_code,
+                status: row.status,
+                expires_in: row.expires_in,
+            })
         })
-        .collect())
+        .collect()
 }
 
-/// The guild's answer to a request: the status, and for a yes the grant itself.
+/// The target's answer to a request: the status, and for a yes the grant itself.
 ///
 /// The grant is written from the ask's own scopes, never from anything the
 /// caller names: an approval that granted something else would be a permission
 /// nobody asked for. There is no no — `None` is a request that is not this
-/// guild's, not there, expired, or already answered, and all four are answered
+/// target's, not there, expired, or already answered, and all four are answered
 /// the same way, because an unapproved ask simply stays pending until it dies.
+///
+/// Whichever kind of target it is, the code has to be *that target's*: a guild
+/// administrator answering a person's ask, or a person answering a guild's, is
+/// the same nothing as a code nobody ever issued.
 ///
 /// One transaction, because a request answered yes that granted nothing is a
 /// state the application reads as approval and acts on.
 pub async fn decide_request(
     pool: &PgPool,
     user_code: &str,
-    guild_id: i64,
+    target: Target,
     now: OffsetDateTime,
 ) -> Result<Option<i64>> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
@@ -885,12 +971,16 @@ pub async fn decide_request(
 
     let decided = sqlx::query!(
         r#"UPDATE grant_requests
-              SET status = 'approved', updated_at = $3
-            WHERE guild_id = $1 AND user_code = $2 AND status = 'pending'
-              AND inserted_at + make_interval(secs => expires_in) > $3
+              SET status = 'approved', updated_at = $4
+            WHERE user_code = $1
+              AND guild_id IS NOT DISTINCT FROM $2
+              AND discord_id IS NOT DISTINCT FROM $3
+              AND status = 'pending'
+              AND inserted_at + make_interval(secs => expires_in) > $4
          RETURNING application_id, scopes AS "scopes!""#,
-        guild_id,
         user_code,
+        target.guild(),
+        target.user(),
         at
     )
     .fetch_optional(&mut *tx)
@@ -903,7 +993,7 @@ pub async fn decide_request(
     write_grant(
         &mut tx,
         decided.application_id,
-        guild_id,
+        target,
         &decided.scopes,
         now,
     )
@@ -930,7 +1020,7 @@ pub async fn poll_request(
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let row = sqlx::query!(
-        r#"SELECT id, application_id, guild_id, scopes AS "scopes!",
+        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!",
                   device_code AS "device_code!: Uuid", user_code AS "user_code!",
                   status AS "status!", expires_in AS "expires_in!"
              FROM grant_requests
@@ -943,10 +1033,14 @@ pub async fn poll_request(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|row| GrantRequest {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    Ok(Some(GrantRequest {
         id: row.id,
         application_id: row.application_id,
-        guild_id: row.guild_id,
+        target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
         scopes: row.scopes,
         device_code: row.device_code,
         user_code: row.user_code,

@@ -149,7 +149,7 @@ async fn approve(
     let decided = vc_core::grant::decide_request(
         state.pool(),
         code.trim(),
-        guild_id,
+        vc_core::grant::Target::Guild(guild_id),
         time::OffsetDateTime::now_utc(),
     )
     .await?;

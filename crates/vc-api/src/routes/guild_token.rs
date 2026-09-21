@@ -26,6 +26,8 @@ use uuid::Uuid;
 use vc_auth::Scopes;
 
 use crate::error::ApiError;
+use vc_core::grant::Target;
+
 use crate::state::AppState;
 
 /// The authenticated guild: the application a guild allowed, and that guild.
@@ -68,6 +70,14 @@ impl FromRequestParts<AppState> for GuildToken {
             return Err(unauthorized());
         };
 
+        // A guild token is a guild's. A personal grant's token resolves to the
+        // person who approved it, and this is not the extractor that accepts one —
+        // the target is what says so, so a token written for a person is refused
+        // here the same way a token for a guild nobody granted anything in is.
+        let Target::Guild(guild_id) = resolved.target else {
+            return Err(unauthorized());
+        };
+
         // Counted per application, which is the identity a guild token has: one
         // application's tokens cannot spend another's allowance.
         if !state
@@ -84,7 +94,7 @@ impl FromRequestParts<AppState> for GuildToken {
         Ok(GuildToken {
             application_id: resolved.application_id,
             account_id: resolved.account_id,
-            guild_id: resolved.guild_id,
+            guild_id,
             scopes: Scopes::from_list(&resolved.scopes),
         })
     }

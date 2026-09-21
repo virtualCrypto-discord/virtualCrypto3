@@ -1,17 +1,22 @@
-//! `/oauth2/clients/@me/grant-requests`: where an application asks a guild for
-//! permission, the way a device asks in RFC 8628.
+//! `/oauth2/clients/@me/grant-requests`: where an application asks for permission
+//! — a guild for `vc.issue`, a person for the scopes that concern their own
+//! account — the way a device asks in RFC 8628.
 //!
 //! Not the Elixir's. There the only way an application got a grant was a person
 //! redeeming an authorization code in a browser, so an application had no call of
 //! its own that could ask. This is that ask, for the flows that have no browser:
-//! the row it writes is what a guild's yes answers, and that yes is the grant the
-//! code flow would have written — after which the device poll answers with the
-//! token the endpoint wants.
+//! the row it writes is what a guild's or a person's yes answers, and that yes is
+//! the grant the code flow would have written — after which the device poll
+//! answers with the token the endpoint wants.
+//!
+//! Which of the two is being asked is the request's own body: one target, exactly,
+//! because the answer it waits on belongs to one of them. `docs/issue.md` is the
+//! guild's half and `docs/personal-grants.md` the person's.
 //!
 //! The token is the application's own: `Kind::App` with `oauth2.register`, which
-//! is exactly the token registration answered with. A user token cannot ask a
-//! guild for a permission their application holds, because the caller's
-//! application is not established by a user.
+//! is exactly the token registration answered with. A user token cannot ask for a
+//! permission their application holds, because the caller's application is not
+//! established by a user.
 
 use axum::Json;
 use axum::extract::State;
@@ -22,6 +27,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use vc_auth::AuthUser;
+use vc_core::grant::Target;
 
 use crate::routes::oauth2_clients::{Refusal, internal, refusal, refused};
 use crate::state::AppState;
@@ -34,13 +40,48 @@ const DEFAULT_EXPIRES_IN: i64 = 600;
 /// screen would be showing an ask nobody remembers making.
 const MAX_EXPIRES_IN: i64 = 3600;
 
-/// What one request is: the guild, the scopes it is asked for, and how long the
-/// ask lives.
+/// What one request is: who is being asked — a guild's pool, or one person's own
+/// account — the scopes it is asked for, and how long the ask lives.
+///
+/// Exactly one of the two targets, which is also the database's rule: a body that
+/// names both is not a request this service can file, because the answer it would
+/// be waiting on is two different people's.
 #[derive(Deserialize)]
 pub struct GrantRequest {
-    pub guild_id: String,
+    pub guild_id: Option<String>,
+    pub discord_id: Option<String>,
     pub scopes: Option<Vec<String>>,
     pub expires_in: Option<i64>,
+}
+
+impl GrantRequest {
+    /// Which of the two the body named, and whether it named exactly one.
+    fn target(&self) -> Result<Target, &'static str> {
+        match (&self.guild_id, &self.discord_id) {
+            (Some(guild), None) => guild
+                .parse::<i64>()
+                .map(Target::Guild)
+                .map_err(|_| "the guild id must be a Discord id, as a string"),
+            (None, Some(user)) => user
+                .parse::<i64>()
+                .map(Target::User)
+                .map_err(|_| "the discord id must be a Discord id, as a string"),
+            (Some(_), Some(_)) => Err("a request names a guild or a discord id, not both"),
+            (None, None) => Err("a request names a guild or a discord id"),
+        }
+    }
+
+    /// The scopes this target may be asked for. The two sets do not overlap, and
+    /// the target is what says which one applies — asking a person for a guild's
+    /// pool would be asking the wrong person, so it is refused here rather than
+    /// approved into a grant nobody could use.
+    fn checks(&self) -> fn(&[String]) -> Result<(), vc_core::application::ScopeError> {
+        if self.discord_id.is_some() {
+            vc_core::application::check_personal_scopes
+        } else {
+            vc_core::application::check_scopes
+        }
+    }
 }
 
 /// `POST /oauth2/clients/@me/grant-requests`: ask a guild to let this
@@ -65,13 +106,14 @@ pub async fn create(
         Err(refusal) => return refusal.response(),
     };
 
-    let Ok(guild_id) = body.guild_id.parse::<i64>() else {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "the guild id must be a Discord id, as a string",
-        );
+    let target = match body.target() {
+        Ok(target) => target,
+        Err(complaint) => {
+            return refused(StatusCode::BAD_REQUEST, "invalid_request", complaint);
+        }
     };
+
+    let checks = body.checks();
 
     let Some(scopes) = body.scopes else {
         return refused(
@@ -81,7 +123,7 @@ pub async fn create(
         );
     };
 
-    if vc_core::application::check_scopes(&scopes.to_vec()).is_err() {
+    if checks(&scopes).is_err() {
         return refused(StatusCode::BAD_REQUEST, "invalid_scope", "unknown scope");
     }
 
@@ -100,7 +142,7 @@ pub async fn create(
     match vc_core::grant::request_grant(
         state.pool(),
         application,
-        guild_id,
+        target,
         &scopes,
         expires_in,
         OffsetDateTime::now_utc(),
@@ -138,7 +180,8 @@ pub async fn index(State(state): State<AppState>, user: AuthUser) -> Response {
                     serde_json::json!({
                         "device_code": request.device_code.to_string(),
                         "user_code": request.user_code,
-                        "guild_id": request.guild_id.to_string(),
+                        "guild_id": request.target.guild().map(|id| id.to_string()),
+                        "discord_id": request.target.user().map(|id| id.to_string()),
                         "scopes": request.scopes,
                         "status": request.status,
                         "expires_in": request.expires_in,

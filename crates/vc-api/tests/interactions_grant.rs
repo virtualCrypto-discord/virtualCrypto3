@@ -59,7 +59,7 @@ async fn fixture(pool: &PgPool) -> (i64, String) {
     let asked = vc_core::grant::request_grant(
         pool,
         application,
-        DEFAULT_GUILD,
+        vc_core::grant::Target::Guild(DEFAULT_GUILD),
         &SCOPES
             .iter()
             .map(|scope| (*scope).to_owned())

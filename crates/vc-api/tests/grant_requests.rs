@@ -11,12 +11,15 @@ mod support;
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{Response, account_of, fake, insert_application, mint, mint_app, state};
+use support::{Response, account_of, fake, insert_application, insert_user, mint, mint_app, state};
 use tower::ServiceExt;
+use vc_core::grant::Target;
 
 const OWNER: i32 = 1;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
 const GUILD: i64 = 900_000_000_000_000_001;
+const PERSON: i64 = 700_000_000_000_000_001;
+const SOMEBODY_ELSE: i64 = 700_000_000_000_000_002;
 
 async fn request(app: axum::Router, method: &str, token: Option<&str>, body: Value) -> Response {
     let mut builder = axum::http::Request::builder()
@@ -133,7 +136,7 @@ async fn an_application_may_ask_a_guild(pool: PgPool) {
     .await
     .expect("the request");
 
-    assert_eq!(row.guild_id, GUILD);
+    assert_eq!(row.guild_id, Some(GUILD));
     assert_eq!(row.scopes, ["vc.issue"]);
     assert_eq!(row.status, "pending");
 }
@@ -188,7 +191,7 @@ async fn a_poll_for_an_expired_ask_is_invalid_grant(pool: PgPool) {
     let asked = vc_core::grant::request_grant(
         &pool,
         application,
-        GUILD,
+        Target::Guild(GUILD),
         &["vc.issue".to_owned()],
         600,
         time::OffsetDateTime::now_utc() - time::Duration::hours(2),
@@ -289,9 +292,14 @@ async fn the_list_reads_back_what_was_asked(pool: PgPool) {
         .user_code
         .clone();
 
-    vc_core::grant::decide_request(&pool, &user_code, GUILD, time::OffsetDateTime::now_utc())
-        .await
-        .expect("the answer");
+    vc_core::grant::decide_request(
+        &pool,
+        &user_code,
+        Target::Guild(GUILD),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("the answer");
 
     let response = request(
         vc_api::router(state(pool, fake())),
@@ -308,6 +316,7 @@ async fn the_list_reads_back_what_was_asked(pool: PgPool) {
             "device_code": response.body[0]["device_code"],
             "user_code": user_code,
             "guild_id": GUILD.to_string(),
+            "discord_id": Value::Null,
             "scopes": ["vc.issue"],
             "status": "approved",
             "expires_in": response.body[0]["expires_in"],
@@ -351,9 +360,14 @@ async fn an_answer_lets_the_device_poll_a_guild_token(pool: PgPool) {
     assert_eq!(pending.1["error"], "authorization_pending");
 
     // The guild answers in Discord.
-    vc_core::grant::decide_request(&pool, &user_code, GUILD, time::OffsetDateTime::now_utc())
-        .await
-        .expect("the answer");
+    vc_core::grant::decide_request(
+        &pool,
+        &user_code,
+        Target::Guild(GUILD),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("the answer");
 
     // After: the guild token.
     let (status, body) = device_poll(&pool, application, &device_code).await;
@@ -447,7 +461,7 @@ async fn an_expired_ask_can_be_replaced_before_the_next_purge(pool: PgPool) {
     let old = vc_core::grant::request_grant(
         &pool,
         application,
-        GUILD,
+        Target::Guild(GUILD),
         &["vc.issue".to_owned()],
         600,
         now - time::Duration::seconds(601),
@@ -473,7 +487,7 @@ async fn an_expired_ask_can_be_replaced_before_the_next_purge(pool: PgPool) {
     );
     let code = response.body["user_code"].as_str().unwrap();
     assert_eq!(
-        vc_core::grant::decide_request(&pool, code, GUILD, now)
+        vc_core::grant::decide_request(&pool, code, Target::Guild(GUILD), now)
             .await
             .unwrap(),
         Some(application)
@@ -492,7 +506,7 @@ async fn concurrent_replacements_share_one_live_ask_at_expiry(pool: PgPool) {
     let old = vc_core::grant::request_grant(
         &pool,
         application,
-        GUILD,
+        Target::Guild(GUILD),
         &scopes,
         600,
         now - time::Duration::seconds(600),
@@ -500,8 +514,8 @@ async fn concurrent_replacements_share_one_live_ask_at_expiry(pool: PgPool) {
     .await
     .unwrap();
     let (first, second) = tokio::join!(
-        vc_core::grant::request_grant(&pool, application, GUILD, &scopes, 600, now),
-        vc_core::grant::request_grant(&pool, application, GUILD, &scopes, 600, now),
+        vc_core::grant::request_grant(&pool, application, Target::Guild(GUILD), &scopes, 600, now),
+        vc_core::grant::request_grant(&pool, application, Target::Guild(GUILD), &scopes, 600, now),
     );
     let first = first.unwrap();
     let second = second.unwrap();
@@ -533,7 +547,7 @@ async fn poll_after_discord_revocation(pool: PgPool, keep_another: bool) {
     let asked = vc_core::grant::request_grant(
         &pool,
         application,
-        GUILD,
+        Target::Guild(GUILD),
         &scopes,
         600,
         time::OffsetDateTime::now_utc(),
@@ -544,7 +558,7 @@ async fn poll_after_discord_revocation(pool: PgPool, keep_another: bool) {
         vc_core::grant::decide_request(
             &pool,
             &asked.user_code,
-            GUILD,
+            Target::Guild(GUILD),
             time::OffsetDateTime::now_utc()
         )
         .await
@@ -598,7 +612,7 @@ async fn a_repeated_ask_reports_its_remaining_lifetime(pool: PgPool) {
     let asked = vc_core::grant::request_grant(
         &pool,
         application,
-        GUILD,
+        Target::Guild(GUILD),
         &["vc.issue".to_owned()],
         600,
         time::OffsetDateTime::now_utc() - time::Duration::seconds(590),
@@ -631,4 +645,163 @@ async fn a_repeated_ask_reports_its_remaining_lifetime(pool: PgPool) {
         (1..=10).contains(&expires_in),
         "only 10 seconds remain, but returned {expires_in}"
     );
+}
+
+/// A person's ask: their code is theirs. What answers it is being them, and
+/// nothing else — not the guild the code was not put to, and not another person
+/// who happens to have read it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_person_is_asked_and_only_their_code_answers_it(pool: PgPool) {
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "an application").await;
+    let owner = account_of(&pool, application).await;
+    let token = mint_app(&pool, owner, &["oauth2.register"]).await;
+    insert_user(&pool, 2, PERSON).await;
+    insert_user(&pool, 3, SOMEBODY_ELSE).await;
+
+    let asked = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        Some(&token),
+        json!({ "discord_id": PERSON.to_string(), "scopes": ["vc.read", "vc.pay"] }),
+    )
+    .await;
+    assert_eq!(asked.status, 201, "{}", asked.body);
+
+    let code = asked
+        .body
+        .get("user_code")
+        .and_then(Value::as_str)
+        .expect("a user code")
+        .to_owned();
+    let now = time::OffsetDateTime::now_utc();
+
+    // The guild the ask was not put to cannot answer it, and neither can another
+    // person: a code names one target, and being that target is the whole of the
+    // question.
+    for target in [Target::Guild(GUILD), Target::User(SOMEBODY_ELSE)] {
+        assert_eq!(
+            vc_core::grant::decide_request(&pool, &code, target, now)
+                .await
+                .unwrap(),
+            None,
+            "{target:?} answered a code that is not theirs"
+        );
+    }
+
+    assert_eq!(
+        vc_core::grant::decide_request(&pool, &code, Target::User(PERSON), now)
+            .await
+            .unwrap(),
+        Some(application)
+    );
+
+    // What the grant became: written for the person, carrying what they agreed to,
+    // and its token acts as *them* rather than as the application that asked.
+    let asked = vc_core::grant::requests_of(&pool, application)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(asked.target, Target::User(PERSON));
+    assert_eq!(asked.status, "approved");
+
+    let minted = vc_core::grant::create_device_token(&pool, &asked, now)
+        .await
+        .unwrap()
+        .expect("the approved ask hands out a token");
+    let resolved =
+        vc_core::grant::resolve_token(&pool, uuid::Uuid::parse_str(&minted).unwrap(), now)
+            .await
+            .unwrap()
+            .expect("the token resolves");
+
+    assert_eq!(resolved.application_id, application);
+    assert_eq!(resolved.target, Target::User(PERSON));
+    assert_eq!(
+        resolved.account_id, 2,
+        "the account is the person's, not the application's"
+    );
+    assert_eq!(resolved.scopes, ["vc.read", "vc.pay"]);
+
+    // And it is not a guild token: the guild extractor goes on the target, so the
+    // one place a guild's token is accepted refuses this one.
+    let refused = tower::ServiceExt::oneshot(
+        vc_api::router(state(pool.clone(), fake())),
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v2/currencies/issue")
+            .header("authorization", format!("Bearer {minted}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                json!({ "unit": "nyan", "amount": "1" }).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused.status(), 401);
+
+    // The application's own view of its asks names the person, and the guild it
+    // was not put to is a null rather than an absence.
+    let listed = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "GET",
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(listed.body[0]["discord_id"], PERSON.to_string());
+    assert_eq!(listed.body[0]["guild_id"], Value::Null);
+}
+
+/// The two scope sets do not overlap: what a guild can hand over is its pool and
+/// what a person can is their own account, so an ask that names the other's scope
+/// is refused rather than approved into a grant nobody could use.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_person_is_not_asked_for_a_guilds_scope(pool: PgPool) {
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "an application").await;
+    let token = mint_app(
+        &pool,
+        account_of(&pool, application).await,
+        &["oauth2.register"],
+    )
+    .await;
+
+    let refused = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        Some(&token),
+        json!({ "discord_id": PERSON.to_string(), "scopes": ["vc.issue"] }),
+    )
+    .await;
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"], "invalid_scope");
+
+    let refused = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "POST",
+        Some(&token),
+        json!({ "guild_id": GUILD.to_string(), "scopes": ["vc.pay"] }),
+    )
+    .await;
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"], "invalid_scope");
+
+    // And a request is put to one of the two: a body that names both is waiting on
+    // two different people's answers, and one that names neither is waiting on
+    // nobody's.
+    for body in [
+        json!({ "guild_id": GUILD.to_string(), "discord_id": PERSON.to_string(), "scopes": ["vc.issue"] }),
+        json!({ "scopes": ["vc.issue"] }),
+    ] {
+        let refused = request(
+            vc_api::router(state(pool.clone(), fake())),
+            "POST",
+            Some(&token),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(refused.status, 400, "{body}");
+        assert_eq!(refused.body["error"], "invalid_request");
+    }
 }

@@ -1233,6 +1233,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "    \"device_code\": \"0a5b8e0e-5e3a-4f2b-9d3c-8f1a6b7c9d0e\",",
                 "    \"user_code\": \"A1B2C3D4\",",
                 "    \"guild_id\": \"900000000000000001\",",
+                "    \"discord_id\": null,",
                 "    \"scopes\": [\"vc.issue\"],",
                 "    \"status\": \"approved\",",
                 "    \"expires_in\": 600",
@@ -1257,8 +1258,9 @@ const ENDPOINTS: &[Endpoint] = &[
         summary: "サーバーに発行の許可を申請します。",
         access: "アプリケーションのトークン + `oauth2.register`",
         fields: &[
-            "`guild_id`（文字列・必須） 発行を許可してほしいサーバーのDiscord IDです。",
-            "`scopes`（配列・必須） 求めるスコープです。`vc.issue` だけが置けます。",
+            "`guild_id`（文字列・任意） 発行を許可してほしいサーバーのDiscord IDです。`discord_id` とどちらか一方だけを置きます。",
+            "`discord_id`（文字列・任意） 自分の口座を任せたい相手のDiscord IDです。`guild_id` とどちらか一方だけを置きます。",
+            "`scopes`（配列・必須） 求めるスコープです。`guild_id` の申請では `vc.issue` だけ、`discord_id` の申請では `vc.read` `vc.pay` `vc.claim` だけが置けます。",
             "`expires_in`（数値・任意） 申請が生きる秒数です。既定600、上限3600。",
         ],
         // `tests/grant_requests.rs`'s `an_application_may_ask_a_guild`.
