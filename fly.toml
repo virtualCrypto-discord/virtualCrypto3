@@ -1,6 +1,8 @@
-# The application this replaces, with the configuration it already has: the same
-# internal port this server defaults to, the same region, and no `[env]` — every
-# value it needs is a secret the application already carries.
+# The application this replaces: the same internal port this server defaults to and
+# the same region. No `[env]` — a deploy sets the secrets under the names
+# `docs/deploy.md` lists, which are the ones this server reads. The application's
+# own secrets are spelled `VCRYPTO_*` and are not read, except for the certificate
+# pair, which matches.
 app = "virtualcrypto-prod"
 primary_region = "phx"
 
