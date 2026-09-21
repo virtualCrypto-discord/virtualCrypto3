@@ -19,6 +19,7 @@ fi
 
 : "${DISCORD_API_KEY:?DISCORD_API_KEY (a bot token) must be set in .env}"
 
+# The names the service reads; `docs/deploy.md` has the full list.
 export DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-$DISCORD_API_KEY}"
 
 application="$(
@@ -42,6 +43,13 @@ export DISCORD_CLIENT_SECRET="${DISCORD_CLIENT_SECRET:-test-client-secret}"
 export PORT="${PORT:-8080}"
 export SITE_URL="${SITE_URL:-http://localhost:${PORT}}"
 export INVITE_URL="${INVITE_URL:-https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&permissions=0&scope=applications.commands%20bot}"
+
+# The two the service needs that no older name covers: it signs sessions with
+# `SECRET_KEY_BASE` (a fixed value, so a restart does not sign everybody out), and
+# it expects a `Secure` cookie by default, which a browser on http will not send
+# back to the local site.
+export SECRET_KEY_BASE="${SECRET_KEY_BASE:-virtualcrypto3-dev-session-secret}"
+export SECURE_COOKIES="${SECURE_COOKIES:-false}"
 
 echo "discord app: $DISCORD_CLIENT_ID ($(jq -r '.name' <<<"$application"))"
 echo "public key:  $DISCORD_PUBLIC_KEY"

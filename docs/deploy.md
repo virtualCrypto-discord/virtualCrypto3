@@ -6,34 +6,39 @@ correct as this list.
 
 ## What the server requires
 
-**The names are the deployment's, not this code's.** They were read from
-`flyctl secrets list -a virtualcrypto-prod`, because that is what the running service
-actually has: the values are already there, so a port that invented its own names
-would exit at startup naming variables nobody has. `VCRYPTO_*` is the older
-service's spelling and it is the one to keep.
+**The names are the Elixir application's** — what its configuration reads and what
+`scripts/discord-env.sh` sets — so the port is started from an environment that
+already exists rather than from a spelling of its own.
 
 The first list is what `require_env` refuses to start without, each named in the
 error it exits with; the second is everything else that is read, `WEB_ROOT` from
 `vc-api` rather than from `main.rs`.
 
 - `DATABASE_URL`
-- `VCRYPTO_BOT_TOKEN`
-- `VCRYPTO_CLIENT_ID`
-- `VCRYPTO_CLIENT_SECRET`
-- `VCRYPTO_PUBLIC_KEY`
-- `VCRYPTO_API_JWT_SECRET_KEY`
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_CLIENT_ID`
+- `DISCORD_CLIENT_SECRET`
+- `DISCORD_PUBLIC_KEY`
+- `GUARDIAN_SECRET_KEY`
 - `SECRET_KEY_BASE`
 
-`VCRYPTO_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by name.
+`DISCORD_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by
+name.
+
+The `virtualcrypto-prod` app spells the first list `VCRYPTO_*`, which is the
+deployed Elixir service's own spelling of them: a deployment of this port sets the
+names above. The certificate pair below already matches.
 
 ## What it takes with a default
 
-- `VCRYPTO_INVITE_URL`
+- `DISCORD_OAUTH2_REDIRECT_URI`
+- `INVITE_URL`
 - `PORT`
 - `RATE_LIMIT_PER_MINUTE`
 - `SECURE_COOKIES`
-- `VCRYPTO_SITE_URL`
-- `VCRYPTO_SUPPORT_GUILD_INVITE_URL`
+- `SITE_URL`
+- `SUPPORT_GUILD_INVITE_URL`
+- `VCRYPTO_SETTLE_INTERVAL_SECS`
 - `VCRYPTO_WEBHOOK_PROXY_CERT`
 - `VCRYPTO_WEBHOOK_PROXY_KEY`
 - `WEBHOOK_PROXY_URL`
