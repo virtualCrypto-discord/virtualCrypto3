@@ -52,21 +52,25 @@ omission:
 
 ## The decision
 
-The user the ask names — and nobody else — answers it, in a direct message with the bot:
+Two commands, because there are two things to decide and they are decided by different people.
+`/grant server …` is what exists today — an administrator of the guild the ask named answers it,
+reads the guild's authorized applications, and revokes one. `/grant user …` is this document: the
+code, the list of what this account has approved, and the button that takes one back.
 
 ```
-/grant approve code:4f2a9c11
+/grant user approve code:4f2a9c11
+/grant user list
 ```
 
-The named user is compared against the interaction's own caller, so a code pasted into a public
-channel by somebody else decides nothing. There is no administrator bit here and no guild: the
-decision is the person's own, which is what makes this a different concept from the server grant
-rather than a variant of it.
+**Where the command is run does not matter.** There is no DM-only rule and no guild requirement:
+what makes the decision the right one is that the caller *is* the user the ask named, so the same
+press by anybody else decides nothing and is answered as a code that is not theirs. A guild channel
+therefore costs nothing but the code being visible to whoever is reading — and the code is the
+half a person chose to show, which is how the server grant's has always worked as well.
 
-`/grant list` in a DM is the other half: the applications this account has approved, with the day
-each grant was written and a button that revokes one. Revoking deletes the grant row, and every
-token issued for it goes with it — the same cascade the server grant's revoke has, for the same
-reason. In a guild, `/grant list` is what it always was: the guild's own.
+`/grant user list` reads the applications this account has approved, with the day each grant was
+written and a button that revokes one. Revoking deletes the grant row, and every token issued for
+it goes with it — the same cascade `/grant server revoke` has, for the same reason.
 
 ## The token
 
@@ -105,15 +109,18 @@ take them. `/users/@me/contracts` is a read like any other, and it needs `vc.rea
 
 ## Where the pieces go
 
-- `crates/vc-core/migrations/0013_personal_grants.sql` — `grants.user_id` and
-  `grant_requests.user_id` (with `guild_id` no longer NOT NULL, exactly one of the two set,
-  `vc.read`/`vc.pay`/`vc.claim` added to the scope enum), and the two indexes that follow from the
-  new target: one pending ask per (application, user), one pending code per (user, code).
+- `crates/vc-core/migrations/0013_personal_grants.sql` — `grants.discord_id` and
+  `grant_requests.discord_id` (with `guild_id` no longer NOT NULL, exactly one of the two set,
+  `vc.read`/`vc.pay`/`vc.claim` added to the scope enum), and the indexes that follow from the new
+  target: one pending ask per target, one pending code per (discord_id, code), and the grant upsert.
 - `crates/vc-core/src/grant.rs` — the target becomes a value (`guild` or `user`) in the ask, the
-  grant, the decision and the resolution, rather than a `guild_id` threaded through all of them.
+  grant, the decision, the resolution and the notification, rather than a `guild_id` threaded
+  through all of them.
 - `crates/vc-api/src/routes/grant_requests.rs` — `discord_id` accepted, exactly one target.
-- `crates/vc-api/src/command/grant.rs` — the DM path: approve as the named user, list this
-  account's grants, revoke one.
+- `crates/vc-api/src/command/grant.rs` — split into the two groups: `server` is today's command,
+  `user` is the code, the list and the revoke, run wherever the caller happens to be.
+- `crates/vc-api/src/notification.rs` — the decision is sent for both targets, and event `3`'s body
+  carries which one.
 - `crates/vc-api/src/routes/personal_token.rs` (name to be settled in review) — the extractor,
   which accepts a grant's token and yields what `Limited` yields, so no handler body changes.
 - `crates/vc-api/src/routes/v2/{users,claims,transactions,contracts}.rs` — the reads, and the two
@@ -121,13 +128,27 @@ take them. `/users/@me/contracts` is a read like any other, and it needs `vc.rea
 - `docs/issue.md` gains a pointer here, `docs/oauth2.md`'s grant-request paragraph says which
   target it names, and `docs/qa.md`'s surface tables gain the new rows.
 
+## The event
+
+A decision about a personal grant is delivered to the application over its webhook, the way a
+server grant's is — event type `3`, sent when the grant is written and again when one is revoked,
+with the scopes as they stand.
+
+The body carries which target was decided, and exactly one of the two is ever set:
+
+```json
+{"type": 3, "data": {"guild_id": null, "discord_id": "123456789012345678",
+                     "scopes": ["vc.read", "vc.pay"]}}
+```
+
+`discord_id` is the person who decided, in the same shape the ask names them, and `guild_id` stays
+the string it was: a body with one of them is the event, and "exactly one" is the ask's rule rather
+than a second one. Nothing has been released with the old body, so this is a shape to change now
+rather than a compatibility shim to keep — and the ping is the application's to answer with the
+same poll it was already making.
+
 ## What is not here
 
-- **A push when a personal grant is decided.** The server grant notifies the application's webhook;
-  this one does not, and the reason is that the event is a guild's (`grant_decided` carries a
-  `guild_id`, and an application's subscriptions are its own). The application is polling the
-  device code anyway — that is how it learns the answer — so a second way to say the same thing is
-  not worth a second event shape.
 - **A token kind on the wire.** It is a UUID row, like the server grant's.
 - **Personal grants for anything but a person's own account.** There is no "grant for a guild I
   administer" here: that is the server grant.
