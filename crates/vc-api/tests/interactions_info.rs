@@ -60,15 +60,16 @@ fn from_dm(sender: i64) -> Value {
 
 /// `Interactions.Info.render/2` for `:ok`, as the components it is now.
 ///
-/// TestGuild has no icon in these, so its line is a Text Display rather than a section: a section
+/// TestGuild has no icon in these, so its field is a Text Display rather than a section: a section
 /// requires an accessory, and no icon is none to give it.
 fn embed(name: &str, unit: &str, amount: i64) -> Value {
     json!([{
         "type": 17,
         "accent_color": COLOR_BRAND,
         "components": [
-            { "type": 10, "content": "**TestGuild**" },
-            { "type": 10, "content": format!("**{name}**") },
+            { "type": 10, "content": format!("**通貨名: {name}**") },
+            { "type": 10, "content": "**サーバー名**\nTestGuild" },
+            { "type": 10, "content": format!("**単位**\n`{unit}`") },
             { "type": 10, "content": format!("**総発行量**\n`{TOTAL}{unit}`") },
             { "type": 10, "content": format!("**発行枠**\n`{POOL}{unit}`") },
             { "type": 10, "content": format!("**あなたの所持量**\n`{amount}{unit}`") },
@@ -78,10 +79,10 @@ fn embed(name: &str, unit: &str, amount: i64) -> Value {
     }])
 }
 
-/// The guild's line, which is a section when there is an icon to put beside it and a Text Display
+/// The guild's field, which is a section when there is an icon to put beside it and a Text Display
 /// of its own when there is not: a section requires an accessory, so no icon means no section.
 fn guild_line(body: &Value) -> String {
-    let line = &body["data"]["components"][0]["components"][0];
+    let line = &body["data"]["components"][0]["components"][1];
 
     let text = if line["type"] == 9 {
         &line["components"][0]["content"]
@@ -226,12 +227,12 @@ async fn a_guild_without_an_icon_has_no_icon_url(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
         guild_line(&response.body),
-        "**TestGuild**",
+        "**サーバー名**\nTestGuild",
         "{}",
         response.body
     );
     assert!(
-        response.body["data"]["components"][0]["components"][0]
+        response.body["data"]["components"][0]["components"][1]
             .get("accessory")
             .is_none(),
         "no icon is no thumbnail: {}",
@@ -257,7 +258,7 @@ async fn a_guild_icon_url_is_webp(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"]["components"][0]["components"][0]["accessory"]["media"]["url"],
+        response.body["data"]["components"][0]["components"][1]["accessory"]["media"]["url"],
         json!(format!(
             "https://cdn.discordapp.com/icons/{}/981b65442cb7cffa5a60b6b94a10d263.webp",
             money.guild
@@ -267,7 +268,7 @@ async fn a_guild_icon_url_is_webp(pool: PgPool) {
     );
     assert_eq!(
         guild_line(&response.body),
-        "**TestGuild**",
+        "**サーバー名**\nTestGuild",
         "{}",
         response.body
     );
@@ -292,7 +293,7 @@ async fn an_animated_guild_icon_url_is_gif(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
-        response.body["data"]["components"][0]["components"][0]["accessory"]["media"]["url"],
+        response.body["data"]["components"][0]["components"][1]["accessory"]["media"]["url"],
         json!(format!(
             "https://cdn.discordapp.com/icons/{}/a_981b65442cb7cffa5a60b6b94a10d263.gif",
             money.guild
@@ -302,7 +303,7 @@ async fn an_animated_guild_icon_url_is_gif(pool: PgPool) {
     );
     assert_eq!(
         guild_line(&response.body),
-        "**TestGuild**",
+        "**サーバー名**\nTestGuild",
         "{}",
         response.body
     );

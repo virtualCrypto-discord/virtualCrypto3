@@ -55,34 +55,40 @@ pub async fn handle(
 }
 
 /// `Interactions.Info.render/2` for `:ok`.
+///
+/// The embed this replaces had the guild as its **author**, the currency as its **title**, and
+/// four **fields** under them. What a person wants first is which currency this is, so the name
+/// is the title and the guild and the unit are fields beside the four — the guild with its icon
+/// as the section's accessory, where the author's small icon used to sit.
 fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -> Value {
     let unit = info.unit.clone().unwrap_or_default();
 
     let mut children = Vec::new();
 
-    // The guild was the embed's author: a line with a small icon beside it. A section is that
-    // pairing — its text with an accessory — and a thumbnail is the small image, so the icon keeps
-    // its place and moves to the right of the sentence. With no icon there is no accessory to
-    // have, and a section requires one, so the name is a Text Display of its own.
+    children.push(crate::components::text(format!(
+        "**通貨名: {}**",
+        info.name.clone().unwrap_or_default()
+    )));
+
+    // The guild name is a field now, and its icon is the accessory that keeps it from being a
+    // bare sentence: a section is the pairing, and a section needs one — so an icon that is not
+    // there leaves a Text Display.
     if let Some(guild) = &guild {
         let name = guild.get("name").map(value_text).unwrap_or_default();
 
         children.push(match guild_icon(guild) {
             Some(url) => crate::components::section(
-                vec![crate::components::text(format!("**{name}**"))],
+                vec![crate::components::text(format!("**サーバー名**\n{name}"))],
                 crate::components::thumbnail(&url),
             ),
-            None => crate::components::text(format!("**{name}**")),
+            None => crate::components::text(format!("**サーバー名**\n{name}")),
         });
     }
 
-    // The title, then the four fields, then the footer. The fields were `inline`, which is four
-    // columns in an embed and four lines here: a Text Display is a block, so the arrangement is
-    // the one thing about this message that components cannot say the same way.
-    children.push(crate::components::text(format!(
-        "**{}**",
-        info.name.clone().unwrap_or_default()
-    )));
+    // The fields were `inline`, which is four columns in an embed and four lines here: a Text
+    // Display is a block, so the arrangement is the one thing about this message that components
+    // cannot say the same way.
+    children.push(crate::components::text(format!("**単位**\n`{unit}`")));
     children.push(crate::components::text(format!(
         "**総発行量**\n`{}{unit}`",
         info.total_amount
