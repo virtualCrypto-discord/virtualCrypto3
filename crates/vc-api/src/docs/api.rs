@@ -83,7 +83,7 @@ const PROSE: &[Section] = &[
             "`Accept: application/json` を送ってください。`Accept` を省いた場合は `*/*` として扱われます。満たせない場合は 406 です。",
             "金額とIDは文字列で送ります。",
             "レート制限はアカウントごとに、既定で60秒あたり120回です。超えると 429 `rate_limited` です。",
-            "`POST /api/v2/users/@me/transactions` と `POST /api/v2/currencies/issue` は `Idempotency-Key` ヘッダを受け付けます。同じキーで送り直すと、最初の結果がそのまま返り、応答の `Idempotency-Status` が `Duplicate` になります。",
+            "`POST /api/v2/users/@me/transactions`、`POST /api/v2/currencies/issue`、および契約への課金は `Idempotency-Key` ヘッダを受け付けます。同じキーで送り直すと、最初の結果がそのまま返り、応答の `Idempotency-Status` が `Duplicate` になります。キーは「1つの要求」の名前です。再送には同じキーを、別の要求には新しいキーを使ってください。同じキーで別の内容を送っても返るのは最初の要求の答えです(本文は比較しません)。",
         ])],
     ),
     section(

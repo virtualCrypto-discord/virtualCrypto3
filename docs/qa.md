@@ -358,6 +358,7 @@ belief into a fact, and each of these was run while the code was written:
 | a key that is unquoted, or 257 characters | any write | 400 `invalid_idempotency_key` |
 | two `Idempotency-Key` headers | any write | 400 `multiple_idempotency_key_header_is_not_supported`, no `Idempotency-Status` |
 | the same key twice | any write | the first answer, `Idempotency-Status: Duplicate` |
+| the same key with a *different* body | any write | the first answer as well — nothing compares the bodies, deliberately (`docs/known-gaps.md`, "A key is not compared against the request that carries it") |
 | a failure after the key is claimed | any write | 500 with no `Idempotency-Status`, and the key is free afterwards |
 | a claim held for more than a second | any write | 409 `processing` (`should_retry_after_in_seconds`) |
 | `amount` of `"0"`, `"-1"` | payment | 400 `invalid_amount` (the core's refusal) |
@@ -438,6 +439,15 @@ recommendation and what it costs:
       lives, and "come back" is true of it — a retry is cheap and answers as this one
       did. Telling that caller its key is unusable would be new vocabulary for a
       state that removes itself.
+- [x] **A key used with a different body replays, and nothing compares the two.**
+      The specification's `422` for that case is declined deliberately: it defines no
+      way to say that two requests are the same, so the check would be invented here,
+      and an invented one refuses honest retries (a bulk list reordered, a field this
+      API ignores) as readily as it catches a reused key. The cost — the second
+      request under a spent key does not happen, and the caller is the only one who
+      can tell it apart from a retry — is stated in `docs/known-gaps.md`, and
+      `contract_idempotency.rs::another_body_under_the_same_key_replays_the_first_answer`
+      pins both halves of it.
 - [ ] **The two screens page the same way and count differently**: both show five
       rows with `⏪⏮️⏭️⏩` disabled where there is nowhere to go. The contract screen
       knows its total from a `COUNT` it needs anyway (the "K件" line), the claim

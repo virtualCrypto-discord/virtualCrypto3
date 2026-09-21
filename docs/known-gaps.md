@@ -324,6 +324,32 @@ Three things follow from it, and all three are pinned by tests:
   one of those, and the row is not the caller's to take over: nothing can say
   whether the request that made it wrote.
 
+### A key is not compared against the request that carries it
+
+The specification for this header suggests answering a key that is reused for a
+*different* request with `422`. This service does not: a key that already answered
+is answered from the key, and the body arriving under it is never compared with the
+body that spent it.
+
+The reason is that the specification does not say what makes two requests the same,
+so the comparison would be invented here — and every version of it is wrong in both
+directions. Compare too much and an honest retry is refused: a bulk list sent in
+another order (the list is atomic, so the order means nothing, but it is in the
+bytes), a field this API ignores left out, an amount written in another way. Compare
+too little and the case the check exists for slips through anyway. The one thing a
+server cannot know is the caller's intent, and that is the whole of what the
+question asks, so the rule is left where the specification left it: the key is the
+caller's own word for one request, and a caller that reuses it for another request
+is shown the first request's answer rather than a new error invented here.
+
+The cost, stated rather than hidden: a client that reuses a key for a genuinely
+different charge is answered with the *first* charge's answer, and its second charge
+does not happen. Nothing on this side can tell that apart from a retry — the caller
+is the only one who knows — so the place to notice is its own statement,
+`GET /api/v2/contracts/{id}/payments`, or the answer it was handed, which carries
+the first request's numbers rather than the second's. `docs/contracts.md` says the
+same thing where clients read it.
+
 ### The currency command is `/issue` here, where the Elixir's was `/give`
 
 Renamed, not reimplemented. The Elixir registered `give` in

@@ -18,6 +18,15 @@
 //! `REPEATABLE READ` or `SERIALIZABLE` the blocked insert is instead answered with
 //! a serialization failure, which aborts its transaction: nothing is written, no
 //! claim survives, and the caller may retry with the same key.
+//!
+//! **A key is not compared against the request that carries it.** A row that
+//! already answers is answered from the row, whatever body arrives under it: the
+//! specification defines no way to tell whether two requests are the same, so a
+//! comparison written here would be this module's invention — and one that refuses
+//! honest retries (a bulk list in another order, a field this API ignores) as
+//! readily as it caught a caller reusing a key for another charge. The caller's key
+//! is its own word for one request; `docs/known-gaps.md` carries the decision and
+//! what it costs.
 
 use serde_json::{Value, json};
 use sqlx::PgConnection;

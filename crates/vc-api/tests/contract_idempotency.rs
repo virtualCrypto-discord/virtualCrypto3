@@ -273,6 +273,43 @@ async fn a_refusal_is_cached_too(pool: PgPool) {
     assert_eq!(other.body["remaining"], "75");
 }
 
+/// Nothing compares the body a key arrives with against the body that spent it.
+///
+/// A key is the caller's own word for one request, and the specification says
+/// nothing about how a server could tell two requests apart — every definition of
+/// "the same request" refuses some honest retry (a bulk list sent in another order,
+/// a field this API ignores left out). So a second request under a spent key is
+/// answered as the first, and the answer to "but my second charge disappeared" is a
+/// new key. `docs/known-gaps.md` carries the decision and what it costs.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn another_body_under_the_same_key_replays_the_first_answer(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    let first = charge(&pool, &fixture, 25, Some(key_header(KEY))).await;
+
+    assert_eq!(first.status, 201, "body: {}", first.body);
+    assert_eq!(first.body["remaining"], "75");
+
+    // An amount this contract could still pay — so a charge that happened would
+    // be visible, rather than refused for want of room.
+    let reused = charge(&pool, &fixture, 30, Some(key_header(KEY))).await;
+
+    assert_eq!(reused.status, 201, "body: {}", reused.body);
+    assert_eq!(reused.body, first.body, "the first request's answer");
+    assert_eq!(idempotency_status(&reused).as_deref(), Some("Duplicate"));
+    assert_eq!(
+        remaining(&pool, &fixture).await,
+        "75",
+        "and no second charge"
+    );
+
+    // What a genuinely new request needs is a new key, and this one does charge.
+    let fresh = charge(&pool, &fixture, 30, Some(key_header("a-new-key"))).await;
+
+    assert_eq!(fresh.status, 201, "body: {}", fresh.body);
+    assert_eq!(fresh.body["remaining"], "45");
+}
+
 /// The key is the application's, so a token that could not charge without one
 /// cannot charge with one either — and nothing is cached for it to collect.
 #[sqlx::test(migrations = "../vc-core/migrations")]

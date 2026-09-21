@@ -157,6 +157,19 @@ succeeded replays as its own `201` and its own numbers, and **a charge that was
 refused replays as the refusal**, because "the quota is gone" is an answer a retry
 has to get rather than a second attempt at.
 
+**A key is taken at the caller's word.** A key that already answered is answered
+from the key, whatever the body of the request that carries it says: nothing here
+compares the two. The specification suggests refusing a key reused for a
+*different* request with `422`, and that is declined deliberately — it defines no
+way to tell whether two requests are the same, so the comparison would be this
+service's invention, and any invention can refuse an honest retry (a bulk list in
+another order, a field this API ignores left out, an amount written the other way)
+with a status no client of this API has seen. What remains is the cost, and it is
+the caller's to carry: a client that reuses a key for a request that is genuinely
+different is shown the first request's answer, and its second charge never
+happens. Discipline about keys is the caller's half of this feature, and
+`GET /api/v2/contracts/{id}/payments` is where to see what a key did.
+
 **The claim, the charge and the answer are one commit.** The key's row is inserted
 by the same transaction that performs the charge and stores the answer, so they
 cannot come apart: a charge that failed rolls back with its claim (nothing moved,
