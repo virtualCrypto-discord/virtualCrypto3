@@ -16,10 +16,18 @@ use vc_core::page::Cursor;
 
 use crate::error::ApiError;
 
+/// How many rows a page holds when the caller does not say.
+///
+/// One number for every list here — the claim list, the two contract lists and the
+/// statement — because a page is the list's contract with its caller rather than
+/// each list's own taste. The claim list answered *every* matching claim until it
+/// was given this one, which made it the only unbounded-by-default list in the
+/// service; `docs/known-gaps.md` records the difference from the Elixir.
+pub const PER_PAGE: i64 = 50;
+
 /// The most rows one page may hold, however the caller asks.
 ///
-/// Fifty is the default ([`crate::routes::v2::contracts`]'s `PER_PAGE`); this is
-/// the ceiling. A limit the service has to honour is a request to read a table —
+/// [`PER_PAGE`] is the default; this is the ceiling. A limit the service has to honour is a request to read a table —
 /// the first version of this took whatever number it was given, so a caller could
 /// ask for a million rows with a straight face and one query.
 const MAX_LIMIT: i64 = 200;

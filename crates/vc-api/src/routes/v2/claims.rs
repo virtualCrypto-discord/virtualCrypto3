@@ -102,7 +102,9 @@ pub async fn index(
         Some(_) => return Err(ApiError::InvalidRequest("invalid_type")),
     };
 
-    let page = pagination::Page::asked(&params)?;
+    // A page whether or not the caller asked for one: the Elixir answered every
+    // matching claim here, which is the one thing a list endpoint must not do.
+    let page = pagination::Page::asked(&params)?.limited_to(pagination::PER_PAGE);
 
     let order_param = params.one("order");
     let order = match order_param.as_deref() {

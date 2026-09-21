@@ -104,7 +104,7 @@ const PROSE: &[Section] = &[
         "請求の一覧とページング",
         &[
             text(
-                "`GET /api/v2/users/@me/claims` は `limit` を付けると、その件数までを返します。\
+                "`GET /api/v2/users/@me/claims` は `limit` の件数までを返します。\
                  続きは応答の `link` ヘッダ（`rel=\"next\"`）のURLから取ります。\
                  カーソルは `next`（そのidを含まない）と `on_next`（含む）のどちらか一方だけを指定できます。",
             ),
@@ -166,7 +166,10 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/api/v2/users/@me/claims",
         summary: "呼び出した利用者に関係する請求の一覧です。",
         access: "利用者のトークン + `vc.claim`",
-        notes: &["`statuses[]` を省略すると未決定の請求だけを返します。"],
+        notes: &[
+            "`statuses[]` を省略すると未決定の請求だけを返します。",
+            "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
+        ],
     },
     Endpoint {
         method: "POST",

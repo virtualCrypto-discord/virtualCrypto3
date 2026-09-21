@@ -349,6 +349,52 @@ async fn a_full_page_carries_a_link_header(pool: PgPool) {
     );
 }
 
+/// A list that answers every matching row when the caller says nothing spends a
+/// caller's memory in proportion to their data, on a request that did not ask for
+/// it. Fifty is the page and `link` says where the next one is — the scan the
+/// contract lists already make, and the one this list was the last to make.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_absent_limit_is_a_page(pool: PgPool) {
+    fixture(&pool).await;
+
+    // Forty-eight more pending claims between the two users, so the list holds one
+    // row more than a page.
+    for id in 7..=54 {
+        insert_claim(&pool, id, 100, "pending", USER1, USER2, CURRENCY_ID).await;
+    }
+
+    let token = mint(&pool, USER1, &["vc.claim"]).await;
+    let response = list(pool.clone(), "", &token).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+
+    let rows = response.body.as_array().expect("an array");
+    assert_eq!(rows.len(), 50, "a page, not everything: {}", response.body);
+    assert_eq!(rows[0]["id"], "54", "newest first");
+    assert_eq!(rows[49]["id"], "2", "and the page ends at the fiftieth");
+
+    let link = response
+        .headers
+        .get("link")
+        .expect("a full page advertises the next one")
+        .to_str()
+        .expect("a header");
+    assert!(link.contains("next=2"), "{link}");
+
+    // The row the page left over is the one the link leads to.
+    let rest = list(pool, "next=2", &token).await;
+    assert_eq!(rest.status, 200, "body: {}", rest.body);
+    assert_eq!(
+        rest.body,
+        expected(&[(1, 500, USER1, USER2, "pending")]),
+        "the rest of the list"
+    );
+    assert!(
+        !rest.headers.contains_key("link"),
+        "and a partial page has no next page"
+    );
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_token_without_the_claim_scope_is_forbidden(pool: PgPool) {
     fixture(&pool).await;

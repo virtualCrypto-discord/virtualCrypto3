@@ -30,17 +30,6 @@ use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
 use vc_core::contract::{self, Contract, ContractError, NewParty};
 
-/// How many rows a page of a list holds when the caller does not say.
-///
-/// **All three lists answer a page**, and the first version of this file was wrong
-/// about the two older ones: it kept "an absent `limit` means every row" for
-/// compatibility with a behaviour nothing depended on, which left a list endpoint
-/// doing the one thing a list endpoint must not — spending a caller's memory in
-/// proportion to their data, on a request that did not ask for it. A page is
-/// bounded and the `link` header is how the next one is asked for; `limit` says
-/// something else if the caller wants to.
-const PER_PAGE: i64 = 50;
-
 /// `POST /api/v2/contracts`: the application asking.
 ///
 /// Nothing is locked and nothing is agreed here: this is the question the named
@@ -85,7 +74,7 @@ pub async fn index(
     let application = application(&state, &user).await?;
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
-    let page = pagination::Page::asked(&params)?.limited_to(PER_PAGE);
+    let page = pagination::Page::asked(&params)?.limited_to(pagination::PER_PAGE);
 
     let contracts = contract::of_application(state.pool(), application, page.cursor, page.limit)
         .await
@@ -349,7 +338,7 @@ pub async fn mine(
     };
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
-    let page = pagination::Page::asked(&params)?.limited_to(PER_PAGE);
+    let page = pagination::Page::asked(&params)?.limited_to(pagination::PER_PAGE);
 
     let contracts = contract::of_party(state.pool(), named, page.cursor, page.limit)
         .await
@@ -393,7 +382,7 @@ pub async fn payments(
     }
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
-    let page = pagination::Page::asked(&params)?.limited_to(PER_PAGE);
+    let page = pagination::Page::asked(&params)?.limited_to(pagination::PER_PAGE);
 
     let entries = contract::payments(state.pool(), id, page.cursor, page.limit)
         .await
