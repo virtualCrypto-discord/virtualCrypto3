@@ -29,11 +29,11 @@ document — report it as such.
 
 **If you have one pass and not a day**, in this order:
 
-1. §1.2 against `routes/mod.rs`, `routes/v2/mod.rs`, and the test files: the route
+1. §1.2 against `crates/vc-api/src/routes/mod.rs`, `crates/vc-api/src/routes/v2/mod.rs`, and the test files: the route
    table and the suite column — it is the fastest way to see a surface nothing
    holds.
-2. §1.5: re-derive the reachability table from `routes/idempotency.rs` and
-   `vc_core/idempotency.rs`. The interesting claim is the *unreachable* one.
+2. §1.5: re-derive the reachability table from `crates/vc-api/src/routes/idempotency.rs` and
+   `crates/vc-core/src/idempotency.rs`. The interesting claim is the *unreachable* one.
 3. §1.4: the two pagination mechanisms, in the code and in the docs, and the doc ↔
    code rows of that table.
 4. §2.2: pick two mutations and run them. A test that cannot fail is worth less
@@ -129,19 +129,19 @@ findings.
 | `GET /api/docs` | — | `documentation` |
 | `GET /` and the client routes | — | `web` |
 
-- [ ] Every path in `crates/vc-api/src/routes/mod.rs` and `routes/v2/mod.rs` is a
+- [ ] Every path in `crates/vc-api/src/routes/mod.rs` and `crates/vc-api/src/routes/v2/mod.rs` is a
       row here:
       `grep -hoE '"/[a-zA-Z0-9/:{}@_.-]*"' crates/vc-api/src/routes/{mod.rs,v2/mod.rs} | sort -u`
       is the list to compare against.
 - [ ] For each endpoint, the auth column against its extractor: `AuthUser` (auth
       only), `Limited` (auth plus the per-account limit), `GuildToken` (a grant).
-      `routes/limited.rs` says what is limited; a v2 handler taking `AuthUser`
+      `crates/vc-api/src/routes/limited.rs` says what is limited; a v2 handler taking `AuthUser`
       instead of `Limited` is an unlimited endpoint and a finding.
 - [ ] The two findings above: `POST /oauth2/token/revoke` is what a client calls
       when a token leaked, and `PATCH /oauth2/clients/@me` is the only way an
       application changes its own webhook. Either add the test, or say in §4 why
       not.
-- [ ] `Accept` under `/api` (`require_json_accept` in `routes/mod.rs`): a header
+- [ ] `Accept` under `/api` (`require_json_accept` in `crates/vc-api/src/routes/mod.rs`): a header
       that cannot be satisfied with JSON is a 406 before any handler runs, a
       **missing** header is treated as `*/*` and allowed, and media type parameters
       are ignored (so `q=0` excludes nothing). The four cases are goldens:
@@ -160,11 +160,11 @@ have to agree:
 | Artefact | Where | What to check |
 | --- | --- | --- |
 | the registration | `discord_commands.rs` | names, descriptions, options, `contexts`, `integration_types`, the admin bit |
-| the dispatch | `command/mod.rs`'s `handle` | one arm per command; an unknown name is refused |
-| the prose | `docs/commands.rs` (shown by `/help` and the site) | describes what the handler does, not what it was meant to |
-| the suite | `tests/interactions_*.rs` | nine commands have their own file; `help`, `invite` and `application` live in `interactions_commands.rs`, with `interactions_autocomplete.rs` and the shared `interactions_common.rs` beside them |
+| the dispatch | `crates/vc-api/src/command/mod.rs`'s `handle` | one arm per command; an unknown name is refused |
+| the prose | `crates/vc-api/src/docs/commands.rs` (shown by `/help` and the site) | describes what the handler does, not what it was meant to |
+| the suite | `crates/vc-api/tests/interactions_*.rs` | nine commands have their own file; `help`, `invite` and `application` live in `interactions_commands.rs`, with `interactions_autocomplete.rs` and the shared `interactions_common.rs` beside them |
 
-- [ ] `tests/documentation.rs` asserts registration ↔ prose ↔ order; a reader checks
+- [ ] `crates/vc-api/tests/documentation.rs` asserts registration ↔ prose ↔ order; a reader checks
       the *content* of the prose against the handler.
 - [ ] Every component's state travels in its `custom_id`
       (`crates/vc-api/src/custom_id.rs`): a head byte per space (`0xF0` claim list,
@@ -176,7 +176,7 @@ have to agree:
       unit tests.
 - [ ] The screens nobody clicks in a test: the empty list, "this page is empty", the
       error screens (`CommandError`), the ephemeral flags, the autocomplete lists
-      (`command/autocomplete.rs`).
+      (`crates/vc-api/src/command/autocomplete.rs`).
 - [ ] `contexts` in the registration: `[0, 1]` everywhere except `issue`, `grant`,
       `create` and `delete`, which are `[0]` — guild only, because they act on a
       guild's currency. `discord_commands.rs`'s header says that is the whole of
@@ -186,8 +186,8 @@ have to agree:
 
 | This | must agree with | How it is held |
 | --- | --- | --- |
-| `docs/api.rs` | the routes | `tests/documentation.rs` both ways; a reader checks the content |
-| `docs/contracts.md` | the contract handlers | prose only — the three rules under "Retrying a charge" are `routes/idempotency.rs`'s `guard`; the return rule is `contract::pay_in`; the sizes are `PER_PAGE`, `MAX_LIMIT`, `MAX_CONTRACTS` |
+| `crates/vc-api/src/docs/api.rs` | the routes | `crates/vc-api/tests/documentation.rs` both ways; a reader checks the content |
+| `docs/contracts.md` | the contract handlers | prose only — the three rules under "Retrying a charge" are `crates/vc-api/src/routes/idempotency.rs`'s `guard`; the return rule is `contract::pay_in`; the sizes are `PER_PAGE`, `MAX_LIMIT`, `MAX_CONTRACTS` |
 | `docs/known-gaps.md` | the tree | prose only; every claim is a file or a test |
 | `docs/issue.md`, `docs/oauth2.md` | the issue endpoint, the OAuth2 surface | prose only |
 | `docs/test-port.md` | the ported suites | a ledger: every Elixir case is a file here or recorded as dropped |
@@ -205,6 +205,9 @@ have to agree:
       each is used where it is right: a cursor is stable under inserts and cannot
       say "back"; a page number can say first/last and shifts when rows are
       inserted.
+- [ ] **Every list answers the same default page:** `PER_PAGE` is shared by the
+      claim list, the two contract lists and the statement, and a reader confirms no
+      list has grown a page size of its own.
 
 ### 1.5 Branches, and what makes each reachable
 
@@ -222,8 +225,8 @@ intricate:
 | refused by the isolation level | **no** | the transaction names `READ COMMITTED` | `a_stricter_session_default_does_not_change_the_answer` |
 | a key that is unquoted, too long, or several | yes | a client's mistake | `an_unquoted_key_is_rejected`, `an_over_long_key_is_refused`, `two_keys_at_once_are_refused` |
 
-- [ ] Re-derive the table from `routes/idempotency.rs` and
-      `vc_core/idempotency.rs`: every `match` arm appears, and the one marked
+- [ ] Re-derive the table from `crates/vc-api/src/routes/idempotency.rs` and
+      `crates/vc-core/src/idempotency.rs`: every `match` arm appears, and the one marked
       unreachable has a reason a reader can check rather than "should not happen".
 - [ ] The same pass over the rest: `contract::pay_in`'s error arms,
       `Page::asked`'s bounds, `scheduler::reverify_webhooks`'s handshake outcomes,
@@ -237,7 +240,7 @@ intricate:
 
 - [ ] **Money is conserved.** Read `contract::approve`, `pay_in` and `end`: no path
       writes `remaining` without moving `assets` in the same transaction.
-      `tests/contract_escrow.rs`'s `supply()` and `escrow()` state it.
+      `crates/vc-api/tests/contract_escrow.rs`'s `supply()` and `escrow()` state it.
 - [ ] **A lock is a transfer.** `contract::approve` credits the contract's own
       account (`users.contract_id`); the `assets` trigger deletes a balance that
       reaches zero.
@@ -290,7 +293,7 @@ intricate:
 - [ ] The `_in` wrappers (`contract::pay`, `payment::pay`, `payment::pay_bulk`,
       `issue::issue`): used by tests and the Discord commands, each commits once.
 - [ ] The purge's five tables (`vc_core::purge`): a row that expires and one that
-      does not, per table, in `tests/purge.rs`.
+      does not, per table, in `crates/vc-api/tests/purge.rs`.
 
 ## 2. Dynamic
 
@@ -345,7 +348,7 @@ belief into a fact, and each of these was run while the code was written:
 | Input | Endpoint | Expected |
 | --- | --- | --- |
 | no `limit` | contract lists, statement | 200, fifty rows, `link` when full |
-| no `limit` | claim list | 200, **every matching claim** — see §4 |
+| no `limit` | claim list | 200, fifty rows, `link` when full |
 | `limit=0` | any list | 200, no rows, no `link` |
 | `limit=-1`, `limit=201`, `limit=1000000` | any list | 400 `invalid_limit` |
 | `limit=nyan` | any list | 400 `invalid_limit` |
@@ -358,8 +361,7 @@ belief into a fact, and each of these was run while the code was written:
 | a failure after the key is claimed | any write | 500 with no `Idempotency-Status`, and the key is free afterwards |
 | a claim held for more than a second | any write | 409 `processing` (`should_retry_after_in_seconds`) |
 | `amount` of `"0"`, `"-1"` | payment | 400 `invalid_amount` (the core's refusal) |
-| `amount` of `"ten"` | payment | 400 — but `invalid_format_of_convert_amount`, see §4 |
-| `amount` of `"ten"` | charge, issue | 400 `invalid_format_of_amount` |
+| `amount` of `"ten"` | payment, charge, issue | 400 `invalid_format_of_amount` |
 | everything the contract holds plus one | charge | 409 `not_enough_amount` |
 | `expires_in` of `0`, or of a year and a day | contract create | 400 `invalid_expires_in` |
 | `party_discord_id` naming a stranger | charge | 400 `not_a_party` |
@@ -376,7 +378,7 @@ belief into a fact, and each of these was run while the code was written:
       the webhook re-check together; with a short interval, an aged `expires_at`
       refunds within a tick and the application is notified.
 - [ ] **The deploy build**: `SQLX_OFFLINE=true cargo build --release`.
-- [ ] **Required env vars absent**: `vc-server/src/main.rs` refuses to start, with a
+- [ ] **Required env vars absent**: `crates/vc-server/src/main.rs` refuses to start, with a
       clear message. Optional ones absent: the documented defaults.
 - [ ] **The site**: `GET /` answers the index, a hashed asset may be kept forever,
       an unknown client route answers the index, and `/api/…` keeps its own routes.
@@ -420,11 +422,6 @@ Nothing here can be settled from a terminal.
 Each of these is a decision rather than a defect; a reviewer should give a
 recommendation and what it costs:
 
-- [ ] **The claim list answers every matching claim when no `limit` is given**,
-      where the contract lists and the statement answer fifty. It is a ported
-      endpoint whose documented behaviour is "no limit means no limit", and it is
-      now the only unbounded-by-default list in the service. Align it (a deviation
-      to record) or say in `docs/known-gaps.md` why not.
 - [ ] **Is fifty the right page**, with a ceiling of two hundred? The size is a
       judgement; the bounds are tested.
 - [ ] **Is a second the right wait** for a key another request holds
@@ -432,12 +429,6 @@ recommendation and what it costs:
       come back.
 - [ ] **Is `409 processing` with `should_retry_after_in_seconds` the right thing to
       tell a client**, and is the `Idempotency-Status` header worth what it costs?
-- [ ] **Is `invalid_format_of_convert_amount` the right name** for a non-numeric
-      `amount` in the single-payment clause of `POST /api/v2/users/@me/transactions`
-      (`routes/v2/transactions.rs:86`)? It is what the Elixir said for that clause,
-      and the charge and issue endpoints call the same mistake
-      `invalid_format_of_amount`. Either it is fidelity worth keeping or a name to
-      fix in one line.
 - [ ] **The two screens count differently on purpose**: the contract screen says a
       number (a `COUNT`), the claim screen fetches one row more than a page holds and
       says "and more". Both are legitimate; confirm both read well.

@@ -261,6 +261,34 @@ who can fix it is looking at the status. All three are pinned by tests on the
 claim list and on the contract lists, which share the reader — so they are
 behaviour rather than an accident of a column.
 
+### An absent `limit` is a page, where the Elixir answered every matching claim
+
+`GET /api/v2/users/@me/claims` answered its whole result set when the caller gave
+no `limit`, which is what `Rest.md` says it does. Every other list here — the two
+contract lists and a contract's statement — answers fifty rows and a `link` header
+to the next page, and a list that reads a table in proportion to a caller's data
+is the one thing a list endpoint must not do. The claim list takes the same fifty
+now (`routes/pagination.rs`'s `PER_PAGE`, one number for all four lists, with the
+ceiling of two hundred beside it).
+
+Records that were written against the old behaviour and read the endpoint in a loop
+without a `limit` will see fifty rows and no error; the `link` header is how the
+rest is asked for, and a caller that asks for a page size still gets it.
+
+### A malformed `amount` is named after the field, not after another clause
+
+The single-payment clause of `POST /api/v2/users/@me/transactions` answered a
+non-numeric `amount` with `invalid_format_of_convert_amount`: the name of the
+*list* clause's amount, and a name that points at a field neither clause has — the
+list clause reads `amount`, `unit` and `receiver_discord_id`. The charge and issue
+endpoints answer the same mistake with `invalid_format_of_amount`, and this one
+does now too.
+
+The status was 400 before and is 400 after; only the description string moved. The
+Elixir's own wording for this clause cannot be checked from here (`Rest.md` is not
+in this repository), so this is recorded as a deliberate difference rather than a
+correction.
+
 ### The claim is in the write's transaction
 
 The Elixir's idempotency plug claims the key and *then* calls the controller, in a
