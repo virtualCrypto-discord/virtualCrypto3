@@ -71,6 +71,8 @@ export type Endpoint = {
    */
   example: { request: string[]; response: string[] } | null;
   notes: Span[][];
+  /** What it refuses, one line each: the status, the body, and when. */
+  errors: Span[][];
 };
 
 export type Guide = {

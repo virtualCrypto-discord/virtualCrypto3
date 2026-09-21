@@ -582,9 +582,19 @@ fn account(user: &AuthUser) -> Result<i32, ApiError> {
         .map_err(|_| ApiError::Internal("the token's subject is not an account id".into()))
 }
 
+/// The Discord id of the account a caller is, if it has one.
+///
+/// Both kinds of token have an account, and an application's never has a Discord
+/// id: a contract names people, so an application is named in none of them, and
+/// the list answers it an empty array rather than a refusal.
 async fn caller_discord_id(state: &AppState, user: &AuthUser) -> Result<Option<i64>, ApiError> {
-    let account = account(user)?;
-    let found = vc_core::user::find_by_id(state.pool(), account)
+    let Ok(subject) = i32::try_from(user.subject) else {
+        return Err(ApiError::Internal(
+            "the token's subject is not an account id".into(),
+        ));
+    };
+
+    let found = vc_core::user::find_by_id(state.pool(), subject)
         .await?
         .ok_or(vc_core::Error::UserNotFound(user.subject))?;
 

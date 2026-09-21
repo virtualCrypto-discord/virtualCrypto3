@@ -119,6 +119,11 @@ fn endpoint_json(endpoint: &Endpoint, links: &Links) -> Value {
             .iter()
             .map(|note| spans_json(note, links))
             .collect::<Vec<_>>(),
+        "errors": endpoint
+            .errors
+            .iter()
+            .map(|line| spans_json(line, links))
+            .collect::<Vec<_>>(),
     })
 }
 

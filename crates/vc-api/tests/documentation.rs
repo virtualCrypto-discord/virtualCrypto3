@@ -57,6 +57,36 @@ fn every_example_answer_is_json_or_nothing() {
     }
 }
 
+/// Every endpoint says what it refuses: a reference that lists what a call does
+/// and not when it is answered with a failure is one a caller learns the rest of
+/// from a request that went wrong.
+///
+/// And each line opens with the status, because that is the thing a caller scans
+/// for — a list of conditions with the numbers buried in it is a list nobody
+/// reads twice.
+#[test]
+fn every_endpoint_says_what_it_refuses() {
+    for endpoint in api::all() {
+        assert!(
+            !endpoint.errors.is_empty(),
+            "{} {} has no errors written down",
+            endpoint.method,
+            endpoint.path
+        );
+
+        for line in endpoint.errors {
+            let status: String = line.chars().take(3).collect();
+
+            assert!(
+                status.len() == 3 && status.chars().all(|character| character.is_ascii_digit()),
+                "{} {}: {line} does not open with a status",
+                endpoint.method,
+                endpoint.path
+            );
+        }
+    }
+}
+
 /// The two lists are one list: Discord's picker, the bot's `/help` and the site's
 /// command page are the same commands, and a command that is only in one of them
 /// is a command nobody can find out about — or a page about something that does
@@ -264,6 +294,19 @@ async fn the_site_reads_one_document(pool: PgPool) {
         api::all().len()
     );
 
+    // The errors are the site's too: a list that never reached the page would be
+    // a list nobody reads.
+    assert!(
+        document["endpoints"]
+            .as_array()
+            .expect("endpoints")
+            .iter()
+            .all(|endpoint| endpoint["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty())),
+        "an endpoint's errors did not reach the document"
+    );
+
     assert!(!body.contains("{site}"), "an address was left unfilled");
     assert!(body.contains(&links().site_url), "the deployment's address");
 }
@@ -391,6 +434,7 @@ fn prose() -> Vec<&'static str> {
         found.push(endpoint.summary);
         found.push(endpoint.access);
         found.extend(endpoint.notes.iter().copied());
+        found.extend(endpoint.errors.iter().copied());
     }
 
     found

@@ -149,6 +149,15 @@
               {/each}
             </ul>
           {/if}
+
+          {#if endpoint.errors.length > 0}
+            <p class="example">エラー</p>
+            <ul>
+              {#each endpoint.errors as line}
+                <li><Spans spans={line} /></li>
+              {/each}
+            </ul>
+          {/if}
         </section>
       {/each}
     {/if}

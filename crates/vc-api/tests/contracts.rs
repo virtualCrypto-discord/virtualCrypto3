@@ -857,6 +857,33 @@ async fn a_users_list_names_the_contracts_they_are_in(pool: PgPool) {
     assert_eq!(none.body, json!([]));
 }
 
+/// An application's token is answered an empty list rather than a refusal: `@me`
+/// is whatever the token is, and a contract names people — an application's
+/// account has no Discord id, so it is named in nothing.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_applications_list_is_empty(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    id_of(
+        &pool,
+        &fixture.token,
+        asked("nyan", json!([alice_party(100)])),
+    )
+    .await;
+
+    let response = request(
+        vc_api::router(state(pool, fake())),
+        "GET",
+        "/api/v2/users/@me/contracts",
+        Some(&fixture.token),
+        Value::Null,
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body, json!([]));
+}
+
 /// The scope says an application may ask; a token without it cannot, and a user
 /// token is not an application at all.
 #[sqlx::test(migrations = "../vc-core/migrations")]
