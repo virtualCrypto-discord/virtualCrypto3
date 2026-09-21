@@ -530,9 +530,11 @@ handshake makes.
 **And so is the re-verification, which this paragraph used to say was missing.**
 `handshake` ("verify") runs when a webhook is registered or edited, and
 `scheduler::reverify_webhooks` runs it afterwards: one tick's work is a batch of
-the applications whose webhook has not been checked for a week, and the outcome
-goes into `applications.webhook_verified_at` and `webhook_failed_at` (`0010`),
-which `GET /oauth2/clients/@me` answers back to the application. A failure is
+the applications whose webhook is due, and the outcome goes into
+`applications.webhook_verified_at` and `webhook_failed_at` (`0010`), which
+`GET /oauth2/clients/@me` answers back to the application. What makes a webhook
+due is `applications.next_reverify_at` (`0016`): each check sets it a week out,
+and registering or replacing a webhook sets it to now. A failure is
 recorded and logged and that is all — the webhook is not taken away and deliveries
 keep going, because what a delivery carries is a decision about somebody's money
 and an outage is not a reason to stop telling an application about it. The

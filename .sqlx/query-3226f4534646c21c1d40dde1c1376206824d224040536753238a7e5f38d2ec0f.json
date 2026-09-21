@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, webhook_url AS \"webhook_url!\", private_key\n           FROM applications\n          WHERE webhook_url IS NOT NULL\n            AND (GREATEST(webhook_verified_at, webhook_failed_at) IS NULL\n                 OR GREATEST(webhook_verified_at, webhook_failed_at) < $1)\n          ORDER BY GREATEST(webhook_verified_at, webhook_failed_at) NULLS FIRST, id\n          LIMIT $2",
+  "query": "SELECT id, webhook_url AS \"webhook_url!\", private_key\n           FROM applications\n          WHERE webhook_url IS NOT NULL\n            AND next_reverify_at <= $1\n          ORDER BY next_reverify_at, id\n          LIMIT $2",
   "describe": {
     "columns": [
       {
@@ -49,5 +49,5 @@
       false
     ]
   },
-  "hash": "c8775050eeadaa93cdf505e216df42506f5f1148151dccb079b0c72325e9026e"
+  "hash": "3226f4534646c21c1d40dde1c1376206824d224040536753238a7e5f38d2ec0f"
 }

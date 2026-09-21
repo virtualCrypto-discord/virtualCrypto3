@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n            SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5,\n                discord_support_server_invite_slug = $6,\n                application_type = $7::text::openid_connect_application_type,\n                grant_types = $8::text[]::openid_connect_grant_types[],\n                response_types = $9::text[]::openid_connect_response_types[],\n                subscribed_events = $10,\n                client_secret = COALESCE($11, client_secret),\n                next_reverify_at = $12\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "Int8Array",
+        "Varchar",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1745e6640c6639f52c25a73b12d780086cf7d0eb1b2492fc9575ec361132cd5"
+}

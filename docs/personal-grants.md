@@ -45,7 +45,7 @@ The scopes an application may ask a person for are the three a person's own acco
 
 | Scope | What it lets the holder do, as that user |
 |---|---|
-| `vc.read` | read the account: `/api/v2/users/@me` and its balances, claims, transactions and contracts, and a contract it is named in |
+| `vc.read` | read the account: `/api/v2/users/@me` and its balances, claims and contracts, including a contract it is named in and its payment history |
 | `vc.pay` | spend from it: `POST /api/v2/users/@me/transactions`, and the bulk one |
 | `vc.claim` | act on its claims: create one, approve, deny, cancel, set metadata |
 
@@ -114,6 +114,9 @@ application takes for itself with `client_credentials`, are the account's own cr
 not narrowed this way.
 
 ## Authorization model and compatibility
+
+The complete model, including the legacy JWT rules, resource checks and implementation
+boundaries, is documented in [認証・認可モデル](authorization.md).
 
 Authentication and authorization are separate. An account credential (a session, PAT,
 or application's JWT) is an **own credential**. A personal grant is a **delegation**:

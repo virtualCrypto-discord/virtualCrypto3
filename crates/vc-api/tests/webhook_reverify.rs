@@ -33,7 +33,8 @@ async fn application_at(pool: &PgPool, url: &str) -> i64 {
 
     sqlx::query!(
         "UPDATE applications
-            SET webhook_url = $2, private_key = $3, public_key = $4
+            SET webhook_url = $2, private_key = $3, public_key = $4,
+                next_reverify_at = '2000-01-01 00:00:00'::timestamp
           WHERE id = $1",
         application,
         url,
@@ -290,9 +291,11 @@ async fn a_pass_that_is_old_is_asked_again(pool: PgPool) {
 
     assert_eq!(asked.load(Ordering::SeqCst), 2, "the two PINGs");
 
+    // The row is due again once its schedule is in the past, which is what the
+    // sweep reads: ageing the stored history alone would not move it (`0016`).
     sqlx::query!(
         "UPDATE applications
-            SET webhook_verified_at = webhook_verified_at - interval '8 days'
+            SET next_reverify_at = next_reverify_at - interval '8 days'
           WHERE id = $1",
         application
     )

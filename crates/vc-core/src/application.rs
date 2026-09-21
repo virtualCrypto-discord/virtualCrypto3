@@ -454,21 +454,23 @@ pub struct StaleWebhook {
     pub private_key: Vec<u8>,
 }
 
-/// The applications whose webhook has not been **checked** since `stale_before` —
-/// never-checked first, then the one that waited longest.
+/// The applications whose webhook is due to be checked again — `next_reverify_at`
+/// at or before `due_by` — the one due longest ago first.
 ///
-/// "Checked" is either outcome, which is what `GREATEST` over the two columns is:
-/// a webhook that was asked and failed has been asked, and a queue that counted
-/// only the passes would come back to the same failures on every tick while the
-/// rest of a fleet waited behind them. (PostgreSQL's `GREATEST` ignores nulls, so
-/// the answer is null exactly when neither has been written.)
+/// "Due" is a stored time rather than a `GREATEST` over the two outcome columns.
+/// That is what lets one partial index serve both the filter and the order
+/// (`0016`), and why `0010`'s index on `webhook_verified_at` is gone: the sweep
+/// writes `next_reverify_at` a week out when it checks a webhook, and registering
+/// or replacing one sets it to now — which is what the old `NULLS FIRST` arm meant
+/// by "never checked". `GREATEST` ignored nulls, so a webhook that was asked and
+/// failed counted as asked; the sweep still counts either outcome as a check.
 ///
 /// `limit` is what keeps the clock's work bounded. The job runs on every tick and
 /// a fleet is not one application, so a pass re-checks a few and the tick after it
 /// takes the next few.
 pub async fn stale_webhooks(
     pool: &sqlx::PgPool,
-    stale_before: time::PrimitiveDateTime,
+    due_by: time::PrimitiveDateTime,
     limit: i64,
 ) -> std::result::Result<Vec<StaleWebhook>, sqlx::Error> {
     sqlx::query_as!(
@@ -476,16 +478,22 @@ pub async fn stale_webhooks(
         "SELECT id, webhook_url AS \"webhook_url!\", private_key
            FROM applications
           WHERE webhook_url IS NOT NULL
-            AND (GREATEST(webhook_verified_at, webhook_failed_at) IS NULL
-                 OR GREATEST(webhook_verified_at, webhook_failed_at) < $1)
-          ORDER BY GREATEST(webhook_verified_at, webhook_failed_at) NULLS FIRST, id
+            AND next_reverify_at <= $1
+          ORDER BY next_reverify_at, id
           LIMIT $2",
-        stale_before,
+        due_by,
         limit
     )
     .fetch_all(pool)
     .await
 }
+
+/// How long a check is good for before the webhook is due again. A week is longer
+/// than any outage worth noticing lasts and short enough that a webhook that has
+/// stopped answering is found within one. `0016`'s backfill measures the same
+/// seven days from the last check, so a row the sweep has not touched yet comes
+/// back on the same schedule.
+pub const REVERIFY_AFTER: time::Duration = time::Duration::days(7);
 
 /// What a re-check found, written where the next one reads it.
 ///
@@ -493,22 +501,34 @@ pub async fn stale_webhooks(
 /// and neither clears the other: an application that answered once and has gone
 /// quiet is one whose last pass is still worth knowing, and the failure beside it
 /// is why it is being asked again. Neither takes the webhook away.
+///
+/// Either outcome also schedules the next check: `next_reverify_at` moves
+/// [`REVERIFY_AFTER`] out, which is what the sweep reads instead of recomputing a
+/// `GREATEST` over the two history columns (`0016`).
 pub async fn record_webhook_verification(
     pool: &sqlx::PgPool,
     application_id: i64,
     passed: bool,
     now: time::PrimitiveDateTime,
 ) -> std::result::Result<(), sqlx::Error> {
+    let due = now + REVERIFY_AFTER;
+
     match passed {
         true => sqlx::query!(
-            "UPDATE applications SET webhook_verified_at = $2 WHERE id = $1",
+            "UPDATE applications
+                SET webhook_verified_at = $2, next_reverify_at = $3
+              WHERE id = $1",
             application_id,
-            now
+            now,
+            due
         ),
         false => sqlx::query!(
-            "UPDATE applications SET webhook_failed_at = $2 WHERE id = $1",
+            "UPDATE applications
+                SET webhook_failed_at = $2, next_reverify_at = $3
+              WHERE id = $1",
             application_id,
-            now
+            now,
+            due
         ),
     }
     .execute(pool)
@@ -787,6 +807,11 @@ pub struct Registered {
 /// names none gets none. The Elixir wrote a literal empty list here and threw the
 /// validated value away, which docs/oauth2.md used to record; nothing downstream
 /// reads this field, so the difference is visible in the answer and nowhere else.
+///
+/// A registration that names a webhook makes it due at once: `next_reverify_at` is
+/// set to the row's `inserted_at`, because the handshake it just passed is not
+/// written as a check — `webhook_verified_at` is the sweep's to write — and a row
+/// with a webhook and no schedule would never be re-verified (`0016`).
 pub async fn register(
     pool: &sqlx::PgPool,
     new: &NewApplication,
@@ -795,6 +820,7 @@ pub async fn register(
 ) -> crate::error::Result<Registered> {
     let client_id = uuid::Uuid::new_v4();
     let client_secret = new_secret();
+    let now = crate::model::utc_now();
 
     let mut tx = pool.begin().await?;
 
@@ -803,11 +829,12 @@ pub async fn register(
              (status, client_id, client_secret, response_types, grant_types,
               application_type, client_name, client_uri, logo_uri, webhook_url,
               discord_support_server_invite_slug, owner_discord_id,
-              private_key, public_key, subscribed_events, inserted_at, updated_at)
+              private_key, public_key, subscribed_events, inserted_at, updated_at,
+              next_reverify_at)
          VALUES (0, $1, $2, $14::text[]::openid_connect_response_types[],
                  $3::text[]::openid_connect_grant_types[],
                  $4::text::openid_connect_application_type,
-                 $5, $6, $7, $8, $9, $10, $11, $12, $15::bigint[], $13, $13)
+                 $5, $6, $7, $8, $9, $10, $11, $12, $15::bigint[], $13, $13, $16)
         RETURNING id",
         client_id,
         client_secret,
@@ -821,9 +848,10 @@ pub async fn register(
         new.owner_discord_id,
         private_key.to_vec(),
         public_key,
-        crate::model::utc_now(),
+        now,
         &new.response_types,
-        &new.subscribed_events
+        &new.subscribed_events,
+        new.webhook_url.as_ref().map(|_| now)
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -910,6 +938,11 @@ pub struct Changes {
 ///
 /// `redirect_uris` is replaced wholesale when given: deleted and reinserted, so a
 /// request that sends one URI leaves one rather than two.
+///
+/// A webhook that is added or replaced is made due at once (`next_reverify_at`):
+/// `apply` has just run its handshake and nothing writes that as a check. One that
+/// is removed leaves the column NULL, and an edit that does not name the webhook
+/// leaves the sweep's schedule alone (`0016`).
 pub async fn patch(
     pool: &sqlx::PgPool,
     application_id: i64,
@@ -924,7 +957,8 @@ pub async fn patch(
                   application_type::text AS "application_type!",
                   grant_types::text[] AS "grant_types!",
                   response_types::text[] AS "response_types!",
-                  subscribed_events AS "subscribed_events!: Vec<i64>"
+                  subscribed_events AS "subscribed_events!: Vec<i64>",
+                  next_reverify_at
              FROM applications WHERE id = $1 FOR UPDATE"#,
         application_id
     )
@@ -946,6 +980,18 @@ pub async fn patch(
 
     let client_secret = changes.rotate_client_secret.then(new_secret);
 
+    // The webhook the row will carry. A value that differs from what it had is a
+    // webhook added or replaced: `apply` has just run the new URL's handshake, and
+    // the schedule has to follow the URL or the new one is never re-checked, so it
+    // is due at once. Removing it leaves no schedule, and an edit that does not
+    // touch it keeps whatever the sweep last wrote.
+    let webhook_url = applied(&changes.webhook_url, &current.webhook_url);
+    let next_reverify_at = if webhook_url == current.webhook_url {
+        current.next_reverify_at
+    } else {
+        webhook_url.as_ref().map(|_| crate::model::utc_now())
+    };
+
     sqlx::query!(
         "UPDATE applications
             SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5,
@@ -954,13 +1000,14 @@ pub async fn patch(
                 grant_types = $8::text[]::openid_connect_grant_types[],
                 response_types = $9::text[]::openid_connect_response_types[],
                 subscribed_events = $10,
-                client_secret = COALESCE($11, client_secret)
+                client_secret = COALESCE($11, client_secret),
+                next_reverify_at = $12
           WHERE id = $1",
         application_id,
         applied(&changes.client_name, &current.client_name),
         applied(&changes.client_uri, &current.client_uri),
         applied(&changes.logo_uri, &current.logo_uri),
-        applied(&changes.webhook_url, &current.webhook_url),
+        webhook_url,
         applied(
             &changes.discord_support_server_invite_slug,
             &current.discord_support_server_invite_slug
@@ -978,7 +1025,8 @@ pub async fn patch(
             .subscribed_events
             .clone()
             .unwrap_or(current.subscribed_events),
-        client_secret
+        client_secret,
+        next_reverify_at
     )
     .execute(&mut *tx)
     .await?;

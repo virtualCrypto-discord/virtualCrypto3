@@ -248,3 +248,64 @@ async fn the_clock_needs_nobody_awake(pool: PgPool) {
         "nobody called an endpoint"
     );
 }
+
+/// How many contracts one tick settles, which is the clock's own chunk. The
+/// bound is the read's as much as the tick's — one index scan that stops after
+/// this many rows — so the test names it rather than deriving it.
+const PER_PASS: i64 = 500;
+
+/// Contracts whose deadline has passed and that nobody has settled, counted.
+async fn still_due(pool: &PgPool) -> i64 {
+    sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM contracts
+          WHERE status IN ('pending', 'active')
+            AND expires_at IS NOT NULL AND expires_at <= now()"
+    )
+    .fetch_one(pool)
+    .await
+    .expect("a count")
+}
+
+/// A backlog is settled a chunk at a time: a tick takes the contracts that ran
+/// out longest ago and the rest are the next tick's, which is what keeps one
+/// tick's work — the read and the transactions behind it — from being the whole
+/// backlog's.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_backlog_is_settled_a_chunk_at_a_time(pool: PgPool) {
+    let application = fixture(&pool).await;
+
+    // Two more contracts than a tick takes, each a minute older than the last,
+    // written as rows: what a tick does is decided by the rows it finds.
+    sqlx::query!(
+        "INSERT INTO contracts (application_id, currency_id, expires_at, status, inserted_at, updated_at)
+         SELECT $1, 1, now() - i * interval '1 minute', 'active', now(), now()
+           FROM generate_series(1, $2::bigint) i",
+        application,
+        PER_PASS + 2
+    )
+    .execute(&pool)
+    .await
+    .expect("a backlog");
+
+    let state = state_with_notifier(pool.clone(), fake(), Arc::new(Recorded::default()));
+
+    vc_api::scheduler::settle_expired(&state).await;
+
+    assert_eq!(still_due(&pool).await, 2, "one tick, one chunk");
+
+    // And the two left are the two that ran out last, which is the far end of
+    // the order the chunk is taken from: the longest overdue go first.
+    let newest = sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM contracts
+          WHERE status IN ('pending', 'active')
+            AND expires_at IS NOT NULL AND expires_at > now() - interval '3 minutes'"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("a count");
+    assert_eq!(newest, 2, "the oldest deadlines were the ones settled");
+
+    vc_api::scheduler::settle_expired(&state).await;
+
+    assert_eq!(still_due(&pool).await, 0, "the next tick takes the rest");
+}

@@ -99,7 +99,10 @@ default, `VCRYPTO_SETTLE_INTERVAL_SECS` to change it, `0` to turn it off — and
 every contract still standing whose `expires_at` has passed is settled: each
 party's remainder is refunded, the contract becomes `expired` rather than
 `canceled` (the deadline did it, not anyone in it), and the application is told
-over its webhook, the way it is told about a decision.
+over its webhook, the way it is told about a decision. A tick takes a bounded
+chunk of them — the ones that ran out longest ago, first — so a backlog cannot
+hold the tick: what a tick does not reach is still expired and still the next
+tick's work.
 
 Settling is what a party's own withdrawal would have done, so the two race safely:
 the contract row is locked first, and whichever runs second finds a contract that

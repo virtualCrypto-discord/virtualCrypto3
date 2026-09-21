@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n            SET next_reverify_at = next_reverify_at - interval '8 days'\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eb777a03fdbfc1df3cd89b097774dcc4696e83fe5343d82d3e8346780911cfde"
+}

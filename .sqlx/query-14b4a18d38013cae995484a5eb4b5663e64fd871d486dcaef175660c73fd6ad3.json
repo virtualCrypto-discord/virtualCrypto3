@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n            SET webhook_url = $2, private_key = $3, public_key = $4,\n                next_reverify_at = '2000-01-01 00:00:00'::timestamp\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "14b4a18d38013cae995484a5eb4b5663e64fd871d486dcaef175660c73fd6ad3"
+}

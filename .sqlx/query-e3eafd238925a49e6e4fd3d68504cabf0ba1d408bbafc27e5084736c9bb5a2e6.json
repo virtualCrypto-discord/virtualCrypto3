@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO contracts (application_id, currency_id, expires_at, status, inserted_at, updated_at)\n         SELECT $1, 1, now() - i * interval '1 minute', 'active', now(), now()\n           FROM generate_series(1, $2::bigint) i",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e3eafd238925a49e6e4fd3d68504cabf0ba1d408bbafc27e5084736c9bb5a2e6"
+}

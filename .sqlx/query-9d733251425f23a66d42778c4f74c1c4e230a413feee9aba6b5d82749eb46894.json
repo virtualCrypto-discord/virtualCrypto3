@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO applications\n             (status, client_id, client_secret, response_types, grant_types,\n              application_type, client_name, client_uri, logo_uri, webhook_url,\n              discord_support_server_invite_slug, owner_discord_id,\n              private_key, public_key, subscribed_events, inserted_at, updated_at,\n              next_reverify_at)\n         VALUES (0, $1, $2, $14::text[]::openid_connect_response_types[],\n                 $3::text[]::openid_connect_grant_types[],\n                 $4::text::openid_connect_application_type,\n                 $5, $6, $7, $8, $9, $10, $11, $12, $15::bigint[], $13, $13, $16)\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "TextArray",
+        "Text",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Int8",
+        "Bytea",
+        "Bytea",
+        "Timestamp",
+        "TextArray",
+        "Int8Array",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9d733251425f23a66d42778c4f74c1c4e230a413feee9aba6b5d82749eb46894"
+}

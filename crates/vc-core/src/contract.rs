@@ -1241,21 +1241,43 @@ async fn end(
     Ok(())
 }
 
-/// The contracts whose deadline has passed and that nobody has settled yet.
+/// A chunk of the contracts whose deadline has passed and that nobody has settled
+/// yet: the ones that ran out longest ago first, and at most `limit` of them.
 ///
 /// What the clock asks for: a contract still standing — `pending` or `active` —
 /// whose time is up. The ones already over are not looked at again, which is what
 /// the partial index behind this query is for.
+///
+/// **The order and the bound are one decision, and they are the index's.**
+/// `contracts_unsettled_expiry_index` is keyed on `expires_at`, so it can serve the
+/// filter *and* an order on the same column — deadline order — and a scan of it can
+/// then stop the moment it has `limit` rows. Ordered by `id` instead, the index
+/// serves only the filter: every matching row is read, fetched from the heap and
+/// sorted before the first one comes back, so the pass costs the whole backlog and
+/// grows with it. Reading the deadline order costs the chunk.
+///
+/// **Deadline order is also the order to settle in.** Every row is a contract whose
+/// time is up and whose money is locked, so the one that ran out first is the one
+/// to refund first; among contracts created with a deadline after them, deadlines
+/// and ids rise together anyway. Ties are not broken: a second sort key would make
+/// the executor sort every row that shares the first one, which is what makes the
+/// stop-early scan stop early no longer. Progress needs no tiebreak, because a
+/// later deadline is always a later candidate — a contract created now is due no
+/// earlier than the next tick — so each tick takes the next `limit` rows off the
+/// front of the same order and the rest are still there next tick.
 pub async fn expired(
     pool: &PgPool,
     now: OffsetDateTime,
+    limit: i64,
 ) -> std::result::Result<Vec<i64>, ContractError> {
     let ids = sqlx::query_scalar!(
         "SELECT id FROM contracts
           WHERE status IN ('pending', 'active')
             AND expires_at IS NOT NULL AND expires_at <= $1
-          ORDER BY id",
-        at(now)
+          ORDER BY expires_at
+          LIMIT $2",
+        at(now),
+        limit
     )
     .fetch_all(pool)
     .await

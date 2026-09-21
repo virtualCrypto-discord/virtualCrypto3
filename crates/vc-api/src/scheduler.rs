@@ -32,18 +32,39 @@ pub fn interval() -> Duration {
         .unwrap_or(DEFAULT_INTERVAL)
 }
 
-/// One tick's work, first half: every contract whose deadline has passed is
-/// settled, and the application that wrote it is told.
+/// How many expired contracts one tick settles.
+///
+/// The clock is not the only thing that bounds a tick, for the reason the rate
+/// limiters are bounded rather than trusted: a backlog is what a minute of downtime
+/// leaves behind, and settling tens of thousands of contracts in one tick would
+/// hold the tick — and the four jobs behind it — for as long as it took to drain.
+/// What a tick can do is bounded instead, and the rest of the backlog is what the
+/// next tick is for: 500 a minute drains more than a deployment expires, and a
+/// backlog of them is gone inside an hour.
+///
+/// 500 is also what the read behind it costs. `contract::expired` reads the oldest
+/// deadlines first off `contracts_unsettled_expiry_index`, so the pass is one index
+/// scan that stops after this many rows — measured at 0.2 ms for the plan that
+/// returns it — while a pass without the bound reads, fetches and sorts every
+/// contract that is over.
+const EXPIRED_PER_PASS: i64 = 500;
+
+/// One tick's work, first half: the expired contracts that ran out longest ago are
+/// settled, and the application that wrote each is told.
 ///
 /// One transaction per contract rather than one for all of them: they are
 /// independent agreements, and a contract that cannot be settled — a database
 /// error, a row somebody else is deciding about at this moment — must not hold up
 /// the rest. `settle` answers whether it did anything, which is also what keeps a
 /// second tick from refunding twice.
+///
+/// A tick takes `EXPIRED_PER_PASS` of them rather than all of them, so the work
+/// here is bounded by the tick and not by the backlog: whatever is left is still
+/// expired and still due the next time round.
 pub async fn settle_expired(state: &AppState) {
     let now = time::OffsetDateTime::now_utc();
 
-    let ids = match vc_core::contract::expired(state.pool(), now).await {
+    let ids = match vc_core::contract::expired(state.pool(), now, EXPIRED_PER_PASS).await {
         Ok(ids) => ids,
         Err(error) => {
             tracing::warn!(?error, "the expired contracts could not be read");
@@ -115,11 +136,6 @@ pub async fn purge_expired(state: &AppState) {
     }
 }
 
-/// How old a webhook's last pass has to be before it is checked again. A week is
-/// longer than any outage worth noticing lasts and short enough that a webhook
-/// that has stopped answering is found within one.
-const WEBHOOK_STALE: time::Duration = time::Duration::days(7);
-
 /// How many webhooks one pass re-checks. Two requests each, to strangers, so the
 /// batch is what keeps a pass short rather than the interval being the only bound.
 const WEBHOOKS_PER_PASS: i64 = 10;
@@ -130,12 +146,14 @@ const WEBHOOKS_PER_PASS: i64 = 10;
 /// and then says nothing is exactly the case this job exists to find.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The webhooks that have not answered in a while, re-checked.
+/// The webhooks that are due to be re-checked.
 ///
 /// The handshake runs at registration and at an edit, and an application that
 /// passed once and then stopped answering is one nobody hears about: deliveries
 /// are fire-and-forget, so nothing about sending one says whether it landed. This
-/// is what turns "it verified once" into something that is still true.
+/// is what turns "it verified once" into something that is still true. What makes
+/// a row due is its `applications.next_reverify_at`, which
+/// `record_webhook_verification` moves a week out after each check (`0016`).
 ///
 /// **It does not charge the handshake limiter.** That budget belongs to the
 /// caller a handshake is made for — one per three seconds, twenty an hour, fifty a
@@ -152,19 +170,14 @@ pub async fn reverify_webhooks(state: &AppState) {
     let now = time::OffsetDateTime::now_utc();
     let at = time::PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
-    let webhooks = match vc_core::application::stale_webhooks(
-        state.pool(),
-        at - WEBHOOK_STALE,
-        WEBHOOKS_PER_PASS,
-    )
-    .await
-    {
-        Ok(webhooks) => webhooks,
-        Err(error) => {
-            tracing::warn!(?error, "the webhooks to re-check could not be read");
-            return;
-        }
-    };
+    let webhooks =
+        match vc_core::application::stale_webhooks(state.pool(), at, WEBHOOKS_PER_PASS).await {
+            Ok(webhooks) => webhooks,
+            Err(error) => {
+                tracing::warn!(?error, "the webhooks to re-check could not be read");
+                return;
+            }
+        };
 
     for webhook in webhooks {
         let Ok(private_key) = <[u8; 32]>::try_from(webhook.private_key.as_slice()) else {

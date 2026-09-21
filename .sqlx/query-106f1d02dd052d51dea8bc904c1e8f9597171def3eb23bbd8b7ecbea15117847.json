@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM contracts\n          WHERE status IN ('pending', 'active')\n            AND expires_at IS NOT NULL AND expires_at > now() - interval '3 minutes'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "106f1d02dd052d51dea8bc904c1e8f9597171def3eb23bbd8b7ecbea15117847"
+}
