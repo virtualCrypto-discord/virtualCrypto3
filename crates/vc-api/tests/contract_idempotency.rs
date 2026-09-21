@@ -636,6 +636,15 @@ async fn a_key_another_request_is_holding_answers_come_back(pool: PgPool) {
     assert_eq!(refused.status, 409, "body: {}", refused.body);
     assert_eq!(refused.body["error"], "processing");
     assert_eq!(idempotency_status(&refused).as_deref(), Some("Duplicate"));
+    // The body says to come back without saying when; the standard header is the
+    // number, and it is the wait that just expired.
+    assert_eq!(
+        refused
+            .headers
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
     assert_eq!(
         remaining(&pool, &fixture).await,
         QUOTA.to_string(),

@@ -19,7 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use axum::Json;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use sqlx::PgConnection;
@@ -233,13 +233,32 @@ async fn claim_in(
 }
 
 /// The answer for a request whose key another one is using: `409` with the body
-/// that says to come back, and the header that says it was read rather than done.
+/// that says to come back, and the headers that say how and that it was read
+/// rather than done.
+///
+/// The body is the Elixir's, and it says *that* to retry without saying when —
+/// `should_retry_after_in_seconds` with no number under it. The number goes in
+/// HTTP's own [`header::RETRY_AFTER`], which is what the payments APIs this
+/// convention comes from send beside the same kind of answer, and what a retrying
+/// client already reads. One second, the wait that just ran out.
+///
+/// This is also the answer to a claim left by a version of this service that
+/// claimed outside its transaction: those rows have no answer coming, and the purge
+/// takes them within the seven days a key lives. Telling that caller to come back
+/// is the same advice, and it is true — a retry of it is cheap and answers as this
+/// one did.
 fn processing() -> Response {
-    with_idempotency(
+    let mut response = with_idempotency(
         StatusCode::CONFLICT,
         vc_core::idempotency::processing(),
         "Duplicate",
-    )
+    );
+
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+
+    response
 }
 
 /// Whether the claim gave up waiting for another transaction to let go of the row.

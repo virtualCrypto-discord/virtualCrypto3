@@ -182,8 +182,11 @@ the charge as well, leaving the charge as the only step that can fail.
 The response header says which of the three things happened:
 `Idempotency-Status: OK` for the request that did the work, `Duplicate` for one
 that read it back, `Not Requested` for a request that carried no key. A key that is being used right now answers `409 processing` and asks to be
-retried; a key that is not the quoted string the specification asks for is a `400`
-before anything is claimed.
+retried — the body is the same one, and the standard `Retry-After: 1` beside it is
+the number it does not carry; a key that is not the quoted string the specification
+asks for is a `400` before anything is claimed. (One second is the wait that ran
+out, and asking again is what the caller should do: a retry that lands after the
+holder commits reads the stored answer.)
 
 ## Reading what it paid
 

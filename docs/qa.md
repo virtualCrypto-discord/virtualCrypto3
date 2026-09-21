@@ -427,11 +427,22 @@ recommendation and what it costs:
 - [ ] **Is a second the right wait** for a key another request holds
       (`CLAIM_WAIT`)? It decides whether a retry waits for the answer or is told to
       come back.
-- [ ] **Is `409 processing` with `should_retry_after_in_seconds` the right thing to
-      tell a client**, and is the `Idempotency-Status` header worth what it costs?
-- [ ] **The two screens count differently on purpose**: the contract screen says a
-      number (a `COUNT`), the claim screen fetches one row more than a page holds and
-      says "and more". Both are legitimate; confirm both read well.
+- [x] **`409 processing`, decided.** The body is the Elixir's and says to retry
+      without saying when; the number is now HTTP's `Retry-After: 1`, which is what
+      the payments APIs this header convention comes from send beside the same
+      answer (Worldpay's `Idempotency-Status` field, CityPay's, the middleware
+      libraries). The `Idempotency-Status` header stays: it is the only way a client
+      whose response was lost can tell "I did this" from "I read it back".
+- [x] **A row that answers nothing keeps the same answer** (the pre-`4435878`
+      shape): it has no answer coming, the purge takes it within the seven days a key
+      lives, and "come back" is true of it — a retry is cheap and answers as this one
+      did. Telling that caller its key is unusable would be new vocabulary for a
+      state that removes itself.
+- [ ] **The two screens page the same way and count differently**: both show five
+      rows with `⏪⏮️⏭️⏩` disabled where there is nowhere to go. The contract screen
+      knows its total from a `COUNT` it needs anyway (the "K件" line), the claim
+      screen never counts — one extra row tells it there is more, and it counts only
+      when `⏩` is pressed. Confirm both read well.
 - [ ] **Whether a deployment ever sets an isolation level above `READ COMMITTED`**:
       the idempotency transaction names its own, so the answer is the same either
       way, but the session default is what a `psql` session inherits.
