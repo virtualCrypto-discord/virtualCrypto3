@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contract_parties\n            SET status = 'approved', remaining = amount, updated_at = $2,\n                approval_order = (SELECT COALESCE(MAX(approval_order), 0) + 1\n                                    FROM contract_parties WHERE contract_id = $3)\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamp",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c40a59b3cdd34bf8851171068fb9de032c014ab7d2c15574c1babe1f5598e96"
+}

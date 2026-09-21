@@ -258,6 +258,9 @@ fn describe(contract: &Contract, me: i64) -> String {
 /// taken back — one more press would only be refused, and a screen that offers
 /// what it will refuse is a screen that lies.
 fn buttons(contract: &Contract, me: i64) -> Option<Value> {
+    if contract.status != "pending" && contract.status != "active" {
+        return None;
+    }
     let mine = contract
         .parties
         .iter()
@@ -298,6 +301,7 @@ fn contract_status(status: &str) -> &'static str {
     match status {
         "active" => "全員承認済み",
         "canceled" => "終了",
+        "expired" => "期限切れ",
         _ => "承認待ち",
     }
 }

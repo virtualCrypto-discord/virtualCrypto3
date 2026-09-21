@@ -299,7 +299,7 @@ pub async fn open_of_party(
     let total = sqlx::query_scalar!(
         "SELECT count(*) AS \"count!\" FROM contracts c
            JOIN contract_parties p ON p.contract_id = c.id
-          WHERE p.discord_id = $1 AND c.status <> 'canceled'",
+          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')",
         discord_id
     )
     .fetch_one(pool)
@@ -314,7 +314,7 @@ pub async fn open_of_party(
            JOIN currencies ON currencies.id = c.currency_id
            JOIN applications ON applications.id = c.application_id
            JOIN contract_parties p ON p.contract_id = c.id
-          WHERE p.discord_id = $1 AND c.status <> 'canceled'
+          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')
           ORDER BY c.id DESC
           LIMIT $2
          OFFSET $3",
@@ -604,10 +604,13 @@ pub async fn approve(
 
     sqlx::query!(
         "UPDATE contract_parties
-            SET status = 'approved', remaining = amount, updated_at = $2
+            SET status = 'approved', remaining = amount, updated_at = $2,
+                approval_order = (SELECT COALESCE(MAX(approval_order), 0) + 1
+                                    FROM contract_parties WHERE contract_id = $3)
           WHERE id = $1",
         party.id,
-        now
+        now,
+        contract_id
     )
     .execute(&mut *tx)
     .await
@@ -755,7 +758,7 @@ pub async fn withdraw(
 /// One transaction. The contract row is locked first, so a withdrawal cannot
 /// land between the bounds check and the spend; what the parties have left is
 /// read, and then consumed **oldest approval first** — one statement, walking
-/// the parties in id order and taking from each up to what the payment still
+/// the parties in approval order and taking from each up to what the payment still
 /// needs. Which party's money a payment used is not part of the contract: what
 /// the parties agreed to is an amount, and FIFO is what makes every refund exact
 /// without splitting anyone's remainder into fractions.
@@ -877,7 +880,7 @@ pub async fn pay_in(
     let taken = sqlx::query!(
         "WITH ordered AS (
              SELECT p.id, u.id AS sender_id, p.remaining,
-                    COALESCE(sum(p.remaining) OVER (ORDER BY p.id
+                    COALESCE(sum(p.remaining) OVER (ORDER BY p.approval_order, p.id
                               ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0)::bigint
                         AS before
                FROM contract_parties p
@@ -950,7 +953,7 @@ pub async fn pay_in(
     let amounts: Vec<i64> = taken.iter().map(|row| row.amount).collect();
     let senders: Vec<i64> = taken.iter().map(|row| i64::from(row.sender_id)).collect();
 
-    // `ORDER BY p.id` is what makes a payment's rows ordered rather than
+    // `ORDER BY p.approval_order, p.id` is what makes a payment's rows ordered rather than
     // unfortunate: without it the rows of one payment are inserted in whatever
     // order the draw returned them, and a statement lists them by id. This is the
     // draw's own order — oldest approval first — so a reader sees the slices in
@@ -963,7 +966,7 @@ pub async fn pay_in(
            FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)
            JOIN users u ON u.id = t.sender_id
            JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id
-          ORDER BY p.id",
+          ORDER BY p.approval_order, p.id",
         &amounts,
         &senders,
         i64::from(receiver.id),

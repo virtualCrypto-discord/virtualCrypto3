@@ -174,9 +174,11 @@ pub async fn send(
 
     // The status first, because the body consumes the response and the handshake needs both.
     let status = transport.status(&response);
-    let body = response.json::<Value>().await.ok();
+    // A refusal needs only its status. A successful PING still has to carry
+    // {"type": 1}; a missing or invalid JSON body cannot satisfy that check.
+    let body = response.json::<Value>().await.unwrap_or(Value::Null);
 
-    Ok(status.zip(body))
+    Ok(status.map(|status| (status, body)))
 }
 
 /// The event body for a claim update: type 2, with the events as its data.
