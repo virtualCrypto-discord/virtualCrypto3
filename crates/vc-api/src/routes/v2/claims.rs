@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::PrimitiveDateTime;
 
-use crate::routes::limited::Limited;
+use crate::routes::limited::{Authorized, ReadClaims, WriteClaims};
 use crate::routes::pagination::{self, QueryParams, parse_number};
 use vc_core::claim::{ClaimFilter, ClaimView, Order, SrFilter};
 
@@ -21,15 +21,10 @@ const STATUSES: [&str; 4] = ["pending", "approved", "denied", "canceled"];
 /// or the claimant may read a claim, and the metadata is the requester's own.
 pub async fn get_by_id(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<ReadClaims>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !user.scopes.vc_claim {
-        return Err(ApiError::PermissionDenied);
-    }
-
-    let operator_id = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+    let operator_id = user.account_id();
 
     // Ecto would cast the raw path segment into the bigint column and raise on a
     // non-numeric value; PATCH already answers those with 404, so do the same.
@@ -54,17 +49,12 @@ pub async fn get_by_id(
 /// order, and the response carries a `link` header when a full page was returned.
 pub async fn index(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<ReadClaims>,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if !user.scopes.vc_claim {
-        return Err(ApiError::PermissionDenied);
-    }
-
-    let operator_id = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+    let operator_id = user.account_id();
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
 
@@ -197,7 +187,7 @@ pub async fn index(
 /// and a non-positive amount before any metadata validation.
 pub async fn create(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<WriteClaims>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let object = body.as_object();
@@ -211,12 +201,7 @@ pub async fn create(
         && payer.is_string()
         && amount.is_string()
     {
-        if !user.scopes.vc_claim {
-            return Err(ApiError::PermissionDenied);
-        }
-
-        let operator_id = i32::try_from(user.subject)
-            .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+        let operator_id = user.account_id();
 
         let payer_discord_id = parse_number(payer.as_str().unwrap_or_default())
             .ok_or(ApiError::InvalidRequest("invalid_payer_discord_id_value"))?;
@@ -324,16 +309,11 @@ fn create_error(error: vc_core::claim::CreateError) -> ApiError {
 /// the database trigger can reject their metadata.
 pub async fn patch(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<WriteClaims>,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    if !user.scopes.vc_claim {
-        return Err(ApiError::PermissionDenied);
-    }
-
-    let operator_id = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+    let operator_id = user.account_id();
 
     // `Integer.parse(id)` with a clean tail; anything else is not found.
     let claim_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;

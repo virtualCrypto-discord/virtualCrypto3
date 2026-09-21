@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use serde_json::{Value, json};
 
-use crate::routes::limited::Limited;
+use crate::routes::limited::{Authorized, Read};
 
 use crate::discord::filter_profile;
 use crate::discord_auth::user_profile;
@@ -20,13 +20,15 @@ use crate::state::AppState;
 /// about the application's own account, and that account has no Discord behind it. That case is
 /// `{"id": …, "discord": null}` rather than an error — there is nothing to read, and a caller
 /// asking about itself is not asking for something that is missing.
-pub async fn me(State(state): State<AppState>, user: Limited) -> Result<Json<Value>, ApiError> {
-    let local_id = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+pub async fn me(
+    State(state): State<AppState>,
+    user: Authorized<Read>,
+) -> Result<Json<Value>, ApiError> {
+    let local_id = user.account_id();
 
     let account = vc_core::user::find_by_id(state.pool(), local_id)
         .await?
-        .ok_or(vc_core::Error::UserNotFound(user.subject))?;
+        .ok_or(vc_core::Error::UserNotFound(i64::from(user.account_id())))?;
 
     let Some(discord_id) = account.discord_id else {
         return Ok(Json(json!({
@@ -50,14 +52,13 @@ pub async fn me(State(state): State<AppState>, user: Limited) -> Result<Json<Val
 /// is one too.
 pub async fn balances(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<Read>,
 ) -> Result<Json<Value>, ApiError> {
-    let local_id = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+    let local_id = user.account_id();
 
     let account = vc_core::user::find_by_id(state.pool(), local_id)
         .await?
-        .ok_or(vc_core::Error::UserNotFound(user.subject))?;
+        .ok_or(vc_core::Error::UserNotFound(i64::from(user.account_id())))?;
 
     let holdings = vc_core::balance::holdings_for_user(state.pool(), account.id).await?;
 

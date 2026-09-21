@@ -1,150 +1,191 @@
-//! An authenticated caller, within their allowance.
+//! Operation-specific authorization for the account APIs.
+//!
+//! Authentication preserves the credential's authority: an account credential
+//! and a personal delegation are different principals. Neither authentication
+//! nor a delegation can be extracted by a handler directly. A handler must name
+//! an operation, whose policy is checked before it receives an account id.
+
+use std::marker::PhantomData;
 
 use axum::Json;
 use axum::extract::FromRequestParts;
-use axum::http::StatusCode;
-use axum::http::header::AUTHORIZATION;
-use axum::http::request::Parts;
+use axum::http::{StatusCode, header::AUTHORIZATION, request::Parts};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
-
-use vc_auth::{AuthUser, Kind};
-
-use crate::state::AppState;
+use vc_auth::{AuthUser, Kind, Scopes};
 use vc_core::grant::Target;
 
-/// An authenticated caller, counted against their own allowance, and the
-/// currencies the token is for.
-///
-/// **This is an addition.** The Elixir limits the interaction endpoint and nothing
-/// else — the v2 API it does not limit at all — so there is no golden for this and
-/// the shape below is a choice rather than a reproduction. It is the shape the v2
-/// errors already use, which is the only thing it can be faithful to.
-///
-/// The limit is per account, which is why it is checked here rather than in a
-/// layer: an account is only known once the token has been verified, and a layer
-/// would have to verify tokens a second time, or count addresses instead. A handler
-/// that takes this instead of `AuthUser` cannot forget to be limited.
-///
-/// Two kinds of credential arrive here, and both are the account acting: the
-/// account's own JWT — a browser session, a personal access token, an
-/// application's own `client_credentials` token — and a **grant's** token, which
-/// is the UUID of an `access_tokens` row a person approved. The second is a
-/// delegation, so it is narrowed to the currencies the grant named; the first is
-/// the account itself and is not, which is the whole of the difference
-/// `docs/resources.md` draws. [`Self::resources`] is that narrowing: empty is
-/// every currency, which is both a grant that named none and every credential
-/// that is the account's own.
-pub struct Limited {
-    user: AuthUser,
-    resources: Vec<i64>,
-    delegated: bool,
+use crate::{error::ApiError, state::AppState};
+
+/// Policies are sealed: new operations must be added to the policy table here.
+pub trait Permission: private::Sealed + Send + Sync {
+    const OPERATION: Operation;
+}
+mod private {
+    pub trait Sealed {}
 }
 
-impl Limited {
-    /// Whether this credential acts under a grant rather than as the account itself.
-    pub fn is_delegated(&self) -> bool {
-        self.delegated
+#[derive(Clone, Copy)]
+pub enum Operation {
+    Read,
+    ReadClaims,
+    Pay,
+    WriteClaims,
+    ApplicationContracts,
+    DecideContract,
+}
+
+macro_rules! permissions {
+    ($($name:ident => $operation:ident),* $(,)?) => {$(
+        pub enum $name {}
+        impl private::Sealed for $name {}
+        impl Permission for $name {
+            const OPERATION: Operation = Operation::$operation;
+        }
+    )*};
+}
+permissions! {
+    Read => Read,
+    ReadClaims => ReadClaims,
+    Pay => Pay,
+    WriteClaims => WriteClaims,
+    ApplicationContracts => ApplicationContracts,
+    DecideContract => DecideContract,
+}
+
+/// No default permission, no raw authentication extractor, and no `Deref` to
+/// `AuthUser`: an operation must be chosen at every handler boundary.
+pub struct Authorized<P: Permission> {
+    principal: Principal,
+    account_id: i32,
+    permission: PhantomData<P>,
+}
+
+/// A delegation never becomes an account's own credential, even when both name
+/// the same account. In particular, scopes cannot turn it into a contract party
+/// credential or an application's credential.
+enum Principal {
+    Own(AuthUser),
+    Delegated {
+        account_id: i32,
+        scopes: Scopes,
+        resources: Vec<i64>,
+    },
+}
+
+impl Principal {
+    fn authorize(&self, operation: Operation) -> Result<(), ApiError> {
+        use Operation::*;
+        let (allowed, refusal) = match self {
+            Self::Delegated { scopes, .. } => (
+                match operation {
+                    Read | ReadClaims => scopes.vc_read,
+                    Pay => scopes.vc_pay,
+                    WriteClaims => scopes.vc_claim,
+                    ApplicationContracts | DecideContract => false,
+                },
+                match operation {
+                    ApplicationContracts | DecideContract => ApiError::PermissionDenied,
+                    _ => ApiError::InsufficientScope,
+                },
+            ),
+            Self::Own(user) => (
+                // Preserve the account credentials' existing API contract.
+                match operation {
+                    Read => true,
+                    ReadClaims | WriteClaims => user.scopes.vc_claim,
+                    Pay => user.scopes.vc_pay,
+                    ApplicationContracts => user.kind == Kind::App && user.scopes.vc_contract,
+                    DecideContract => user.kind == Kind::User,
+                },
+                match operation {
+                    Pay => ApiError::InsufficientScope,
+                    ApplicationContracts if user.kind == Kind::App => ApiError::InsufficientScope,
+                    _ => ApiError::PermissionDenied,
+                },
+            ),
+        };
+        if allowed { Ok(()) } else { Err(refusal) }
+    }
+}
+
+impl<P: Permission> Authorized<P> {
+    pub fn account_id(&self) -> i32 {
+        self.account_id
     }
 
-    /// The currencies the token is for. Empty is every currency — the empty set a
-    /// grant written before resources existed carries, the collection form of
-    /// `resource`, and every credential that is not a grant's at all.
+    pub fn is_application(&self) -> bool {
+        matches!(&self.principal, Principal::Own(user) if user.kind == Kind::App)
+    }
+
+    /// Empty is unrestricted. A delegation's nonempty list is retained even
+    /// after its currencies are deleted; own credentials are unrestricted.
     pub fn resources(&self) -> &[i64] {
-        &self.resources
+        match &self.principal {
+            Principal::Own(_) => &[],
+            Principal::Delegated { resources, .. } => resources,
+        }
     }
 }
 
-/// So that switching a handler over is a change to its signature and nothing else:
-/// `user.scopes` and `user.subject` keep working, and only the type says that this
-/// caller has been counted.
-impl std::ops::Deref for Limited {
-    type Target = AuthUser;
-
-    fn deref(&self) -> &AuthUser {
-        &self.user
-    }
-}
-
-impl FromRequestParts<AppState> for Limited {
+impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
     type Rejection = Response;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        // A grant token is an `access_tokens` row's own id, which is a UUID and
-        // never a JWT — the two cannot be confused, so which path to take is
-        // decided by the string rather than by trying one and falling back.
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
         let grant = parts
             .headers
             .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(vc_auth::extractor::bearer_token)
             .and_then(|token| Uuid::parse_str(token).ok());
-
-        let (user, resources) = match grant {
-            Some(token_id) => {
-                let resolved = vc_core::grant::resolve_token(
-                    state.pool(),
-                    token_id,
-                    OffsetDateTime::now_utc(),
-                )
-                .await
-                .map_err(|error| crate::error::ApiError::from(error).into_response())?;
-
-                // A guild's grant is the guild issuing endpoint's, and this is not
-                // it: a token written for one is refused the way an unknown token
-                // is, which is what keeps the two kinds apart.
+        let principal = match grant {
+            Some(token) => {
+                let resolved =
+                    vc_core::grant::resolve_token(state.pool(), token, OffsetDateTime::now_utc())
+                        .await
+                        .map_err(|error| ApiError::from(error).into_response())?;
                 let Some(resolved) =
                     resolved.filter(|grant| matches!(grant.target, Target::User(_)))
                 else {
-                    return Err(unauthorized());
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error":"invalid_token"})),
+                    )
+                        .into_response());
                 };
-
-                (
-                    AuthUser {
-                        subject: i64::from(resolved.account_id),
-                        kind: Kind::User,
-                        scopes: vc_auth::Scopes::from_list(&resolved.scopes),
-                        jti: token_id.to_string(),
-                    },
-                    resolved.resources,
-                )
+                Principal::Delegated {
+                    account_id: resolved.account_id,
+                    scopes: Scopes::from_list(&resolved.scopes),
+                    resources: resolved.resources,
+                }
             }
-            None => (
+            None => Principal::Own(
                 AuthUser::from_request_parts(parts, state)
                     .await
                     .map_err(IntoResponse::into_response)?,
-                Vec::new(),
             ),
         };
-
-        if !state.limiter().allow(&format!("v2:{}", user.subject)) {
+        let account_id = match &principal {
+            Principal::Own(user) => i32::try_from(user.subject)
+                .map_err(|_| ApiError::Internal("subject out of range".into()).into_response())?,
+            Principal::Delegated { account_id, .. } => *account_id,
+        };
+        if !state.limiter().allow(&format!("v2:{account_id}")) {
             return Err((
                 StatusCode::TOO_MANY_REQUESTS,
-                Json(json!({ "error": "rate_limited" })),
+                Json(json!({"error":"rate_limited"})),
             )
                 .into_response());
         }
-
-        Ok(Limited {
-            user,
-            resources,
-            delegated: grant.is_some(),
+        principal
+            .authorize(P::OPERATION)
+            .map_err(IntoResponse::into_response)?;
+        Ok(Self {
+            principal,
+            account_id,
+            permission: PhantomData,
         })
     }
-}
-
-/// The answer to a token that is not one this extractor accepts, or is a grant's
-/// token for a guild rather than a person. One answer for all of them, the way
-/// `AuthUser` gives one: a caller learns that this token does not work here.
-fn unauthorized() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "invalid_token" })),
-    )
-        .into_response()
 }

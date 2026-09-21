@@ -70,6 +70,7 @@ pub struct Party {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contract {
     pub id: i64,
+    pub currency_id: i64,
     pub application_id: i64,
     /// What the application calls itself, which is what a screen showing the
     /// contract has to name: a user deciding whether to trust it needs to know
@@ -200,7 +201,7 @@ pub async fn find(
 ) -> std::result::Result<Option<Contract>, ContractError> {
     let row = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+        "SELECT c.id, c.currency_id, c.application_id, applications.client_name, c.receiver_discord_id,
                 c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
@@ -232,7 +233,7 @@ pub async fn of_application(
 
     let rows = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+        "SELECT c.id, c.currency_id, c.application_id, applications.client_name, c.receiver_discord_id,
                 c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
@@ -301,7 +302,7 @@ pub async fn open_of_party(
 
     let rows = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+        "SELECT c.id, c.currency_id, c.application_id, applications.client_name, c.receiver_discord_id,
                 c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
@@ -344,17 +345,30 @@ pub async fn of_party(
     cursor: Cursor,
     limit: Option<i64>,
 ) -> std::result::Result<Vec<Contract>, ContractError> {
+    of_party_in(pool, discord_id, cursor, limit, &[]).await
+}
+
+/// The same list, restricted by currency before applying its cursor and limit.
+/// An empty resource list means unrestricted, as it does for every grant.
+pub async fn of_party_in(
+    pool: &PgPool,
+    discord_id: i64,
+    cursor: Cursor,
+    limit: Option<i64>,
+    resources: &[i64],
+) -> std::result::Result<Vec<Contract>, ContractError> {
     let (next, on_next) = cursors(cursor);
 
     let rows = sqlx::query_as!(
         ContractRow,
-        "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,
+        "SELECT c.id, c.currency_id, c.application_id, applications.client_name, c.receiver_discord_id,
                 c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id
            FROM contracts c
            JOIN currencies ON currencies.id = c.currency_id
            JOIN applications ON applications.id = c.application_id
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1
+            AND (cardinality($5::bigint[]) = 0 OR c.currency_id = ANY($5))
             AND ($2::bigint IS NULL OR c.id < $2)
             AND ($3::bigint IS NULL OR c.id <= $3)
           ORDER BY c.id DESC
@@ -362,7 +376,8 @@ pub async fn of_party(
         discord_id,
         next,
         on_next,
-        limit
+        limit,
+        resources
     )
     .fetch_all(pool)
     .await
@@ -411,6 +426,7 @@ async fn read_all(
 
 struct ContractRow {
     id: i64,
+    currency_id: i64,
     application_id: i64,
     client_name: Option<String>,
     receiver_discord_id: Option<i64>,
@@ -475,6 +491,7 @@ struct PartyRow {
 fn with_parties(row: ContractRow, parties: Vec<Party>) -> Contract {
     Contract {
         id: row.id,
+        currency_id: row.currency_id,
         application_id: row.application_id,
         client_name: row.client_name,
         unit: row.unit,

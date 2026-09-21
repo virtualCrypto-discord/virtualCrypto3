@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1\n            AND ($2::bigint IS NULL OR c.id < $2)\n            AND ($3::bigint IS NULL OR c.id <= $3)\n          ORDER BY c.id DESC\n          LIMIT $4",
+  "query": "SELECT c.id, c.currency_id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')\n          ORDER BY c.id DESC\n          LIMIT $2\n         OFFSET $3",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "currency_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "currency_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "application_id",
         "type_info": "Int8",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "client_name",
         "type_info": "Varchar",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "receiver_discord_id",
         "type_info": "Int8",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "expires_at",
         "type_info": "Timestamp",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "status!",
         "type_info": "Varchar",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "unit",
         "type_info": "Varchar",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "guild_id",
         "type_info": "Int8",
         "origin": {
@@ -96,11 +107,11 @@
       "Left": [
         "Int8",
         "Int8",
-        "Int8",
         "Int8"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       true,
@@ -111,5 +122,5 @@
       true
     ]
   },
-  "hash": "4f1321dc37f35f602c168066349a63e7c1d52674601c58acf5f62a12545675c5"
+  "hash": "57c4d4843c485b9ec4b1cfb0622f4700aa24855ae6b8f2dcacb3600c421a9f31"
 }

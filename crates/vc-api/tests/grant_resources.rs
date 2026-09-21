@@ -838,3 +838,303 @@ async fn currency_restriction_applies_to_claim_approval(pool: PgPool) {
     .await;
     assert_eq!(allowed.status, 200);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn delegated_read_scope_is_independent_of_write_scopes(pool: PgPool) {
+    fixture(&pool).await;
+    let app = insert_application(&pool, OWNER, "contract owner").await;
+    let id = vc_core::contract::create(
+        &pool,
+        app,
+        UNIT_A,
+        &[vc_core::contract::NewParty {
+            discord_id: PERSON,
+            amount: 100,
+        }],
+        Some(RECEIVER),
+        None,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    insert_claim(
+        &pool,
+        1,
+        100,
+        "pending",
+        RECEIVER_ACCOUNT,
+        PERSON_ACCOUNT,
+        CURRENCY_A,
+    )
+    .await;
+    for (scope, expected) in [("vc.read", 200), ("vc.pay", 403), ("vc.claim", 403)] {
+        let (_, token, _) = ask_and_approve(&pool, None, &[scope]).await;
+        for path in [
+            "/api/v2/users/@me".to_owned(),
+            "/api/v2/users/@me/balances".to_owned(),
+            "/api/v2/users/@me/claims".to_owned(),
+            "/api/v2/users/@me/claims/1".to_owned(),
+            "/api/v2/users/@me/contracts".to_owned(),
+            format!("/api/v2/contracts/{id}"),
+            format!("/api/v2/contracts/{id}/payments"),
+        ] {
+            let r = get(router(pool.clone()), &path, Some(&token)).await;
+            assert_eq!(r.status, expected, "{scope} GET {path}");
+        }
+        if scope == "vc.read" {
+            for (method, path, body) in [
+                (
+                    "POST",
+                    "/api/v2/users/@me/transactions",
+                    json!({"unit":UNIT_A,"amount":"10","receiver_discord_id":RECEIVER.to_string()}),
+                ),
+                (
+                    "POST",
+                    "/api/v2/users/@me/claims",
+                    json!({"unit":UNIT_A,"amount":"10","payer_discord_id":RECEIVER.to_string()}),
+                ),
+                (
+                    "PATCH",
+                    "/api/v2/users/@me/claims/1",
+                    json!({"status":"approved"}),
+                ),
+            ] {
+                assert_eq!(
+                    request(router(pool.clone()), method, path, Some(&token), body)
+                        .await
+                        .status,
+                    403,
+                    "{method} {path}"
+                );
+            }
+        }
+        for (method, path, body) in [
+            (
+                "POST",
+                format!("/api/v2/contracts/{id}/approval"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                format!("/api/v2/contracts/{id}/refusal"),
+                Value::Null,
+            ),
+            (
+                "DELETE",
+                format!("/api/v2/contracts/{id}/approval"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                "/api/v2/contracts".to_owned(),
+                json!({"unit":UNIT_A,"parties":[{"discord_id":PERSON.to_string(),"amount":"100"}]}),
+            ),
+            (
+                "POST",
+                format!("/api/v2/contracts/{id}/payments"),
+                json!({"amount":"10","receiver_discord_id":RECEIVER.to_string()}),
+            ),
+        ] {
+            assert_eq!(
+                request(router(pool.clone()), method, &path, Some(&token), body)
+                    .await
+                    .status,
+                403,
+                "{scope} {method} {path}"
+            );
+        }
+    }
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id=$1 AND currency_id=$2")
+            .bind(i64::from(PERSON_ACCOUNT))
+            .bind(CURRENCY_A)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance, 1000);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn contract_currency_filter_precedes_pagination_and_covers_ledger(pool: PgPool) {
+    fixture(&pool).await;
+    let (app, token, _) = ask_and_approve(
+        &pool,
+        Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
+        &["vc.read"],
+    )
+    .await;
+    let mut ids = Vec::new();
+    for unit in [UNIT_A, UNIT_B, UNIT_A, UNIT_B, UNIT_B] {
+        ids.push(
+            vc_core::contract::create(
+                &pool,
+                app,
+                unit,
+                &[vc_core::contract::NewParty {
+                    discord_id: PERSON,
+                    amount: 100,
+                }],
+                Some(RECEIVER),
+                None,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    for (index, expected) in [(0, 200), (1, 403), (2, 200), (3, 403), (4, 403)] {
+        for suffix in ["", "/payments"] {
+            let r = get(
+                router(pool.clone()),
+                &format!("/api/v2/contracts/{}{suffix}", ids[index]),
+                Some(&token),
+            )
+            .await;
+            assert_eq!(r.status, expected);
+        }
+    }
+    let first = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/contracts?limit=1",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(first.status, 200);
+    assert_eq!(first.body.as_array().unwrap().len(), 1);
+    assert_eq!(first.body[0]["id"], ids[2].to_string());
+    assert!(
+        first.headers["link"]
+            .to_str()
+            .unwrap()
+            .contains(&format!("next={}", ids[2]))
+    );
+    let second = get(
+        router(pool.clone()),
+        &format!("/api/v2/users/@me/contracts?limit=1&next={}", ids[2]),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(second.body[0]["id"], ids[0].to_string());
+    let end = get(
+        router(pool.clone()),
+        &format!("/api/v2/users/@me/contracts?limit=1&next={}", ids[0]),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(end.body, json!([]));
+    let inclusive = get(
+        router(pool.clone()),
+        &format!("/api/v2/users/@me/contracts?limit=2&on_next={}", ids[2]),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(inclusive.body.as_array().unwrap().len(), 2);
+    let own = mint(&pool, PERSON_ACCOUNT, &[]).await;
+    let all = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/contracts",
+        Some(&own),
+    )
+    .await;
+    assert_eq!(all.body.as_array().unwrap().len(), 5);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn legacy_application_scopes_still_read_write_claims_and_pay(pool: PgPool) {
+    fixture(&pool).await;
+    let app = insert_application(&pool, OWNER, "legacy app").await;
+    let account = account_of(&pool, app).await;
+    insert_asset(&pool, account, CURRENCY_A, 1000).await;
+    // These are the old application's scopes. It has never requested vc.read.
+    let token = mint_app(&pool, account, &["vc.claim", "vc.pay"]).await;
+    for path in [
+        "/api/v2/users/@me",
+        "/api/v2/users/@me/balances",
+        "/api/v2/users/@me/claims",
+    ] {
+        assert_eq!(
+            get(router(pool.clone()), path, Some(&token)).await.status,
+            200,
+            "{path}"
+        );
+    }
+    let created = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/users/@me/claims",
+        Some(&token),
+        json!({"unit":UNIT_A,"amount":"10","payer_discord_id":PERSON.to_string()}),
+    )
+    .await;
+    assert_eq!(created.status, 201);
+    let claim_id: i64 = sqlx::query_scalar("SELECT id FROM claims WHERE claimant_user_id=$1")
+        .bind(i64::from(account))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        get(
+            router(pool.clone()),
+            &format!("/api/v2/users/@me/claims/{claim_id}"),
+            Some(&token)
+        )
+        .await
+        .status,
+        200
+    );
+    // The old API can also address an application's account as a payer.
+    insert_claim(
+        &pool,
+        100,
+        10,
+        "pending",
+        PERSON_ACCOUNT,
+        account,
+        CURRENCY_A,
+    )
+    .await;
+    assert_eq!(
+        request(
+            router(pool.clone()),
+            "PATCH",
+            "/api/v2/users/@me/claims/100",
+            Some(&token),
+            json!({"status":"approved"})
+        )
+        .await
+        .status,
+        200
+    );
+    assert_eq!(
+        request(
+            router(pool.clone()),
+            "POST",
+            "/api/v2/users/@me/transactions",
+            Some(&token),
+            json!({"unit":UNIT_A,"amount":"10","receiver_discord_id":RECEIVER.to_string()})
+        )
+        .await
+        .status,
+        201
+    );
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id=$1 AND currency_id=$2")
+            .bind(i64::from(account))
+            .bind(CURRENCY_A)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance, 980);
+    // Lacking vc.claim must still deny an old application's claim reads.
+    let pay_only = mint_app(&pool, account, &["vc.pay"]).await;
+    assert_eq!(
+        get(
+            router(pool.clone()),
+            "/api/v2/users/@me/claims",
+            Some(&pay_only)
+        )
+        .await
+        .status,
+        403
+    );
+}

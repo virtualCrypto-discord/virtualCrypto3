@@ -113,24 +113,52 @@ rather than refused. What is narrowed is a grant: a personal access token, and t
 application takes for itself with `client_credentials`, are the account's own credentials and are
 not narrowed this way.
 
-**Where it is accepted.** Only the endpoints that take the extractor this adds: the v2 reads, the
-transactions, and the claims. Everything else — registration, the consent screen, a contract's
-party half, the guild issuing endpoint — refuses it as a token it does not know, because those
-handlers take the JWT extractor. A personal grant therefore cannot reach `oauth2.register` by
-construction rather than by a check that could be forgotten.
+## Authorization model and compatibility
 
-## Reads, and why they need a scope here
+Authentication and authorization are separate. An account credential (a session, PAT,
+or application's JWT) is an **own credential**. A personal grant is a **delegation**:
+it identifies the granting account but never becomes that account's own credential.
+A guild grant belongs to the guild issuing API and is rejected by account APIs.
 
-A session token and a PAT read `/api/v2/users/@me*` without a scope, and they keep doing that: the
-token *is* the account, and asking it to prove it may look at itself would be ceremony. A grant is
-not that — it is a list of what somebody else may do, and reading is something somebody else may
-do. So the list is exhaustive: a grant token reads only with `vc.read`, spends only with `vc.pay`,
-touches claims only with `vc.claim`. Two rules, then, and they are about two different things: a
-credential that *is* the account, and a credential that acts *for* it.
+Every account API handler names its operation using `Authorized<Permission>` in
+`routes/limited.rs`. The extractor authenticates, rate-limits, and enforces the
+following policy before handing the handler an account id. There is no default
+permission, no unqualified account extractor, and no conversion from a delegation
+to `AuthUser`. Adding an operation requires an explicit entry in this policy.
 
-The same reading applies to the party half of contracts — approving, refusing, withdrawing. Those
-are a person's own decisions about their own money, taken in their own name; a delegation does not
-take them. `/users/@me/contracts` is a read like any other, and it needs `vc.read`.
+| Operation | Own user/app credential | Personal delegation |
+|---|---|---|
+| Profile, balances, user's contracts, contract detail/payment history | Existing account/relationship checks; no new scope | `vc.read` |
+| Claim list/detail | `vc.claim`, as in v2 | `vc.read` |
+| Single/bulk payment | `vc.pay` | `vc.pay` |
+| Create/update/approve/deny/cancel claims | `vc.claim` | `vc.claim` |
+| Application contract list/create/charge | App credential with `vc.contract` | Never |
+| Contract approval/refusal/withdrawal | User's own credential | Never |
+
+**Old v2 applications do not need `vc.read`.** Their JWTs keep the old scope
+semantics: `vc.claim` permits both claim reads and writes, and `vc.pay` permits
+payments. Their profile/balance reads remain available. The new read scope applies
+only to personal delegations. A delegation's `vc.pay` or `vc.claim` does not imply
+`vc.read`, and `vc.read` does not authorize any write.
+
+Passing the operation policy is necessary but not sufficient. Existing ownership
+and party/payer/claimant checks still apply. For a delegation, the target currency
+must also belong to the grant's resource set. Lists filter by that set; contract
+lists filter **before** cursor pagination and limits, so excluded contracts cannot
+hide permitted rows or break continuation. Contract details and payment histories
+check the stable currency id after checking the caller's relationship. Individual
+out-of-resource operations return `403 insufficient_scope`.
+
+Scope and currency restrictions are loaded from the grant on each request, so
+revoking a grant or changing it affects issued tokens as well. Contract decisions
+and application administration cannot be obtained by adding scopes to a delegation.
+Registration/administration continue to use the own-credential `AuthUser` extractor.
+Discord commands continue to authenticate the Discord interaction's caller.
+
+Currency metadata is public under the existing v2 API. Its optional grant check on
+`GET /currencies/{id}` does not make that metadata confidential: anonymous requests
+and the query-form currency lookup remain public. Account balances, claims and
+contracts are not public and use the operation policy above.
 
 ## Where the pieces go
 
@@ -146,10 +174,10 @@ take them. `/users/@me/contracts` is a read like any other, and it needs `vc.rea
   `user` is the code, the list and the revoke, run wherever the caller happens to be.
 - `crates/vc-api/src/notification.rs` — the decision is sent for both targets, and event `3`'s body
   carries which one.
-- `crates/vc-api/src/routes/personal_token.rs` (name to be settled in review) — the extractor,
-  which accepts a grant's token and yields what `Limited` yields, so no handler body changes.
-- `crates/vc-api/src/routes/v2/{users,claims,transactions,contracts}.rs` — the reads, and the two
-  write families, take that extractor instead of `Limited`.
+- `crates/vc-api/src/routes/limited.rs` — the operation-specific authorization extractor and
+  the distinction between own credentials and delegations.
+- `crates/vc-api/src/routes/v2/{users,claims,transactions,contracts}.rs` — each handler names
+  its operation and applies the relationship and currency restrictions for the target.
 - `docs/issue.md` gains a pointer here, `docs/oauth2.md`'s grant-request paragraph says which
   target it names, and `docs/qa.md`'s surface tables gain the new rows.
 - `crates/vc-core/migrations/0014_grant_resources.sql` and `crates/vc-api/src/resource.rs` — the

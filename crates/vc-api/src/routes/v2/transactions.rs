@@ -5,7 +5,7 @@ use axum::response::Response;
 use serde_json::{Value, json};
 
 use crate::routes::idempotency;
-use crate::routes::limited::Limited;
+use crate::routes::limited::{Authorized, Pay};
 use vc_core::payment::PayError;
 
 use crate::error::ApiError;
@@ -22,28 +22,21 @@ use crate::state::AppState;
 /// the key's own refusals are still the layer's to answer first.
 pub async fn post(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<Pay>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let operator_id = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("subject out of range".into()))?;
+    let operator_id = user.account_id();
 
     let asked = asked(&body)?;
 
-    // Before the key, like the body: the scope is part of what the caller is, and
-    // a request that is not allowed to pay must not spend a key either.
-    if !user.scopes.vc_pay {
-        return Err(ApiError::InsufficientScope);
-    }
-
-    // And the currencies the token is for, in the same place and for the same
-    // reason: a payment names its currency by unit, so each one is resolved to the
+    // Operation authorization has already succeeded in the extractor. Check
+    // currencies before claiming the key: each unit is resolved to the
     // currency it names and checked. A unit no currency has is left to the payment
     // itself to refuse as `not_found_currency`.
     ensure_currency(&state, &user, &asked).await?;
 
-    idempotency::guard(&state, &headers, operator_id, user.scopes.vc_pay, |tx| {
+    idempotency::guard(&state, &headers, operator_id, true, |tx| {
         Box::pin(async move { paid(tx, operator_id, asked).await })
     })
     .await
@@ -51,7 +44,11 @@ pub async fn post(
 
 /// Refuse a payment that names a currency the grant does not cover, whether the
 /// body carried one or a list of them.
-async fn ensure_currency(state: &AppState, user: &Limited, asked: &Asked) -> Result<(), ApiError> {
+async fn ensure_currency(
+    state: &AppState,
+    user: &Authorized<Pay>,
+    asked: &Asked,
+) -> Result<(), ApiError> {
     match asked {
         Asked::Single { unit, .. } => {
             crate::resource::ensure_unit(state.pool(), user.resources(), unit).await

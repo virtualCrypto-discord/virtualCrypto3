@@ -20,11 +20,9 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-use vc_auth::AuthUser;
-
 use crate::error::ApiError;
 use crate::routes::idempotency;
-use crate::routes::limited::Limited;
+use crate::routes::limited::{ApplicationContracts, Authorized, DecideContract, Read};
 use crate::routes::pagination::{self, QueryParams};
 use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
@@ -36,7 +34,7 @@ use vc_core::contract::{self, Contract, ContractError, NewParty};
 /// users answer.
 pub async fn create(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<ApplicationContracts>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let application = application(&state, &user).await?;
@@ -66,7 +64,7 @@ pub async fn create(
 /// id.
 pub async fn index(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<ApplicationContracts>,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -98,7 +96,7 @@ pub async fn index(
 /// same nothing a wrong id is, so this cannot be used to ask which ids exist.
 pub async fn show(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<Read>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     let found = find(&state, id).await?;
@@ -120,14 +118,10 @@ pub async fn show(
 /// tells it once.
 pub async fn approve(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<DecideContract>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    // Contract decisions require the account's own credential, never a delegation.
-    if user.is_delegated() {
-        return Err(ApiError::PermissionDenied);
-    }
-    let account = account(&user)?;
+    let account = user.account_id();
 
     let decided = contract::approve(state.pool(), id, account, OffsetDateTime::now_utc())
         .await
@@ -151,14 +145,10 @@ pub async fn approve(
 /// parties who had already locked their amounts take back what is left.
 pub async fn refuse(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<DecideContract>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    // Contract decisions require the account's own credential, never a delegation.
-    if user.is_delegated() {
-        return Err(ApiError::PermissionDenied);
-    }
-    let account = account(&user)?;
+    let account = user.account_id();
 
     let decided = contract::refuse(state.pool(), id, account, OffsetDateTime::now_utc())
         .await
@@ -182,14 +172,10 @@ pub async fn refuse(
 /// because the period is what the party agreed to.
 pub async fn withdraw(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<DecideContract>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    // Contract decisions require the account's own credential, never a delegation.
-    if user.is_delegated() {
-        return Err(ApiError::PermissionDenied);
-    }
-    let account = account(&user)?;
+    let account = user.account_id();
 
     let decided = contract::withdraw(state.pool(), id, account, OffsetDateTime::now_utc())
         .await
@@ -225,13 +211,12 @@ pub async fn withdraw(
 ///   chance to charge again.
 pub async fn pay(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<ApplicationContracts>,
     Path(id): Path<i64>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let account = i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("the token's subject is not an account id".into()))?;
+    let account = user.account_id();
 
     // **Who is asking, and what they are asking for, before the key is claimed.**
     //
@@ -251,7 +236,7 @@ pub async fn pay(
     // the layer's transaction takes the claim with it, leaving the key free.
     let unit = find(&state, id).await?.unit;
 
-    idempotency::guard(&state, &headers, account, user.scopes.vc_contract, |tx| {
+    idempotency::guard(&state, &headers, account, true, |tx| {
         Box::pin(async move { charge(tx, application, id, payment, unit).await })
     })
     .await
@@ -307,7 +292,7 @@ async fn charge(
 /// newest first, a page of the same size — and the same `link` header.
 pub async fn mine(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<Read>,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -323,9 +308,15 @@ pub async fn mine(
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
     let page = pagination::Page::asked(&params)?.limited_to(pagination::PER_PAGE);
 
-    let contracts = contract::of_party(state.pool(), named, page.cursor, page.limit)
-        .await
-        .map_err(contract_error)?;
+    let contracts = contract::of_party_in(
+        state.pool(),
+        named,
+        page.cursor,
+        page.limit,
+        user.resources(),
+    )
+    .await
+    .map_err(contract_error)?;
 
     let next = page.next_cursor(&contracts, |contract| contract.id);
 
@@ -352,7 +343,7 @@ pub async fn mine(
 /// application writes the two are the same list.
 pub async fn payments(
     State(state): State<AppState>,
-    user: Limited,
+    user: Authorized<Read>,
     Path(id): Path<i64>,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
@@ -563,82 +554,51 @@ fn render(contract: &Contract) -> Value {
 /// The application a caller is, which is what the application-side endpoints
 /// need. The scope says it may ask, which is not the same as being allowed to
 /// spend: what a contract holds is the parties' to give.
-async fn application(state: &AppState, user: &AuthUser) -> Result<i64, ApiError> {
-    if user.kind != vc_auth::Kind::App {
-        return Err(ApiError::PermissionDenied);
-    }
-
-    if !user.scopes.vc_contract {
-        return Err(ApiError::InsufficientScope);
-    }
-
-    let Ok(subject) = i32::try_from(user.subject) else {
-        return Err(ApiError::Internal(
-            "the token's subject is not an account id".into(),
-        ));
-    };
-
-    vc_core::user::application_id(state.pool(), subject)
+async fn application(
+    state: &AppState,
+    user: &Authorized<ApplicationContracts>,
+) -> Result<i64, ApiError> {
+    vc_core::user::application_id(state.pool(), user.account_id())
         .await
         .map_err(vc_core::Error::Database)?
         .ok_or(ApiError::PermissionDenied)
 }
 
-/// The account a user token is for, which is the identity a party is found by.
-fn account(user: &AuthUser) -> Result<i32, ApiError> {
-    if user.kind != vc_auth::Kind::User {
-        return Err(ApiError::PermissionDenied);
-    }
-
-    i32::try_from(user.subject)
-        .map_err(|_| ApiError::Internal("the token's subject is not an account id".into()))
-}
-
-/// The Discord id of the account a caller is, if it has one.
-///
-/// Both kinds of token have an account, and an application's never has a Discord
-/// id: a contract names people, so an application is named in none of them, and
-/// the list answers it an empty array rather than a refusal.
-async fn caller_discord_id(state: &AppState, user: &AuthUser) -> Result<Option<i64>, ApiError> {
-    let Ok(subject) = i32::try_from(user.subject) else {
-        return Err(ApiError::Internal(
-            "the token's subject is not an account id".into(),
-        ));
-    };
-
-    let found = vc_core::user::find_by_id(state.pool(), subject)
+async fn caller_discord_id(
+    state: &AppState,
+    user: &Authorized<Read>,
+) -> Result<Option<i64>, ApiError> {
+    let found = vc_core::user::find_by_id(state.pool(), user.account_id())
         .await?
-        .ok_or(vc_core::Error::UserNotFound(user.subject))?;
-
+        .ok_or(vc_core::Error::UserNotFound(i64::from(user.account_id())))?;
     Ok(found.discord_id)
 }
 
-/// Whether this caller may see this contract: the application that wrote it, or
-/// one of the users it names.
-async fn visible(state: &AppState, user: &AuthUser, contract: &Contract) -> Result<bool, ApiError> {
-    match user.kind {
-        vc_auth::Kind::App => {
-            let Ok(subject) = i32::try_from(user.subject) else {
-                return Ok(false);
-            };
-
-            let application = vc_core::user::application_id(state.pool(), subject)
-                .await
-                .map_err(vc_core::Error::Database)?;
-
-            Ok(application == Some(contract.application_id))
-        }
-        vc_auth::Kind::User => {
-            let Some(named) = caller_discord_id(state, user).await? else {
-                return Ok(false);
-            };
-
-            Ok(contract
-                .parties
-                .iter()
-                .any(|party| party.discord_id == named))
-        }
+/// Relationship and currency authorization are both required. Unrelated callers
+/// still receive 404, without learning whether the contract's currency is allowed.
+async fn visible(
+    state: &AppState,
+    user: &Authorized<Read>,
+    contract: &Contract,
+) -> Result<bool, ApiError> {
+    let related = if user.is_application() {
+        vc_core::user::application_id(state.pool(), user.account_id())
+            .await
+            .map_err(vc_core::Error::Database)?
+            == Some(contract.application_id)
+    } else {
+        let Some(named) = caller_discord_id(state, user).await? else {
+            return Ok(false);
+        };
+        contract
+            .parties
+            .iter()
+            .any(|party| party.discord_id == named)
+    };
+    if related {
+        crate::resource::ensure(user.resources(), contract.currency_id)?;
     }
+    Ok(related)
 }
 
 /// What the domain's refusals are answered as: a request or a name that is wrong

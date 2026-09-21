@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n          WHERE c.id = $1",
+  "query": "SELECT c.id, c.currency_id, c.application_id, applications.client_name, c.receiver_discord_id,\n                c.expires_at, c.status AS \"status!\", currencies.unit, currencies.guild_id\n           FROM contracts c\n           JOIN currencies ON currencies.id = c.currency_id\n           JOIN applications ON applications.id = c.application_id\n          WHERE c.id = $1",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "currency_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contracts",
+            "name": "currency_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "application_id",
         "type_info": "Int8",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "client_name",
         "type_info": "Varchar",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "receiver_discord_id",
         "type_info": "Int8",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "expires_at",
         "type_info": "Timestamp",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "status!",
         "type_info": "Varchar",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "unit",
         "type_info": "Varchar",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "guild_id",
         "type_info": "Int8",
         "origin": {
@@ -100,6 +111,7 @@
     "nullable": [
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -108,5 +120,5 @@
       true
     ]
   },
-  "hash": "d4af34093f56afe33bc8723355f68d3b63bc77038b59b81a1a3a8b38373a2def"
+  "hash": "ccf8abaa2b707a0b0485d7cdfbf42d19be3131acccf40785a3e13a497516ce1e"
 }
