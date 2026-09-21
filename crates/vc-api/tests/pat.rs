@@ -17,7 +17,6 @@ use support::{
     Response, account_of, execute_from_dm, fake, get, insert_application, insert_asset,
     insert_currency, insert_user, interaction, mint, mint_app, state,
 };
-use time::{OffsetDateTime, PrimitiveDateTime};
 use tower::ServiceExt;
 
 const DISCORD_ID: i64 = 100_000_000_000_000_001;
@@ -110,9 +109,27 @@ fn token_of(response: &Response) -> String {
     line.trim_matches('`').trim().to_string()
 }
 
-async fn options_of(pool: &PgPool) -> Vec<(String, PrimitiveDateTime)> {
-    let rows = sqlx::query!(
-        r#"SELECT name AS "name!", expires AS "expires!"
+/// Every component the answer carries, counted the way Discord counts them: a container and each
+/// of its children, and an accessory where a child has one.
+fn components(response: &Response) -> usize {
+    fn count(value: &Value) -> usize {
+        value.as_array().map_or(0, |items| {
+            items
+                .iter()
+                .map(|item| {
+                    1 + count(&item["components"]) + usize::from(item.get("accessory").is_some())
+                })
+                .sum()
+        })
+    }
+
+    count(&response.body["data"]["components"])
+}
+
+/// The names this account has live tokens under, which is everything a row holds.
+async fn names_of(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar!(
+        r#"SELECT name AS "name!"
            FROM user_access_tokens
            WHERE user_id = $1 AND name IS NOT NULL
            ORDER BY name"#,
@@ -120,14 +137,10 @@ async fn options_of(pool: &PgPool) -> Vec<(String, PrimitiveDateTime)> {
     )
     .fetch_all(pool)
     .await
-    .expect("the token rows");
-
-    rows.into_iter()
-        .map(|row| (row.name, row.expires))
-        .collect()
+    .expect("the token rows")
 }
 
-/// The headline: what the command makes is a session token with a longer life. It reaches
+/// The headline: what the command makes is a session token with no end but revocation. It reaches
 /// `oauth2.register`, the scope the registration surface is gated on, and one that was not issued
 /// with it does not.
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -147,10 +160,10 @@ async fn the_token_carries_the_scopes_the_registration_surface_checks(pool: PgPo
     assert_ne!(refused.status, 200, "{:?}", refused.body);
 }
 
-/// The year is the point of it, and the row says so: the purge job reads this column, so a token
-/// that outlives its row would be one that is never cleaned up.
+/// Nothing ends a token but revocation, and both halves say so: the message, and the two places a
+/// day could have been recorded — the `exp` claim and the row's `expires`.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_token_is_named_and_stored_for_a_year(pool: PgPool) {
+async fn a_token_is_named_and_lives_until_it_is_revoked(pool: PgPool) {
     insert_user(&pool, USER, DISCORD_ID).await;
 
     let created = interaction(router(pool.clone()), pat("create", Some("claude code"))).await;
@@ -167,20 +180,28 @@ async fn a_token_is_named_and_stored_for_a_year(pool: PgPool) {
     assert!(
         lines(&created)
             .iter()
-            .any(|line| line.starts_with("有効期限: <t:")),
+            .any(|line| line == "期限はありません。`/pat revoke` で失効させるまで使えます。"),
         "{:?}",
         lines(&created)
     );
 
-    let stored = options_of(&pool).await;
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].0, "claude code");
+    let claims = vc_auth::jwt::verify(&token_of(&created), support::JWT_SECRET.as_bytes())
+        .expect("verify token");
 
-    // And the day it stops working is about a year out, which is what the column says rather than
-    // what the message says.
-    let days = (stored[0].1.assume_utc() - OffsetDateTime::now_utc()).whole_days();
+    assert_eq!(claims.exp, None, "no claim to expire against");
+    assert_eq!(claims.kind, "user");
 
-    assert!((364..=365).contains(&days), "{days} days");
+    let recorded = sqlx::query_scalar!(
+        r#"SELECT expires FROM user_access_tokens WHERE user_id = $1 AND name = $2"#,
+        i64::from(USER),
+        "claude code"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the token row");
+
+    assert_eq!(recorded, None, "and no row for the purge job to find");
+    assert_eq!(names_of(&pool).await, ["claude code"]);
 }
 
 /// Revocation is the row: the signature stays valid and the `jti` stops resolving, so the token
@@ -209,7 +230,7 @@ async fn revoking_a_name_kills_the_token(pool: PgPool) {
         401,
         "the row is gone, so the token is"
     );
-    assert!(options_of(&pool).await.is_empty());
+    assert!(names_of(&pool).await.is_empty());
 }
 
 /// The contract half of what a token can do, which is the party's and not the
@@ -276,11 +297,7 @@ async fn a_name_can_only_be_used_once(pool: PgPool) {
     let again = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
 
     assert_eq!(accent(&again), COLOR_ERROR, "{:?}", again.body);
-    assert_eq!(
-        options_of(&pool).await.len(),
-        1,
-        "the first one is still it"
-    );
+    assert_eq!(names_of(&pool).await.len(), 1, "the first one is still it");
     assert_eq!(
         get(router(pool), LIST_URI, Some(&token_of(&first)))
             .await
@@ -306,11 +323,11 @@ async fn a_name_longer_than_the_option_allows_is_refused(pool: PgPool) {
         "{:?}",
         lines(&refused)
     );
-    assert!(options_of(&pool).await.is_empty(), "and nothing was made");
+    assert!(names_of(&pool).await.is_empty(), "and nothing was made");
 }
 
 /// A list is for recognising a credential, not for reading it back: it answers with the name and
-/// the day, and the token itself is one place only — the message that made it.
+/// nothing else, and the token itself is one place only — the message that made it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
     insert_user(&pool, USER, DISCORD_ID).await;
@@ -326,15 +343,64 @@ async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
     let created = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
     let token = token_of(&created);
 
-    let listed = interaction(router(pool.clone()), pat("list", None)).await;
-    let text = lines(&listed).join("\n");
+    let second = interaction(router(pool.clone()), pat("create", Some("claude code"))).await;
+    assert_eq!(accent(&second), COLOR_OK, "{:?}", second.body);
 
-    assert!(text.contains("agent"), "{text}");
-    assert!(
-        text.contains("有効期限 <t:"),
-        "the day it expires, and nothing else: {text}"
+    let listed = interaction(router(pool), pat("list", None)).await;
+
+    assert_eq!(
+        lines(&listed),
+        ["**agent**", "**claude code**"],
+        "the names, in name order, and nothing else"
     );
-    assert!(!text.contains(&token), "the token is not in a list: {text}");
+    assert!(
+        !lines(&listed).join("\n").contains(&token),
+        "the token is not in a list"
+    );
+}
+
+/// The list is one message and nothing pages it, so the count is bounded: the twenty-sixth token
+/// is refused, the refusal says where to look and what to do instead, and the list the person is
+/// sent to still holds every name.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+
+    for index in 0..25 {
+        let made = interaction(
+            router(pool.clone()),
+            pat("create", Some(&format!("t{index:02}"))),
+        )
+        .await;
+
+        assert_eq!(accent(&made), COLOR_OK, "{:?}", made.body);
+    }
+
+    let refused = interaction(router(pool.clone()), pat("create", Some("one too many"))).await;
+
+    assert_eq!(accent(&refused), COLOR_ERROR, "{:?}", refused.body);
+
+    let sentence = &lines(&refused)[0];
+
+    assert!(sentence.contains("25個まで"), "{sentence}");
+    assert!(
+        sentence.contains("/pat list") && sentence.contains("/pat revoke"),
+        "the way to find what to give up, and what to do about it: {sentence}"
+    );
+    assert_eq!(names_of(&pool).await.len(), 25, "and nothing more was made");
+
+    let listed = interaction(router(pool), pat("list", None)).await;
+
+    assert_eq!(
+        lines(&listed).len(),
+        25,
+        "all of them, on the one screen that is why there is a limit"
+    );
+    assert!(
+        components(&listed) <= 40,
+        "the whole list has to fit one message, and Discord allows forty components: {}",
+        components(&listed)
+    );
 }
 
 /// A token belongs to an account, so a caller who has none is told which step makes one rather
@@ -349,5 +415,5 @@ async fn a_caller_without_an_account_is_told_so(pool: PgPool) {
         "{:?}",
         lines(&created)
     );
-    assert!(options_of(&pool).await.is_empty());
+    assert!(names_of(&pool).await.is_empty());
 }

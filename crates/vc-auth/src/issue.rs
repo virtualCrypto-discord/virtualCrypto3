@@ -14,13 +14,9 @@ use crate::error::AuthError;
 use crate::jwt;
 
 /// How long a token lives. Guardian's hour rather than a choice, and the value
-/// the Elixir service used.
+/// the Elixir service used. A personal access token has no lifetime at all: the two are not the
+/// same kind of thing, which is why [`Issuance::ttl`] is what says so.
 pub const TTL: Duration = Duration::hours(1);
-
-/// How long a personal access token lives: a year, which is the point of it. It is the
-/// credential something that is not a browser keeps, and one that has to be re-made every hour is
-/// not one — the browser can re-make its token because it holds the session; a tool cannot.
-pub const PERSONAL_TTL: Duration = Duration::days(365);
 
 /// The scopes an account's own token carries, whether it was issued to a browser session or to a
 /// personal access token. One list rather than two: a token for a tool is not a new kind of
@@ -47,7 +43,7 @@ pub async fn user_token(
             subject: user_id,
             kind: "user",
             scopes,
-            ttl: TTL,
+            ttl: Some(TTL),
             name: None,
         },
         now,
@@ -75,7 +71,7 @@ pub async fn app_token(
             subject: application_user_id,
             kind: "app",
             scopes,
-            ttl: TTL,
+            ttl: Some(TTL),
             name: None,
         },
         now,
@@ -88,7 +84,13 @@ pub struct Issuance<'a> {
     pub subject: i64,
     pub kind: &'a str,
     pub scopes: &'a [&'a str],
-    pub ttl: Duration,
+    /// How long the token lives, or `None` for one that lives until it is revoked.
+    ///
+    /// It is two things at once: the `exp` claim, which is what refuses a token whose time is up,
+    /// and the row's `expires`, which is what the purge job deletes. A token with neither is one
+    /// whose only end is the `DELETE` that revocation is — a personal access token, which is the
+    /// credential something that is not a browser keeps, and which nobody is around to renew.
+    pub ttl: Option<Duration>,
     /// Set for a personal access token and nothing else. It is what tells such a row apart from
     /// the hour-long one a session writes, and the name a person revokes it by.
     pub name: Option<&'a str>,
@@ -106,7 +108,8 @@ pub enum PersonalError {
 }
 
 /// A token for something that is not a browser: the same account, the same scopes as a session's
-/// token, a name to revoke it by, and a year instead of an hour.
+/// token, a name to revoke it by, and no lifetime — an agent or a test keeps the credential it was
+/// given until somebody takes it away, because there is nobody to notice it stopped working.
 ///
 /// The name is unique per account, and the index that says so is what refuses a repeat — a
 /// lookup first would be a race with itself, and the caller would still have to handle the index.
@@ -124,7 +127,7 @@ pub async fn personal_token(
             subject: user_id,
             kind: "user",
             scopes: BROWSER_SCOPES,
-            ttl: PERSONAL_TTL,
+            ttl: None,
             name: Some(name),
         },
         now,
@@ -147,22 +150,23 @@ fn unique_violation(error: &sqlx::Error) -> bool {
         .is_some_and(|error| error.code().as_deref() == Some("23505"))
 }
 
-/// One personal access token, without the token itself: the row does not hold it, and a list is
-/// for recognising a credential rather than for reading it back.
+/// One personal access token, as a list shows it: the name, and nothing else. The row does not
+/// hold the token, and it no longer holds a day either — nothing but revocation ends one — so a
+/// list is for recognising a credential and has nothing else to say about it.
 pub struct PersonalToken {
     pub name: String,
-    /// The column is nullable because the schema is the Elixir's; every row this service writes
-    /// has one, and `expires!` says so rather than making every caller unwrap.
-    pub expires: PrimitiveDateTime,
 }
 
 /// The tokens this account has given a name to, by name.
 ///
 /// Ordered by name rather than by age, because that is how a person finds the one they mean, and
 /// because it does not move as new tokens are made.
+///
+/// No paging: the command is what caps how many an account may hold, so the whole list is what it
+/// needs — the count to refuse one more, and the names to draw.
 pub async fn personal_tokens(pool: &PgPool, user_id: i64) -> Result<Vec<PersonalToken>, AuthError> {
-    let rows = sqlx::query!(
-        r#"SELECT name AS "name!", expires AS "expires!"
+    let rows = sqlx::query_scalar!(
+        r#"SELECT name AS "name!"
            FROM user_access_tokens
            WHERE user_id = $1 AND name IS NOT NULL
            ORDER BY name"#,
@@ -173,10 +177,7 @@ pub async fn personal_tokens(pool: &PgPool, user_id: i64) -> Result<Vec<Personal
 
     Ok(rows
         .into_iter()
-        .map(|row| PersonalToken {
-            name: row.name,
-            expires: row.expires,
-        })
+        .map(|name| PersonalToken { name })
         .collect())
 }
 
@@ -222,7 +223,7 @@ async fn issue(
          VALUES ($1, $2, $3, $4, $5, $5)",
         subject,
         jti,
-        at + ttl,
+        ttl.map(|ttl| at + ttl),
         name,
         at
     )
@@ -231,7 +232,7 @@ async fn issue(
 
     let claims = Claims {
         sub: subject.to_string(),
-        exp: issued + ttl.whole_seconds(),
+        exp: ttl.map(|ttl| issued + ttl.whole_seconds()),
         iat: Some(issued),
         nbf: Some(issued),
         iss: ISSUER.to_string(),

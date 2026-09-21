@@ -243,9 +243,14 @@ column that could hold one. There is no golden for it, `docs/pat.md` is the desi
 `crates/vc-api/tests/pat.rs` is this tree's own suite.
 
 What it is, in one sentence: a `kind: user` token carrying the browser session's scopes, with a name
-and a year, revoked by deleting the `user_access_tokens` row every JWT here already resolves
-against. The API therefore sees no fourth kind of caller, and the only two things the reference had
-to learn were that a user token can also come from `/pat` and that a longer life exists.
+and no lifetime, revoked by deleting the `user_access_tokens` row every JWT here already resolves
+against. The API therefore sees no fourth kind of caller, and the only thing the reference had to
+learn was that a user token can also come from `/pat`.
+
+That no lifetime is the one claim this service writes that Guardian never did, and it is confined:
+a personal access token carries no `exp`, and the verifier checks an `exp` that is there rather than
+demanding one. Everything else — a session's hour, an application's hour — is unchanged, and the
+purge job skips a row with no `expires` because SQL compares nothing to `NULL`.
 
 The scope list is the browser's, which is why a PAT cannot create a contract: the application half
 of the contract family takes an `app` token, and no scope changes a kind. The party half —

@@ -20,7 +20,15 @@ pub const SCOPE_VC_CONTRACT: &str = "vc.contract";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
-    pub exp: i64,
+    /// When the token stops being accepted, or absent for one that lives until it is revoked.
+    ///
+    /// Guardian always wrote it, and every token this service issued before personal access tokens
+    /// has one. A token without one is a credential something that is not a browser keeps: it has
+    /// no session to renew from and nobody watching it, so the `DELETE` that revocation is — and
+    /// nothing on a clock — is what ends it. The claim is left out rather than written as `null`,
+    /// because a verifier that reads JSON has to see a number or nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exp: Option<i64>,
     #[serde(default)]
     pub iat: Option<i64>,
     #[serde(default)]

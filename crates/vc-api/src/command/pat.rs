@@ -1,16 +1,19 @@
 //! `/pat`: the credentials an account gives to something that is not a browser.
 //!
 //! Three subcommands, and a token appears exactly once — in the answer to `create`. What the
-//! table keeps is the name and the day it expires, so `list` has nothing to leak and `revoke`
-//! needs nothing but the name.
+//! table keeps is the name, so `list` has nothing to leak and `revoke` needs nothing but the name.
+//!
+//! A personal access token has no expiry, which is why the list is a list of names and not of
+//! days: nothing but `/pat revoke` ends one, so there is no date to show and no purge that takes
+//! it away. What that leaves is the count, and [`MAX_TOKENS`] is the count — the list is one
+//! message and nothing pages it.
 //!
 //! An addition rather than a port: the Elixir has no personal access token, no API key, and no
 //! column that could hold one. `docs/pat.md` is the design.
 
 use serde_json::{Map, Value, json};
-use time::{OffsetDateTime, PrimitiveDateTime};
+use time::OffsetDateTime;
 
-use super::claim::format_date_time;
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, get_user,
 };
@@ -18,12 +21,20 @@ use crate::components::{container, ephemeral, text};
 use crate::docs::discord::mentions;
 use crate::state::AppState;
 use vc_auth::issue::{
-    BROWSER_SCOPES, PERSONAL_TTL, PersonalError, personal_token, personal_tokens, revoke_personal,
+    BROWSER_SCOPES, PersonalError, personal_token, personal_tokens, revoke_personal,
 };
 
-/// The longest a name may be. `crate::discord_commands`'s `/pat` option states the same bound —
-/// one number in the option Discord shows and in the check that makes it true.
+/// The longest a name may be. `crate::discord_commands`'s `/pat name` option states the same
+/// bound — one number in the option Discord shows and in the check that makes it true.
 const NAME_MAX: usize = 32;
+
+/// How many tokens one account may hold.
+///
+/// A token is named and nothing ends it but revocation, so a list of them is one message with
+/// every row in it: a message holds about forty, and twenty-five is the point past which the list
+/// stops being a list of credentials somebody recognises. Nobody with twenty-five is reading it.
+/// `/pat list` is where a person at the limit finds the names to give up.
+const MAX_TOKENS: usize = 25;
 
 /// `Command.handle/4` for `pat`.
 pub async fn handle(
@@ -60,7 +71,7 @@ fn named(sub_options: Option<&Value>) -> Result<&str, CommandError> {
         .ok_or_else(|| CommandError::missing("pat option name"))
 }
 
-/// A token, once: the value, the day it stops working, and what it can do.
+/// A token, once: the value, and what it can do.
 ///
 /// The scopes are read from [`BROWSER_SCOPES`] rather than written out here, because they are the
 /// same list the session's token carries and a screen that repeats it by hand is a screen that
@@ -84,6 +95,21 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         ));
     }
 
+    let held = personal_tokens(state.pool(), i64::from(account)).await?;
+
+    if held.len() >= MAX_TOKENS {
+        return Ok(screen(
+            vec![text(mentions(
+                &format!(
+                    "トークンは1アカウントに{MAX_TOKENS}個までです。`/pat list` で名前を確かめて、\
+                     要らないものを`/pat revoke` で失効させてから作ってください。"
+                ),
+                state.command_ids().await,
+            ))],
+            COLOR_ERROR,
+        ));
+    }
+
     let now = OffsetDateTime::now_utc();
 
     match personal_token(
@@ -95,21 +121,20 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
     )
     .await
     {
-        Ok(token) => {
-            let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
-
-            Ok(screen(
-                vec![
-                    text(format!(
-                        "**{name}** としてトークンを発行しました。このトークンは一度だけ表示されます。"
-                    )),
-                    text(format!("```\n{token}\n```")),
-                    text(format!("有効期限: {}", format_date_time(at + PERSONAL_TTL))),
-                    text(format!("スコープ: {}", BROWSER_SCOPES.join(", "))),
-                ],
-                COLOR_OK,
-            ))
-        }
+        Ok(token) => Ok(screen(
+            vec![
+                text(format!(
+                    "**{name}** としてトークンを発行しました。このトークンは一度だけ表示されます。"
+                )),
+                text(format!("```\n{token}\n```")),
+                text(format!("スコープ: {}", BROWSER_SCOPES.join(", "))),
+                text(mentions(
+                    "期限はありません。`/pat revoke` で失効させるまで使えます。",
+                    state.command_ids().await,
+                )),
+            ],
+            COLOR_OK,
+        )),
         // The name is how a token is revoked, so two of them on one account could not be told
         // apart: the second is refused rather than made.
         Err(PersonalError::NameTaken(name)) => Ok(screen(
@@ -122,7 +147,10 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
     }
 }
 
-/// What this account has given out: names and days, never a token.
+/// What this account has given out: the names, never a token.
+///
+/// Every one of them is here, because nothing hides a row: the count is bounded by what one
+/// message holds, so a screen that paged would be a screen with an arrow nobody ever presses.
 async fn list(state: &AppState, discord_id: i64) -> Result<Value, CommandError> {
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
@@ -134,12 +162,10 @@ async fn list(state: &AppState, discord_id: i64) -> Result<Value, CommandError> 
     let tokens = personal_tokens(state.pool(), i64::from(account)).await?;
 
     if tokens.is_empty() {
-        let ids = state.command_ids().await;
-
         return Ok(screen(
             vec![text(mentions(
                 "まだありません。`/pat create` で作れます。",
-                ids,
+                state.command_ids().await,
             ))],
             COLOR_BRAND,
         ));
@@ -148,13 +174,7 @@ async fn list(state: &AppState, discord_id: i64) -> Result<Value, CommandError> 
     Ok(screen(
         tokens
             .iter()
-            .map(|token| {
-                text(format!(
-                    "**{}**\n有効期限 {}",
-                    token.name,
-                    format_date_time(token.expires)
-                ))
-            })
+            .map(|token| text(format!("**{}**", token.name)))
             .collect(),
         COLOR_BRAND,
     ))

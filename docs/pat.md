@@ -7,8 +7,8 @@ with a live browser session cookie, which means the person doing the setting up 
 in a browser — and anything that is not a browser (an agent, a script, a terminal) cannot do it at
 all, because the session cannot be handed over and the token it produces lives for an hour.
 
-A personal access token is that same token with a longer life and a name. Nothing about what it
-*can* do is new: it is a `kind: user` token carrying the browser session's scopes, so every
+A personal access token is that same token with a name and no end but revocation. Nothing about
+what it *can* do is new: it is a `kind: user` token carrying the browser session's scopes, so every
 endpoint that accepts a session token accepts it, and the API reference needs no fourth kind of
 caller.
 
@@ -23,9 +23,17 @@ could hold one (`docs/known-gaps.md`). There is therefore no golden and no Elixi
 | Value | a JWT, the same HS512 shape as every other token this service issues |
 | `kind` | `user` — a PAT is the account it belongs to, with no authority of its own |
 | Scopes | `oauth2.register`, `vc.pay`, `vc.claim` — the scopes a browser session's token carries, from one shared constant, so the two cannot drift apart |
-| Lifetime | 365 days |
-| Storage | a `user_access_tokens` row, with `name` set — which is what tells a PAT apart from the hour-long row a session writes |
+| Lifetime | none — the claims carry no `exp`, so no clock refuses it and only revocation ends it |
+| Storage | a `user_access_tokens` row, with `name` set and `expires` NULL — which is what tells a PAT apart from the hour-long row a session writes |
 | Revocation | deleting that row, which is how every JWT here is revoked: the signature stays valid, the `jti` stops resolving |
+
+The lifetime is the one place a PAT is not a session token with a name, and the reason is the
+caller: a browser re-makes its token because it holds the session that can, and the thing this
+token exists for — an agent, a test, a script in a crontab — has nobody to notice it stopped
+working. A year, then a re-make by hand, is that same chore spread out. So the token has no day it
+dies on, the row has no date the purge job can delete it by, and `/pat revoke` is the whole of what
+ends it. What that costs is the count: nothing expires, so nothing thins the list, which is what
+[the cap](#how-many) is for.
 
 The scopes are the whole of what a browser session can do, deliberately: a token handed to a tool
 is the account with a longer memory, not a new kind of authority. Narrowing it (an `oauth2.register`-only
@@ -41,13 +49,21 @@ would be the first exception to that — the site has no authenticated page at a
 
 | Command | Answer |
 |---|---|
-| `/pat create name:` | an ephemeral message holding the token, once, with the day it expires and the scopes it carries |
-| `/pat list` | the names, each with the day it expires, and never a token — a list is for recognising a credential, not for reading it back |
+| `/pat create name:` | an ephemeral message holding the token, once, with the scopes it carries and the fact that it has no expiry |
+| `/pat list` | the names, and never a token — a list is for recognising a credential, not for reading it back, and with no day to show there is nothing else it could say |
 | `/pat revoke name:` | the name is forgotten and the token is dead from that moment, because the row it resolves against is gone |
 
 The name is required, unique per account (`user_access_tokens (user_id, name) WHERE name IS NOT NULL`),
 and 1〜32 characters. Unique because revocation names it — two tokens called `laptop` could not be
 told apart — and required because an unnamed list is a list of one indistinguishable token per row.
+
+### How many
+
+Twenty-five per account. The list is one message and nothing pages it, so there has to be a number
+past which it would not fit — and a screen that paged a list of credentials nobody browses is a
+screen with an arrow nobody presses. Twenty-five is well inside what a message holds and far past
+what a person keeps track of; `/pat list` is where somebody at the limit finds the names to give
+up, and `/pat revoke` is how they give one up.
 
 Ephemeral is not decoration: Discord keeps an ephemeral response to the interaction that asked for
 it, so the token is visible to the person who typed the command and to nobody in the channel. It is
@@ -81,11 +97,13 @@ application holds its own `client_id` and `client_secret` for that.
 - **Scope selection at mint time.** One scope set, the browser's. A selection menu is a screen to
   read every time, for a choice whose alternatives (say, a token that may not pay) have no caller
   yet.
+- **Paging.** The list is one message and shows every row, which is the reason the count is
+  bounded instead: a page of names nobody asked for is a component that exists to be ignored.
 - **A web page listing tokens.** The site has no authenticated surface, and a management operation
   that only a browser can reach is the thing this service does not do.
 - **Reading the token back.** A PAT is shown once, at the interaction that made it. `/pat list`
   cannot answer with it, because the row does not store it — the JWT is signed, not kept, and the
   only copy is the one Discord delivered.
-- **A token that outlives revocation, or survives a purge.** The row's `expires` is the PAT's own
-  365 days, so the purge job that already removes expired `user_access_tokens` rows removes this
-  one too, and the token dies at the same moment.
+- **A day to expire on.** No `exp` claim, no `expires`, so the purge job that removes expired
+  `user_access_tokens` rows never touches a PAT: what deletes it is `/pat revoke`, or the account
+  it belongs to being deleted, which takes the row with it.
