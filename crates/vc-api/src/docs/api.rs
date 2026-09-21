@@ -161,8 +161,21 @@ const ENDPOINTS: &[Endpoint] = &[
         summary: "ブラウザのセッションを、利用者のトークンに交換します。",
         access: "ブラウザのセッション",
         fields: &[],
-        example: None,
-        notes: &["セッションが無い場合は 401 `invalid_token` です。"],
+        // `tests/login.rs`'s `a_session_can_get_a_token`: the session's account,
+        // and the token it is answered with.
+        example: Some(Example {
+            request: &["POST /token", "Cookie: <セッション>"],
+            response: &[
+                "{",
+                "  \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.…\",",
+                "  \"expires_in\": 3600",
+                "}",
+            ],
+        }),
+        notes: &[
+            "セッションが無い場合は 401 `invalid_token` です。",
+            "トークンのスコープは `oauth2.register`・`vc.pay`・`vc.claim` です。",
+        ],
     },
     // The v2 API, in the order the router registers it.
     Endpoint {
@@ -734,12 +747,34 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/authorize",
         summary: "同意画面。アプリケーションが求める内容を確かめます。",
         access: "ブラウザのセッション",
-        fields: &[],
-        example: None,
+        fields: &[
+            "`response_type`（文字列・必須） `code` だけです。",
+            "`client_id`（文字列・必須） アプリケーションの `client_id` です。",
+            "`redirect_uri`（文字列・必須） 登録した戻り先のどれかです。",
+            "`scope`（文字列・必須） 求めるスコープです。空白区切りで、`openid` と `vc.issue` が置けます。",
+            "`guild_id`（文字列・必須） 発行を許可するサーバーのDiscord IDです。",
+            "`state`（文字列・任意） そのまま返ります。",
+        ],
+        // `oauth2::Consent`, which is what the screen reads the consent out of.
+        example: Some(Example {
+            request: &[
+                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=openid&guild_id=900000000000000001",
+                "Cookie: <セッション>",
+            ],
+            response: &[
+                "{",
+                "  \"client_name\": \"my-application\",",
+                "  \"client_id\": \"e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f\",",
+                "  \"redirect_uri\": \"https://app.example/callback\",",
+                "  \"scopes\": [\"openid\"],",
+                "  \"guild_id\": 900000000000000001,",
+                "  \"state\": null",
+                "}",
+            ],
+        }),
         notes: &[
-            "`response_type=code`・`client_id`・`redirect_uri`・`guild_id`・`scope` が必要です。",
-            "`scope` に置けるのは `openid` と `vc.issue` だけです。",
-            "セッションが無い場合は `/login` へ送られます。",
+            "セッションが無い場合は `/login` へ送られ、ログインのあとここへ戻ります。",
+            "`client_id` と `redirect_uri` が登録と合わない場合は、どこへも送らずに 400 です。それ以外の拒否は `redirect_uri` へ `error` を付けて返します。",
         ],
     },
     Endpoint {
@@ -747,11 +782,19 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/authorize",
         summary: "同意し、認可コードを発行します。",
         access: "ブラウザのセッション",
-        fields: &[],
+        fields: &[
+            "`action`（文字列・必須） `approve` だけです。拒否という値はありません。",
+            "`response_type`（文字列・必須） `code` だけです。",
+            "`client_id`（文字列・必須） アプリケーションの `client_id` です。",
+            "`redirect_uri`（文字列・必須） 登録した戻り先のどれかです。",
+            "`scope`（文字列・必須） 同意するスコープです。",
+            "`guild_id`（文字列・必須） 発行を許可するサーバーのDiscord IDです。",
+            "`state`（文字列・任意） そのまま返ります。",
+        ],
         example: None,
         notes: &[
-            "`action=approve` が必要です。拒否という操作はありません。",
-            "結果は `redirect_uri` へ `code` と `scope` を付けて返ります。",
+            "結果は `redirect_uri` へ `code`・`guild_id`・`scope` と、あれば `state` を付けて返ります。",
+            "`GET` と違い、失敗しても `redirect_uri` へは送りません。セッションが無い場合は 401 です。",
         ],
     },
     Endpoint {
@@ -759,12 +802,39 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/token",
         summary: "トークンを発行します。",
         access: "グラントの種類によります",
-        fields: &[],
-        example: None,
+        fields: &[
+            "`grant_type`（文字列・必須） `authorization_code`（認可コードの交換） `refresh_token` `client_credentials`（アプリケーションのトークン） `urn:ietf:params:oauth:grant-type:device_code`（デバイスコードのポーリング）。",
+            "`client_id`（文字列・`authorization_code` では必須） アプリケーションの `client_id` です。",
+            "`redirect_uri`（文字列・`authorization_code` では必須） 認可コードを求めたときと同じ戻り先です。",
+            "`code`（文字列・`authorization_code` では必須） 同意画面が返した認可コードです。",
+            "`refresh_token`（文字列・`refresh_token` では必須） 前に受け取ったリフレッシュトークンです。",
+            "`device_code`（文字列・デバイスコードでは必須） 申請が返した `device_code` です。",
+            "`scope`（文字列・`client_credentials` では必須） 求めるスコープです。",
+        ],
+        // `oauth2_token::exchange`, whose answer is the code flow's own: the token
+        // and the unit it is good for.
+        example: Some(Example {
+            request: &[
+                "POST /oauth2/token",
+                "Content-Type: application/x-www-form-urlencoded",
+                "",
+                "grant_type=authorization_code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&code=3d1f0c…",
+            ],
+            response: &[
+                "{",
+                "  \"access_token\": \"f2b7c1a4-0d2e-4f5a-9b6c-1e2d3f4a5b6c\",",
+                "  \"token_type\": \"Bearer\",",
+                "  \"expires_in\": 3600,",
+                "  \"scopes\": [\"openid\"],",
+                "  \"refresh_token\": \"9a6d5c4b-3e2f-4a1b-8c7d-6e5f4a3b2c1d\"",
+                "}",
+            ],
+        }),
         notes: &[
-            "`authorization_code` はサーバーのトークン、`client_credentials` はアプリケーションのトークンを返します。",
-            "`refresh_token` は新しいサーバーのトークンを返します。リフレッシュトークンは毎回入れ替わるので、返ってきたものを保存してください。",
-            "デバイスコードのポーリング（`urn:ietf:params:oauth:grant-type:device_code`）は、承認されるまで `authorization_pending` を返します。",
+            "`authorization_code` とデバイスコードはサーバーのトークン、`client_credentials` はアプリケーションのトークンを返します。",
+            "本文は `application/x-www-form-urlencoded` と `application/json` のどちらでも送れます。`client_credentials` とデバイスコードは、`Authorization: Basic` で `client_id` と `client_secret` を送ります。",
+            "`refresh_token` は、登録の `grant_types` に `refresh_token` があるときだけ返ります。毎回入れ替わるので、返ってきたものを保存してください。",
+            "デバイスコードのポーリングは、承認されるまで 400 `authorization_pending` です。",
         ],
     },
     Endpoint {
@@ -772,9 +842,26 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/oauth2/token/revoke",
         summary: "トークンを失効させます。",
         access: "トークン自体を送ります",
-        fields: &[],
-        example: None,
-        notes: &["知らないトークンでも 200 です。"],
+        fields: &[
+            "`token`（文字列・任意） 失効させるトークンそのものです。",
+            "`jti`（文字列・任意） トークンの `jti` です。`typ` と `kind` が一緒に必要です。",
+            "`typ`（文字列・`jti` を送るときは必須） `access` だけです。",
+            "`kind`（文字列・`jti` を送るときは必須） `app` か `user` です。",
+        ],
+        // `oauth2_token::revoked`: the empty object a revocation is answered with.
+        example: Some(Example {
+            request: &[
+                "POST /oauth2/token/revoke",
+                "Content-Type: application/x-www-form-urlencoded",
+                "",
+                "token=f2b7c1a4-0d2e-4f5a-9b6c-1e2d3f4a5b6c",
+            ],
+            response: &["{}"],
+        }),
+        notes: &[
+            "知らないトークンでも 200 です。",
+            "`token` も `jti` も無い場合は 400 `invalid_request` です。",
+        ],
     },
     Endpoint {
         method: "GET",
@@ -783,18 +870,51 @@ const ENDPOINTS: &[Endpoint] = &[
         access: "利用者のトークン + `oauth2.register`",
         fields: &[],
         example: None,
-        notes: &[],
+        notes: &["1件の形は `/oauth2/clients/@me` と同じで、配列で返ります。"],
     },
     Endpoint {
         method: "POST",
         path: "/oauth2/clients",
         summary: "アプリケーションを登録します。",
         access: "利用者のトークン + `oauth2.register`",
-        fields: &[],
-        example: None,
+        fields: &[
+            "`redirect_uris`（配列・必須） 戻り先のURLです。1件以上で、http か https だけです。",
+            "`client_name`（文字列・任意） アプリケーションの名前です。",
+            "`application_type`（文字列・任意） `web`（既定） か `native` です。",
+            "`grant_types`（配列・任意） `authorization_code` と `refresh_token` だけです。省略すると空で、何もできません。",
+            "`response_types`（配列・任意） `code` だけです。",
+            "`client_uri`（文字列・任意） アプリケーションのURLです。",
+            "`logo_uri`（文字列・任意） ロゴのURLです。",
+            "`webhook_url`（文字列・任意） 通知の送り先です。",
+            "`discord_support_server_invite_slug`（文字列・任意） Discordのサポートサーバーの招待コードです。",
+            "`subscribed_events`（配列・任意） 受け取る通知の種類です。`2` 請求の更新、`3` 発行許可の決定、`4` 契約の決定。省略するとすべてです。",
+        ],
+        // `oauth2_clients::register`, whose 201 is the four values a client needs
+        // and the address it reads itself at.
+        example: Some(Example {
+            request: &[
+                "POST /oauth2/clients",
+                "Authorization: Bearer <利用者のトークン>",
+                "Content-Type: application/json",
+                "",
+                "{",
+                "  \"client_name\": \"my-application\",",
+                "  \"redirect_uris\": [\"https://app.example/callback\"]",
+                "}",
+            ],
+            response: &[
+                "{",
+                "  \"client_id\": \"e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f\",",
+                "  \"client_secret\": \"4b9d2f6a8c1e0d3b5a7f9c2e4d6b8a0f\",",
+                "  \"registration_access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.…\",",
+                "  \"registration_client_uri\": \"https://<site>/oauth2/clients/@me\",",
+                "  \"client_secret_expires_at\": 0",
+                "}",
+            ],
+        }),
         notes: &[
-            "`redirect_uris` が必須です。",
-            "成功は 201 で、`client_id`・`client_secret`・`registration_access_token`・`registration_client_uri` を返します。",
+            "成功は 201 です。`registration_access_token` はこのアプリケーション自身のトークンで、`oauth2.register` を持ち、`GET` と `PATCH` の `/oauth2/clients/@me` に使えます。",
+            "`webhook_url` を送ると、書き込む前にそのURLへ確認のPINGを送ります。答えなければ 400 `webhook_verification_failed` で、登録されません。",
         ],
     },
     Endpoint {
@@ -803,19 +923,66 @@ const ENDPOINTS: &[Endpoint] = &[
         summary: "そのアプリケーション自身の登録内容を読みます。",
         access: "アプリケーションのトークン + `oauth2.register`",
         fields: &[],
-        example: None,
-        notes: &["登録の応答が返す `registration_client_uri` は、このURLです。"],
+        // `oauth2_clients::render`, which is the one shape the read, the list and the
+        // registration all answer with — as `tests/oauth2_clients.rs`'s own fixture
+        // fills it in.
+        example: Some(Example {
+            request: &[
+                "GET /oauth2/clients/@me",
+                "Authorization: Bearer <アプリケーションのトークン>",
+                "Accept: application/json",
+            ],
+            response: &[
+                "{",
+                "  \"client_id\": \"e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f\",",
+                "  \"client_secret\": \"a-secret\",",
+                "  \"client_secret_expires_at\": 0,",
+                "  \"redirect_uris\": [\"https://app.example/callback\"],",
+                "  \"user_id\": \"7\",",
+                "  \"discord_user_id\": \"100000000000000001\",",
+                "  \"application_type\": \"web\",",
+                "  \"client_name\": \"An Application\",",
+                "  \"client_uri\": null,",
+                "  \"discord_support_server_invite_slug\": null,",
+                "  \"grant_types\": [\"authorization_code\"],",
+                "  \"logo_uri\": null,",
+                "  \"owner_discord_id\": \"100000000000000002\",",
+                "  \"response_types\": [\"code\"],",
+                "  \"webhook_url\": \"https://app.example/hook\",",
+                "  \"webhook_verified_at\": null,",
+                "  \"webhook_failed_at\": null,",
+                "  \"subscribed_events\": [2, 3],",
+                "  \"public_key\": \"00abff\"",
+                "}",
+            ],
+        }),
+        notes: &[
+            "登録の応答が返す `registration_client_uri` は、このURLです。",
+            "`user_id`・`discord_user_id`・`owner_discord_id` は文字列の数字、`public_key` は小文字の16進数です。",
+            "`client_secret_expires_at` は無期限を表す `0` です。`webhook_verified_at`・`webhook_failed_at` は、まだ一度も確かめていなければ `null` です。",
+        ],
     },
     Endpoint {
         method: "PATCH",
         path: "/oauth2/clients/@me",
         summary: "そのアプリケーション自身の登録内容を書き換えます。",
         access: "アプリケーションのトークン + `oauth2.register`",
-        fields: &[],
+        fields: &[
+            "`client_name`（文字列か `null`・任意） 名前です。",
+            "`client_uri`（文字列か `null`・任意） アプリケーションのURLです。",
+            "`logo_uri`（文字列か `null`・任意） ロゴのURLです。",
+            "`webhook_url`（文字列か `null`・任意） 通知の送り先です。変えるときは、書き込む前に新しいURLへ確認のPINGを送ります。",
+            "`discord_support_server_invite_slug`（文字列か `null`・任意） Discordのサポートサーバーの招待コードです。",
+            "`application_type`（文字列・任意） `web` か `native` です。",
+            "`grant_types`（配列・任意） `authorization_code` `refresh_token` だけです。",
+            "`response_types`（配列・任意） `code` だけです。",
+            "`redirect_uris`（配列・任意） http か https のURLです。",
+            "`subscribed_events`（配列・任意） 受け取る通知の種類です。`2` `3` `4` だけです。",
+        ],
         example: None,
         notes: &[
             "送らなかった項目はそのままです。`null` を送ると消えます。",
-            "成功は 204 です。",
+            "成功は 204 で、本文はありません。",
         ],
     },
     Endpoint {
@@ -824,20 +991,67 @@ const ENDPOINTS: &[Endpoint] = &[
         summary: "そのアプリケーションが送った、発行の申請の一覧です。",
         access: "アプリケーションのトークン + `oauth2.register`",
         fields: &[],
-        example: None,
-        notes: &[],
+        // `tests/grant_requests.rs`'s `the_list_reads_back_what_was_asked`: the ask
+        // the guild has answered.
+        example: Some(Example {
+            request: &[
+                "GET /oauth2/clients/@me/grant-requests",
+                "Authorization: Bearer <アプリケーションのトークン>",
+                "Accept: application/json",
+            ],
+            response: &[
+                "[",
+                "  {",
+                "    \"device_code\": \"0a5b8e0e-5e3a-4f2b-9d3c-8f1a6b7c9d0e\",",
+                "    \"user_code\": \"A1B2C3D4\",",
+                "    \"guild_id\": \"900000000000000001\",",
+                "    \"scopes\": [\"vc.issue\"],",
+                "    \"status\": \"approved\",",
+                "    \"expires_in\": 600",
+                "  }",
+                "]",
+            ],
+        }),
+        notes: &[
+            "`status` は `pending` か `approved` です。拒否という答えはなく、承認されないまま時間が過ぎれば消えます。",
+            "承認されると、`POST /oauth2/token` のデバイスコードのポーリングがサーバーのトークンを返します。",
+        ],
     },
     Endpoint {
         method: "POST",
         path: "/oauth2/clients/@me/grant-requests",
         summary: "サーバーに発行の許可を申請します。",
         access: "アプリケーションのトークン + `oauth2.register`",
-        fields: &[],
-        example: None,
+        fields: &[
+            "`guild_id`（文字列・必須） 発行を許可してほしいサーバーのDiscord IDです。",
+            "`scopes`（配列・必須） 求めるスコープです。`openid` と `vc.issue` だけが置けます。",
+            "`expires_in`（数値・任意） 申請が生きる秒数です。既定600、上限3600。",
+        ],
+        // `tests/grant_requests.rs`'s `an_application_may_ask_a_guild`.
+        example: Some(Example {
+            request: &[
+                "POST /oauth2/clients/@me/grant-requests",
+                "Authorization: Bearer <アプリケーションのトークン>",
+                "Content-Type: application/json",
+                "",
+                "{",
+                "  \"guild_id\": \"900000000000000001\",",
+                "  \"scopes\": [\"vc.issue\"]",
+                "}",
+            ],
+            response: &[
+                "{",
+                "  \"device_code\": \"0a5b8e0e-5e3a-4f2b-9d3c-8f1a6b7c9d0e\",",
+                "  \"user_code\": \"A1B2C3D4\",",
+                "  \"verification_uri\": \"discord\",",
+                "  \"expires_in\": 600",
+                "}",
+            ],
+        }),
         notes: &[
-            "`guild_id` と `scopes` が必須です。`scopes` に置けるのは `openid` と `vc.issue` だけです。",
-            "`expires_in` は既定600秒、最大3600秒です。",
             "201 で `device_code` と `user_code` を返します。`user_code` が、サーバーの管理者が `/grant approve` に入れるコードです。",
+            "`verification_uri` は `discord` です。開くURLはなく、承認はサーバーの中で行われます。",
+            "同じサーバーへの申請がまだ生きている間は、新しく作らず、同じ `device_code` と `user_code` を返します。",
         ],
     },
     Endpoint {
@@ -845,11 +1059,16 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/applications/{id}/connect",
         summary: "アプリケーションにDiscordのBotを結びつけます。",
         access: "利用者のトークン",
-        fields: &[],
+        fields: &[
+            "`{id}`（パス・必須） アプリケーションの `client_id` です。",
+            "`bot_id`（文字列・必須） 結びつけるBotのDiscord IDです。",
+            "`guild_id`（文字列・必須） そのBotがいるサーバーのDiscord IDです。",
+        ],
         example: None,
         notes: &[
-            "`bot_id` と `guild_id` を送ります。成功は 204 です。",
+            "成功は 204 です。",
             "Botのプロフィール（説明）に、アプリケーションの画面に出るトークン（`{site}/applications/verification?q=<client_id>`）が書かれていない場合は 400 `invalid_description` です。",
+            "呼び出した利用者のものではない `client_id` は 404 です。",
         ],
     },
     Endpoint {
@@ -857,17 +1076,44 @@ const ENDPOINTS: &[Endpoint] = &[
         path: "/applications/{id}/grants",
         summary: "そのアプリケーションが許可されているサーバーの一覧です。",
         access: "利用者のトークン + `oauth2.register`",
-        fields: &[],
-        example: None,
-        notes: &[],
+        fields: &["`{id}`（パス・必須） アプリケーションの `client_id` です。"],
+        // `tests/guild_grants.rs`'s `the_list_names_the_guilds_and_their_scopes`,
+        // whose fake Discord is what names the guild.
+        example: Some(Example {
+            request: &[
+                "GET /applications/e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f/grants",
+                "Authorization: Bearer <利用者のトークン>",
+                "Accept: application/json",
+            ],
+            response: &[
+                "[",
+                "  {",
+                "    \"guild_id\": \"900000000000000001\",",
+                "    \"guild_name\": \"TestGuild\",",
+                "    \"scopes\": [\"vc.issue\"],",
+                "    \"updated_at\": \"2026-01-01T00:00:00Z\"",
+                "  }",
+                "]",
+            ],
+        }),
+        notes: &[
+            "`guild_name` はDiscordから読めないとき `null` です。",
+            "発行の許可をなくすのは、この一覧の1件ごとの `DELETE` です。",
+        ],
     },
     Endpoint {
         method: "DELETE",
         path: "/applications/{id}/grants/{guild_id}",
         summary: "サーバーに与えた発行の許可を取り消します。",
         access: "利用者のトークン + `oauth2.register`",
-        fields: &[],
+        fields: &[
+            "`{id}`（パス・必須） アプリケーションの `client_id` です。",
+            "`{guild_id}`（パス・必須） 取り消すサーバーのDiscord IDです。",
+        ],
         example: None,
-        notes: &["許可が無くても 204 です。"],
+        notes: &[
+            "消えるのは発行のスコープだけで、許可そのものは残ります。発行済みのサーバーのトークンは、それ以降発行できなくなります。",
+            "許可が無くても 204 です。",
+        ],
     },
 ];
