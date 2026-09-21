@@ -99,8 +99,10 @@ error code for it, and one this service did not have until now.
 - `grant_requests.resources` — `bigint[]`, the same shape `scopes` already has, so
   a request carries what was asked for in one row.
 - `grant_resources` — `(grant_id, currency_id)`, the same shape `grant_scopes` has,
-  so a grant carries what was approved in rows a read can join. A currency's own
-  deletion takes its resource rows with it.
+  so a grant carries what was approved in rows a read can join. A currency's
+  deletion retains its approved id in these rows, so deleting the last allowed
+  currency cannot turn a restricted grant into an all-currency grant.
+  Deleting the grant itself still removes its resource rows.
 
 An empty set is not a thing the request can write (see above), but an *old* grant
 has none: those rows mean "every currency of the target", which is what they meant

@@ -138,6 +138,9 @@ pub async fn create_grant_scopes(
 /// asks for too — they are the same fact written two ways, and neither writes a
 /// row. It is also what a grant written before resources existed means, so a
 /// migration does not have to rewrite those rows.
+/// Approved currency ids remain here after currency deletion: removing the last
+/// resource would turn a restricted grant into an unrestricted one. A subsequent
+/// approval can still replace the set explicitly.
 ///
 /// Unlike [`create_grant_scopes`], which only ever adds, this **replaces** the
 /// set: a grant carries what was last approved, so an application that

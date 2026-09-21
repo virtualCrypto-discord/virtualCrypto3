@@ -542,3 +542,117 @@ async fn an_accounts_own_credential_is_not_narrowed(pool: PgPool) {
     .await;
     assert_eq!(read.status, 200, "body: {}", read.body);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn deleting_a_currency_does_not_widen_its_grant(pool: PgPool) {
+    fixture(&pool).await;
+    let (_, token, resources) = ask_and_approve(
+        &pool,
+        Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
+        &["vc.pay"],
+    )
+    .await;
+    assert_eq!(resources, vec![CURRENCY_A]);
+    let before = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/users/@me/transactions",
+        Some(&token),
+        pay(UNIT_B, "100"),
+    )
+    .await;
+    assert_eq!(before.status, 403);
+    assert_eq!(
+        vc_core::currency::delete(&pool, GUILD_A, &format!("delete {UNIT_A}"))
+            .await
+            .unwrap(),
+        vc_core::currency::DeleteResult::Deleted
+    );
+    let after = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/users/@me/transactions",
+        Some(&token),
+        pay(UNIT_B, "100"),
+    )
+    .await;
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id = $1 AND currency_id = $2")
+            .bind(i64::from(PERSON_ACCOUNT))
+            .bind(CURRENCY_B)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after.status, 403,
+        "after deleting allowed currency A, payment in unapproved B returned {}; B balance is {balance} (was 1000)",
+        after.status
+    );
+    assert_eq!(balance, 1000);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn deleting_one_resource_preserves_the_remaining_permission(pool: PgPool) {
+    fixture(&pool).await;
+    let (_, token, _) = ask_and_approve(
+        &pool,
+        Some(json!([
+            format!("{SITE}/api/v2/currencies/{CURRENCY_A}"),
+            format!("{SITE}/api/v2/currencies/{CURRENCY_B}")
+        ])),
+        &["vc.pay"],
+    )
+    .await;
+    assert_eq!(
+        vc_core::currency::delete(&pool, GUILD_A, &format!("delete {UNIT_A}"))
+            .await
+            .unwrap(),
+        vc_core::currency::DeleteResult::Deleted
+    );
+    let allowed = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/users/@me/transactions",
+        Some(&token),
+        pay(UNIT_B, "100"),
+    )
+    .await;
+    assert_eq!(allowed.status, 201);
+    // Reusing the guild and unit gives a new currency id, not the old permission.
+    vc_core::currency::create(&pool, GUILD_A, "replacement", UNIT_A, PERSON, 1000)
+        .await
+        .unwrap();
+    let refused = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/users/@me/transactions",
+        Some(&token),
+        pay(UNIT_A, "100"),
+    )
+    .await;
+    assert_eq!(refused.status, 403);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn unrestricted_grants_still_cover_replacement_currencies(pool: PgPool) {
+    fixture(&pool).await;
+    let (_, token, _) = ask_and_approve(&pool, None, &["vc.pay"]).await;
+    assert_eq!(
+        vc_core::currency::delete(&pool, GUILD_A, &format!("delete {UNIT_A}"))
+            .await
+            .unwrap(),
+        vc_core::currency::DeleteResult::Deleted
+    );
+    vc_core::currency::create(&pool, GUILD_A, "replacement", UNIT_A, PERSON, 1000)
+        .await
+        .unwrap();
+    let allowed = request(
+        router(pool),
+        "POST",
+        "/api/v2/users/@me/transactions",
+        Some(&token),
+        pay(UNIT_A, "100"),
+    )
+    .await;
+    assert_eq!(allowed.status, 201);
+}
