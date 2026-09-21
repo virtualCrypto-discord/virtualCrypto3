@@ -17,7 +17,15 @@ pub struct AuthUser {
     pub jti: String,
 }
 
-const BEARER: &str = "Bearer ";
+/// Read a Bearer credential without changing the case-sensitive token itself.
+/// Authentication scheme names are case-insensitive (RFC 9110 section 11.1).
+pub fn bearer_token(header: &str) -> Option<&str> {
+    let prefix = "Bearer ";
+    if !header.get(..prefix.len())?.eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    header.get(prefix.len()..).filter(|token| !token.is_empty())
+}
 
 impl<S> FromRequestParts<S> for AuthUser
 where
@@ -32,10 +40,7 @@ where
             .and_then(|value| value.to_str().ok())
             .ok_or(AuthError::Missing)?;
 
-        let token = header.strip_prefix(BEARER).ok_or(AuthError::Missing)?;
-        if token.is_empty() {
-            return Err(AuthError::Missing);
-        }
+        let token = bearer_token(header).ok_or(AuthError::Missing)?;
 
         let claims = jwt::verify(token, state.jwt_secret())?;
         let kind = Kind::parse(&claims.kind).ok_or(AuthError::Invalid)?;
@@ -63,5 +68,35 @@ where
             scopes: Scopes::from_list(&claims.scopes),
             jti: claims.jti,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bearer_token;
+
+    #[test]
+    fn scheme_case_does_not_change_the_token() {
+        for scheme in ["Bearer", "bearer", "BEARER", "bEaReR"] {
+            assert_eq!(
+                bearer_token(&format!("{scheme} AbC.dEf-X_y")),
+                Some("AbC.dEf-X_y")
+            );
+        }
+    }
+
+    #[test]
+    fn other_schemes_and_missing_credentials_are_rejected() {
+        for header in [
+            "",
+            "Bearer",
+            "Bearer ",
+            "Basic token",
+            "Bearertoken",
+            "BearerX token",
+            "💰💰 token",
+        ] {
+            assert_eq!(bearer_token(header), None, "{header}");
+        }
     }
 }

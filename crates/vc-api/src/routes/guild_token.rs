@@ -28,8 +28,6 @@ use vc_auth::Scopes;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-const BEARER: &str = "Bearer ";
-
 /// The authenticated guild: the application a guild allowed, and that guild.
 #[derive(Debug, Clone)]
 pub struct GuildToken {
@@ -53,10 +51,7 @@ impl FromRequestParts<AppState> for GuildToken {
             .and_then(|value| value.to_str().ok())
             .ok_or_else(unauthorized)?;
 
-        let token = header
-            .strip_prefix(BEARER)
-            .filter(|token| !token.is_empty())
-            .ok_or_else(unauthorized)?;
+        let token = vc_auth::extractor::bearer_token(header).ok_or_else(unauthorized)?;
 
         // Anything that is not a UUID is not a grant token, rather than a database
         // error: the column is a uuid.
