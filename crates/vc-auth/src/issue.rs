@@ -4,7 +4,7 @@
 //! which is how it was possible for the service to have no way of issuing a
 //! token at all. The support now calls this, so the suite tests the real thing.
 
-use sqlx::PgPool;
+use sqlx::{PgExecutor, PgPool};
 use thiserror::Error;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
@@ -96,9 +96,14 @@ pub struct Issuance<'a> {
     pub name: Option<&'a str>,
 }
 
+/// Maximum personal access tokens per account, keeping the list within one Discord message.
+pub const MAX_PERSONAL_TOKENS: usize = 25;
+
 /// Why a personal access token could not be issued.
 #[derive(Debug, Error)]
 pub enum PersonalError {
+    #[error("personal access token limit reached")]
+    LimitReached,
     /// A token with this name already exists on this account. Names are how one is revoked, so
     /// two of them could not be told apart.
     #[error("a token named {0} already exists")]
@@ -120,8 +125,29 @@ pub async fn personal_token(
     name: &str,
     now: OffsetDateTime,
 ) -> Result<String, PersonalError> {
+    let mut tx = pool.begin().await.map_err(AuthError::from)?;
+    // Lock the account even when it has no tokens yet. Every personal issuance holds this
+    // lock until the count check and insertion have committed.
+    sqlx::query!(
+        "SELECT id FROM users WHERE id = $1::bigint FOR UPDATE",
+        user_id
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(AuthError::from)?;
+    let count = sqlx::query_scalar!(
+        "SELECT count(*) FROM user_access_tokens WHERE user_id = $1 AND name IS NOT NULL",
+        user_id
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(AuthError::from)?
+    .unwrap_or(0);
+    if count >= MAX_PERSONAL_TOKENS as i64 {
+        return Err(PersonalError::LimitReached);
+    }
     let issued = issue(
-        pool,
+        &mut *tx,
         secret,
         Issuance {
             subject: user_id,
@@ -138,7 +164,11 @@ pub async fn personal_token(
         Err(AuthError::Database(error)) if unique_violation(&error) => {
             Err(PersonalError::NameTaken(name.to_string()))
         }
-        other => Ok(other?),
+        other => {
+            let token = other?;
+            tx.commit().await.map_err(AuthError::from)?;
+            Ok(token)
+        }
     }
 }
 
@@ -162,7 +192,7 @@ pub struct PersonalToken {
 /// Ordered by name rather than by age, because that is how a person finds the one they mean, and
 /// because it does not move as new tokens are made.
 ///
-/// No paging: the command is what caps how many an account may hold, so the whole list is what it
+/// No paging: personal issuance caps how many an account may hold, so the whole list is what it
 /// needs — the count to refuse one more, and the names to draw.
 pub async fn personal_tokens(pool: &PgPool, user_id: i64) -> Result<Vec<PersonalToken>, AuthError> {
     let rows = sqlx::query_scalar!(
@@ -200,8 +230,8 @@ pub async fn revoke_personal(pool: &PgPool, user_id: i64, name: &str) -> Result<
 /// Guardian's `after_encode_and_sign/4` writes a `user_access_tokens` row for
 /// `kind in ["user", "app"]` — the same table for both — so an application's
 /// token is revoked the same way a user's is, by deleting a row.
-async fn issue(
-    pool: &PgPool,
+async fn issue<'a>(
+    executor: impl PgExecutor<'a>,
     secret: &[u8],
     issuance: Issuance<'_>,
     now: OffsetDateTime,
@@ -227,7 +257,7 @@ async fn issue(
         name,
         at
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     let claims = Claims {

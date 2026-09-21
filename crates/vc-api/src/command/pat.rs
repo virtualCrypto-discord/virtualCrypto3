@@ -21,20 +21,13 @@ use crate::components::{container, ephemeral, text};
 use crate::docs::discord::mentions;
 use crate::state::AppState;
 use vc_auth::issue::{
-    BROWSER_SCOPES, PersonalError, personal_token, personal_tokens, revoke_personal,
+    BROWSER_SCOPES, MAX_PERSONAL_TOKENS as MAX_TOKENS, PersonalError, personal_token,
+    personal_tokens, revoke_personal,
 };
 
 /// The longest a name may be. `crate::discord_commands`'s `/pat name` option states the same
 /// bound — one number in the option Discord shows and in the check that makes it true.
 const NAME_MAX: usize = 32;
-
-/// How many tokens one account may hold.
-///
-/// A token is named and nothing ends it but revocation, so a list of them is one message with
-/// every row in it: a message holds about forty, and twenty-five is the point past which the list
-/// stops being a list of credentials somebody recognises. Nobody with twenty-five is reading it.
-/// `/pat list` is where a person at the limit finds the names to give up.
-const MAX_TOKENS: usize = 25;
 
 /// `Command.handle/4` for `pat`.
 pub async fn handle(
@@ -95,21 +88,6 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         ));
     }
 
-    let held = personal_tokens(state.pool(), i64::from(account)).await?;
-
-    if held.len() >= MAX_TOKENS {
-        return Ok(screen(
-            vec![text(mentions(
-                &format!(
-                    "トークンは1アカウントに{MAX_TOKENS}個までです。`/pat list` で名前を確かめて、\
-                     要らないものを`/pat revoke` で失効させてから作ってください。"
-                ),
-                state.command_ids().await,
-            ))],
-            COLOR_ERROR,
-        ));
-    }
-
     let now = OffsetDateTime::now_utc();
 
     match personal_token(
@@ -140,6 +118,16 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         Err(PersonalError::NameTaken(name)) => Ok(screen(
             vec![text(format!(
                 "`{name}` という名前のトークンはもうあります。`/pat revoke` で消してから作ってください。"
+            ))],
+            COLOR_ERROR,
+        )),
+        Err(PersonalError::LimitReached) => Ok(screen(
+            vec![text(mentions(
+                &format!(
+                    "トークンは1アカウントに{MAX_TOKENS}個までです。`/pat list` で名前を確かめて、\
+                     要らないものを`/pat revoke` で失効させてから作ってください。"
+                ),
+                state.command_ids().await,
             ))],
             COLOR_ERROR,
         )),

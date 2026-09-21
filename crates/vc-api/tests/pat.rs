@@ -417,3 +417,62 @@ async fn a_caller_without_an_account_is_told_so(pool: PgPool) {
     );
     assert!(names_of(&pool).await.is_empty());
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_pat_creation_respects_limit(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+    for index in 0..24 {
+        let response = interaction(
+            router(pool.clone()),
+            pat("create", Some(&format!("token{index}"))),
+        )
+        .await;
+        assert_eq!(
+            response.body["data"]["components"][0]["accent_color"],
+            COLOR_OK
+        );
+    }
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE user_access_tokens IN SHARE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let a = tokio::spawn(interaction(
+        router(pool.clone()),
+        pat("create", Some("parallel-a")),
+    ));
+    let b = tokio::spawn(interaction(
+        router(pool.clone()),
+        pat("create", Some("parallel-b")),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND (query LIKE 'INSERT INTO user_access_tokens%' OR query LIKE 'SELECT id FROM users%FOR UPDATE')")
+                .fetch_one(&pool).await.unwrap();
+            if waiting == 2 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("both requests reached the issuance locks");
+    blocker.commit().await.unwrap();
+    let a = a.await.unwrap();
+    let b = b.await.unwrap();
+    assert_eq!(a.status, 200);
+    assert_eq!(b.status, 200);
+    let mut colors = [
+        a.body["data"]["components"][0]["accent_color"]
+            .as_i64()
+            .unwrap(),
+        b.body["data"]["components"][0]["accent_color"]
+            .as_i64()
+            .unwrap(),
+    ];
+    colors.sort();
+    let mut expected = [COLOR_OK, COLOR_ERROR];
+    expected.sort();
+    assert_eq!(colors, expected);
+    assert_eq!(
+        names_of(&pool).await.len(),
+        25,
+        "24 tokens followed by two concurrent creations must stay within the cap"
+    );
+}
