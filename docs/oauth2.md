@@ -100,6 +100,11 @@ names a guild, and the grant it produces belongs to that guild, which is why the
 The request carries `response_type=code`, `client_id`, `redirect_uri`, `scope`
 (optional, empty by default), **`guild_id`** (required) and optionally `state`.
 
+The Rust endpoint rejects malformed requests here with HTTP 400 and no
+`Location` header, including a missing or malformed `guild_id`. At this stage
+the client and redirect URI have not been verified. Errors may redirect to the
+client only after those checks have established the destination.
+
 `GET` validates, in this order:
 
 1. `Auth.preauthorize/1` — the client exists, the redirect URI is one of its own,

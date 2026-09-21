@@ -255,17 +255,6 @@ pub enum Malformed {
     NoGuildId,
 }
 
-impl Malformed {
-    pub fn refusal(self) -> Refusal {
-        match self {
-            Malformed::ResponseType | Malformed::NoClientId | Malformed::NoRedirectUri => {
-                Refusal::Page
-            }
-            Malformed::NoGuildId => Refusal::redirect("invalid_request", "invalid_guild_id"),
-        }
-    }
-}
-
 impl Request {
     /// The request, or the reason it cannot be one.
     ///
@@ -331,23 +320,11 @@ pub async fn authorize(
     uri: Uri,
     Query(query): Query<AuthorizeQuery>,
 ) -> Response {
-    // Kept before the parse takes the query, because a malformed request still
-    // has somewhere to be sent if it named a redirect URI.
-    let redirect_uri = query.redirect_uri.clone();
-    let sent_state = query.state.clone();
-
+    // Parsing happens before the client and redirect URI have been verified.
+    // No parse error may redirect to a destination supplied by the request.
     let request = match Request::parse(query) {
         Ok(request) => request,
-        Err(malformed) => {
-            let refusal = malformed.refusal();
-
-            return match (refusal, redirect_uri.as_deref()) {
-                (Refusal::Redirect { .. }, Some(redirect_uri)) => {
-                    answer(refusal, redirect_uri, sent_state.as_deref())
-                }
-                _ => answer(Refusal::Page, redirect_uri.as_deref().unwrap_or(""), None),
-            };
-        }
+        Err(_) => return page(),
     };
 
     let Some(session) = session::from_headers(&headers, state.session_secret()) else {

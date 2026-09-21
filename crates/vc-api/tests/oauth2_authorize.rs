@@ -137,3 +137,24 @@ async fn a_post_never_redirects_to_the_client(pool: PgPool) {
     assert_eq!(status, 400);
     assert_eq!(location, "", "and it goes nowhere");
 }
+
+/// An invalid guild must not turn the consent endpoint into an open redirect.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn malformed_requests_never_redirect_to_an_unverified_destination(pool: PgPool) {
+    for suffix in [
+        "",
+        "&guild_id=",
+        "&guild_id=invalid",
+        "&guild_id=9223372036854775808",
+    ] {
+        let uri = format!(
+            "/oauth2/authorize?response_type=code&client_id=unregistered&redirect_uri=https%3A%2F%2Funregistered.example%2Fcallback&scope=vc.issue&state=client-state{suffix}"
+        );
+        let (status, location) = visit(vc_api::router(state(pool.clone(), fake())), &uri).await;
+        assert_eq!(status, 400, "{suffix}: {location}");
+        assert!(
+            location.is_empty(),
+            "an unverified destination must never receive a redirect: {location}"
+        );
+    }
+}
