@@ -67,6 +67,7 @@ pub struct FakeDiscord {
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
     user_status: u16,
+    user_profile: Option<Map<String, Value>>,
     webhooks: Mutex<Vec<Value>>,
     callbacks: Mutex<Vec<Value>>,
     followup_gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -131,6 +132,7 @@ impl FakeDiscord {
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             user_status: 200,
+            user_profile: None,
             webhooks: Mutex::new(Vec::new()),
             callbacks: Mutex::new(Vec::new()),
             followup_gate: None,
@@ -203,6 +205,12 @@ impl FakeDiscord {
         fake.integrations_status = integrations_status;
         fake.guild_status = guild_status;
 
+        fake
+    }
+
+    pub fn with_user_profile(profile: Map<String, Value>) -> Self {
+        let mut fake = Self::new();
+        fake.user_profile = Some(profile);
         fake
     }
 
@@ -424,7 +432,7 @@ impl DiscordApi for FakeDiscord {
         // still out, so a lookup that is not coalesced has somewhere to show it.
         tokio::task::yield_now().await;
 
-        let mut user = Map::new();
+        let mut user = self.user_profile.clone().unwrap_or_default();
         user.insert("id".to_string(), Value::String(discord_user_id.to_string()));
 
         Ok(Some(user))

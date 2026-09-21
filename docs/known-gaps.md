@@ -650,3 +650,12 @@ profile lookup fails or returns 404. The ID comes from the stored account; an
 account with no Discord ID still returns `discord: null`. Successful lookups
 continue to return the filtered profile. This deliberately avoids the old
 serializer's failure on unavailable profiles.
+
+## User profiles without a browser Discord authorization
+
+Personal access tokens can be issued entirely in Discord. Application registration and
+`GET /api/v2/users/@me` therefore use the bot's user lookup when the account has no stored
+Discord OAuth authorization or that authorization cannot fetch a profile. A working OAuth
+profile lookup and its refresh behavior remain unchanged. Registration still requires a
+successful profile lookup and rejects bot accounts; the owner is the authenticated account's
+stored Discord id. This extends the old browser-dependent flow to support PAT callers.

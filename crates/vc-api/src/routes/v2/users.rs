@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::routes::limited::Limited;
 
 use crate::discord::filter_profile;
-use crate::discord_auth::resolve_token;
+use crate::discord_auth::user_profile;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -13,7 +13,7 @@ use crate::state::AppState;
 ///
 /// Mirrors `VirtualCryptoWeb.Api.V1V2.UserController.me/2`: resolve the local
 /// user, take its stored Discord authorization (refreshing it first when it is
-/// near expiry), fetch the Discord profile, and return
+/// near expiry) or use the bot lookup when no usable authorization exists, and return
 /// `{"id": "<local user id>", "discord": <filtered profile>}`.
 ///
 /// `@me` is whoever holds the token, which is not only a person: an application's token asks
@@ -35,13 +35,7 @@ pub async fn me(State(state): State<AppState>, user: Limited) -> Result<Json<Val
         })));
     };
 
-    let authorization = vc_core::user::find_discord_auth(state.pool(), discord_id)
-        .await?
-        .ok_or(vc_core::Error::DiscordAuthNotFound(discord_id))?;
-
-    let token = resolve_token(&state, discord_id, &authorization).await?;
-
-    let profile = state.discord().get_user_info(&token).await?;
+    let profile = user_profile(&state, discord_id).await?;
 
     Ok(Json(json!({
         "id": account.id.to_string(),

@@ -476,3 +476,120 @@ async fn concurrent_pat_creation_respects_limit(pool: PgPool) {
         "24 tokens followed by two concurrent creations must stay within the cap"
     );
 }
+
+async fn pat_registration(
+    pool: &PgPool,
+    discord: std::sync::Arc<support::FakeDiscord>,
+) -> Response {
+    let made = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    assert_eq!(accent(&made), COLOR_OK);
+    request(
+        vc_api::router(state(pool.clone(), discord)),
+        "POST",
+        "/oauth2/clients",
+        &token_of(&made),
+        json!({"client_name":"agent app", "redirect_uris":["https://example.com/callback"]}),
+    )
+    .await
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pat_registers_and_reads_profile_without_browser_login(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let discord = std::sync::Arc::new(support::FakeDiscord::with_user_profile(
+        json!({"username":"tester", "bot":false,"extra_field_that_must_be_filtered":"ignored"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    ));
+    let registered = pat_registration(&pool, discord.clone()).await;
+    assert_eq!(registered.status, 201);
+    let owner: i64 =
+        sqlx::query_scalar("SELECT owner_discord_id FROM applications WHERE client_id = $1::uuid")
+            .bind(registered.body["client_id"].as_str().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(owner, DISCORD_ID);
+    let made = interaction(router(pool.clone()), pat("create", Some("profile"))).await;
+    let me = get(
+        vc_api::router(state(pool, discord)),
+        "/api/v2/users/@me",
+        Some(&token_of(&made)),
+    )
+    .await;
+    assert_eq!(me.status, 200);
+    assert_eq!(me.body["id"], USER.to_string());
+    assert_eq!(me.body["discord"]["id"], DISCORD_ID.to_string());
+    assert_eq!(me.body["discord"]["username"], "tester");
+    assert!(
+        me.body["discord"]
+            .get("extra_field_that_must_be_filtered")
+            .is_none()
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pat_works_with_an_unusable_browser_authorization(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+    support::insert_discord_auth(&pool, DISCORD_ID, "old-token").await;
+    support::set_discord_updated_at(
+        &pool,
+        DISCORD_ID,
+        support::utc_now() - time::Duration::days(8),
+    )
+    .await;
+    sqlx::query("UPDATE discord_users SET refresh_token = NULL WHERE discord_user_id = $1")
+        .bind(DISCORD_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pat_registration(&pool, fake()).await.status, 201);
+    let made = interaction(router(pool.clone()), pat("create", Some("profile"))).await;
+    assert_eq!(
+        get(router(pool), "/api/v2/users/@me", Some(&token_of(&made)))
+            .await
+            .status,
+        200
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pat_registration_still_refuses_bots(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let discord = std::sync::Arc::new(support::FakeDiscord::with_user_profile(
+        json!({"bot":true}).as_object().unwrap().clone(),
+    ));
+    let refused = pat_registration(&pool, discord).await;
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"], "user_verification_failed");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM applications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pat_registration_requires_a_successful_profile_lookup(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let made = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let token = token_of(&made);
+    for status in [404, 503] {
+        let discord = std::sync::Arc::new(support::FakeDiscord::with_user_status(status));
+        let refused = request(
+            vc_api::router(state(pool.clone(), discord)),
+            "POST",
+            "/oauth2/clients",
+            &token,
+            json!({"redirect_uris":["https://example.com/callback"]}),
+        )
+        .await;
+        assert_eq!(refused.status, 500);
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM applications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

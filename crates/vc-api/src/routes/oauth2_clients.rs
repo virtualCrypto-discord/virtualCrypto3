@@ -24,7 +24,7 @@ use vc_core::application::{
     check_grant_types, check_logo_uri, check_response_types, check_slug, check_url,
 };
 
-use crate::discord_auth::resolve_token;
+use crate::discord_auth::user_profile;
 use crate::error::ApiError;
 use crate::notification::{Handshake, fresh_keypair};
 use crate::rate_limit::TooSoon;
@@ -553,7 +553,7 @@ mod registration_tests {
 /// `POST /oauth2/clients`: register an application.
 ///
 /// The order is the Elixir's, and each step has its own refusal: the metadata,
-/// then the owner's Discord authorization, then who Discord says they are, then —
+/// then the owner's Discord profile (OAuth or bot lookup), then —
 /// only if a webhook was given — whether it verifies, and then the writing.
 pub async fn register(
     State(state): State<AppState>,
@@ -581,19 +581,7 @@ pub async fn register(
         return internal("the registering account has no discord id").response();
     };
 
-    let Some(authorization) = vc_core::user::find_discord_auth(state.pool(), discord_id)
-        .await
-        .ok()
-        .flatten()
-    else {
-        return internal("the registering account has no authorization").response();
-    };
-
-    let Ok(token) = resolve_token(&state, discord_id, &authorization).await else {
-        return internal("the authorization could not be refreshed").response();
-    };
-
-    let Ok(profile) = state.discord().get_user_info(&token).await else {
+    let Ok(profile) = user_profile(&state, discord_id).await else {
         return internal("discord could not be asked about the account").response();
     };
 
@@ -607,10 +595,7 @@ pub async fn register(
         );
     }
 
-    new.owner_discord_id = profile
-        .get("id")
-        .and_then(Value::as_str)
-        .and_then(|id| id.parse().ok());
+    new.owner_discord_id = Some(discord_id);
 
     let created = match create(&state, subject, &new).await {
         Ok(created) => created,

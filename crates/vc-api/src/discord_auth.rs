@@ -49,3 +49,23 @@ pub async fn resolve_token(
 
     Ok(refreshed.token)
 }
+
+/// Resolve a public profile without requiring a browser login. Keep the OAuth profile when
+/// available for compatibility, but a missing or unusable OAuth grant does not invalidate
+/// the service token: the bot can look up the account's stored Discord id instead.
+pub async fn user_profile(
+    state: &AppState,
+    discord_id: i64,
+) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
+    if let Some(authorization) = vc_core::user::find_discord_auth(state.pool(), discord_id).await?
+        && let Ok(token) = resolve_token(state, discord_id, &authorization).await
+        && let Ok(profile) = state.discord().get_user_info(&token).await
+    {
+        return Ok(profile);
+    }
+    state
+        .discord()
+        .get_user(discord_id)
+        .await?
+        .ok_or(ApiError::NotFound)
+}
