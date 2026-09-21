@@ -8,7 +8,7 @@
 
 pub mod application;
 pub mod autocomplete;
-mod bal;
+pub mod bal;
 pub mod claim;
 pub mod contract;
 pub mod create;

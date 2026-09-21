@@ -193,6 +193,80 @@ pub mod ui {
         }
     }
 
+    /// The arrows a balance list is paged with.
+    ///
+    /// Not from the Elixir — its `/bal` answered one fence with every currency in it — so
+    /// what this mirrors is the shape of the spaces beside it, and a head byte of its own for
+    /// the contract space's reason: these ids carry a page number, and a parser that only
+    /// accepts its own head refuses every other space's bytes rather than reading them as its
+    /// own.
+    pub mod bal {
+        use super::UiError;
+
+        const HEAD: u8 = 0xF5;
+
+        /// The head this space writes, so a test and a screen agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        /// Where a pagination button moves the list: first, previous, next and last are what
+        /// its arrows say, and a cursor cannot say "back".
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Page {
+            First,
+            Previous,
+            Next,
+            Last,
+        }
+
+        fn id(page: Page) -> u8 {
+            match page {
+                Page::First => 1,
+                Page::Previous => 2,
+                Page::Next => 3,
+                Page::Last => 4,
+            }
+        }
+
+        /// The string a pagination button carries: which move, then where to.
+        pub fn page_custom_id(page: Page, number: i64) -> String {
+            let mut data = vec![HEAD, id(page)];
+            data.extend_from_slice(number.to_string().as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<(Page, i64), UiError> {
+            let [head, id, rest @ ..] = source else {
+                return Err(UiError::Head);
+            };
+
+            if *head != HEAD {
+                return Err(UiError::Head);
+            }
+
+            let page = match id {
+                1 => Page::First,
+                2 => Page::Previous,
+                3 => Page::Next,
+                4 => Page::Last,
+                other => return Err(UiError::Unknown(u16::from(*other))),
+            };
+
+            // The packing left-aligns the last group, so a decoded payload comes back padded
+            // with NULs — the module above says so. A number never contains one, which is what
+            // makes cutting them the inverse of what went in.
+            let trimmed = rest
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&rest[..0], |end| &rest[..=end]);
+            let text = String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head)?;
+
+            Ok((page, text.parse().map_err(|_| UiError::Head)?))
+        }
+    }
+
     /// The screens the DM's developer features move between.
     ///
     /// Not from the Elixir: it had no Discord surface for registering an application,

@@ -59,7 +59,7 @@ checked against the locked balances before anything is written.
 | `help_test.exs` | 1 | `tests/interactions_commands.rs` | ported |
 | `invite_test.exs` | 1 | `tests/interactions_commands.rs` | ported |
 | `pay_test.exs` | 8 | `tests/interactions_pay.rs` | ported (+1 extra: paying a receiver with no account) |
-| `bal_test.exs` | 3 | `tests/interactions_bal.rs` | ported |
+| `bal_test.exs` | 3 | `tests/interactions_bal.rs` | ported — plus a page of eleven currencies, which the Elixir had no page to put them on |
 | `info_test.exs` | 13 | `tests/interactions_info.rs` | ported |
 | `create_test.exs` | 9 | `tests/interactions_create.rs` | ported |
 | `delete_test.exs` | 3 | `tests/interactions_delete.rs` | ported |

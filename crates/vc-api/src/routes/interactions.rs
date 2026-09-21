@@ -200,6 +200,17 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         };
     }
 
+    // And the balance list's arrows, which carry a page and nothing else.
+    if let Some(custom_id) = custom_id
+        && crate::custom_id::ui::bal::parse(&crate::custom_id::parse(custom_id)).is_ok()
+    {
+        return match crate::command::bal::component(state, custom_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     match (component_type, custom_id) {
         (Some(2), Some(custom_id)) => {
             match crate::command::claim::button::handle(state, custom_id, payload).await {
