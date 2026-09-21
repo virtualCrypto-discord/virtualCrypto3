@@ -157,8 +157,8 @@ pub struct Application {
 /// `get_application_by_client_id/1`: a `client_id` that is not a UUID is not
 /// found, rather than an error — the Elixir casts first and only queries a
 /// value that survived the cast.
-pub async fn find_by_client_id(
-    pool: &sqlx::PgPool,
+pub async fn find_by_client_id<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     client_id: &str,
 ) -> Result<Option<Application>, sqlx::Error> {
     let Ok(client_id) = uuid::Uuid::parse_str(client_id) else {
@@ -171,15 +171,15 @@ pub async fn find_by_client_id(
            FROM applications WHERE client_id = $1",
         client_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
 }
 
 /// `validate_redirect_uri/2`: an exact match against the application's own
 /// registrations. No normalisation, no trailing-slash forgiveness — a string
 /// comparison, which is what the Elixir does.
-pub async fn redirect_uri_is_registered(
-    pool: &sqlx::PgPool,
+pub async fn redirect_uri_is_registered<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     application_id: i64,
     redirect_uri: &str,
 ) -> Result<bool, sqlx::Error> {
@@ -191,7 +191,7 @@ pub async fn redirect_uri_is_registered(
         application_id,
         redirect_uri
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(found)
@@ -290,8 +290,8 @@ pub struct TakenCode {
 /// nothing — which is what lets the exchange tell a reused code from an unknown
 /// one, and is the reason this is a `DELETE ... RETURNING` rather than a read
 /// with a delete after it.
-pub async fn take_code(
-    pool: &sqlx::PgPool,
+pub async fn take_code<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     code: &str,
 ) -> std::result::Result<Option<TakenCode>, sqlx::Error> {
     let taken = sqlx::query_as!(
@@ -301,7 +301,7 @@ pub async fn take_code(
                   scopes::text[] AS "scopes!", expires"#,
         code
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     Ok(taken)

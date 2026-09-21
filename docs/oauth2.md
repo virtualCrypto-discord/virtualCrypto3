@@ -220,9 +220,18 @@ that a *used* code is distinguished from an *unknown* one: a client can tell
 "somebody already spent this" from "I made this up", and only the first is worth
 retrying with a fresh authorization.
 
+The code exchange is one transaction: refusals and failed writes roll back the
+code consumption, grant, scopes and tokens together. A reused code is the
+exception: it commits deletion of the grant that remembers it, cascading to
+its access and refresh tokens, before returning `used_code`.
+
+Both `/oauth2/token` and `/oauth2/token/revoke` accept JSON and URL-encoded form
+bodies, matching the old Phoenix parsers.
+
 ### `token_refresh_token/1`
 
-Replaces the refresh token and issues a new access token. The answer carries no
+Replaces the refresh token and issues a new access token in one transaction.
+If issuance fails, the presented refresh token remains usable. The answer carries no
 `scopes`, unlike the code exchange's — the grant already knows them. A token that
 is not one answers `invalid_grant`, `invalid_refresh_token`, and there is a
 `retry_limit` error which comes from the refresh token's own machinery.

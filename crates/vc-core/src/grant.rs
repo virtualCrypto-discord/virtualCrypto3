@@ -22,8 +22,8 @@ pub const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 /// accepts one, so the single path that reaches it raises. An insert that fails
 /// is not retried by wrapping it in a branch that also fails, so there is no
 /// retry here.
-pub async fn create_access_token(
-    pool: &PgPool,
+pub async fn create_access_token<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     grant_id: i64,
     now: OffsetDateTime,
 ) -> Result<String> {
@@ -38,7 +38,7 @@ pub async fn create_access_token(
         at + ACCESS_TOKEN_TTL,
         at
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(token_id.to_string())
@@ -59,10 +59,21 @@ pub async fn grant_for_code(
     latest_code: &str,
     now: OffsetDateTime,
 ) -> Result<Option<i64>> {
+    let mut connection = pool.acquire().await?;
+    grant_for_code_in(&mut connection, application_id, guild_id, latest_code, now).await
+}
+
+async fn grant_for_code_in(
+    connection: &mut sqlx::PgConnection,
+    application_id: i64,
+    guild_id: i64,
+    latest_code: &str,
+    now: OffsetDateTime,
+) -> Result<Option<i64>> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let remembered = sqlx::query!("DELETE FROM grants WHERE latest_code = $1", latest_code)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
 
     if remembered.rows_affected() > 0 {
@@ -79,7 +90,7 @@ pub async fn grant_for_code(
         latest_code,
         at
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await?;
 
     Ok(Some(id))
@@ -133,8 +144,8 @@ pub const REFRESH_TOKEN_TTL: Duration = Duration::days(180);
 /// from `create_access_token`: it looks the row up with `Repo.get/2` and a
 /// keyword list, so the one path that reaches it raises. The same unreachable
 /// branch appears in both functions, which is what a copy is.
-pub async fn create_refresh_token(
-    pool: &PgPool,
+pub async fn create_refresh_token<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     grant_id: i64,
     now: OffsetDateTime,
 ) -> Result<String> {
@@ -153,7 +164,7 @@ pub async fn create_refresh_token(
         at + REFRESH_TOKEN_TTL,
         at
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(token_id.to_string())
@@ -165,8 +176,8 @@ pub async fn create_refresh_token(
 /// The expiry is part of the match, so an expired token cannot be rotated: it is
 /// not found rather than given another six months. `None` is that, and the
 /// caller answers it as `invalid_refresh_token`.
-pub async fn replace_refresh_token(
-    pool: &PgPool,
+pub async fn replace_refresh_token<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     old_token_id: Uuid,
     now: OffsetDateTime,
 ) -> Result<Option<(i64, String)>> {
@@ -182,7 +193,7 @@ pub async fn replace_refresh_token(
         old_token_id,
         at
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     Ok(replaced
@@ -248,28 +259,9 @@ pub struct Exchanged {
     pub expires_in: i64,
 }
 
-/// Whether some grant still remembers this code.
-///
-/// The other half of telling a spent code from one that was never issued: the
-/// grant keeps the code it was last redeemed with, so a code in a grant's memory
-/// was spent, and one nowhere at all is a code that never existed.
-async fn grant_remembers_code(pool: &PgPool, code: &str) -> std::result::Result<bool, sqlx::Error> {
-    let found = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM grants WHERE latest_code = $1) AS "exists!""#,
-        code
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(found)
-}
-
-/// `token_authorization_code/4`.
-///
-/// The order is the Elixir's and it is the contract: the code is spent first
-/// (taking it is what spends it), then its expiry, then the application, then
-/// that the code was issued to *this* application, then the redirect URI, and
-/// only then a grant and its tokens.
+/// Exchange a code atomically. Ordinary refusals roll back consumption of the
+/// code; reuse commits revocation of the grant and all its tokens, as Elixir's
+/// `Auth.run/1` does for `{:commit, {:error, ...}}`.
 pub async fn exchange_code(
     pool: &PgPool,
     client_id: &str,
@@ -277,15 +269,40 @@ pub async fn exchange_code(
     code: &str,
     now: OffsetDateTime,
 ) -> std::result::Result<Exchanged, ExchangeError> {
-    let taken = match take_code(pool, code).await {
+    let mut tx = pool
+        .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await
+        .map_err(|_| ExchangeError::InvalidCode)?;
+    let result = exchange_code_in(&mut tx, client_id, redirect_uri, code, now).await;
+    if result.is_ok() || result == Err(ExchangeError::UsedCode) {
+        tx.commit().await.map_err(|_| ExchangeError::InvalidCode)?;
+    } else {
+        tx.rollback()
+            .await
+            .map_err(|_| ExchangeError::InvalidCode)?;
+    }
+    result
+}
+
+async fn exchange_code_in(
+    connection: &mut sqlx::PgConnection,
+    client_id: &str,
+    redirect_uri: &str,
+    code: &str,
+    now: OffsetDateTime,
+) -> std::result::Result<Exchanged, ExchangeError> {
+    let taken = match take_code(&mut *connection, code).await {
         Ok(Some(taken)) => taken,
         Ok(None) => {
-            return Err(
-                match grant_remembers_code(pool, code).await.unwrap_or(false) {
-                    true => ExchangeError::UsedCode,
-                    false => ExchangeError::InvalidCode,
-                },
-            );
+            let revoked = sqlx::query!("DELETE FROM grants WHERE latest_code = $1", code)
+                .execute(&mut *connection)
+                .await
+                .map_err(|_| ExchangeError::InvalidCode)?;
+            return Err(if revoked.rows_affected() > 0 {
+                ExchangeError::UsedCode
+            } else {
+                ExchangeError::InvalidCode
+            });
         }
         Err(_) => return Err(ExchangeError::InvalidCode),
     };
@@ -296,7 +313,7 @@ pub async fn exchange_code(
         return Err(ExchangeError::InvalidCode);
     }
 
-    let application = find_by_client_id(pool, client_id)
+    let application = find_by_client_id(&mut *connection, client_id)
         .await
         .map_err(|_| ExchangeError::NotFoundClient)?
         .ok_or(ExchangeError::NotFoundClient)?;
@@ -305,15 +322,15 @@ pub async fn exchange_code(
         return Err(ExchangeError::IssuedToOtherClient);
     }
 
-    if !redirect_uri_is_registered(pool, application.id, redirect_uri)
+    if !redirect_uri_is_registered(&mut *connection, application.id, redirect_uri)
         .await
         .unwrap_or(false)
     {
         return Err(ExchangeError::RedirectUriMismatch);
     }
 
-    let granted = grant_for_code(
-        pool,
+    let granted = grant_for_code_in(
+        &mut *connection,
         application.id,
         taken.guild_id.unwrap_or_default(),
         code,
@@ -326,18 +343,11 @@ pub async fn exchange_code(
         return Err(ExchangeError::UsedCode);
     };
 
-    let mut connection = pool
-        .acquire()
+    create_grant_scopes(&mut *connection, grant_id, &taken.scopes, now)
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
 
-    create_grant_scopes(&mut connection, grant_id, &taken.scopes, now)
-        .await
-        .map_err(|_| ExchangeError::InvalidCode)?;
-
-    drop(connection);
-
-    let access_token = create_access_token(pool, grant_id, now)
+    let access_token = create_access_token(&mut *connection, grant_id, now)
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
 
@@ -347,7 +357,7 @@ pub async fn exchange_code(
         .any(|grant| grant == "refresh_token")
     {
         Some(
-            create_refresh_token(pool, grant_id, now)
+            create_refresh_token(&mut *connection, grant_id, now)
                 .await
                 .map_err(|_| ExchangeError::InvalidCode)?,
         )
@@ -388,14 +398,22 @@ pub async fn exchange_refresh_token(
         return Err(ExchangeError::InvalidRefreshToken);
     };
 
-    let replaced = replace_refresh_token(pool, presented, now)
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| ExchangeError::InvalidRefreshToken)?;
+    let replaced = replace_refresh_token(&mut *tx, presented, now)
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?
         .ok_or(ExchangeError::InvalidRefreshToken)?;
 
     let (grant_id, refresh_token) = replaced;
 
-    let access_token = create_access_token(pool, grant_id, now)
+    let access_token = create_access_token(&mut *tx, grant_id, now)
+        .await
+        .map_err(|_| ExchangeError::InvalidRefreshToken)?;
+
+    tx.commit()
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?;
 

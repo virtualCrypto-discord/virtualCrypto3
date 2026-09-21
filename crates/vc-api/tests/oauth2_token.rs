@@ -3,6 +3,8 @@
 //! Additions rather than ports: OAuth2 is the part of the migration with no
 //! Elixir test to follow.
 
+mod support;
+
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
@@ -543,4 +545,216 @@ async fn an_applications_webhook_is_read_back(pool: PgPool) {
     let missing = webhook_data(&pool, 999_999).await.expect("an answer");
 
     assert_eq!(missing, None);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_code_exchange_preserves_code(pool: PgPool) {
+    let (_, client) = application_with_callback(&pool).await;
+    let now = OffsetDateTime::now_utc();
+    let callback = "https://app.example/callback";
+    let code = authorize(&pool, 42, &["openid".to_string()], callback, &client, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        exchange_code(&pool, &client, "https://wrong.example/", &code, now).await,
+        Err(ExchangeError::RedirectUriMismatch)
+    );
+    let retry = exchange_code(&pool, &client, callback, &code, now).await;
+    assert!(
+        retry.is_ok(),
+        "a rejected request must not consume the code: {retry:?}"
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn replayed_code_revokes_issued_tokens(pool: PgPool) {
+    let (app, client) = application_with_callback(&pool).await;
+    sqlx::query("UPDATE applications SET grant_types=ARRAY['authorization_code','refresh_token']::openid_connect_grant_types[] WHERE id=$1").bind(app).execute(&pool).await.unwrap();
+    let now = OffsetDateTime::now_utc();
+    let callback = "https://app.example/callback";
+    let code = authorize(&pool, 42, &["openid".to_string()], callback, &client, now)
+        .await
+        .unwrap();
+    let tokens = exchange_code(&pool, &client, callback, &code, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        exchange_code(&pool, &client, callback, &code, now).await,
+        Err(ExchangeError::UsedCode)
+    );
+    let surviving: i64 = sqlx::query_scalar("SELECT count(*) FROM access_tokens WHERE token_id=$1")
+        .bind(Uuid::parse_str(&tokens.access_token).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        surviving, 0,
+        "Elixir deletes the grant and cascades revocation on reuse"
+    );
+    let refresh_survives: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM refresh_tokens WHERE token_id=$1)")
+            .bind(Uuid::parse_str(tokens.refresh_token.as_ref().unwrap()).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!refresh_survives, "reuse must revoke the refresh token too");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_refresh_preserves_presented_token(pool: PgPool) {
+    let grant_id = grant(&pool).await;
+    let now = OffsetDateTime::now_utc();
+    let token = create_refresh_token(&pool, grant_id, now).await.unwrap();
+    sqlx::query("ALTER TABLE access_tokens ADD CONSTRAINT injected_failure CHECK (false)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(exchange_refresh_token(&pool, &token, now).await.is_err());
+    sqlx::query("ALTER TABLE access_tokens DROP CONSTRAINT injected_failure")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let retry = exchange_refresh_token(&pool, &token, now).await;
+    assert!(
+        retry.is_ok(),
+        "rotation must roll back when issuing fails: {retry:?}"
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn json_revocation_remains_supported(pool: PgPool) {
+    use tower::ServiceExt;
+    let user = 1234;
+    support::insert_user(&pool, user, 12345678).await;
+    let token = support::mint(&pool, user, &["vc.pay"]).await;
+    let claims = vc_auth::jwt::verify(
+        &token,
+        support::state(pool.clone(), support::fake()).jwt_secret(),
+    )
+    .unwrap();
+    let response = vc_api::router(support::state(pool.clone(), support::fake()))
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/oauth2/token/revoke")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({"token": token}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status().as_u16(),
+        200,
+        "JSON revocation was supported by Phoenix parsers"
+    );
+    let survives: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_access_tokens WHERE token_id=$1)")
+            .bind(Uuid::parse_str(&claims.jti).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!survives);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_code_token_write_rolls_back_the_grant_and_code(pool: PgPool) {
+    let (_, client) = application_with_callback(&pool).await;
+    let now = OffsetDateTime::now_utc();
+    let callback = "https://app.example/callback";
+    let code = authorize(&pool, 42, &["openid".to_string()], callback, &client, now)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE access_tokens ADD CONSTRAINT injected_failure CHECK (false)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        exchange_code(&pool, &client, callback, &code, now)
+            .await
+            .is_err()
+    );
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM grants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(grants, 0, "a failed exchange must leave no partial grant");
+    sqlx::query("ALTER TABLE access_tokens DROP CONSTRAINT injected_failure")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        exchange_code(&pool, &client, callback, &code, now)
+            .await
+            .is_ok()
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn simultaneous_code_exchanges_detect_reuse_and_revoke(pool: PgPool) {
+    let (_, client) = application_with_callback(&pool).await;
+    let now = OffsetDateTime::now_utc();
+    let callback = "https://app.example/callback";
+    let code = authorize(&pool, 42, &["openid".to_string()], callback, &client, now)
+        .await
+        .unwrap();
+    let (first, second) = tokio::join!(
+        exchange_code(&pool, &client, callback, &code, now),
+        exchange_code(&pool, &client, callback, &code, now)
+    );
+    assert!(
+        matches!(
+            (&first, &second),
+            (Ok(_), Err(ExchangeError::UsedCode)) | (Err(ExchangeError::UsedCode), Ok(_))
+        ),
+        "{first:?}, {second:?}"
+    );
+    let tokens: i64 = sqlx::query_scalar("SELECT count(*) FROM access_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tokens, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn json_code_exchange_remains_supported(pool: PgPool) {
+    use tower::ServiceExt;
+    let (_, client) = application_with_callback(&pool).await;
+    let callback = "https://app.example/callback";
+    let code = authorize(
+        &pool,
+        42,
+        &["openid".to_string()],
+        callback,
+        &client,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let response = vc_api::router(support::state(pool, support::fake()))
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/oauth2/token")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({
+                        "grant_type":"authorization_code", "client_id":client,
+                        "redirect_uri":callback, "code":code
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body["access_token"].is_string());
+    assert_eq!(body["token_type"], "Bearer");
 }

@@ -8,7 +8,7 @@
 //! itself, or the `jti`, `typ` and `kind` triple that names one.
 
 use axum::Json;
-use axum::extract::{Form, State};
+use axum::extract::{Form, FromRequest, Request, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -24,6 +24,41 @@ use vc_core::grant::{
 };
 
 use crate::state::AppState;
+
+/// Phoenix accepted both form and JSON bodies on the token endpoints.
+pub struct TokenBody<T>(pub T);
+
+impl<S, T> FromRequest<S> for TokenBody<T>
+where
+    S: Send + Sync,
+    T: serde::de::DeserializeOwned,
+{
+    type Rejection = Response;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let content_type = request
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if content_type == "application/json"
+            || (content_type.starts_with("application/") && content_type.ends_with("+json"))
+        {
+            Json::<T>::from_request(request, state)
+                .await
+                .map(|Json(value)| Self(value))
+                .map_err(IntoResponse::into_response)
+        } else {
+            Form::<T>::from_request(request, state)
+                .await
+                .map(|Form(value)| Self(value))
+                .map_err(IntoResponse::into_response)
+        }
+    }
+}
 
 /// The body an authorization request arrives as.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -42,7 +77,7 @@ pub struct TokenForm {
 pub async fn token(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Form(form): Form<TokenForm>,
+    TokenBody(form): TokenBody<TokenForm>,
 ) -> Response {
     match form.grant_type.as_deref() {
         None => error("invalid_request", "grant_type_parameter_missing"),
@@ -413,7 +448,10 @@ pub struct RevokeForm {
 /// A `token` that is none of those is still `200`: RFC 7009 says a revocation
 /// endpoint must not say whether the token existed, and a client that has
 /// already forgotten a token should not be told off for tidying up.
-pub async fn revoke(State(state): State<AppState>, Form(form): Form<RevokeForm>) -> Response {
+pub async fn revoke(
+    State(state): State<AppState>,
+    TokenBody(form): TokenBody<RevokeForm>,
+) -> Response {
     if let Some(token) = form.token {
         if let Ok(claims) = vc_auth::jwt::verify(&token, state.jwt_secret()) {
             let _ = revoke_by_jti(state.pool(), &claims.jti).await;
