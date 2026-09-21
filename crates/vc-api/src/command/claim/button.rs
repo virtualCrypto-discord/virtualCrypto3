@@ -1,18 +1,20 @@
 use serde_json::Value;
 use vc_core::claim::{PartialClaim, UpdateClaimsError};
 
-use super::list;
+use super::{list, show};
 use crate::claim_list::ListOptions;
 use crate::command::{CommandError, get_user};
 use crate::custom_id::ui::button::{Action, Path, parse};
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// `Interaction.Button.handle/4` for `[:claim, :action, X]`: a status change for
-/// the claims the list had selected, followed by a redraw of the list.
+/// `Interaction.Button.handle/4` for a claim's buttons, which are three kinds:
+/// a list row's action, the list's own pagination row, and one claim's screen.
 ///
-/// The result is not the response body — it is posted as a follow-up message, so
-/// the ephemeral list can be updated in place and the outcome still be visible.
+/// A row's action is a status change for the claims it names, followed by a redraw of
+/// the list; the redraw is the response and the outcome is posted as a follow-up, so the
+/// ephemeral list updates in place and the result is still visible. The other two answer
+/// with the screen they came from, updated: the Elixir's three `handle/4` clauses.
 pub async fn handle(
     state: &AppState,
     custom_id: &str,
@@ -23,10 +25,18 @@ pub async fn handle(
     let (path, data) = parse(&crate::custom_id::parse(custom_id))
         .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
 
-    let Path::Act(action) = path else {
-        return Err(CommandError::Internal(ApiError::Internal(
-            "this button is not a claim action".to_string(),
-        )));
+    let action = match path {
+        // `[:claim, :list, position]`: the pagination row — the four arrows and the
+        // reload. It only redraws, and the page to draw is in the options the button
+        // carries rather than in the path, which is why the scope is not read: the
+        // Elixir's `handle_listing/2` reads the options too.
+        Path::List(_) => return list::page(state, me, options(&data)?).await,
+        // `[:claim, :action_single, action]`: one claim's own screen, which answers with
+        // itself rather than with a list.
+        Path::ActionSingle(action) => {
+            return show::pressed(state, me, action, single_claim_id(&data)?).await;
+        }
+        Path::Act(action) => action,
     };
 
     let (options, rest) = ListOptions::parse(&data).ok_or_else(|| {
@@ -51,6 +61,27 @@ pub async fn handle(
         .await?;
 
     list::page(state, me, options).await
+}
+
+/// The options a list button carries, which is the whole state of the page it draws.
+fn options(data: &[u8]) -> Result<ListOptions, CommandError> {
+    ListOptions::parse(data)
+        .map(|(options, _)| options)
+        .ok_or_else(|| {
+            CommandError::Internal(ApiError::Internal("the button payload is malformed".into()))
+        })
+}
+
+/// `Show.action_custom_id/3`'s tail: the claim's id as eight big-endian bytes.
+fn single_claim_id(data: &[u8]) -> Result<i64, CommandError> {
+    let id: [u8; 8] = data
+        .get(..8)
+        .and_then(|head| head.try_into().ok())
+        .ok_or_else(|| {
+            CommandError::Internal(ApiError::Internal("the button payload is malformed".into()))
+        })?;
+
+    Ok(i64::from_be_bytes(id))
 }
 
 /// `List.Helper`: the count byte, then that many eight-byte ids.

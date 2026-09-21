@@ -6,11 +6,12 @@ pub mod show;
 
 use serde_json::{Map, Value, json};
 use time::PrimitiveDateTime;
-use vc_core::claim::Transition;
+use vc_core::claim::{Transition, TransitionError};
 
 use crate::claim_list::Position;
 
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError};
+use crate::error::ApiError;
 use crate::state::AppState;
 
 /// `Command.handle/4`'s `"claim"` clauses: the subcommand picks a handler.
@@ -54,6 +55,34 @@ fn sub_option<'a>(sub_options: Option<&'a Value>, name: &str) -> Result<&'a Valu
 /// would otherwise have a second copy of this format.
 pub(super) fn format_date_time(value: PrimitiveDateTime) -> String {
     format!("<t:{}>", value.assume_utc().unix_timestamp())
+}
+
+/// `Claim.render_error/1`: the sentence each refusal of a claim's transition gets.
+///
+/// One function because the Elixir has one: the `claim approve|deny|cancel` command and
+/// the buttons that move a claim both answer a refusal with it.
+pub(super) fn transition_error(error: TransitionError) -> Result<Value, CommandError> {
+    match error {
+        TransitionError::NotFound => Ok(render_error("そのidの請求は見つかりませんでした。")),
+        TransitionError::InvalidOperator => Ok(render_error(
+            "この請求に対してこの操作を行う権限がありません。",
+        )),
+        TransitionError::InvalidStatus => Ok(render_error(
+            "この請求に対してこの操作を行うことは出来ません。",
+        )),
+        TransitionError::NotEnoughAmount | TransitionError::NotFoundSenderAsset => {
+            Ok(render_error("お金が足りません。"))
+        }
+        TransitionError::NotFoundCurrency => Ok(render_error("指定された通貨は存在しません。")),
+        TransitionError::InvalidAmount => Ok(render_error(
+            "不正な金額です。1以上9223372036854775807以下である必要があります。",
+        )),
+        // Unreachable here: both callers move a claim without a metadata patch of their
+        // own, which is the only way a claim's metadata grows. Reported the way the
+        // metadata endpoints report it.
+        TransitionError::MetadataLimit => Err(CommandError::Internal(ApiError::MetadataLimit)),
+        TransitionError::Database(error) => Err(CommandError::from(error)),
+    }
 }
 
 /// `Interactions.Claim.render/1` for `{:error, _, error}`.

@@ -1,9 +1,8 @@
 use serde_json::{Value, json};
-use vc_core::claim::{Transition, TransitionError};
+use vc_core::claim::Transition;
 
-use super::{render_error, sub_option};
+use super::sub_option;
 use crate::command::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, get_user};
-use crate::error::ApiError;
 use crate::state::AppState;
 
 /// `Command.handle/4` for `claim approve`, `claim deny` and `claim cancel`, which
@@ -35,26 +34,7 @@ pub async fn handle(
 
     match result {
         Ok(()) => Ok(render(transition, id)),
-        Err(TransitionError::NotFound) => Ok(render_error("そのidの請求は見つかりませんでした。")),
-        Err(TransitionError::InvalidOperator) => Ok(render_error(
-            "この請求に対してこの操作を行う権限がありません。",
-        )),
-        Err(TransitionError::InvalidStatus) => Ok(render_error(
-            "この請求に対してこの操作を行うことは出来ません。",
-        )),
-        Err(TransitionError::NotEnoughAmount | TransitionError::NotFoundSenderAsset) => {
-            Ok(render_error("お金が足りません。"))
-        }
-        Err(TransitionError::NotFoundCurrency) => {
-            Ok(render_error("指定された通貨は存在しません。"))
-        }
-        Err(TransitionError::InvalidAmount) => Ok(render_error(
-            "不正な金額です。1以上9223372036854775807以下である必要があります。",
-        )),
-        // Unreachable: an empty metadata patch cannot push a claim over the
-        // entry limit. Reported the way the metadata endpoints report it.
-        Err(TransitionError::MetadataLimit) => Err(CommandError::Internal(ApiError::MetadataLimit)),
-        Err(TransitionError::Database(error)) => Err(CommandError::from(error)),
+        Err(error) => super::transition_error(error),
     }
 }
 

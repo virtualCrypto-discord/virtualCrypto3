@@ -1,10 +1,11 @@
 use serde_json::{Value, json};
 use vc_core::balance::Balance;
-use vc_core::claim::{ClaimCurrency, ClaimView};
+use vc_core::claim::{ClaimCurrency, ClaimView, Transition, TransitionError};
 
 use super::{format_date_time, render_error, sub_option};
 use crate::command::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, as_int, get_user, mention,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, get_user,
+    mention,
 };
 use crate::state::AppState;
 
@@ -41,11 +42,58 @@ pub async fn handle(
         None
     };
 
-    Ok(render(&claim, me, assets.as_deref()))
+    Ok(render(&claim, me, assets.as_deref(), None))
+}
+
+/// `Button.handle_single_patch/3`: the three buttons this screen offers, pressed.
+///
+/// The answer is the same screen, updated in place and carrying the line that says what
+/// was done — the Elixir's `update_message/0` with `content`, which a components message
+/// has no room for and a Text Display holds instead. The metadata is `%{}`, as the
+/// command passes: a press carries none of its own.
+pub async fn pressed(
+    state: &AppState,
+    me: i64,
+    action: ButtonAction,
+    claim_id: i64,
+) -> Result<Value, CommandError> {
+    let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
+
+    let transition = match action {
+        ButtonAction::Approve => Transition::Approved,
+        ButtonAction::Deny => Transition::Denied,
+        ButtonAction::Cancel => Transition::Canceled,
+    };
+
+    if let Err(error) = vc_core::claim::transition(
+        state.pool(),
+        state.notifier(),
+        account,
+        claim_id,
+        transition,
+        Some(json!({})),
+    )
+    .await
+    {
+        return super::transition_error(error);
+    }
+
+    let Some(claim) = vc_core::claim::view(state.pool(), account, claim_id).await? else {
+        return super::transition_error(TransitionError::NotFound);
+    };
+
+    // No quotation and no buttons: the press is what moved the claim out of `pending`,
+    // and Elixir's button path passes no assets for the same reason.
+    Ok(render(&claim, me, None, Some(action)))
 }
 
 /// `Interactions.Claim.Show.render/1`.
-fn render(claim: &ClaimView, me: i64, assets: Option<&[Balance]>) -> Value {
+fn render(
+    claim: &ClaimView,
+    me: i64,
+    assets: Option<&[Balance]>,
+    outcome: Option<ButtonAction>,
+) -> Value {
     let unit = claim.currency.unit.clone().unwrap_or_default();
     let amount = claim.amount.unwrap_or_default();
     let claimant = claim.claimant.discord_id;
@@ -76,7 +124,15 @@ fn render(claim: &ClaimView, me: i64, assets: Option<&[Balance]>) -> Value {
         format_date_time(claim.inserted_at),
     );
 
-    let mut children = vec![crate::components::text(format!("{heading}\n{field}"))];
+    let mut children = Vec::new();
+
+    // What the press did, above the claim it did it to: the Elixir's `content`, which was
+    // the first thing in the message and is the first thing in the container here.
+    if let Some(action) = outcome {
+        children.push(crate::components::text(outcome_text(action, claim.id)));
+    }
+
+    children.push(crate::components::text(format!("{heading}\n{field}")));
 
     let mut rows = Vec::new();
 
@@ -94,13 +150,30 @@ fn render(claim: &ClaimView, me: i64, assets: Option<&[Balance]>) -> Value {
     children.extend(rows);
 
     json!({
-        "type": CHANNEL_MESSAGE_WITH_SOURCE,
+        // A press edits the message it was pressed on; the command opens a new one.
+        "type": if outcome.is_some() {
+            UPDATE_MESSAGE
+        } else {
+            CHANNEL_MESSAGE_WITH_SOURCE
+        },
         "data": crate::components::ephemeral(vec![crate::components::container(
             // Both embeds carried this accent.
             Some(COLOR_BRAND as u32),
             children,
         )]),
     })
+}
+
+/// `Common.render_action_result/2`: what the screen says the press did, which is the
+/// same sentence the command answers with and the claim's own id in it.
+fn outcome_text(action: ButtonAction, claim_id: i64) -> String {
+    let result = match action {
+        ButtonAction::Approve => "承諾し、支払いました。",
+        ButtonAction::Deny => "拒否しました。",
+        ButtonAction::Cancel => "キャンセルしました。",
+    };
+
+    format!("id: {claim_id}の請求を{result}")
 }
 
 /// `Show.selection_execute_row/2`: the three buttons, disabled when the caller

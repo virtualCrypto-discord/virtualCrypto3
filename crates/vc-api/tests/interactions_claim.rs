@@ -7,9 +7,13 @@ mod support;
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{ClaimSet, execute_from_guild, fake, get_amount, interaction, setup_claim, state};
+use support::{
+    ClaimSet, execute_from_guild, fake, get_amount, insert_claim, interaction, setup_claim, state,
+};
 use vc_api::claim_list::{ListOptions, Page, Position};
-use vc_api::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
+use vc_api::custom_id::ui::button::{
+    Action, ListScope, claim_action, claim_action_single, claim_list,
+};
 
 const COLOR_ERROR: i64 = 0x00EA_3875;
 const COLOR_BRAND: i64 = 6_431_213;
@@ -1716,4 +1720,163 @@ async fn button_cancel_reports_an_unknown_claim(pool: PgPool) {
     let money = &claims.money;
 
     assert_action_error(pool, Action::Cancel, 0, money.user1, BUTTON_NOT_FOUND).await;
+}
+
+/// The row's 🔄: it draws the page it is on, which is what a person presses when the
+/// claim in front of them was decided somewhere else.
+///
+/// All five of the row's buttons answer through `[:claim, :list, position]`, and that
+/// clause was the one this handler did not have: every one of them was an internal error,
+/// which Discord shows as a failed interaction.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_the_reload_button_draws_the_page_again(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let api = fake();
+    let options = list_options(Position::All);
+    let response = interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        action_data(
+            page_custom_id(4, Position::All, Page::Number(1), &options),
+            money.user1,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body["type"],
+        json!(7),
+        "a redraw edits the message"
+    );
+    // The caller's three pending claims, which is the page a reload of page one is.
+    assert_eq!(claims_on(response.body["data"].to_string().as_str()), 3);
+    assert_eq!(
+        response.body["data"]["components"][0]["components"][0]["content"],
+        json!("**請求一覧(all)**")
+    );
+    assert!(
+        api.webhooks().is_empty(),
+        "a redraw tells nobody: {:?}",
+        api.webhooks()
+    );
+}
+
+/// And the ⏭️: it draws the page the button names rather than the one the message was
+/// showing, which is what makes a list longer than a page readable.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_the_next_arrow_draws_the_next_page(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+
+    // Four more of the caller's pending claims, so their pending list is two pages.
+    for id in 7..=10 {
+        insert_claim(&pool, id, 100, "pending", 1, 2, claims.money.currency).await;
+    }
+
+    let api = fake();
+    let options = list_options(Position::All);
+    let response = interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        action_data(
+            page_custom_id(2, Position::All, Page::Number(2), &options),
+            claims.money.user1,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(7));
+    assert_eq!(
+        claims_on(response.body["data"].to_string().as_str()),
+        2,
+        "the two the first page left: {}",
+        response.body
+    );
+
+    // The row follows the page it drew: ⏪ has somewhere to go and ⏭️ does not.
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+    let row = children.last().expect("the pagination row");
+
+    assert_ne!(row["components"][0]["custom_id"], json!("disabled-0"));
+    assert_eq!(row["components"][2]["custom_id"], json!("disabled-2"));
+}
+
+/// `Show.action_custom_id/3`: the claim's own screen carries its id after the action.
+fn single_action_custom_id(action: Action, claim_id: i64) -> String {
+    let mut payload = claim_action_single(action).to_vec();
+    payload.extend_from_slice(&claim_id.to_be_bytes());
+
+    vc_api::custom_id::encode(1, &payload)
+}
+
+/// A claim's own screen answers on itself: the button that was pressed moves the claim,
+/// and the message it was on comes back saying so and showing the claim it changed.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_the_show_screens_approve_updates_the_claim(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+    let claim_id = claims.id(0);
+
+    let api = fake();
+    let response = interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        action_data(
+            single_action_custom_id(Action::Approve, claim_id),
+            money.user2,
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.body["type"], json!(7), "the screen edits itself");
+
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the children");
+
+    assert_eq!(
+        children[0]["content"],
+        json!(format!("id: {claim_id}の請求を承諾し、支払いました。"))
+    );
+    assert!(
+        children[1]["content"]
+            .as_str()
+            .is_some_and(|claim| claim.contains("✅支払い済み")),
+        "the claim it changed: {}",
+        response.body
+    );
+    assert_eq!(
+        children.len(),
+        2,
+        "a decided claim offers no buttons: {}",
+        response.body
+    );
+    assert!(api.webhooks().is_empty(), "this screen answers with itself");
+}
+
+/// A refusal is the error screen the command answers with, and the claim is left alone.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pressing_the_show_screens_approve_as_the_claimant_is_refused(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let money = &claims.money;
+
+    let response = interaction(
+        vc_api::router(state(pool.clone(), fake())),
+        action_data(
+            single_action_custom_id(Action::Approve, claims.id(0)),
+            money.user1,
+        ),
+    )
+    .await;
+
+    assert_message(&response, INVALID_OPERATOR);
+
+    let claim = vc_core::claim::view(&pool, 1, claims.id(0))
+        .await
+        .expect("a lookup")
+        .expect("the claim exists");
+    assert_eq!(claim.status.as_deref(), Some("pending"));
 }
