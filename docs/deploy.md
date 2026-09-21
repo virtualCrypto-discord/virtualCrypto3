@@ -6,7 +6,8 @@ correct as this list.
 
 ## What the server requires
 
-**The names are the Elixir application's** — what its configuration reads and what
+**The names are the Elixir application's**: they are the ones its `config/dev.exs`
+reads, which is the configuration the service is operated under and the names
 `scripts/discord-env.sh` sets — so the port is started from an environment that
 already exists rather than from a spelling of its own.
 
@@ -25,9 +26,10 @@ error it exits with; the second is everything else that is read, `WEB_ROOT` from
 `DISCORD_PUBLIC_KEY` must be 32 hex-encoded bytes; anything else is refused by
 name.
 
-The `virtualcrypto-prod` app spells the first list `VCRYPTO_*`, which is the
-deployed Elixir service's own spelling of them: a deployment of this port sets the
-names above. The certificate pair below already matches.
+The `virtualcrypto-prod` app carries secrets spelled `VCRYPTO_*` instead. Those are
+not the names above and nothing here reads them, so a deployment of this port sets
+the names above. The certificate pair below is the exception: both sides spell it
+the same.
 
 ## What it takes with a default
 
@@ -55,8 +57,7 @@ Worker to `vcrypto-webhook-emitter.sumidora.com` for every environment (see
 defaults like `SITE_URL` does. What decides whether there is a proxy at all is the
 certificate below.
 
-It goes together with
-`VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` is the mTLS client the
+`VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` are the mTLS client the
 webhook handshake goes through — the Cloudflare Worker in front of an application's
 webhook requires a client certificate, which is why the pair is required together
 rather than separately. `#` in the PEM values is read as a newline. Without the

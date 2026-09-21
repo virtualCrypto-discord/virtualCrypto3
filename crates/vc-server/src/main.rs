@@ -15,9 +15,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // The names are the Elixir application's — what its configuration reads and
-    // what `scripts/discord-env.sh` sets — and they are read as they are, each on
-    // its own: a value the environment does not have is refused by name.
+    // The names are the Elixir application's — written in its `config/dev.exs`,
+    // which is the configuration the service is operated under, and the ones
+    // `scripts/discord-env.sh` sets — and they are read as they are, each on its
+    // own: a value the environment does not have is refused by name.
     let database_url = require_env("DATABASE_URL")?;
     let jwt_secret = require_env("GUARDIAN_SECRET_KEY")?;
     let discord_client_id = require_env("DISCORD_CLIENT_ID")?;
