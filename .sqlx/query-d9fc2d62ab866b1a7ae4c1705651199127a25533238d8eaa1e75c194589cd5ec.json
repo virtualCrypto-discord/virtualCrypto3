@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO grants (application_id, guild_id, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $3)\n         ON CONFLICT (application_id, guild_id) DO UPDATE SET updated_at = EXCLUDED.updated_at\n         RETURNING id",
+  "query": "SELECT id FROM grants\n          WHERE application_id = $1\n            AND guild_id IS NOT DISTINCT FROM $2\n            AND discord_id IS NOT DISTINCT FROM $3",
   "describe": {
     "columns": [
       {
@@ -19,12 +19,12 @@
       "Left": [
         "Int8",
         "Int8",
-        "Timestamp"
+        "Int8"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "599e825b295d5dd4ec9eae9a35e984ab1f5b3f29339eca0022409e7016ecdfac"
+  "hash": "d9fc2d62ab866b1a7ae4c1705651199127a25533238d8eaa1e75c194589cd5ec"
 }

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM grant_requests\n          WHERE application_id = $1 AND status = 'pending'\n            AND guild_id IS NOT DISTINCT FROM $2\n            AND discord_id IS NOT DISTINCT FROM $3\n            AND inserted_at + make_interval(secs => expires_in) <= $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2577f0e0dfd1996e139fe82ba5ae3d1a2347abfe14488de21b481a70982ca8f7"
+}

@@ -1,0 +1,126 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, application_id, guild_id, discord_id, scopes AS \"scopes!\",\n                  device_code AS \"device_code!: Uuid\", user_code AS \"user_code!\",\n                  status AS \"status!\", expires_in AS \"expires_in!\"\n             FROM grant_requests\n            WHERE application_id = $1 AND device_code = $2\n              AND inserted_at + make_interval(secs => expires_in) > $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "application_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "application_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "scopes!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "device_code!: Uuid",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "device_code"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "user_code!",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "user_code"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status!",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "expires_in!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "expires_in"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Uuid",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0b8d2abc9a5bd58e604581365601e3dca614da666604ffb5724de300424bf27f"
+}
