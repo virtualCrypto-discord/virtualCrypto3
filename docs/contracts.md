@@ -134,6 +134,13 @@ the guild's pool. An application that cannot read a balance cannot decide how
 much to pay out, which is why this travels with the operation authority rather
 than being a separate permission to ask for.
 
+Only approved parties are included while the contract is pending or active and
+its deadline has not passed. Pending parties are omitted even if another party
+has approved. Refusal, withdrawal, or expiry ends balance access for the whole
+contract; expiry takes effect immediately, without waiting for the scheduler.
+An owned contract with no authorized parties returns `200 []`. An authorized
+party with no available balance is still included with `"amount": "0"`.
+
 ## Retrying a charge
 
 A charge is the one write in this family that an `Idempotency-Key` matters for,

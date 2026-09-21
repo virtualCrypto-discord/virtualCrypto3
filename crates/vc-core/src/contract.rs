@@ -992,6 +992,10 @@ pub async fn pay_in(
 /// an approval gives the application: it cannot decide what to pay out without
 /// knowing what the people it pays hold.
 ///
+/// Only currently approved parties of a live contract are visible. Check the
+/// deadline in the balance query itself, so scheduler lag cannot extend access.
+/// An owned contract with no current approvals answers an empty list.
+///
 /// A party with no balance is a zero rather than an absence: the `assets` trigger
 /// deletes a row that reaches zero, and the application asked about a person
 /// rather than about a row.
@@ -1013,9 +1017,13 @@ pub async fn party_balances(
     let rows = sqlx::query!(
         "SELECT p.discord_id, COALESCE(a.amount, 0) AS \"amount!\"
            FROM contract_parties p
+           JOIN contracts c ON c.id = p.contract_id
            LEFT JOIN users u ON u.discord_id = p.discord_id
            LEFT JOIN assets a ON a.user_id = u.id AND a.currency_id = $2
           WHERE p.contract_id = $1
+            AND p.status = 'approved'
+            AND c.status IN ('pending', 'active')
+            AND (c.expires_at IS NULL OR c.expires_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'))
           ORDER BY p.id",
         contract_id,
         currency_id

@@ -792,6 +792,13 @@ async fn the_parties_balances_are_readable(pool: PgPool) {
     )
     .await;
 
+    let now = time::OffsetDateTime::now_utc();
+    for party in [ALICE, BOB] {
+        vc_core::contract::approve(&pool, id, party, now)
+            .await
+            .unwrap();
+    }
+
     let response = request(
         vc_api::router(state(pool.clone(), fake())),
         "GET",
@@ -805,8 +812,8 @@ async fn the_parties_balances_are_readable(pool: PgPool) {
     assert_eq!(
         response.body,
         json!([
-            { "discord_id": ALICE_DISCORD_ID.to_string(), "amount": "1000" },
-            { "discord_id": BOB_DISCORD_ID.to_string(), "amount": "200" },
+            { "discord_id": ALICE_DISCORD_ID.to_string(), "amount": "900" },
+            { "discord_id": BOB_DISCORD_ID.to_string(), "amount": "150" },
         ])
     );
 }
@@ -1004,4 +1011,145 @@ async fn unsorted_parties_keep_their_own_amounts(pool: PgPool) {
     .await;
     assert!(response.status < 300, "{}", response.body);
     assert_eq!(balance(&pool, BOB, 1).await, 150);
+}
+
+async fn read_contract_balances(pool: &PgPool, token: &str, id: i64) -> Value {
+    let response = request(
+        vc_api::router(state(pool.clone(), fake())),
+        "GET",
+        &format!("/api/v2/contracts/{id}/balances"),
+        Some(token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    response.body
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn balances_require_each_partys_approval_and_preserve_zero(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let id = id_of(
+        &pool,
+        &f.token,
+        asked("nyan", json!([alice_party(1000), bob_party(200)])),
+    )
+    .await;
+    assert_eq!(read_contract_balances(&pool, &f.token, id).await, json!([]));
+    let now = time::OffsetDateTime::now_utc();
+    vc_core::contract::approve(&pool, id, ALICE, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_contract_balances(&pool, &f.token, id).await,
+        json!([{ "discord_id": ALICE_DISCORD_ID.to_string(), "amount": "0" }])
+    );
+    vc_core::contract::approve(&pool, id, BOB, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_contract_balances(&pool, &f.token, id).await,
+        json!([{ "discord_id": ALICE_DISCORD_ID.to_string(), "amount": "0" },
+               { "discord_id": BOB_DISCORD_ID.to_string(), "amount": "0" }])
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn withdrawal_ends_live_balance_access_for_every_party(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let id = id_of(
+        &pool,
+        &f.token,
+        asked("nyan", json!([alice_party(100), bob_party(50)])),
+    )
+    .await;
+    let now = time::OffsetDateTime::now_utc();
+    for party in [ALICE, BOB] {
+        vc_core::contract::approve(&pool, id, party, now)
+            .await
+            .unwrap();
+    }
+    vc_core::contract::withdraw(&pool, id, ALICE, now)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE assets SET amount = 1234 WHERE user_id = $1 AND currency_id = 1")
+        .bind(i64::from(BOB))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(read_contract_balances(&pool, &f.token, id).await, json!([]));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn refusal_ends_previously_approved_partys_balance_access(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let id = id_of(
+        &pool,
+        &f.token,
+        asked("nyan", json!([alice_party(100), bob_party(50)])),
+    )
+    .await;
+    let now = time::OffsetDateTime::now_utc();
+    vc_core::contract::approve(&pool, id, ALICE, now)
+        .await
+        .unwrap();
+    vc_core::contract::refuse(&pool, id, BOB, now)
+        .await
+        .unwrap();
+    assert_eq!(read_contract_balances(&pool, &f.token, id).await, json!([]));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn expiry_ends_balance_access_before_and_after_settlement(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let now = time::OffsetDateTime::now_utc();
+    let id = vc_core::contract::create(
+        &pool,
+        f.application,
+        "nyan",
+        &[vc_core::contract::NewParty {
+            discord_id: ALICE_DISCORD_ID,
+            amount: 100,
+        }],
+        None,
+        Some(60),
+        now,
+    )
+    .await
+    .unwrap();
+    vc_core::contract::approve(&pool, id, ALICE, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_contract_balances(&pool, &f.token, id).await,
+        json!([{ "discord_id": ALICE_DISCORD_ID.to_string(), "amount": "900" }])
+    );
+    // Reach the deadline without waiting for the clock job or sleeping.
+    sqlx::query("UPDATE contracts SET expires_at = date_trunc('second', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $1")
+        .bind(id).execute(&pool).await.unwrap();
+    assert_eq!(read_contract_balances(&pool, &f.token, id).await, json!([]));
+    vc_core::contract::settle(&pool, id, time::OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    assert_eq!(read_contract_balances(&pool, &f.token, id).await, json!([]));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn another_application_cannot_read_approved_balances(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let id = id_of(&pool, &f.token, asked("nyan", json!([alice_party(100)]))).await;
+    vc_core::contract::approve(&pool, id, ALICE, time::OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    let other = insert_application(&pool, OWNER_DISCORD_ID, "another application").await;
+    let token = mint_app(&pool, account_of(&pool, other).await, &["vc.contract"]).await;
+    let response = request(
+        vc_api::router(state(pool, fake())),
+        "GET",
+        &format!("/api/v2/contracts/{id}/balances"),
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(response.status, 404);
 }
