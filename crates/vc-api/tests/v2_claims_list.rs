@@ -508,3 +508,19 @@ async fn related_user_ids_require_unsigned_positive_decimal_digits(pool: PgPool)
         }
     }
 }
+
+/// `@me` is the token's own account, and an application holds a token of its own: this list is
+/// its claims, which are none — the same empty answer a person with no claims gets. What is
+/// pinned is that the endpoint is not the user kind's alone.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_application_reads_its_own_claims(pool: PgPool) {
+    fixture(&pool).await;
+
+    let application = support::insert_application(&pool, DISCORD1, "Shop").await;
+    let account = support::account_of(&pool, application).await;
+    let token = support::mint_app(&pool, account, &["vc.claim"]).await;
+
+    let response = list(pool, "", &token).await;
+
+    assert_json(&response, 200, json!([]));
+}
