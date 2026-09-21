@@ -224,8 +224,8 @@ async fn claims(
     let mut choices = Vec::with_capacity(found.len());
 
     for claim in found {
-        let claimant = party(state, &claim.claimant).await;
-        let payer = party(state, &claim.payer).await;
+        let claimant = party(state, &claim.claimant).await?;
+        let payer = party(state, &claim.payer).await?;
 
         choices.push(json!({
             "name": format!(
@@ -247,15 +247,23 @@ async fn claims(
 /// `ClaimId.user_tag/1`: a discord name, the four-digit form when there is one,
 /// and `deleted` when Discord does not know them.
 ///
-/// A party that is an application rather than a person needs the OAuth2 side to
-/// name, which does not exist yet; it reads as `deleted` until then.
-async fn party(state: &AppState, user: &ClaimUser) -> String {
+/// An application account is named by its registered client name, as in Elixir.
+async fn party(state: &AppState, user: &ClaimUser) -> Result<String, CommandError> {
     let Some(discord_id) = user.discord_id else {
-        return "deleted".to_string();
+        if let Some(application_id) = vc_core::user::application_id(state.pool(), user.id).await?
+            && let Some(application) =
+                crate::routes::oauth2_clients::details(state.pool(), application_id).await?
+        {
+            return Ok(format!(
+                "{}(app)",
+                application.client_name.unwrap_or_default()
+            ));
+        }
+        return Ok("deleted".to_string());
     };
 
     let Ok(Some(profile)) = state.discord().get_user(discord_id).await else {
-        return "deleted".to_string();
+        return Ok("deleted".to_string());
     };
 
     let name = profile
@@ -263,10 +271,10 @@ async fn party(state: &AppState, user: &ClaimUser) -> String {
         .and_then(Value::as_str)
         .unwrap_or("deleted");
 
-    match profile.get("discriminator").and_then(Value::as_str) {
+    Ok(match profile.get("discriminator").and_then(Value::as_str) {
         Some("0") | None => name.to_string(),
         Some(discriminator) => format!("{name}#{discriminator}"),
-    }
+    })
 }
 
 /// `ClaimId.claim_status_emoji/1`.

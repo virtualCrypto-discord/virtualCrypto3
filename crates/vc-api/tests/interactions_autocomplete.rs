@@ -248,3 +248,27 @@ async fn a_help_query_narrows_to_the_names_that_contain_it(pool: PgPool) {
         ["application", "contract", "create", "claim"]
     );
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn claim_autocomplete_names_the_application(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let application = insert_application(&pool, claims.money.user1, "Shop").await;
+    let account = support::account_of(&pool, application).await;
+    sqlx::query("UPDATE claims SET claimant_user_id = $1 WHERE id = $2")
+        .bind(i64::from(account))
+        .bind(claims.id(0))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = interaction(
+        router(pool),
+        autocomplete_payload(
+            "claim",
+            focused_subcommand("approve", "id", &claims.id(0).to_string()),
+            claims.money.user2,
+        ),
+    )
+    .await;
+    let name = choices(&response)[0]["name"].as_str().unwrap().to_owned();
+    assert!(name.contains("請求元: Shop(app)"), "{name}");
+}

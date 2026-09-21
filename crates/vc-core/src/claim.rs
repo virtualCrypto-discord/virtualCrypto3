@@ -663,7 +663,7 @@ async fn delete_metadata(
 /// The metadata is the claimant's own row, which is what `approve_claim/3`
 /// passes after taking it off the transition result — never the operator's.
 async fn claim_notification(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     claim_id: i64,
     claimant_id: i64,
 ) -> std::result::Result<Option<(i32, Value)>, sqlx::Error> {
@@ -680,7 +680,7 @@ async fn claim_notification(
           WHERE c.id = $1",
         claim_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     let Some(row) = row else {
@@ -708,7 +708,7 @@ async fn claim_notification(
         claim_id,
         claimant_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?
     .unwrap_or_else(|| json!({}));
 
@@ -806,15 +806,19 @@ pub async fn transition(
     )
     .await?;
 
-    tx.commit().await.map_err(TransitionError::Database)?;
-
-    // `Money.approve_claim/3` and `deny_claim/3` notify the claimant once the
-    // transaction has committed; `cancel_claim/3` tells nobody.
-    if transition.requires_payer()
-        && let Some((claimant_id, event)) = claim_notification(pool, claim_id, locked.claimant_id)
+    // Build the event inside the payment transaction; a read failure must roll
+    // back the payment too. Delivery happens only after a successful commit.
+    let notification = if transition.requires_payer() {
+        claim_notification(&mut tx, claim_id, locked.claimant_id)
             .await
             .map_err(TransitionError::Database)?
-    {
+    } else {
+        None
+    };
+
+    tx.commit().await.map_err(TransitionError::Database)?;
+
+    if let Some((claimant_id, event)) = notification {
         notifier.notify_claim_update(claimant_id, &[event]);
     }
 
@@ -1137,15 +1141,15 @@ pub async fn update_claims(
         .map_err(UpdateClaimsError::from)?;
     }
 
-    tx.commit().await.map_err(UpdateClaimsError::Database)?;
-
+    // Prepare events before committing, so notification reads cannot fail after
+    // the payments have already been persisted.
     // One notification per claimant, carrying every event for that claimant. A
     // cancelled claim has no event, which is how it drops out here.
     let mut grouped: Vec<(i32, Vec<Value>)> = Vec::new();
     for id in &updated {
         let claim = &claims[id];
 
-        let Some((claimant_id, event)) = claim_notification(pool, *id, claim.claimant_id)
+        let Some((claimant_id, event)) = claim_notification(&mut tx, *id, claim.claimant_id)
             .await
             .map_err(UpdateClaimsError::Database)?
         else {
@@ -1157,6 +1161,8 @@ pub async fn update_claims(
             None => grouped.push((claimant_id, vec![event])),
         }
     }
+
+    tx.commit().await.map_err(UpdateClaimsError::Database)?;
 
     for (claimant_id, events) in grouped {
         notifier.notify_claim_update(claimant_id, &events);

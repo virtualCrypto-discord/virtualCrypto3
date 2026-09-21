@@ -514,3 +514,73 @@ async fn a_mixed_batch_notifies_only_the_changed_hands(pool: PgPool) {
         canonical(&[expected(&money, 2, "denied", 200, json!({}))])
     );
 }
+
+async fn approval_under_pool_pressure(pool: PgPool, bulk: bool) {
+    support::insert_user(&pool, 1, 100000000000000001).await;
+    support::insert_user(&pool, 2, 100000000000000002).await;
+    support::insert_currency(&pool, 1, "test", "tst", 900000000000000001, 0).await;
+    support::insert_asset(&pool, 1, 1, 0).await;
+    support::insert_asset(&pool, 2, 1, 1000).await;
+    support::insert_claim(&pool, 1, 500, "pending", 1, 2, 1).await;
+
+    // Hold the released transaction connection briefly, reproducing pool pressure
+    // between committing the payment and acquiring a connection for its notification.
+    let pressured = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_millis(100))
+        .after_release(|_, _| {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                Ok(true)
+            })
+        })
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let sink = Sink::default();
+    if bulk {
+        vc_core::claim::update_claims(
+            &pressured,
+            &sink,
+            2,
+            &[PartialClaim {
+                id: 1,
+                status: Some("approved".into()),
+                metadata: None,
+            }],
+        )
+        .await
+        .expect("bulk approval must not fail after committing");
+    } else {
+        vc_core::claim::transition(&pressured, &sink, 2, 1, Transition::Approved, None)
+            .await
+            .expect("approval must not fail after committing");
+    }
+    let status: String = sqlx::query_scalar("SELECT status::text FROM claims WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id = 2 AND currency_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "approved");
+    assert_eq!(balance, 500);
+    let deliveries = sink.take();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0].0, 1);
+    assert_eq!(deliveries[0].1[0]["status"], "approved");
+    assert_eq!(deliveries[0].1[0]["amount"], "500");
+    pressured.close().await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approval_does_not_reacquire_after_commit(pool: PgPool) {
+    approval_under_pool_pressure(pool, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn bulk_approval_does_not_reacquire_after_commit(pool: PgPool) {
+    approval_under_pool_pressure(pool, true).await;
+}
