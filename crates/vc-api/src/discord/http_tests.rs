@@ -1,0 +1,193 @@
+//! Exercise the real HTTP adapter against local wire responses, including its
+//! interaction with the cache. No Discord credentials or external service needed.
+use super::*;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use serde_json::json;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+struct Wire {
+    answers: Mutex<VecDeque<(u16, Value)>>,
+    requests: Mutex<Vec<(String, String)>>,
+}
+
+struct Server {
+    wire: Arc<Wire>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn answer(State(wire): State<Arc<Wire>>, request: Request) -> impl IntoResponse {
+    let path = request.uri().path().to_owned();
+    let body = axum::body::to_bytes(request.into_body(), 16_384)
+        .await
+        .unwrap();
+    wire.requests
+        .lock()
+        .unwrap()
+        .push((path, String::from_utf8(body.to_vec()).unwrap()));
+    let (status, body) = wire
+        .answers
+        .lock()
+        .unwrap()
+        .pop_front()
+        .expect("unexpected HTTP request");
+    (StatusCode::from_u16(status).unwrap(), axum::Json(body))
+}
+
+async fn server(answers: Vec<(u16, Value)>) -> (HttpDiscordApi, Server) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let wire = Arc::new(Wire {
+        answers: Mutex::new(answers.into()),
+        requests: Mutex::new(Vec::new()),
+    });
+    let app = axum::Router::new()
+        .fallback(answer)
+        .with_state(wire.clone());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut client = HttpDiscordApi::new(
+        "123",
+        "dummy-secret",
+        "dummy-bot",
+        "https://vc.example/callback/discord",
+    );
+    client.api_base = format!("http://{address}/api");
+    client.http = reqwest::Client::builder().no_proxy().build().unwrap();
+    (client, Server { wire, task })
+}
+
+fn token() -> Value {
+    json!({"access_token":"opaque-access-token", "refresh_token":"rotated-refresh-token", "expires_in":604800, "token_type":"Bearer", "scope":"identify"})
+}
+
+#[tokio::test]
+async fn refresh_and_code_exchange_read_discords_wire_format() {
+    let (client, server) = server(vec![(200, token()), (200, token())]).await;
+    let refreshed = client.refresh_token("old-refresh").await.unwrap();
+    let exchanged = client.exchange_code("the-code").await.unwrap();
+    for result in [refreshed, exchanged] {
+        assert_eq!(result.token, "opaque-access-token");
+        assert_eq!(
+            result.refresh_token.as_deref(),
+            Some("rotated-refresh-token")
+        );
+        assert_eq!(result.expires_in, 604800);
+    }
+    let requests = server.wire.requests.lock().unwrap();
+    assert_eq!(requests[0].0, "/api/oauth2/token");
+    assert_eq!(requests[1].0, "/api/oauth2/token");
+    assert!(requests[0].1.contains("grant_type=refresh_token"));
+    assert!(requests[0].1.contains("refresh_token=old-refresh"));
+    assert!(requests[1].1.contains("grant_type=authorization_code"));
+    assert!(requests[1].1.contains("code=the-code"));
+}
+
+#[tokio::test]
+async fn token_responses_require_success_and_a_lifetime() {
+    let (client, _server) = server(vec![
+        (401, token()),
+        (503, token()),
+        (200, json!({"access_token":"opaque"})),
+        (200, json!({"access_token":"opaque", "expires_in":3600})),
+    ])
+    .await;
+    assert!(client.refresh_token("refresh").await.is_err());
+    assert!(client.exchange_code("code").await.is_err());
+    assert!(client.refresh_token("refresh").await.is_err());
+    let refreshed = client.refresh_token("refresh").await.unwrap();
+    assert_eq!(refreshed.token, "opaque");
+    assert_eq!(refreshed.refresh_token, None);
+}
+
+#[tokio::test]
+async fn user_and_guild_caches_retry_after_http_errors() {
+    for status in [401, 403, 429, 500, 503] {
+        for guild in [false, true] {
+            let (client, server) = server(vec![
+                (
+                    status,
+                    json!({"message":"temporary failure", "retry_after":0.01}),
+                ),
+                (
+                    200,
+                    json!({"id":"31414", "name":"recovered", "username":"recovered"}),
+                ),
+            ])
+            .await;
+            let cached = CachedDiscord::new(Arc::new(client));
+            let first = if guild {
+                cached.get_guild(31414).await
+            } else {
+                cached.get_user(31414).await
+            };
+            assert!(first.is_err(), "HTTP {status} was accepted as a resource");
+            let second = if guild {
+                cached.get_guild(31414).await
+            } else {
+                cached.get_user(31414).await
+            };
+            assert_eq!(second.unwrap().unwrap()["id"], "31414");
+            let third = if guild {
+                cached.get_guild(31414).await
+            } else {
+                cached.get_user(31414).await
+            };
+            assert_eq!(third.unwrap().unwrap()["id"], "31414");
+            assert_eq!(server.wire.requests.lock().unwrap().len(), 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn not_found_is_still_cached_for_users_and_guilds() {
+    for guild in [false, true] {
+        let (client, server) = server(vec![(404, json!({"message":"Unknown resource"}))]).await;
+        let cached = CachedDiscord::new(Arc::new(client));
+        for _ in 0..2 {
+            let result = if guild {
+                cached.get_guild(123).await
+            } else {
+                cached.get_user(123).await
+            };
+            assert!(result.unwrap().is_none());
+        }
+        assert_eq!(server.wire.requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn other_resource_readers_reject_http_errors() {
+    let (client, _server) = server(vec![(429, json!({"message":"rate limited"})); 4]).await;
+    assert!(client.get_user_info("token").await.is_err());
+    assert!(client.get_guild_member(123, 456).await.is_err());
+    assert!(client.get_roles(123).await.is_err());
+    assert!(client.get_application_commands().await.is_err());
+}
+
+#[tokio::test]
+async fn status_aware_readers_keep_the_status_for_their_callers() {
+    let body = json!({"message":"Missing Permissions"});
+    let (client, _server) = server(vec![(403, body.clone()); 3]).await;
+    let (status, user) = client.get_user_with_status(123).await.unwrap();
+    assert_eq!(status, 403);
+    assert_eq!(user["message"], body["message"]);
+    let (status, guild) = client.get_guild_with_status(123).await.unwrap();
+    assert_eq!(status, 403);
+    assert_eq!(guild["message"], body["message"]);
+    assert_eq!(
+        client
+            .get_guild_integrations_with_status(123)
+            .await
+            .unwrap()
+            .0,
+        403
+    );
+}

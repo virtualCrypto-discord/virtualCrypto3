@@ -360,6 +360,7 @@ impl DiscordApi for CachedDiscord {
 
 pub struct HttpDiscordApi {
     http: reqwest::Client,
+    api_base: String,
     client_id: String,
     client_secret: String,
     bot_token: String,
@@ -377,12 +378,49 @@ impl HttpDiscordApi {
     ) -> Self {
         Self {
             http: reqwest::Client::new(),
+            api_base: "https://discord.com/api".to_owned(),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             bot_token: bot_token.into(),
             redirect_uri: redirect_uri.into(),
         }
     }
+
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}{path}", self.api_base)
+    }
+}
+
+/// Check HTTP status before interpreting a Discord response as resource data.
+async fn successful_json(response: reqwest::Response) -> Result<Value, DiscordError> {
+    if !response.status().is_success() {
+        return Err(DiscordError::Request(format!(
+            "Discord answered HTTP {}",
+            response.status()
+        )));
+    }
+    response
+        .json()
+        .await
+        .map_err(|error| DiscordError::Request(error.to_string()))
+}
+
+/// Code exchange and refresh return the same wire format. The access token is
+/// opaque text, not another JSON document.
+async fn token_response(response: reqwest::Response) -> Result<RefreshedToken, DiscordError> {
+    #[derive(serde::Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        expires_in: i64,
+        refresh_token: Option<String>,
+    }
+    let token: TokenResponse = serde_json::from_value(successful_json(response).await?)
+        .map_err(|error| DiscordError::Request(error.to_string()))?;
+    Ok(RefreshedToken {
+        token: token.access_token,
+        expires_in: token.expires_in,
+        refresh_token: token.refresh_token,
+    })
 }
 
 #[async_trait]
@@ -396,9 +434,7 @@ impl DiscordApi for HttpDiscordApi {
     ) -> Result<(u16, Vec<Map<String, Value>>), DiscordError> {
         let response = self
             .http
-            .get(format!(
-                "https://discord.com/api/guilds/{guild_id}/integrations"
-            ))
+            .get(self.endpoint(&format!("/guilds/{guild_id}/integrations")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -433,9 +469,7 @@ impl DiscordApi for HttpDiscordApi {
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
         let response = self
             .http
-            .get(format!(
-                "https://discord.com/api/guilds/{guild_id}?with_counts=false"
-            ))
+            .get(self.endpoint(&format!("/guilds/{guild_id}?with_counts=false")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -460,7 +494,7 @@ impl DiscordApi for HttpDiscordApi {
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
         let response = self
             .http
-            .get(format!("https://discord.com/api/users/{user_id}"))
+            .get(self.endpoint(&format!("/users/{user_id}")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -481,16 +515,13 @@ impl DiscordApi for HttpDiscordApi {
     async fn get_user_info(&self, token: &str) -> Result<Map<String, Value>, DiscordError> {
         let response = self
             .http
-            .get("https://discord.com/api/users/@me")
+            .get(self.endpoint("/users/@me"))
             .bearer_auth(token)
             .send()
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+        let body = successful_json(response).await?;
 
         match body {
             Value::Object(map) => Ok(map),
@@ -506,7 +537,7 @@ impl DiscordApi for HttpDiscordApi {
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
         let response = self
             .http
-            .get(format!("https://discord.com/api/users/{discord_user_id}"))
+            .get(self.endpoint(&format!("/users/{discord_user_id}")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -521,10 +552,7 @@ impl DiscordApi for HttpDiscordApi {
             return Ok(None);
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+        let body = successful_json(response).await?;
 
         match body {
             Value::Object(map) => Ok(Some(map)),
@@ -541,9 +569,7 @@ impl DiscordApi for HttpDiscordApi {
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
         let response = self
             .http
-            .get(format!(
-                "https://discord.com/api/guilds/{guild_id}/members/{user_id}"
-            ))
+            .get(self.endpoint(&format!("/guilds/{guild_id}/members/{user_id}")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -556,10 +582,7 @@ impl DiscordApi for HttpDiscordApi {
             return Ok(None);
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+        let body = successful_json(response).await?;
 
         match body {
             Value::Object(member) => Ok(Some(member)),
@@ -581,10 +604,7 @@ impl DiscordApi for HttpDiscordApi {
     async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
         let response = self
             .http
-            .get(format!(
-                "https://discord.com/api/applications/{}/commands",
-                self.client_id
-            ))
+            .get(self.endpoint(&format!("/applications/{}/commands", self.client_id)))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -593,10 +613,7 @@ impl DiscordApi for HttpDiscordApi {
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+        let body = successful_json(response).await?;
 
         Ok(body
             .as_array()
@@ -612,7 +629,7 @@ impl DiscordApi for HttpDiscordApi {
     async fn get_roles(&self, guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {
         let response = self
             .http
-            .get(format!("https://discord.com/api/guilds/{guild_id}/roles"))
+            .get(self.endpoint(&format!("/guilds/{guild_id}/roles")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -621,10 +638,7 @@ impl DiscordApi for HttpDiscordApi {
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+        let body = successful_json(response).await?;
 
         Ok(body
             .as_array()
@@ -640,9 +654,7 @@ impl DiscordApi for HttpDiscordApi {
     async fn get_guild(&self, guild_id: i64) -> Result<Option<Map<String, Value>>, DiscordError> {
         let response = self
             .http
-            .get(format!(
-                "https://discord.com/api/guilds/{guild_id}?with_counts=false"
-            ))
+            .get(self.endpoint(&format!("/guilds/{guild_id}?with_counts=false")))
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bot {}", self.bot_token),
@@ -656,10 +668,7 @@ impl DiscordApi for HttpDiscordApi {
             return Ok(None);
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
+        let body = successful_json(response).await?;
 
         match body {
             Value::Object(map) => Ok(Some(map)),
@@ -677,9 +686,7 @@ impl DiscordApi for HttpDiscordApi {
     ) -> Result<(), DiscordError> {
         let response = self
             .http
-            .post(format!(
-                "https://discord.com/api/webhooks/{application_id}/{token}"
-            ))
+            .post(self.endpoint(&format!("/webhooks/{application_id}/{token}")))
             .json(body)
             .send()
             .await
@@ -698,7 +705,7 @@ impl DiscordApi for HttpDiscordApi {
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError> {
         let response = self
             .http
-            .post("https://discord.com/api/oauth2/token")
+            .post(self.endpoint("/oauth2/token"))
             .form(&[
                 ("grant_type", "refresh_token"),
                 ("refresh_token", refresh_token),
@@ -709,26 +716,13 @@ impl DiscordApi for HttpDiscordApi {
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
-
-        // The Elixir code does `Jason.decode!(client.token.access_token)` and reads
-        // the token out of that document, so the access_token is itself JSON here.
-        // Reproduce that shape exactly rather than treating it as an opaque token.
-        let access_token = body["access_token"]
-            .as_str()
-            .ok_or_else(|| DiscordError::Request("response has no access_token".into()))?;
-
-        serde_json::from_str(access_token)
-            .map_err(|error| DiscordError::Request(format!("access_token is not JSON: {error}")))
+        token_response(response).await
     }
 
     async fn exchange_code(&self, code: &str) -> Result<RefreshedToken, DiscordError> {
         let response = self
             .http
-            .post("https://discord.com/api/oauth2/token")
+            .post(self.endpoint("/oauth2/token"))
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("code", code),
@@ -740,23 +734,8 @@ impl DiscordApi for HttpDiscordApi {
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| DiscordError::Request(error.to_string()))?;
-
-        // Unlike a refresh, whose access_token arrives as a document the Elixir
-        // code then decodes, this one is an opaque token and is read directly.
-        Ok(RefreshedToken {
-            token: body["access_token"]
-                .as_str()
-                .ok_or_else(|| DiscordError::Request("response has no access_token".into()))?
-                .to_owned(),
-            expires_in: body["expires_in"].as_i64().unwrap_or_default(),
-            refresh_token: body["refresh_token"].as_str().map(str::to_owned),
-        })
+        token_response(response).await
     }
-
     /// The parameters are the old app's, spelled out: `scope=identify`, because
     /// the bot only ever needs to know who someone is, and `prompt=none`,
     /// because Discord should not ask again someone who already agreed.
@@ -818,3 +797,6 @@ pub fn verify_signature(
 pub fn parse_public_key(value: &str) -> Option<[u8; 32]> {
     hex::decode(value).ok()?.try_into().ok()
 }
+
+#[cfg(test)]
+mod http_tests;
