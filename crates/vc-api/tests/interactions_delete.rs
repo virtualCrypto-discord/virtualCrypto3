@@ -184,3 +184,128 @@ async fn confirmation_accepts_uppercase_like_elixir(pool: PgPool) {
 async fn confirmation_accepts_a_legacy_action_row(pool: PgPool) {
     submit_confirmation(pool, false, false, true).await;
 }
+
+async fn delete_after_approval(pool: PgPool, withdrawn: bool) {
+    let money = setup_money(&pool).await;
+    let app = support::insert_application(&pool, money.user1, "contract app").await;
+    let now = OffsetDateTime::now_utc();
+    let id = vc_core::contract::create(
+        &pool,
+        app,
+        &money.unit,
+        &[vc_core::contract::NewParty {
+            discord_id: money.user1,
+            amount: 1,
+        }],
+        None,
+        None,
+        now,
+    )
+    .await
+    .unwrap();
+    let account = vc_core::user::find_by_discord_id(&pool, money.user1)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    vc_core::contract::approve(&pool, id, account, now)
+        .await
+        .unwrap();
+    if withdrawn {
+        vc_core::contract::withdraw(&pool, id, account, now)
+            .await
+            .unwrap();
+    }
+    let other_id = vc_core::contract::create(
+        &pool,
+        app,
+        &money.unit2,
+        &[vc_core::contract::NewParty {
+            discord_id: money.user2,
+            amount: 1,
+        }],
+        None,
+        None,
+        now,
+    )
+    .await
+    .unwrap();
+    let other_account = vc_core::user::find_by_discord_id(&pool, money.user2)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    vc_core::contract::approve(&pool, other_id, other_account, now)
+        .await
+        .unwrap();
+    let other_balance = support::get_amount(&pool, money.user2, money.currency2).await;
+    let opened = interaction(router(pool.clone()), from_guild(money.user1, money.guild)).await;
+    assert_eq!(opened.body["type"], 9);
+    let response = interaction(router(pool.clone()), json!({
+        "type": 5,
+        "data": { "custom_id": opened.body["data"]["custom_id"], "components": [
+            {"type": 18, "component": {"type": 4, "custom_id": "confirm", "value": format!("delete {}", money.unit)}}
+        ]},
+        "member": {"user": {"id": money.user1.to_string()}, "permissions": DEFAULT_PERMISSIONS.to_string()},
+        "guild_id": money.guild.to_string()
+    })).await;
+    assert_eq!(
+        response.status, 200,
+        "withdrawn={withdrawn}: {}",
+        response.body
+    );
+    assert!(
+        support::currency_by_unit(&pool, &money.unit)
+            .await
+            .is_none()
+    );
+    for (table, query) in [
+        ("contracts", "SELECT COUNT(*) FROM contracts WHERE id = $1"),
+        (
+            "contract_parties",
+            "SELECT COUNT(*) FROM contract_parties WHERE contract_id = $1",
+        ),
+        ("users", "SELECT COUNT(*) FROM users WHERE contract_id = $1"),
+    ] {
+        let count: i64 = sqlx::query_scalar(query)
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "deleted contract left rows in {table}");
+        let count: i64 = sqlx::query_scalar(query)
+            .bind(other_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "unrelated contract lost rows in {table}");
+    }
+    let escrow_balance: i64 = sqlx::query_scalar("SELECT a.amount FROM assets a JOIN users u ON u.id = a.user_id WHERE u.contract_id = $1 AND a.currency_id = $2")
+        .bind(other_id).bind(money.currency2).fetch_one(&pool).await.unwrap();
+    assert_eq!(escrow_balance, 1);
+    assert_eq!(
+        support::get_amount(&pool, money.user2, money.currency2).await,
+        other_balance
+    );
+    assert!(
+        support::currency_by_unit(&pool, &money.unit2)
+            .await
+            .is_some()
+    );
+    assert!(
+        vc_core::user::find_by_discord_id(&pool, money.user1)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn delete_currency_with_active_contract(pool: PgPool) {
+    delete_after_approval(pool, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn delete_currency_after_contract_withdrawal(pool: PgPool) {
+    delete_after_approval(pool, true).await;
+}

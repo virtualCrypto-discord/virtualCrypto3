@@ -312,6 +312,9 @@ pub async fn delete(
         "DELETE FROM currency_given_histories WHERE currency_id = $1",
         "DELETE FROM currency_payment_histories WHERE currency_id = $1",
         "DELETE FROM claims WHERE currency_id = $1",
+        // Approval creates an escrow user that still references the contract
+        // after withdrawal/refund. Remove it after its assets, before contracts.
+        "DELETE FROM users WHERE contract_id IN (SELECT id FROM contracts WHERE currency_id = $1)",
         // The parties go with the contract's row, which cascades: a currency
         // that is deleted is one whose locked money is deleted with it.
         "DELETE FROM contracts WHERE currency_id = $1",
