@@ -55,16 +55,26 @@ the one place this service puts a secret in a message, and it is the point of th
 
 ## What it is for
 
-Handing an account to something that is not a person and is not a browser: an agent registering an
-application, a script renewing a grant, a local tool that reads a balance. It is not for other
-people, and it is not a delegation — there is no "acts on behalf of" anywhere in it, because the
-token *is* the account.
+Handing an account to something that is not a person and is not a browser — an agent registering an
+application, a script reading a balance, a tool approving a contract it was named in. The list is
+examples and not the whole of it: the token *is* the account, so what it can do is what the account
+can, which is the browser session's surface. It is not for other people, and it is not a
+delegation — there is no "acts on behalf of" anywhere in it, because the token is the account
+rather than somebody speaking for it.
 
-The LLM use case is why it exists: registration and connect are the two operations that are tedious
-to do by hand in Discord, and they are exactly the two a `kind: user` token with `oauth2.register`
-unlocks. Whoever holds the token speaks as the account, so it belongs in the same place as a
-password: shown once when it is made, revoked when it is not needed, never pasted anywhere that
-someone else can read it.
+The LLM use case is why it exists: registration and connect are the operations that are tedious to
+do by hand in Discord, and they are the ones a `kind: user` token with `oauth2.register` unlocks.
+Whoever holds the token speaks as the account, so it belongs in the same place as a password:
+shown once when it is made, revoked when it is not needed, never pasted anywhere that someone else
+can read it.
+
+What that surface is, in full, because "the browser's surface" is not a list: every endpoint that
+takes a user token — the `/api/v2` family it is a caller of, the registration endpoints, the connect
+and grant endpoints, and the party half of the contract family (`approve`, `refuse`, `withdraw`,
+reading a contract it is named in, and its own list) — and `POST /oauth2/token/revoke`, which takes
+any token, this one included. The application half of contracts — creating one, spending it — is not
+in it and cannot be: those endpoints take an `app` token, which is a different caller, and an
+application holds its own `client_id` and `client_secret` for that.
 
 ## What is deliberately not here
 

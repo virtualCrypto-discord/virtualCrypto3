@@ -152,7 +152,7 @@ findings.
 
 ### 1.3 The Discord surface
 
-Twelve commands — `help`, `invite`, `application`, `issue`, `grant`, `contract`,
+Thirteen commands — `help`, `invite`, `application`, `issue`, `pat`, `grant`, `contract`,
 `pay`, `info`, `create`, `delete`, `bal`, `claim` — and each is four artefacts that
 have to agree:
 

@@ -41,6 +41,7 @@ pub fn commands() -> Vec<Value> {
         invite(),
         application(),
         issue(),
+        pat(),
         grant(),
         contract(),
         pay(),
@@ -120,6 +121,50 @@ fn issue() -> Value {
         "contexts": [0],
         "integration_types": [0, 1],
         "default_member_permissions": "0",
+    })
+}
+
+/// `/pat`: the credential an account gives to something that is not a browser.
+///
+/// In a guild and in a DM both, and for nobody but the caller: the token it makes belongs to the
+/// account that asked, and every answer is ephemeral — the value is shown once, to the person who
+/// typed the command.
+fn pat() -> Value {
+    let name = |description: &str| {
+        json!({
+            "name": "name",
+            "description": description,
+            "type": 3,
+            "required": true,
+            "min_length": 1,
+            "max_length": 32,
+        })
+    };
+
+    json!({
+        "name": "pat",
+        "description": "LLMやスクリプトに渡すトークン（個人アクセストークン）を作ります。",
+        "options": [
+            {
+                "name": "create",
+                "description": "トークンを1つ作ります。値はこの返信に一度だけ表示されます。",
+                "type": 1,
+                "options": [name("トークンの名前です。1〜32文字で、失効させる時に使います。")],
+            },
+            {
+                "name": "list",
+                "description": "作ったトークンの名前と有効期限を表示します。",
+                "type": 1,
+            },
+            {
+                "name": "revoke",
+                "description": "名前を指定してトークンを失効させます。",
+                "type": 1,
+                "options": [name("失効させるトークンの名前です。")],
+            },
+        ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
     })
 }
 
@@ -547,6 +592,7 @@ mod tests {
                 "invite",
                 "application",
                 "issue",
+                "pat",
                 "grant",
                 "contract",
                 "pay",

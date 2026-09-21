@@ -41,6 +41,15 @@ pub fn all() -> &'static [Command] {
             sections: ISSUE,
         },
         Command {
+            name: "pat",
+            usage: &[
+                "/pat create name:<名前>",
+                "/pat list",
+                "/pat revoke name:<名前>",
+            ],
+            sections: PAT,
+        },
+        Command {
             name: "grant",
             usage: &["/grant list", "/grant approve code:<申請コード>"],
             sections: GRANT,
@@ -240,6 +249,44 @@ const CONTRACT: &[Section] = &[
         &[text(
             "ロックされた通貨が消えることはありません。\
              アプリケーションが使わなかった分は、契約が終わるとあなたに戻ります。",
+        )],
+    ),
+];
+
+const PAT: &[Section] = &[
+    section(
+        "使い方",
+        &[
+            text(
+                "このトークンは、ブラウザのセッションで得られるトークンと同じことができます。\
+                 アプリケーションの登録と接続、送金、請求、契約の承認などに使えます。",
+            ),
+            list(&[
+                "`/pat create name:<名前>` トークンを1つ作ります。値はこの返信に一度だけ表示されます。",
+                "`/pat list` 作ったトークンの名前と有効期限を表示します。",
+                "`/pat revoke name:<名前>` トークンを失効させます。",
+            ]),
+        ],
+    ),
+    section(
+        "有効期限",
+        &[text(
+            "有効期限は1年です。失効させると、その瞬間から使えなくなります。\
+             値はどこにも保存されていないので、`/pat list` には名前と有効期限しか出ません。",
+        )],
+    ),
+    section(
+        "名前",
+        &[text(
+            "名前は1〜32文字で、同じ名前は1つだけです。\
+             名前は失効させるために使うので、複数あると区別できません。",
+        )],
+    ),
+    section(
+        "気をつけること",
+        &[text(
+            "トークンはパスワードと同じです。他人に見せないでください。\
+             見せてしまったときは `/pat revoke` で失効させてください。",
         )],
     ),
 ];

@@ -89,6 +89,12 @@ it is exercised only through `setup_money/1` calling `Money.give/1`.
 `tests/interactions_issue.rs` therefore holds additions rather than ports: they
 follow `Command.handle/4` and `Query.Issue.issue/3` directly.
 
+`/pat` is an addition with nothing behind it at all: the Elixir has no personal access token, no API
+key, and no column that could hold one, so there is no case to port and no golden to capture.
+`crates/vc-api/tests/pat.rs` holds what the design in `docs/pat.md` claims — the scopes it carries
+(the one the registration surface checks, and one without it that is refused), the year, the name,
+revocation, and that a PAT answers as a party to a contract.
+
 **Every Elixir interaction case is ported, and the endpoint is still not whole.**
 Type 4 (autocomplete) answers 501, and the Elixir suite has no test for it, so
 this table cannot show it: a count of ported cases says nothing about the parts

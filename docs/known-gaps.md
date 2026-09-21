@@ -235,6 +235,23 @@ practice; it is recorded because it is not a faithful reproduction.
 
 ## Deliberate differences
 
+### A credential the Elixir had no notion of: the personal access token
+
+`/pat create|list|revoke` make a token an account can hand to something that is not a browser, and
+it is an addition in the plain sense: the Elixir has no personal access token, no API key, and no
+column that could hold one. There is no golden for it, `docs/pat.md` is the design, and
+`crates/vc-api/tests/pat.rs` is this tree's own suite.
+
+What it is, in one sentence: a `kind: user` token carrying the browser session's scopes, with a name
+and a year, revoked by deleting the `user_access_tokens` row every JWT here already resolves
+against. The API therefore sees no fourth kind of caller, and the only two things the reference had
+to learn were that a user token can also come from `/pat` and that a longer life exists.
+
+The scope list is the browser's, which is why a PAT cannot create a contract: the application half
+of the contract family takes an `app` token, and no scope changes a kind. The party half —
+`approve`, `refuse`, `withdraw`, reading, and its own list — takes a user token and no scope at all,
+so a PAT does all of it, and `crates/vc-api/tests/pat.rs` pins that it does.
+
 ### The consent screen's scope is `vc.issue`, where the Elixir's was `openid`
 
 `is_valid_scopes?/1` accepted `openid` and nothing else, and this port did the same until now.

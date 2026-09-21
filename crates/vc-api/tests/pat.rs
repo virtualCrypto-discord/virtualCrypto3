@@ -13,15 +13,55 @@ mod support;
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{Response, execute_from_dm, fake, get, insert_user, interaction, mint, state};
+use support::{
+    Response, account_of, execute_from_dm, fake, get, insert_application, insert_asset,
+    insert_currency, insert_user, interaction, mint, mint_app, state,
+};
 use time::{OffsetDateTime, PrimitiveDateTime};
+use tower::ServiceExt;
 
 const DISCORD_ID: i64 = 100_000_000_000_000_001;
+const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
+const GUILD: i64 = 900_000_000_000_000_001;
 const USER: i32 = 1;
 const COLOR_BRAND: i64 = 0x0062_21ED;
 const COLOR_OK: i64 = 0x0038_EA42;
 const COLOR_ERROR: i64 = 0x00EA_3875;
 const LIST_URI: &str = "/oauth2/clients";
+
+/// A request with a body, which the shared support has no shape for: the contract and claim
+/// suites each keep their own, and this is that one, for the two calls a party makes.
+async fn request(app: Router, method: &str, uri: &str, token: &str, body: Value) -> Response {
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("accept", "application/json")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::from(body.to_string()))
+                .expect("a request"),
+        )
+        .await
+        .expect("a response");
+
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body");
+
+    Response {
+        status,
+        headers,
+        body: if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("a json body")
+        },
+    }
+}
 
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
@@ -170,6 +210,60 @@ async fn revoking_a_name_kills_the_token(pool: PgPool) {
         "the row is gone, so the token is"
     );
     assert!(options_of(&pool).await.is_empty());
+}
+
+/// The contract half of what a token can do, which is the party's and not the
+/// application's: `docs/contracts.md` puts `vc.contract` on the *application* — it says an
+/// application is one that may ask — and says the party answers because it is named. A PAT is a
+/// user token, so it is the party: it approves, and it reads the contract among its own.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
+    insert_user(&pool, USER, DISCORD_ID).await;
+    insert_currency(&pool, 1, "nyan", "nyan", GUILD, 500).await;
+    insert_asset(&pool, USER, 1, 1_000).await;
+
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "an application").await;
+    let writer = mint_app(
+        &pool,
+        account_of(&pool, application).await,
+        &["vc.contract"],
+    )
+    .await;
+
+    let created = request(
+        router(pool.clone()),
+        "POST",
+        "/api/v2/contracts",
+        &writer,
+        json!({
+            "unit": "nyan",
+            "parties": [{ "discord_id": DISCORD_ID.to_string(), "amount": "100" }]
+        }),
+    )
+    .await;
+
+    assert_eq!(created.status, 201, "{:?}", created.body);
+    let id = created.body["id"].as_str().expect("a contract id");
+
+    let made = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let token = token_of(&made);
+
+    let approved = request(
+        router(pool.clone()),
+        "POST",
+        &format!("/api/v2/contracts/{id}/approval"),
+        &token,
+        Value::Null,
+    )
+    .await;
+
+    assert_eq!(approved.status, 200, "{:?}", approved.body);
+    assert_eq!(approved.body["parties"][0]["status"], "approved");
+
+    let mine = get(router(pool), "/api/v2/users/@me/contracts", Some(&token)).await;
+
+    assert_eq!(mine.status, 200, "{:?}", mine.body);
+    assert_eq!(mine.body.as_array().map(Vec::len), Some(1));
 }
 
 /// A name is how a token is revoked, so two of them on one account could not be told apart: the

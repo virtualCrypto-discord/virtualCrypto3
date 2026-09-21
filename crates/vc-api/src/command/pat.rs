@@ -21,8 +21,8 @@ use vc_auth::issue::{
     BROWSER_SCOPES, PERSONAL_TTL, PersonalError, personal_token, personal_tokens, revoke_personal,
 };
 
-/// The longest a name may be. The option in `scripts/discord-commands.json` states the same
-/// bound, and this is the check that makes the statement true.
+/// The longest a name may be. `crate::discord_commands`'s `/pat` option states the same bound —
+/// one number in the option Discord shows and in the check that makes it true.
 const NAME_MAX: usize = 32;
 
 /// `Command.handle/4` for `pat`.
@@ -139,7 +139,7 @@ async fn list(state: &AppState, discord_id: i64) -> Result<Value, CommandError> 
         return Ok(screen(
             vec![text(mentions(
                 "まだありません。`/pat create` で作れます。",
-                &ids,
+                ids,
             ))],
             COLOR_BRAND,
         ));
