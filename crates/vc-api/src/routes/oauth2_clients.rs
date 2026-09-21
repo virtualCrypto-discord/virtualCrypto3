@@ -399,15 +399,7 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
     // Not `check_url`'s error: a redirect URI's refusal names the redirect URI
     // rather than the metadata, which is the pair the clients controller answers
     // with.
-    for redirect_uri in &redirect_uris {
-        if check_url(redirect_uri, MetadataError::ClientUri).is_err() {
-            return Err(refusal(
-                StatusCode::BAD_REQUEST,
-                "invalid_redirect_uri",
-                "redirect_uri_scheme_must_be_http_or_https",
-            ));
-        }
-    }
+    validate_redirects(&redirect_uris)?;
 
     Ok(NewApplication {
         response_types,
@@ -548,6 +540,23 @@ mod registration_tests {
             "this service's own faults are not described to the caller"
         );
     }
+}
+
+fn validate_redirects(uris: &[String]) -> Result<(), Box<Refusal>> {
+    use vc_core::application::{RedirectUriError, check_redirect_uris};
+    check_redirect_uris(uris).map_err(|error| {
+        refusal(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            match error {
+                RedirectUriError::Scheme => "redirect_uri_scheme_must_be_http_or_https",
+                RedirectUriError::TooLong => "redirect_uri_must_be_at_most_255_characters",
+                RedirectUriError::ListTooLong => {
+                    "redirect_uris_must_be_at_most_2000_characters_including_newlines"
+                }
+            },
+        )
+    })
 }
 
 /// `POST /oauth2/clients`: register an application.
@@ -869,15 +878,7 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
     }
 
     if let Some(uris) = changes.redirect_uris.as_deref() {
-        for redirect_uri in uris {
-            if check_url(redirect_uri, MetadataError::ClientUri).is_err() {
-                return Err(refusal(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_redirect_uri",
-                    "redirect_uri_scheme_must_be_http_or_https",
-                ));
-            }
-        }
+        validate_redirects(uris)?;
     }
 
     Ok(changes)

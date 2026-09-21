@@ -533,7 +533,7 @@ async fn edit_field(
             "リダイレクト URI",
             Some(redirects.as_str()),
             crate::components::TextInputStyle::Paragraph,
-            Some(4000),
+            Some(vc_core::application::REDIRECT_URIS_MAX_CHARS as u64),
         ),
         "client_uri" => (
             "クライアント URI",

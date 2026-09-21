@@ -217,3 +217,67 @@ async fn invalid_rotation_types_and_metadata_do_not_change_secret(pool: PgPool) 
         .unwrap();
     assert_eq!(name, "before");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn oversized_redirect_updates_preserve_the_existing_list(pool: PgPool) {
+    let (application, account) = insert_application(&pool, OWNER_DISCORD_ID, "app").await;
+    let token = mint_app(&pool, account, &["oauth2.register"]).await;
+    let original = vec!["https://example.com/callback".to_string()];
+    assert_eq!(
+        patch(
+            pool.clone(),
+            token.clone(),
+            json!({"redirect_uris":original})
+        )
+        .await,
+        204
+    );
+    for uris in [
+        vec![format!("https://example.com/{}", "a".repeat(256))],
+        (0..21)
+            .map(|i| format!("https://example.com/{i}/{}", "a".repeat(180)))
+            .collect(),
+    ] {
+        assert_eq!(
+            patch(pool.clone(), token.clone(), json!({"redirect_uris":uris})).await,
+            400
+        );
+        let stored: Vec<String> =
+            sqlx::query_scalar("SELECT redirect_uri FROM redirect_uris WHERE application_id = $1")
+                .bind(application)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, original);
+    }
+}
+
+#[test]
+fn registration_and_edits_share_redirect_length_limits() {
+    use vc_api::routes::oauth2_clients::{Registration, changes, validated};
+    fn accepted(uris: Vec<String>, expected: bool) {
+        assert_eq!(
+            validated(Registration {
+                redirect_uris: Some(uris.clone()),
+                ..Default::default()
+            })
+            .is_ok(),
+            expected
+        );
+        assert_eq!(
+            changes(json!({"redirect_uris":uris}).as_object().unwrap()).is_ok(),
+            expected
+        );
+    }
+    let uri = |n: usize| format!("https://example.com/{}", "a".repeat(n - 20));
+    // The prefix is 20 characters; test exact boundaries, including separators.
+    assert_eq!(uri(255).chars().count(), 255);
+    accepted(vec![uri(255)], true);
+    accepted(vec![uri(256)], false);
+    let mut list = vec![uri(249); 8];
+    list[7] = uri(250);
+    assert_eq!(list.join("\n").chars().count(), 2000);
+    accepted(list.clone(), true);
+    list[7].push('a');
+    accepted(list, false);
+}

@@ -659,3 +659,11 @@ Discord OAuth authorization or that authorization cannot fetch a profile. A work
 profile lookup and its refresh behavior remain unchanged. Registration still requires a
 successful profile lookup and rejects bot accounts; the owner is the authenticated account's
 stored Discord id. This extends the old browser-dependent flow to support PAT callers.
+
+## Redirect URI length limits
+
+Registration and updates now reject redirect URIs longer than 255 Unicode characters and
+URI lists longer than 2000 characters including the newline between entries. Both return
+400 `invalid_redirect_uri` before writing. These limits also apply to Discord edits and
+prevent the modal from silently truncating an existing list. The individual limit matches
+the database column; the aggregate limit is new.

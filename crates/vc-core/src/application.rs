@@ -12,6 +12,8 @@ pub enum RedirectUriError {
     /// `redirect_uri_scheme_must_be_http_or_https`. The Elixir's answer to every
     /// URI that is not plainly `http` or `https`, including a relative one.
     Scheme,
+    TooLong,
+    ListTooLong,
 }
 
 /// Why an authorization request was refused, in the API's own words.
@@ -261,7 +263,21 @@ fn check_set(scopes: &[String], allowed: &[&str]) -> Result<(), ScopeError> {
 /// An empty list passes, as `Enum.all?/2` on an empty list does; whether an
 /// application may register none at all is a separate question, asked where the
 /// payload is read.
+pub const REDIRECT_URI_MAX_CHARS: usize = 255;
+pub const REDIRECT_URIS_MAX_CHARS: usize = 2000;
+
 pub fn check_redirect_uris(uris: &[String]) -> Result<(), RedirectUriError> {
+    let mut total = uris.len().saturating_sub(1);
+    for uri in uris {
+        let length = uri.chars().count();
+        if length > REDIRECT_URI_MAX_CHARS {
+            return Err(RedirectUriError::TooLong);
+        }
+        total = total.saturating_add(length);
+    }
+    if total > REDIRECT_URIS_MAX_CHARS {
+        return Err(RedirectUriError::ListTooLong);
+    }
     if uris
         .iter()
         .all(|uri| matches!(scheme(uri).as_deref(), Some("http" | "https")))
