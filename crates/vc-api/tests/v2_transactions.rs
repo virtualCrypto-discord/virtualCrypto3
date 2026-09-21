@@ -448,3 +448,32 @@ async fn claimed(pool: &PgPool, account: i32, key: &str) -> i64 {
     .await
     .expect("the layer's table")
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn bulk_preserves_each_payment_in_history(pool: PgPool) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+    let response = send(
+        build(pool.clone()),
+        &token,
+        json!([
+            {"unit": "nyan", "receiver_discord_id": DISCORD2.to_string(), "amount": "100"},
+            {"unit": "nyan", "receiver_discord_id": DISCORD2.to_string(), "amount": "200"}
+        ]),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, 201, "{}", response.body);
+    assert_eq!(amount(&pool, USER1).await, 199200);
+    assert_eq!(amount(&pool, USER2).await, 1300);
+    let history: Vec<i64> =
+        sqlx::query_scalar("SELECT amount FROM currency_payment_histories ORDER BY amount")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        history,
+        vec![100, 200],
+        "each requested payment must have its own history row"
+    );
+}

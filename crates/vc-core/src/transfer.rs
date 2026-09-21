@@ -232,9 +232,13 @@ pub async fn transfer_bulk(
     .await
     .map_err(TransferError::Database)?;
 
-    let history_amounts: Vec<i64> = totals.values().copied().collect();
-    let history_receivers: Vec<i64> = totals.keys().map(|(_, id)| i64::from(*id)).collect();
-    let history_currencies: Vec<i64> = totals.keys().map(|(id, _)| *id).collect();
+    // Aggregate balance changes, but preserve each payment in the audit history.
+    let history_amounts: Vec<i64> = entries.iter().map(|(_, _, amount)| *amount).collect();
+    let history_receivers: Vec<i64> = entries.iter().map(|(_, id, _)| i64::from(*id)).collect();
+    let history_currencies: Vec<i64> = entries
+        .iter()
+        .map(|(unit, _, _)| currency_of[unit])
+        .collect();
 
     sqlx::query!(
         "INSERT INTO currency_payment_histories

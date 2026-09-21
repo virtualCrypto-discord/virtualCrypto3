@@ -584,3 +584,31 @@ async fn approval_does_not_reacquire_after_commit(pool: PgPool) {
 async fn bulk_approval_does_not_reacquire_after_commit(pool: PgPool) {
     approval_under_pool_pressure(pool, true).await;
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn bulk_approval_records_each_claim_payment(pool: PgPool) {
+    setup_money(&pool).await;
+    pending_claim(&pool, 1, 100, 1, 2, None).await;
+    pending_claim(&pool, 2, 200, 1, 2, None).await;
+    let sink = Sink::default();
+    let partials: Vec<_> = [1, 2]
+        .into_iter()
+        .map(|id| PartialClaim {
+            id,
+            status: Some("approved".into()),
+            metadata: None,
+        })
+        .collect();
+    vc_core::claim::update_claims(&pool, &sink, 2, &partials)
+        .await
+        .unwrap();
+    let history: Vec<i64> =
+        sqlx::query_scalar("SELECT amount FROM currency_payment_histories ORDER BY amount")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(history, vec![100, 200]);
+    let deliveries = sink.take();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0].1.len(), 2);
+}
