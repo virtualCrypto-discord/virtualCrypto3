@@ -155,28 +155,6 @@ const PROSE: &[Section] = &[
 ];
 
 const ENDPOINTS: &[Endpoint] = &[
-    Endpoint {
-        method: "POST",
-        path: "/token",
-        summary: "ブラウザのセッションを、利用者のトークンに交換します。",
-        access: "ブラウザのセッション",
-        fields: &[],
-        // `tests/login.rs`'s `a_session_can_get_a_token`: the session's account,
-        // and the token it is answered with.
-        example: Some(Example {
-            request: &["POST /token", "Cookie: <セッション>"],
-            response: &[
-                "{",
-                "  \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.…\",",
-                "  \"expires_in\": 3600",
-                "}",
-            ],
-        }),
-        notes: &[
-            "セッションが無い場合は 401 `invalid_token` です。",
-            "トークンのスコープは `oauth2.register`・`vc.pay`・`vc.claim` です。",
-        ],
-    },
     // The v2 API, in the order the router registers it.
     Endpoint {
         method: "GET",
