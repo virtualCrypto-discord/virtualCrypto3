@@ -56,6 +56,17 @@ the id in it is the currency's own, so the identifier is a location rather than 
 name that has to be looked up. Units are not used: a unit is unique inside a guild
 and this URI has to identify a currency from anywhere.
 
+The collection is the second form, and it is how a client asks for all of them:
+
+```
+https://vcrypto.sumidora.com/api/v2/currencies
+```
+
+Naming every currency one by one would say something else: a set frozen at the
+moment of the ask, which quietly leaves out a currency the guild creates
+tomorrow. The collection says all of them, now and later, and it is the same fact
+whether a client writes it or writes nothing at all.
+
 What is *stored* is the currency id, never the URI. The URI is the wire form, and
 storing the id is what keeps a grant working when the site moves.
 
@@ -73,10 +84,11 @@ Both ways of asking — the browser's `POST /oauth2/preauthorize` and the device
 An array of absolute URIs, which is how a JSON request carries the repeated
 parameter RFC 8707 describes for form-encoded ones. It is optional, and an ask
 that names none is an ask for everything — within the target it already names,
-which is the whole of what it could mean. An application that does not know which
-currencies it will work with (a wallet, which learns them from the account it is
-approved against) has to be able to ask for all of them; an application that does
-know says so, and the screen says it back.
+which is the whole of what it could mean — and an ask that names the collection
+says the same thing out loud. An application that does not know which currencies
+it will work with (a wallet, which learns them from the account it is approved
+against) has to be able to ask for all of them; an application that does know says
+so, and the screen says it back.
 
 A URI that is not absolute, not this service's, not a currency, or — for a
 guild's ask — a currency of another guild, is `invalid_target`: RFC 8707's own
