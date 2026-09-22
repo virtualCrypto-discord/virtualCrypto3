@@ -566,6 +566,9 @@ pub mod ui {
         #[derive(Debug, Clone, PartialEq, Eq)]
         pub enum Pressed {
             Revoked(String),
+            Confirmed(i64),
+            UserRevoked(i64, uuid::Uuid),
+            UserPaged(i64, i64),
             Paged(Page, i64),
         }
 
@@ -603,6 +606,21 @@ pub mod ui {
             crate::custom_id::encode(0, &data)
         }
 
+        pub fn confirm_custom_id(request: i64) -> String {
+            encoded(6, &request.to_string())
+        }
+        pub fn user_revoke_custom_id(user: i64, client: &str) -> String {
+            encoded(7, &format!("{user}:{client}"))
+        }
+        pub fn user_page_custom_id(user: i64, page: i64) -> String {
+            encoded(8, &format!("{user}:{page}"))
+        }
+        fn encoded(action: u8, payload: &str) -> String {
+            let mut data = vec![HEAD, action];
+            data.extend_from_slice(payload.as_bytes());
+            crate::custom_id::encode(0, &data)
+        }
+
         pub fn parse(source: &[u8]) -> Result<Pressed, UiError> {
             let [head, id, rest @ ..] = source else {
                 return Err(UiError::Head);
@@ -636,6 +654,25 @@ pub mod ui {
                         page,
                         text()?.parse().map_err(|_| UiError::Head)?,
                     ))
+                }
+                6 => Ok(Pressed::Confirmed(
+                    text()?.parse().map_err(|_| UiError::Head)?,
+                )),
+                7 | 8 => {
+                    let value = text()?;
+                    let (user, value) = value.split_once(':').ok_or(UiError::Head)?;
+                    let user = user.parse().map_err(|_| UiError::Head)?;
+                    if *id == 7 {
+                        Ok(Pressed::UserRevoked(
+                            user,
+                            value.parse().map_err(|_| UiError::Head)?,
+                        ))
+                    } else {
+                        Ok(Pressed::UserPaged(
+                            user,
+                            value.parse().map_err(|_| UiError::Head)?,
+                        ))
+                    }
                 }
                 other => Err(UiError::Unknown(u16::from(*other))),
             }

@@ -22,7 +22,10 @@ use time::OffsetDateTime;
 
 use crate::error::ApiError;
 use crate::routes::idempotency;
-use crate::routes::limited::{ApplicationContracts, Authorized, DecideContract, Read};
+use crate::routes::limited::{
+    ApplicationContracts, Authorized, DecideContract, Permission, ReadContractPayments,
+    ReadContracts,
+};
 use crate::routes::pagination::{self, QueryParams};
 use crate::routes::v2::claims::format_timestamp;
 use crate::state::AppState;
@@ -96,7 +99,7 @@ pub async fn index(
 /// same nothing a wrong id is, so this cannot be used to ask which ids exist.
 pub async fn show(
     State(state): State<AppState>,
-    user: Authorized<Read>,
+    user: Authorized<ReadContracts>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     let found = find(&state, id).await?;
@@ -292,7 +295,7 @@ async fn charge(
 /// newest first, a page of the same size — and the same `link` header.
 pub async fn mine(
     State(state): State<AppState>,
-    user: Authorized<Read>,
+    user: Authorized<ReadContracts>,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -343,7 +346,7 @@ pub async fn mine(
 /// application writes the two are the same list.
 pub async fn payments(
     State(state): State<AppState>,
-    user: Authorized<Read>,
+    user: Authorized<ReadContractPayments>,
     Path(id): Path<i64>,
     RawQuery(raw): RawQuery,
     OriginalUri(uri): OriginalUri,
@@ -564,9 +567,9 @@ async fn application(
         .ok_or(ApiError::PermissionDenied)
 }
 
-async fn caller_discord_id(
+async fn caller_discord_id<P: Permission>(
     state: &AppState,
-    user: &Authorized<Read>,
+    user: &Authorized<P>,
 ) -> Result<Option<i64>, ApiError> {
     let found = vc_core::user::find_by_id(state.pool(), user.account_id())
         .await?
@@ -576,9 +579,9 @@ async fn caller_discord_id(
 
 /// Relationship and currency authorization are both required. Unrelated callers
 /// still receive 404, without learning whether the contract's currency is allowed.
-async fn visible(
+async fn visible<P: Permission>(
     state: &AppState,
-    user: &Authorized<Read>,
+    user: &Authorized<P>,
     contract: &Contract,
 ) -> Result<bool, ApiError> {
     let related = if user.is_application() {

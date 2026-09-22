@@ -1,146 +1,165 @@
-# 認証・認可モデル
+# Authentication and authorization model
 
-現行実装の認可は、**認証情報の種類・操作権限・対象との関係・対象通貨**を
-組み合わせて判断する。アカウントIDが一致するだけでは、本人の操作権限を与えない。
-特に、個人委任トークンを本人用の認証情報に変換しない。
+Authorization combines **credential type, operation permission, relationship to the
+object, and currency restriction**. An account id alone never proves the caller has
+the account's own authority. Personal delegations are not converted into user JWTs.
 
-## 認証情報の種類
+## Credential types
 
-| 種類 | 実装上の扱い | 操作する対象 |
+| Credential | Representation | Account or resource it acts on |
 |---|---|---|
-| ユーザー自身のJWT（セッション、PATなど） | `Principal::Own`、`kind: user` | そのユーザーのアカウント |
-| アプリケーション自身のJWT | `Principal::Own`、`kind: app` | アプリケーション自身のアカウント |
-| 個人委任トークン（grantに紐づくUUID） | `Principal::Delegated` | 承認したユーザーのアカウント。操作と通貨に制限がある |
-| サーバー委任トークン（grantに紐づくUUID） | 別の `GuildToken` extractor | 承認したサーバーの通貨プールからの発行 |
+| User JWT, including sessions and PATs | `Principal::Own`, `kind: user` | That user's account |
+| Application JWT | `Principal::Own`, `kind: app` | The application's own account |
+| Personal grant UUID token | `Principal::Delegated` | The approving user's account, with explicit operation and currency restrictions |
+| Guild grant UUID token | Separate `GuildToken` extractor | The approving guild's issuing pool |
 
-`Own` は「無制限の権限」という意味ではない。従来のアカウント用認証情報であり、
-操作によってはスコープが必要で、対象との関係も確認する。
-アプリケーション自身のJWTを持つことと、ユーザーから委任を受けることは別である。
-アプリケーションのJWTだけでは、その所有者であるユーザーの資産を操作できない。
+`Own` does not mean unrestricted authority. Existing scope, ownership and state
+checks still apply. An application's JWT does not grant access to its owner's
+personal assets. A personal grant never becomes an own credential, and personal
+and guild grants are not interchangeable merely because both tokens are UUIDs.
 
-個人委任トークンはユーザーのアカウントIDを持つが、`kind: user` の `AuthUser` に
-変換しない。したがって、本人用認証を必要とする操作には使えない。
-個人委任とサーバー委任も、同じUUID形式という理由では互換に扱わない。
+## Personal scope catalogue
 
-## 操作権限の表
+The `vc.delegate.` namespace is exclusively for personal delegations. Names are
+matched exactly; there are no wildcards, prefix grants, aliases or implied scopes.
+The shared catalogue is [delegation.rs](../crates/vc-core/src/delegation.rs).
 
-以下は操作の入口で必要な条件。表で許可されても、次節の対象・状態の確認は別途必要。
-「追加スコープ不要」は、有効な認証情報が必要であることを省略していない。
-
-| 操作 | ユーザー自身のJWT | アプリ自身のJWT | 個人委任 |
-|---|---|---|---|
-| 自分のプロフィール・残高 | 追加スコープ不要 | 追加スコープ不要 | `vc.read` |
-| 自分の契約一覧・契約詳細・契約の支払い履歴 | 追加スコープ不要 | 追加スコープ不要 | `vc.read` |
-| 請求一覧・詳細 | `vc.claim` | `vc.claim` | `vc.read` |
-| 単一・一括支払い | `vc.pay` | `vc.pay` | `vc.pay` |
-| 請求作成・承認・拒否・キャンセル・メタデータ更新 | `vc.claim` | `vc.claim` | `vc.claim` |
-| アプリ側の契約一覧・作成・契約資金からの支払い | 不可 | `vc.contract` | 不可 |
-| 契約への承認・拒否・承認撤回 | 追加スコープ不要 | 不可 | 不可 |
-
-個人委任では `vc.read`、`vc.pay`、`vc.claim` は独立した権限である。
-`vc.pay` や `vc.claim` を与えても、読み取りAPIの権限は増えない。
-逆に `vc.read` では支払いや請求承認はできない。
-ただし、許可された更新操作が結果をレスポンスとして返すことまで禁止する意味ではない。
-
-個人委任にすべてのスコープがあっても、契約への同意やアプリケーション自身の操作は
-許可されない。スコープの追加で認証情報の種類を昇格させることはできない。
-登録・アプリ管理系のAPIは従来の `AuthUser` を使い、個人委任トークンを受け付けない。
-
-サーバー委任はこの表に入らず、発行APIで `vc.issue` とサーバーの通貨制限を確認する。
-ユーザー・アプリ自身のJWTや個人委任で、サーバー委任の代わりをすることはできない。
-
-## 旧v2アプリケーションとの互換性
-
-**旧v2のJWTに `vc.read` の取得を要求しない。** JWTの形式や既存スコープを変更せず、
-`Own` では従来の認可規則を維持する。
-
-- 従来の `vc.claim` は、請求の読み取りと更新の両方に使える。
-- 従来の `vc.pay` は、単一・一括支払いに使える。
-- プロフィール・残高の取得に、新しい読み取りスコープを要求しない。
-- `Own` には、個人委任の `resource` による通貨制限を追加しない。
-
-このため請求の読み取り条件は、旧JWTでは `vc.claim`、個人委任では `vc.read` となる。
-同じスコープ解釈に統一して旧クライアントを破壊しないための明示的な互換性規則である。
-JWTの `kind: user` と `kind: app` の両方がこの規則の対象となる。
-
-## 対象との関係・通貨・状態の確認
-
-操作権限は必要条件であり、それだけで任意のデータを操作できるわけではない。
-
-1. **対象との関係**：請求の請求者・支払者、契約の当事者・作成アプリなど、
-   そのアカウントが対象を読める／操作できる関係にあるかを確認する。
-2. **対象通貨**：委任の場合は、その通貨IDがgrantの許可対象かを確認する。
-3. **操作の成立条件**：残高、請求や契約の状態、期限などをドメイン処理で確認する。
-
-実装上の確認順序はエンドポイントにより異なる。このリストは共通の処理順を意味しない。
-契約詳細・支払い履歴では関係を先に確認し、無関係な呼び出しには404を返したうえで、
-関係がある呼び出しに通貨制限を適用する。
-
-通貨制限の保存値は単位名やURLではなく通貨ID。空のリストは全通貨を意味する。
-許可対象だった通貨が削除されてもそのIDを保持し、削除によって空リストになって
-全通貨の権限を獲得することを防ぐ。詳細は [resources.md](resources.md) を参照。
-
-| 読み取り対象 | 通貨制限の適用方法 |
+| Scope | Operation |
 |---|---|
-| 残高一覧 | 許可された通貨の行だけを返す |
-| 請求一覧 | DBからのページ取得後に行を絞る。継続カーソルは絞り込み前のページから作る |
-| 契約一覧 | DBで通貨を絞ってからカーソルと件数制限を適用する |
-| 請求詳細・契約詳細・契約の支払い履歴 | 対象外の通貨は403で拒否する |
+| `vc.delegate.profile.read` | Read `/api/v2/users/@me` |
+| `vc.delegate.balances.read` | Read the account's balances |
+| `vc.delegate.claims.read` | Read claim lists and individual claims |
+| `vc.delegate.contracts.read` | Read the user's contract list and individual contracts |
+| `vc.delegate.contracts.payments.read` | Read a contract's payment history |
+| `vc.delegate.payments.create` | Make single or bulk payments from the account |
+| `vc.delegate.claims.create` | Create claims, including their initial metadata |
+| `vc.delegate.claims.approve` | Approve a claim and pay it from the account |
+| `vc.delegate.claims.deny` | Deny a claim addressed to the account |
+| `vc.delegate.claims.cancel` | Cancel a claim made by the account |
+| `vc.delegate.claims.metadata.write` | Set or delete the account's metadata on an existing claim |
 
-請求一覧は絞り込み後に空でも次ページの `Link` が存在する場合がある。
-契約一覧では、対象外の契約がページの件数枠を消費しない。
-アプリ自身の `/users/@me/contracts` は、そのアカウントにDiscordユーザーが紐づかないため
-空になる。アプリが作成した契約の一覧は、別の `/contracts` で取得する。
+Claim creation does not authorize claim approval. Payment creation does not
+authorize claim approval, and approval does not authorize arbitrary payments.
+Reading contracts does not imply reading their payment history. No read scope
+implies a write, and no write scope implies access to a read endpoint. An authorized
+write may still return its result, as the API already does.
 
-## 実装上の境界
+A claim PATCH containing both a status transition and an explicit `metadata` field
+requires **both** the transition's scope and `claims.metadata.write`, including when
+metadata is `null`. All required permissions are checked before any mutation. With
+metadata omitted, a transition does not change existing metadata values; the old
+empty-object merge behavior is retained. Initial metadata belongs to claim creation
+and does not require permission to edit existing claims.
 
-アカウントAPIでは [limited.rs](../crates/vc-api/src/routes/limited.rs) の
-`Authorized<P>` をハンドラーの引数として使う。`P` は次のいずれかを明示する。
+No personal scope authorizes contract approval, refusal or withdrawal, application
+registration/administration, or application-side contract creation/charging. These
+require an own credential of the appropriate kind even if a delegation has every scope.
 
-| 型引数 | 操作 |
+## Legacy v2 compatibility
+
+**Existing v2 JWTs do not need any `vc.delegate.*` scope.** Their format and scope
+meanings remain unchanged, for both `kind: user` and `kind: app`.
+
+| Operation | Own user JWT | Own application JWT |
+|---|---|---|
+| Profile, balances, user's contract list, contract detail/history | No additional scope | No additional scope |
+| Claim reads and writes | `vc.claim` | `vc.claim` |
+| Single/bulk payments | `vc.pay` | `vc.pay` |
+| Application contract list/create/charge | Denied | `vc.contract` |
+| Contract approval/refusal/withdrawal | No additional scope | Denied |
+
+Valid authentication and the object checks below are always required. Own
+credentials do not acquire a grant's currency restriction. `vc.delegate.*` names
+in a JWT do not imply legacy `vc.pay` or `vc.claim` permissions.
+
+Conversely, personal grant requests reject `vc.read`, `vc.pay`, `vc.claim` and
+wildcards as `400 invalid_scope`. Old broad personal-grant rows are not expanded
+into the new scopes and do not authorize delegated operations. New explicit
+permissions require a new approval. The migration adds enum values only; it does
+not grant permissions or reinterpret existing approvals.
+
+Guild issuing remains separate: a guild grant needs `vc.issue` and must cover the
+guild's currency. None of the personal scope names authorizes guild issuing.
+
+## Object, currency and state checks
+
+An operation permission is necessary but not sufficient:
+
+- The account must have the required relationship to the object: claimant, payer,
+  contract party or contract-creating application, depending on the operation.
+- For a delegation, the currency must be covered by its grant.
+- Domain rules still enforce balances, pending/active states, expiry and other
+  conditions. An approval scope does not bypass a claim's payer check.
+
+The order of these checks is endpoint-specific. Contract details and histories
+check the relationship first, returning 404 to unrelated callers before applying
+the currency check.
+
+Currencies are stored as ids, not units or URLs. Empty means all currencies. A
+restricted grant retains deleted currency ids so deletion cannot turn its last
+restriction into unrestricted access. See [resources.md](resources.md).
+
+| List/read | Currency restriction |
 |---|---|
-| `Read` | プロフィール・残高・契約の読み取り |
-| `ReadClaims` | 請求の読み取り（旧JWTの互換性規則を含む） |
-| `Pay` | 単一・一括支払い |
-| `WriteClaims` | 請求作成・更新 |
-| `ApplicationContracts` | アプリ側の契約操作 |
-| `DecideContract` | ユーザー自身の契約判断 |
+| Balances | Return only covered rows |
+| Claims | Filter after fetching a page; derive continuation from the unfiltered page |
+| Contracts | Filter in SQL before applying cursor pagination and limit |
+| Claim detail, contract detail/history | Reject an excluded currency with 403 |
 
-extractorは認証情報を解決し、アカウント単位のレート制限と操作権限の確認を行う。
-操作を省略した `Authorized` は使えず、権限型はsealed traitで限定している。
-`Authorized<P>` から `AuthUser` への暗黙変換も提供しない。
-以前の `Limited` のように、委任トークンを本人として扱ってから各ハンドラーが
-追加チェックを覚えておく構造を廃止した。
+A filtered claim page may be empty and still have a next-page `Link`. Excluded
+contracts do not consume the contract page's limit. An application account has no
+Discord user and therefore has an empty `/users/@me/contracts` list; its own
+created contracts are listed through `/contracts`.
 
-**型が保証するのは操作権限まで。** 対象との関係、通貨制限、残高や状態は、
-ハンドラーとドメイン処理で引き続き確認する必要がある。
-新しいAPIを追加するときは、適切な権限型を選ぶだけで完成とはならない。
-一覧の絞り込み・ページ送りと、個別操作の対象チェックも実装・検証する。
+The `resource` set applies to every granted currency-specific operation. It does
+not express a different currency set per scope. Profile access has no currency
+target and is controlled by its own scope.
 
-個人委任のスコープと通貨制限は、リクエスト時にDBのgrantから読む。
-grantの変更は次の認証時に反映され、取り消されたgrantのトークンは認証に失敗する。
-これは、すでに認可を終えて実行中のリクエストを遡って取り消す仕組みではない。
+## Enforcement boundaries
 
-## 拒否と公開API
+Account handlers use `Authorized<P>` from
+[limited.rs](../crates/vc-api/src/routes/limited.rs). Permission types explicitly
+name profile, balance, claim, contract or history reads; payment creation; claim
+creation; application contract operations; or own-user contract decisions.
+There is no default permission and no conversion to `AuthUser`. The sealed
+permission catalogue centralizes the own/delegated policy.
 
-- 個人委任のスコープ不足・対象外通貨：403 `insufficient_scope`。
-- 個人委任で契約判断など、認証情報の種類として許可しない操作：403
-  `invalid_token`（現行の `PermissionDenied`、説明は `permission_denied`）。
-- 無効な個人委任トークン、またはアカウントAPIに渡したサーバー委任：401 `invalid_token`。
-- 対象との関係や状態による拒否：各APIの既存の404・403・409等の規則に従う。
+Claim PATCH uses a separate `ClaimPatch` body extractor. It authenticates the
+caller, parses the body, determines the exact transition and whether metadata is
+present, then verifies every required scope. A handler cannot extract the broad
+PATCH family on its own and forget to check which mutation was requested. Invalid
+status/body semantics continue to be handled by the endpoint; they do not acquire
+permission to perform a different transition.
 
-通貨の名称・単位・発行量などの通貨情報APIは、従来どおり公開APIである。
-`GET /currencies/{id}` は有効な委任が渡された場合に通貨制限を確認するが、
-匿名アクセスやクエリ形式の検索も可能なので、機密情報を守る境界ではない。
-個別アカウントの残高・請求・契約の認可とは区別する。
-Discordコマンドは署名済みinteractionの呼び出し元を認証する別経路である。
+**The types enforce operation permission, not every object constraint.** Handlers
+and domain code must still enforce relationships, currencies and state. New
+endpoints also need individual-target checks and correct list pagination.
 
-## 回帰テスト
+Delegated scopes and resources are read from the grant on each authentication.
+Changes affect subsequent authentication, and revoked grants stop authenticating.
+This does not retroactively cancel a request that already passed authorization.
+Account APIs retain their account-based rate limit.
 
-[grant_resources.rs](../crates/vc-api/tests/grant_resources.rs) で次を検証する。
+## Refusals and public endpoints
 
-- `vc.read`、`vc.pay`、`vc.claim` の読み取り権限の違いと、読み取り専用での更新拒否。
-- 個人委任による契約承認・拒否・撤回、アプリ側の契約作成・支払いの拒否。
-- 通貨限定の契約詳細・支払い履歴、および対象外通貨を挟んだ一覧のページ送り。
-- `vc.read` を持たない旧アプリ用JWTでの請求作成・取得・承認と支払い。
-- 許可対象通貨を削除しても、権限が全通貨へ広がらないこと。
+- Missing personal scope or excluded currency: 403 `insufficient_scope`.
+- Credential kind cannot perform the operation: 403 `invalid_token` with the
+  existing `permission_denied` description.
+- Invalid personal token, or a guild token at an account endpoint: 401 `invalid_token`.
+- Object relationship or state refusals retain each endpoint's existing responses.
+
+Currency metadata remains public. `GET /currencies/{id}` checks an optional valid
+grant's resources, but anonymous access and the query-form lookup remain available;
+that check is not a confidentiality boundary. Account balances, claims and contracts
+are protected separately. Discord commands authenticate signed interactions through
+a separate path. `/grant approve` reviews and confirms either target kind; `/grant user` and
+`/grant server` manage grants. See [personal-grants.md](personal-grants.md) for
+identity checks, globally unique pending codes and request-bound confirmation.
+
+## Regression coverage
+
+[grant_resources.rs](../crates/vc-api/tests/grant_resources.rs) tests every delegated
+scope against read and write operations, compound PATCH permissions and unchanged
+state after denial, legacy JWT compatibility, excluded currencies and contract
+pagination. [grant_requests.rs](../crates/vc-api/tests/grant_requests.rs) exercises
+request, approval and token polling with the explicit scope names.

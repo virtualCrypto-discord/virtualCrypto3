@@ -255,6 +255,20 @@ impl vc_core::notification::Notifier for WebhookNotifier {
     /// Fire and forget for the same reason again: the parties have decided, and
     /// the application can read the contract whenever it likes — this is the
     /// ping that saves it from asking.
+    fn notify_personal_grant_decided(
+        &self,
+        application_id: i64,
+        discord_id: i64,
+        scopes: &[String],
+    ) {
+        let pool = self.pool.clone();
+        let transport = std::sync::Arc::clone(&self.transport);
+        let body = personal_grant_decided_body(discord_id, scopes);
+        tokio::spawn(async move {
+            send_to_application(&pool, &*transport, application_id, body).await;
+        });
+    }
+
     fn notify_contract_decided(&self, application_id: i64, contract_id: i64) {
         let pool = self.pool.clone();
         let transport = std::sync::Arc::clone(&self.transport);
@@ -293,6 +307,10 @@ async fn send_claim_update(
 /// application must ignore types it does not know — which is what its
 /// documentation says, and what makes adding this one safe for applications
 /// written before it.
+pub fn personal_grant_decided_body(discord_id: i64, scopes: &[String]) -> Value {
+    serde_json::json!({"type": 3, "data": {"guild_id": null, "discord_id": discord_id.to_string(), "scopes": scopes}})
+}
+
 pub fn grant_decided_body(guild_id: i64, scopes: &[String]) -> Value {
     serde_json::json!({
         "type": 3,

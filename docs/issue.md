@@ -113,18 +113,18 @@ application's owner, not the guild.
 
 ### 2. Discord: `/grant`
 
-For the guild that never opens a browser — and the only way a guild that is not
-the application's owner says yes. `/grant` is guild-only and asks the
-administrator bit, like `/issue` beside it:
+The common `/grant approve` command reviews personal and server requests. Server
+requests require administrator permission in the requested server; personal requests
+require the requested user and also work in DMs.
 
-- `/grant list` shows the applications this guild has allowed to issue, five to a
+- `/grant server` shows the applications this guild has allowed to issue, five to a
   page, each with the button that takes the permission back. It names the
   currency each one may issue — the guild's own, by unit rather than by id — so
   the list says what an application may touch as well as what it may do. Asks
   are not here: they are the application's own business, and
   `GET /oauth2/clients/@me/grant-requests` is where the application reads them.
-- `/grant approve code:<user_code>` approves an ask and writes the grant from
-  its scopes and its currencies, so a narrowed ask is approved narrowed, not
+- `/grant approve code:<user_code>` displays the target, application, scopes and
+  currencies; its confirmation button writes the grant from those exact values, so a narrowed ask is approved narrowed, not
   widened. A code that names nothing pending here is refused the same way
   whether it never existed, belongs to another guild, or already expired.
 - The list's revoke button takes a permission back by the application it belongs

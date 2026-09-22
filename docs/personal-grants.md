@@ -1,215 +1,152 @@
 # Personal grants
 
-`docs/issue.md` is the grant this service already had: an application asks a *guild* for
-`vc.issue`, an administrator answers `/grant approve code:` in that guild, and the application is
-handed a token that may issue from the guild's pool. Every sentence of it is guild-scoped — the
-column is NOT NULL, the code is unique inside a guild, and the token's account is the
-application's own.
+A personal grant lets an application perform explicitly approved operations on a
+user's account. It is separate from a PAT, which is the account's own credential,
+and from a guild grant, which authorizes issuing from a guild's pool.
 
-This is the same ask with a *person* on the other end: the application wants to do something that
-concerns one user's own account, that user is the one who decides, and the token it gets acts as
-them for the scopes they agreed to. It is what the personal access token cannot be — a PAT is the
-whole account, for as long as nobody revokes it, and it says nothing about which application holds
-it.
+This is an addition to v2. Existing application and user JWTs retain their legacy
+`vc.pay` and `vc.claim` semantics. Personal grants use only the fine-grained
+`vc.delegate.*` namespace described in [authorization.md](authorization.md).
 
-**This is an addition.** The Elixir has no user-scoped grant, no `vc.pay`/`vc.claim`/`vc.read`
-scope it could name, and no column either could live in. There is no golden and no case to port;
-`crates/vc-api/tests/personal_grants.rs` is this tree's own.
+## Request
 
-## The ask
-
-`POST /oauth2/clients/@me/grant-requests` — the endpoint an application already uses — with
-`discord_id` where it used to be `guild_id`:
+An application's own token with `oauth2.register` calls
+`POST /oauth2/clients/@me/grant-requests`:
 
 ```json
-{ "discord_id": "123456789012345678", "scopes": ["vc.read", "vc.pay"],
-  "resource": ["https://vcrypto.sumidora.com/api/v2/currencies/12"], "expires_in": 600 }
+{
+  "discord_id": "123456789012345678",
+  "scopes": ["vc.delegate.balances.read", "vc.delegate.payments.create"],
+  "resource": ["https://vcrypto.sumidora.com/api/v2/currencies/12"],
+  "expires_in": 600
+}
 ```
 
-Exactly one of `guild_id` and `discord_id` is required, and which one is there says which kind of
-grant is being asked for: a server grant (an administrator of that guild decides, `docs/issue.md`)
-or a personal grant (that user decides, this document). Both are still one pending ask per
-application and target, both answer `{device_code, user_code, verification_uri, expires_in}`, and
-both are polled the same way.
+Exactly one of `discord_id` and `guild_id` is required. `discord_id` selects a
+personal request; `guild_id` selects the guild issuing flow. The result contains
+`device_code`, `user_code`, `verification_uri` and `expires_in`. There is one
+pending request per application and target. Device polling and token refresh use
+the existing grant machinery.
 
-**Which currencies** the application may touch is the ask's other half: RFC 8707's `resource`, an
-array of absolute URIs — `https://<site>/api/v2/currencies/{id}` for one currency,
-`https://<site>/api/v2/currencies` for all of them (`docs/resources.md`). An ask that names none
-and one that names the collection both mean every currency of the person's account, and an
-application that cannot know which currencies it will work with — a wallet, which learns them from
-the account it is approved against — asks with the collection. A `resource` that is not absolute,
-not this service's, or not a currency is `400 invalid_target`. What the grant keeps is the currency
-*ids*, never the URIs, so it survives the site moving.
+For a personal request, each scope must be an exact member of this catalogue:
 
-The scopes an application may ask a person for are the three a person's own account has to give:
-
-| Scope | What it lets the holder do, as that user |
+| Scope | Permission |
 |---|---|
-| `vc.read` | read the account: `/api/v2/users/@me` and its balances, claims and contracts, including a contract it is named in and its payment history |
-| `vc.pay` | spend from it: `POST /api/v2/users/@me/transactions`, and the bulk one |
-| `vc.claim` | act on its claims: create one, approve, deny, cancel, set metadata |
+| `vc.delegate.profile.read` | Read the user's profile |
+| `vc.delegate.balances.read` | Read balances |
+| `vc.delegate.claims.read` | Read claim lists and details |
+| `vc.delegate.contracts.read` | Read contract lists and details |
+| `vc.delegate.contracts.payments.read` | Read contract payment histories |
+| `vc.delegate.payments.create` | Create single or bulk payments |
+| `vc.delegate.claims.create` | Create a claim, with optional initial metadata |
+| `vc.delegate.claims.approve` | Approve and pay a claim |
+| `vc.delegate.claims.deny` | Deny an incoming claim |
+| `vc.delegate.claims.cancel` | Cancel an outgoing claim |
+| `vc.delegate.claims.metadata.write` | Set or delete metadata on an existing claim |
 
-Three things are deliberately **not** grantable, and each has its own reason rather than being an
-omission:
+No scope implies another. In particular, a claim creator cannot approve a claim,
+and a payment creator cannot approve claims. A status change with explicit metadata
+requires both the status operation's permission and metadata-write permission.
+An empty scope list grants no account operation. Duplicate or unknown names,
+`vc.delegate.*` wildcards, and the old broad `vc.read`, `vc.pay`, `vc.claim` names
+are `400 invalid_scope`; none is an alias for a set of new permissions.
 
-- **`oauth2.register`** — registering and editing applications is administration *of the account*,
-  not an operation *on its money*. A delegate is a list of things an application may do; who I am
-  is not one of them. That is the personal access token's job, and it stays that way.
-- **`vc.issue`** — a guild's pool is a guild's, and there is no person to ask.
-- **`vc.contract`** — that is an application's own scope: it says the application may *ask* a user
-  to lock money, and what makes it spend is each contract's own approval. A personal grant is not
-  that side of the relationship.
+The API catalogue is shared with authorization through
+[`vc_core::delegation::Scope`](../crates/vc-core/src/delegation.rs).
 
-## The decision
+## Currency restrictions
 
-Two commands, because there are two things to decide and they are decided by different people.
-`/grant server …` is what exists today — an administrator of the guild the ask named answers it,
-reads the guild's authorized applications, and revokes one. `/grant user …` is this document: the
-code, the list of what this account has approved, and the button that takes one back.
+RFC 8707's `resource` selects currencies independently of operations:
 
-```
-/grant user approve code:4f2a9c11
-/grant user list
-```
+- `https://<site>/api/v2/currencies/{id}` selects one currency.
+- `https://<site>/api/v2/currencies` selects all currencies.
+- Omitting resources has the same meaning as selecting all currencies.
 
-**Where the command is run does not matter.** There is no DM-only rule and no guild requirement:
-what makes the decision the right one is that the caller *is* the user the ask named, so the same
-press by anybody else decides nothing and is answered as a code that is not theirs. A guild channel
-therefore costs nothing but the code being visible to whoever is reading — and the code is the
-half a person chose to show, which is how the server grant's has always worked as well.
+The same resource set applies to every currency-specific operation in the grant.
+A nonabsolute URI, a foreign service URI or an invalid currency is
+`400 invalid_target`. Stored currency ids survive a site move. Deleted currency
+ids are retained so deleting a grant's last currency cannot widen it to all
+currencies. See [resources.md](resources.md).
 
-`/grant user list` reads the applications this account has approved, with the day each grant was
-written and a button that revokes one. It names the currencies each application may touch, by unit
-rather than by id — an application narrowed to one currency reads as 「この申請は、通貨 nyan だけを
-操作できます」, and one that named none as 「この申請は、すべての通貨を操作できます」 — so the person
-deciding can see the narrowing the API will enforce. Together the two commands are the whole
-decision: `/grant user approve` writes the grant from the ask's own scopes and its own currencies,
-never from anything the approver names, and the list says back what was written. Revoking deletes
-the grant row, and every token issued for it goes with it — the same cascade `/grant server revoke`
-has, for the same reason.
+## Discord approval and management
 
-## The token
+There is one approval command and two management commands:
 
-Exactly the shape the server grant's token has, because it is the same machinery:
+- `/grant approve code:<user_code>` reviews either a personal or a server request.
+  It displays the application name/client id, target, exact scope names with their
+  meanings, and the currencies. Only the confirmation button writes the grant.
+- `/grant user` lists applications with access to the caller's account, two per
+  page, with their scopes, currencies and revoke buttons. It works in servers
+  and DMs and does not require server administrator permissions.
+- `/grant server` lists applications allowed to issue in the current server, five
+  per page. It requires administrator permission in that server.
 
-| | |
-|---|---|
-| On the wire | the UUID of an `access_tokens` row — not a JWT |
-| Lifetime | one hour, with a refresh token (180 days) from the same poll |
-| Resolves to | the granting user's account, the application that asked, and the grant's scopes read at use |
-| Currencies | the ones the grant names, by id, read at use — an empty set is every currency of the account |
-| Revocation | the grant row deleted — the token row is a child of it — or the token deleted on its own |
+Personal requests can be reviewed and approved only by the requested user.
+Server requests require an administrator in the requested server; they cannot
+be approved from a DM or another server. Confirmation, pagination and revocation
+buttons recheck the interaction actor. Personal list buttons are bound to that
+user, and a copied button cannot act on someone else's grants.
 
-Resolving to the *user's* account is the whole of what makes it a delegation: an application
-holding it is that user for the endpoints it is accepted on, and for the scopes it carries.
-Because the scopes are read from `grant_scopes` when the token is used rather than carried in it,
-taking a scope away takes it away from tokens already issued.
+Pending user codes are **globally unique**, across all users and servers. Migration
+`0018_global_grant_codes.sql` replaces the target-local unique index. The generator
+uses random UUID bytes, and a collision retries the transaction with a new code.
+No disambiguation screen or target guessing is needed. Expired pending rows also
+reserve their codes until they are removed.
 
-The same reading applies to the currencies, which live in `grant_resources` beside the scopes: an
-act that lands on a currency the grant does not name — issuing from a pool, paying, deciding a
-claim, or a read that names a currency — is `403 insufficient_scope`, and the two lists
-(`/api/v2/users/@me/balances`, `/api/v2/users/@me/claims`) are *filtered* to the grant's currencies
-rather than refused. What is narrowed is a grant: a personal access token, and the token an
-application takes for itself with `client_credentials`, are the account's own credentials and are
-not narrowed this way.
+A confirmation button contains the request id, not its reusable user code or its
+secret device code. A deleted/expired/replaced request cannot be approved through
+an old button. The decision checks pending status and expiry inside the transaction;
+concurrent confirmations can write the grant only once and notify only once.
 
-## Authorization model and compatibility
+A personal approval creates the user's account if needed and replaces the existing
+grant's exact scopes and currencies. Old spending scopes cannot survive a new
+read-only approval and inherit its currencies. Issued tokens read the updated grant.
+The review screen explicitly states this replacement behavior.
 
-The complete model, including the legacy JWT rules, resource checks and implementation
-boundaries, is documented in [認証・認可モデル](authorization.md).
+Revoking a personal grant deletes it and its dependent access/refresh tokens.
+Guild revocation retains the existing behavior of removing `vc.issue` from the
+grant. Old `/grant list` interactions remain a server-list alias, but the registered
+commands are `approve`, `user`, and `server`.
 
-Authentication and authorization are separate. An account credential (a session, PAT,
-or application's JWT) is an **own credential**. A personal grant is a **delegation**:
-it identifies the granting account but never becomes that account's own credential.
-A guild grant belongs to the guild issuing API and is rejected by account APIs.
-
-Every account API handler names its operation using `Authorized<Permission>` in
-`routes/limited.rs`. The extractor authenticates, rate-limits, and enforces the
-following policy before handing the handler an account id. There is no default
-permission, no unqualified account extractor, and no conversion from a delegation
-to `AuthUser`. Adding an operation requires an explicit entry in this policy.
-
-| Operation | Own user/app credential | Personal delegation |
-|---|---|---|
-| Profile, balances, user's contracts, contract detail/payment history | Existing account/relationship checks; no new scope | `vc.read` |
-| Claim list/detail | `vc.claim`, as in v2 | `vc.read` |
-| Single/bulk payment | `vc.pay` | `vc.pay` |
-| Create/update/approve/deny/cancel claims | `vc.claim` | `vc.claim` |
-| Application contract list/create/charge | App credential with `vc.contract` | Never |
-| Contract approval/refusal/withdrawal | User's own credential | Never |
-
-**Old v2 applications do not need `vc.read`.** Their JWTs keep the old scope
-semantics: `vc.claim` permits both claim reads and writes, and `vc.pay` permits
-payments. Their profile/balance reads remain available. The new read scope applies
-only to personal delegations. A delegation's `vc.pay` or `vc.claim` does not imply
-`vc.read`, and `vc.read` does not authorize any write.
-
-Passing the operation policy is necessary but not sufficient. Existing ownership
-and party/payer/claimant checks still apply. For a delegation, the target currency
-must also belong to the grant's resource set. Lists filter by that set; contract
-lists filter **before** cursor pagination and limits, so excluded contracts cannot
-hide permitted rows or break continuation. Contract details and payment histories
-check the stable currency id after checking the caller's relationship. Individual
-out-of-resource operations return `403 insufficient_scope`.
-
-Scope and currency restrictions are loaded from the grant on each request, so
-revoking a grant or changing it affects issued tokens as well. Contract decisions
-and application administration cannot be obtained by adding scopes to a delegation.
-Registration/administration continue to use the own-credential `AuthUser` extractor.
-Discord commands continue to authenticate the Discord interaction's caller.
-
-Currency metadata is public under the existing v2 API. Its optional grant check on
-`GET /currencies/{id}` does not make that metadata confidential: anonymous requests
-and the query-form currency lookup remain public. Account balances, claims and
-contracts are not public and use the operation policy above.
-
-## Where the pieces go
-
-- `crates/vc-core/migrations/0013_personal_grants.sql` — `grants.discord_id` and
-  `grant_requests.discord_id` (with `guild_id` no longer NOT NULL, exactly one of the two set,
-  `vc.read`/`vc.pay`/`vc.claim` added to the scope enum), and the indexes that follow from the new
-  target: one pending ask per target, one pending code per (discord_id, code), and the grant upsert.
-- `crates/vc-core/src/grant.rs` — the target becomes a value (`guild` or `user`) in the ask, the
-  grant, the decision, the resolution and the notification, rather than a `guild_id` threaded
-  through all of them.
-- `crates/vc-api/src/routes/grant_requests.rs` — `discord_id` accepted, exactly one target.
-- `crates/vc-api/src/command/grant.rs` — split into the two groups: `server` is today's command,
-  `user` is the code, the list and the revoke, run wherever the caller happens to be.
-- `crates/vc-api/src/notification.rs` — the decision is sent for both targets, and event `3`'s body
-  carries which one.
-- `crates/vc-api/src/routes/limited.rs` — the operation-specific authorization extractor and
-  the distinction between own credentials and delegations.
-- `crates/vc-api/src/routes/v2/{users,claims,transactions,contracts}.rs` — each handler names
-  its operation and applies the relationship and currency restrictions for the target.
-- `docs/issue.md` gains a pointer here, `docs/oauth2.md`'s grant-request paragraph says which
-  target it names, and `docs/qa.md`'s surface tables gain the new rows.
-- `crates/vc-core/migrations/0014_grant_resources.sql` and `crates/vc-api/src/resource.rs` — the
-  currencies beside the scopes in the ask, the grant, the decision and the token, and the one
-  function that rules on whether an act lands inside them (`docs/resources.md`).
-
-## The event
-
-A decision about a personal grant is delivered to the application over its webhook, the way a
-server grant's is — event type `3`, sent when the grant is written and again when one is revoked,
-with the scopes as they stand.
-
-The body carries which target was decided, and exactly one of the two is ever set:
+Personal approval and revocation notify the application using webhook event type 3:
 
 ```json
-{"type": 3, "data": {"guild_id": null, "discord_id": "123456789012345678",
-                     "scopes": ["vc.read", "vc.pay"]}}
+{"type":3,"data":{"guild_id":null,"discord_id":"123456789012345678",
+                  "scopes":["vc.delegate.balances.read"]}}
 ```
 
-`discord_id` is the person who decided, in the same shape the ask names them, and `guild_id` stays
-the string it was: a body with one of them is the event, and "exactly one" is the ask's rule rather
-than a second one. Nothing has been released with the old body, so this is a shape to change now
-rather than a compatibility shim to keep — and the ping is the application's to answer with the
-same poll it was already making.
+Revocation sends an empty scope list. The existing guild event shape is unchanged.
 
-## What is not here
+## Token and enforcement
 
-- **A token kind on the wire.** It is a UUID row, like the server grant's.
-- **Personal grants for anything but a person's own account.** There is no "grant for a guild I
-  administer" here: that is the server grant.
-- **A scope that means "act entirely as me".** That is the PAT, and it is a credential handed to a
-  person rather than a permission an application asked for.
+| Property | Behavior |
+|---|---|
+| Wire form | UUID of an `access_tokens` row, not a JWT |
+| Access-token lifetime | One hour |
+| Refresh-token lifetime | 180 days |
+| Account | The approving user's account |
+| Authority | A personal delegation, never `AuthUser` or an application's own credential |
+| Scopes/resources | Read from the grant when the token is authenticated |
+| Revocation | Deleting the grant removes its dependent tokens; a token can also be deleted independently |
+
+Personal grants cannot authorize application administration, guild issuing,
+application-side contract creation/charging, or a user's contract approval,
+refusal or withdrawal. Adding scopes cannot change the credential's kind.
+
+The operation policy is enforced by typed extractors before domain work. Target
+relationship, currency and state checks remain necessary. Out-of-resource
+operations are `403 insufficient_scope`; lists return only covered data.
+The precise endpoint policy, compound PATCH rules and pagination behavior are
+in [authorization.md](authorization.md).
+
+## Compatibility and schema
+
+Migration `0017_delegation_scopes.sql` adds the explicit personal scope names.
+It does not reinterpret existing JWTs or convert old broad personal permissions.
+An old personal grant containing only `vc.read`, `vc.pay` or `vc.claim` has no
+new delegated permission. Applications must obtain a new explicit approval;
+old v2 own-account JWTs continue working without a new scope or approval.
+
+The personal target columns were introduced in migration `0013`; resources were
+introduced in `0014`, with deletion-safe restrictions in `0015`. Scope names on
+the wire are strings, and grant request/poll/refresh payload shapes are unchanged.

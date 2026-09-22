@@ -23,6 +23,15 @@ pub trait Notifier: Send + Sync {
     /// to do it, because its scopes are read from the grant.
     fn notify_grant_decided(&self, application_id: i64, guild_id: i64);
 
+    /// A personal approval or revocation. The committed scope snapshot is supplied
+    /// because revocation deletes the grant and its dependent tokens.
+    fn notify_personal_grant_decided(
+        &self,
+        application_id: i64,
+        discord_id: i64,
+        scopes: &[String],
+    );
+
     /// A party decided something about a contract: the application that wrote
     /// it, and which contract. The application asked for the users' currency,
     /// and this is what tells it the answer — including the last one, which is
@@ -46,6 +55,14 @@ impl Notifier for NoopNotifier {
     fn notify_claim_update(&self, _claimant_id: i32, _events: &[Value]) {}
 
     fn notify_grant_decided(&self, _application_id: i64, _guild_id: i64) {}
+
+    fn notify_personal_grant_decided(
+        &self,
+        _application_id: i64,
+        _discord_id: i64,
+        _scopes: &[String],
+    ) {
+    }
 
     fn notify_contract_decided(&self, _application_id: i64, _contract_id: i64) {}
 }

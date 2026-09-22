@@ -1,7 +1,7 @@
-# 操作できる通貨 — RFC 8707 の `resource`
+# Currency restrictions — RFC 8707 `resource`
 
-A grant says *what* an application may do — `vc.issue`, `vc.pay`, `vc.read`,
-`vc.claim` — and nothing about *which currency*. An application allowed to pay is
+A grant says *what* an application may do — `vc.issue` for guilds, or
+the individual `vc.delegate.*` scopes for personal grants — and nothing about *which currency*. An application allowed to pay is
 allowed to pay any currency in the account, and one allowed to issue may issue
 from the whole pool. That is a wider permission than most applications want and a
 wider one than a person means to give when they read the screen.
@@ -38,7 +38,7 @@ RFC 8707 is the specification taken here and RFC 9396, *Rich Authorization
 Requests*, is not. Rich authorization details could express "pay in nyan, read in
 kaguya" as one object — `{"type": "vc.currency", "identifier": "nyan", "actions":
 ["pay"]}` — but the actions it would carry are the scopes this service already
-has, so every grant would say the same thing twice: once as `vc.pay`, once as
+has, so every grant would say the same thing twice: once as `vc.delegate.payments.create`, once as
 `actions: ["pay"]`. RFC 8707 leaves the scopes to the scope parameter, which is
 what they are for, and adds only the one thing missing.
 
@@ -131,11 +131,11 @@ application takes for itself, which is what the issue scope's own token is.
 
 ## What the screens show
 
-The consent screen and `/grant user list` name the currencies, not their ids:
-「この申請は、通貨 nyan だけを操作できます」, and the list says which currencies each
-application may touch. An application asking for one currency is asking for less
-than one asking for all of them and the screen has to make that difference
-visible, or the narrowing is a thing only the API knows.
+The common `/grant approve` review displays the target, exact operations and
+permitted currencies before its confirmation button grants anything. `/grant user`
+and `/grant server` list the corresponding grants and their currency restrictions.
+Personal reapproval replaces both scopes and currencies together; an old spending
+scope must not inherit the currencies of a new read-only approval.
 
 ## Where the pieces go
 

@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use serde_json::{Value, json};
 
-use crate::routes::limited::{Authorized, Read};
+use crate::routes::limited::{Authorized, ReadBalances, ReadProfile};
 
 use crate::discord::filter_profile;
 use crate::discord_auth::user_profile;
@@ -22,7 +22,7 @@ use crate::state::AppState;
 /// asking about itself is not asking for something that is missing.
 pub async fn me(
     State(state): State<AppState>,
-    user: Authorized<Read>,
+    user: Authorized<ReadProfile>,
 ) -> Result<Json<Value>, ApiError> {
     let local_id = user.account_id();
 
@@ -52,7 +52,7 @@ pub async fn me(
 /// is one too.
 pub async fn balances(
     State(state): State<AppState>,
-    user: Authorized<Read>,
+    user: Authorized<ReadBalances>,
 ) -> Result<Json<Value>, ApiError> {
     let local_id = user.account_id();
 

@@ -1297,12 +1297,15 @@ const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         method: "POST",
         path: "/oauth2/clients/@me/grant-requests",
-        summary: "サーバーに発行の許可を申請します。",
+        summary: "Request explicit permission from a user or server.",
         access: "アプリケーションのトークン + `oauth2.register`",
         fields: &[
             "`guild_id`（文字列・任意） 発行を許可してほしいサーバーのDiscord IDです。`discord_id` とどちらか一方だけを置きます。",
             "`discord_id`（文字列・任意） 自分の口座を任せたい相手のDiscord IDです。`guild_id` とどちらか一方だけを置きます。",
-            "`scopes`（配列・必須） 求めるスコープです。`guild_id` の申請では `vc.issue` だけ、`discord_id` の申請では `vc.read` `vc.pay` `vc.claim` だけが置けます。",
+            "`scopes` (required array): guild requests accept only `vc.issue`; personal requests accept only the exact `vc.delegate.*` names below. Wildcards and legacy `vc.read`, `vc.pay`, `vc.claim` names are rejected.",
+            "Reads: `vc.delegate.profile.read`, `vc.delegate.balances.read`, `vc.delegate.claims.read`, `vc.delegate.contracts.read`, `vc.delegate.contracts.payments.read`. Each is independent.",
+            "Spending: `vc.delegate.payments.create` permits single/bulk payments; `vc.delegate.claims.approve` permits approving and paying a claim.",
+            "Claims: `vc.delegate.claims.create`, `vc.delegate.claims.deny`, `vc.delegate.claims.cancel`, `vc.delegate.claims.metadata.write`. A status change with explicit metadata requires both permissions.",
             "`resource`（配列・任意） このグラントで操作する通貨を、絶対URIで並べます。1つの通貨は `https://{site}/api/v2/currencies/{id}`、対象のすべての通貨は `https://{site}/api/v2/currencies` です。何も置かない場合と、すべての通貨の形を置く場合は、同じ意味になります。どの通貨を扱うか前もって分からないアプリケーション（口座に合わせてから決まるもの）は、すべての通貨の形を置いてください。",
             "`expires_in`（数値・任意） 申請が生きる秒数です。既定600、上限3600。",
         ],

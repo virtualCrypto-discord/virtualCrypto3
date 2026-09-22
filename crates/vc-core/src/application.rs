@@ -211,13 +211,6 @@ pub async fn redirect_uri_is_registered<'e, E: sqlx::Executor<'e, Database = sql
 /// pool. Not the Elixir's: it issues no token that could do it.
 pub const ISSUE: &str = "vc.issue";
 
-/// The scopes a person may be asked to delegate, as themselves: read the account,
-/// spend from it, act on its claims. `docs/personal-grants.md` is the design, and
-/// these three are the whole of what an application may ask a person for.
-pub const READ: &str = "vc.read";
-pub const PAY: &str = "vc.pay";
-pub const CLAIM: &str = "vc.claim";
-
 /// Why a list of scopes was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeError {
@@ -241,14 +234,14 @@ pub fn check_scopes(scopes: &[String]) -> Result<(), ScopeError> {
     check_set(scopes, &[ISSUE])
 }
 
-/// `is_valid_scopes?/1` for an ask put to a person: no repeats, and nothing but
-/// [`READ`], [`PAY`] and [`CLAIM`].
-///
-/// The sets do not overlap, and that is the point: what a guild can hand over is
-/// its pool, and what a person can is their own account, so an ask that names the
-/// other's scope is refused rather than approved into a grant nobody can use.
+/// Personal delegations accept only the exact `vc.delegate.*` scope catalogue.
+/// Legacy JWT scopes and guild scopes never imply personal permissions.
 pub fn check_personal_scopes(scopes: &[String]) -> Result<(), ScopeError> {
-    check_set(scopes, &[READ, PAY, CLAIM])
+    let allowed: Vec<_> = crate::delegation::Scope::ALL
+        .iter()
+        .map(|scope| scope.as_str())
+        .collect();
+    check_set(scopes, &allowed)
 }
 
 /// The rule both of the above are: no repeats, and nothing outside the set.

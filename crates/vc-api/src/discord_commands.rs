@@ -16,7 +16,7 @@
 //!   the vendored spec at `tests/discord-schema/openapi.json`.
 //!
 //!   **The commands that set `dm_permission` to `false` are expressed by leaving
-//!   `BOT_DM` out** — `issue`, `grant`, `create` and `delete` carry `"contexts": [0]` and the
+//!   `BOT_DM` out** — `issue`, `create` and `delete` carry `"contexts": [0]` and the
 //!   rest carry `[0, 1]`. That is the whole of what the deprecated field said,
 //!   said in the field that replaced it.
 //! - The option types are Discord's numbers: 1 subcommand, 3 string, 4 integer, 5 boolean,
@@ -190,28 +190,23 @@ fn contract() -> Value {
     })
 }
 
-/// Guild-only, and an administrator's act twice over: this is the command that
-/// decides whether an application may issue from the guild's pool, which is what
-/// makes the issuing endpoint something the guild agreed to rather than something
-/// an application helped itself to.
-///
-/// There is no refusal here on purpose: an approval is the only decision, and an
-/// ask that is never approved simply stays pending until it expires. The approval
-/// takes a code because only the application can put one in front of a person;
-/// taking a permission back is the list's own button, which names the application.
+/// Common approval, personal management and server management. Personal commands
+/// must remain available without guild administrator permissions; server actions
+/// enforce that permission on every interaction instead.
 fn grant() -> Value {
     json!({
         "name": "grant",
-        "description": "アプリケーションにこのサーバーでの発行を許可します。管理者権限が必要です。",
+        "description": "Review application access and manage personal or server grants.",
         "options": [
+            {"name": "user", "description": "List and revoke applications with access to your account.", "type": 1},
             {
-                "name": "list",
+                "name": "server",
                 "description": "発行を許可しているアプリケーションの一覧を表示します。",
                 "type": 1,
             },
             {
                 "name": "approve",
-                "description": "申請コードの申請を承認し、発行を許可します。",
+                "description": "Review a personal or server request before approving it.",
                 "type": 1,
                 "options": [
                     {
@@ -223,9 +218,8 @@ fn grant() -> Value {
                 ],
             },
         ],
-        "contexts": [0],
+        "contexts": [0, 1],
         "integration_types": [0, 1],
-        "default_member_permissions": "0",
     })
 }
 
@@ -621,7 +615,7 @@ mod tests {
                 .map(|value| value.as_u64().expect("a context"))
                 .collect();
 
-            let expected: Vec<u64> = if ["issue", "grant", "create", "delete"].contains(&name) {
+            let expected: Vec<u64> = if ["issue", "create", "delete"].contains(&name) {
                 vec![0]
             } else {
                 vec![0, 1]

@@ -24,6 +24,7 @@ use support::{
     DEFAULT_GUILD, DEFAULT_PERMISSIONS, Recorded, Response, button_from_guild, client_id_of, fake,
     insert_application, insert_currency, interaction, state, state_with_notifier,
 };
+use tower::ServiceExt;
 use vc_api::custom_id::ui::grant::{Page, page_custom_id, revoke_custom_id};
 
 /// The administrator the interactions come from. The id is a Discord one, and the
@@ -103,7 +104,7 @@ fn grant_from_guild(user: i64, permissions: &str, options: Value) -> Value {
 }
 
 fn list_options() -> Value {
-    json!([{ "name": "list", "type": 1 }])
+    json!([{ "name": "server", "type": 1 }])
 }
 
 fn approve_options(code: &str) -> Value {
@@ -248,7 +249,7 @@ async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
 async fn approving_the_code_writes_the_grant(pool: PgPool) {
     let (application, user_code) = fixture(&pool).await;
 
-    let response = interaction(
+    let response = approve_and_confirm(
         router(pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
@@ -288,7 +289,7 @@ async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
     .await
     .expect("an ask");
 
-    let response = interaction(
+    let response = approve_and_confirm(
         router(pool),
         grant_from_guild(
             ADMIN,
@@ -311,7 +312,7 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
     let (application, user_code) = fixture(&pool).await;
     let client_id = client_id_of(&pool, application).await;
 
-    interaction(
+    approve_and_confirm(
         router(pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
@@ -343,7 +344,9 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
         texts(&response),
-        ["エラー: そのコードの申請はこのサーバーにありません。"]
+        [
+            "No pending request is available for you here. Server requests require an administrator in that server."
+        ]
     );
 }
 
@@ -353,7 +356,7 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
 async fn the_grant_carries_the_asked_scopes(pool: PgPool) {
     let (application, user_code) = fixture(&pool).await;
 
-    interaction(
+    approve_and_confirm(
         router(pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
@@ -552,7 +555,7 @@ async fn a_decision_pings_the_application(pool: PgPool) {
     let (application, user_code) = fixture(&pool).await;
     let notified = Arc::new(Recorded::default());
 
-    interaction(
+    approve_and_confirm(
         router_with(pool.clone(), notified.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
@@ -590,7 +593,12 @@ async fn the_command_needs_the_administrator_bit(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(texts(&response), ["エラー: 実行には管理者権限が必要です。"]);
+    assert_eq!(
+        texts(&response),
+        [
+            "No pending request is available for you here. Server requests require an administrator in that server."
+        ]
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -607,4 +615,322 @@ async fn the_command_is_refused_in_a_direct_message(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), ["エラー: DMでは実行できません。"]);
+}
+
+async fn approve_and_confirm(app: Router, payload: Value) -> Response {
+    let reviewed = interaction(app.clone(), payload.clone()).await;
+    let Some(id) = buttons(&reviewed).first().cloned() else {
+        return reviewed;
+    };
+    let mut press = payload;
+    press["type"] = json!(3);
+    press["data"] = json!({"custom_id":id,"component_type":2});
+    interaction(app, press).await
+}
+
+fn from_dm(user: i64, options: Value) -> Value {
+    json!({"type":2,"data":{"name":"grant","options":options},"user":{"id":user.to_string()}})
+}
+fn press_as(mut payload: Value, id: &str) -> Value {
+    payload["type"] = json!(3);
+    payload["data"] = json!({"component_type":2,"custom_id":id});
+    payload
+}
+async fn personal_request(
+    pool: &PgPool,
+    app: i64,
+    user: i64,
+    scopes: &[&str],
+) -> vc_core::grant::GrantRequest {
+    vc_core::grant::request_grant(
+        pool,
+        app,
+        vc_core::grant::Target::User(user),
+        &scopes.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+        &[],
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap()
+}
+async fn grant_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM grants")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
+    let app = insert_application(&pool, FIRST_OWNER, "personal app").await;
+    // No preexisting user row: first consent must create a usable account.
+    let asked = personal_request(
+        &pool,
+        app,
+        ADMIN,
+        &["vc.delegate.balances.read", "vc.delegate.claims.approve"],
+    )
+    .await;
+    let notified = Arc::new(Recorded::default());
+    let http = router_with(pool.clone(), notified.clone());
+    let command = from_dm(ADMIN, approve_options(&asked.user_code));
+    let review = interaction(http.clone(), command.clone()).await;
+    let description = texts(&review).join("\n");
+    assert!(description.contains("personal app"));
+    assert!(description.contains("Your account"));
+    assert!(description.contains("vc.delegate.claims.approve"));
+    assert!(description.contains("pay from your account"));
+    assert_eq!(grant_count(&pool).await, 0);
+    assert!(notified.personal_grant_decisions().is_empty());
+    let confirm = buttons(&review)[0].clone();
+    assert!(confirm.chars().count() <= 100);
+    // A copied button does not let another user consent, even as a guild admin.
+    interaction(
+        http.clone(),
+        press_as(
+            grant_from_guild(ADMIN + 1, DEFAULT_PERMISSIONS, json!([])),
+            &confirm,
+        ),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 0);
+    let (one, two) = tokio::join!(
+        interaction(http.clone(), press_as(command.clone(), &confirm)),
+        interaction(http.clone(), press_as(command, &confirm))
+    );
+    assert_eq!(one.status, 200);
+    assert_eq!(two.status, 200);
+    assert_eq!(grant_count(&pool).await, 1);
+    assert_eq!(notified.personal_grant_decisions().len(), 1);
+    // Poll through the real token endpoint, then exercise the resulting account token.
+    let (status, tokens) = poll_personal(&pool, app, &asked.device_code.to_string()).await;
+    assert_eq!(status, 200);
+    let token = tokens["access_token"].as_str().unwrap();
+    assert_eq!(
+        support::get(http.clone(), "/api/v2/users/@me/balances", Some(token))
+            .await
+            .status,
+        200
+    );
+    let list = interaction(
+        http.clone(),
+        from_dm(ADMIN, json!([{"name":"user","type":1}])),
+    )
+    .await;
+    assert!(
+        texts(&list)
+            .join("\n")
+            .contains("vc.delegate.balances.read")
+    );
+    let revoke = buttons(&list)[0].clone();
+    interaction(
+        http.clone(),
+        press_as(from_dm(ADMIN + 1, json!([])), &revoke),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 1);
+    interaction(http.clone(), press_as(from_dm(ADMIN, json!([])), &revoke)).await;
+    assert_eq!(grant_count(&pool).await, 0);
+    assert_eq!(
+        support::get(http, "/api/v2/users/@me/balances", Some(token))
+            .await
+            .status,
+        401
+    );
+    let refreshes: i64 = sqlx::query_scalar("SELECT count(*) FROM refresh_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(refreshes, 0);
+    assert_eq!(
+        notified.personal_grant_decisions().last().unwrap().2,
+        Vec::<String>::new()
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn personal_approval_in_a_guild_does_not_need_admin(pool: PgPool) {
+    let app = insert_application(&pool, FIRST_OWNER, "personal app").await;
+    let asked = personal_request(&pool, app, ADMIN, &["vc.delegate.profile.read"]).await;
+    approve_and_confirm(
+        router(pool.clone()),
+        grant_from_guild(ADMIN, NOT_ADMIN, approve_options(&asked.user_code)),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 1);
+    let other = interaction(
+        router(pool),
+        from_dm(ADMIN + 1, approve_options(&asked.user_code)),
+    )
+    .await;
+    assert!(buttons(&other).is_empty());
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool) {
+    let (_, code) = fixture(&pool).await;
+    let http = router(pool.clone());
+    let payload = grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&code));
+    let review = interaction(http.clone(), payload.clone()).await;
+    assert_eq!(grant_count(&pool).await, 0);
+    assert!(texts(&review).join("\n").contains("This server"));
+    let confirm = buttons(&review)[0].clone();
+    interaction(
+        http.clone(),
+        press_as(grant_from_guild(ADMIN, NOT_ADMIN, json!([])), &confirm),
+    )
+    .await;
+    let mut wrong = payload.clone();
+    wrong["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());
+    interaction(http.clone(), press_as(wrong, &confirm)).await;
+    interaction(http.clone(), press_as(from_dm(ADMIN, json!([])), &confirm)).await;
+    assert_eq!(grant_count(&pool).await, 0);
+    sqlx::query("UPDATE grant_requests SET inserted_at=inserted_at-interval '1 hour'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    interaction(http, press_as(payload, &confirm)).await;
+    assert_eq!(grant_count(&pool).await, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_old_confirmation_cannot_approve_a_reused_code(pool: PgPool) {
+    let (app, code) = fixture(&pool).await;
+    let http = router(pool.clone());
+    let payload = grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&code));
+    let review = interaction(http.clone(), payload.clone()).await;
+    let confirm = buttons(&review)[0].clone();
+    sqlx::query("UPDATE grant_requests SET inserted_at=inserted_at-interval '1 hour'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let replacement = vc_core::grant::request_grant(
+        &pool,
+        app,
+        vc_core::grant::Target::Guild(DEFAULT_GUILD),
+        &["vc.issue".to_owned()],
+        &[],
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE grant_requests SET user_code=$1 WHERE id=$2")
+        .bind(&code)
+        .bind(replacement.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    interaction(http, press_as(payload, &confirm)).await;
+    assert_eq!(grant_count(&pool).await, 0);
+    assert_eq!(request_status(&pool, app).await, "pending");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pending_codes_are_global_and_random_collisions_retry(pool: PgPool) {
+    let (_, code) = fixture(&pool).await;
+    let app = insert_application(&pool, FIRST_OWNER, "second target").await;
+    // Force the next generated code to collide once, even across target types.
+    // Sequence increments survive rollback, so the second transaction can succeed.
+    sqlx::raw_sql("CREATE SEQUENCE forced_collision; CREATE FUNCTION collide_once() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('forced_collision') = 1 THEN NEW.user_code := (SELECT user_code FROM grant_requests LIMIT 1); END IF; RETURN NEW; END $$; CREATE TRIGGER collide_once BEFORE INSERT ON grant_requests FOR EACH ROW EXECUTE FUNCTION collide_once();")
+        .execute(&pool).await.unwrap();
+    let asked = personal_request(&pool, app, ADMIN, &["vc.delegate.profile.read"]).await;
+    assert_ne!(asked.user_code, code);
+    let attempts: i64 = sqlx::query_scalar("SELECT last_value FROM forced_collision")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 2);
+    let error = sqlx::query("UPDATE grant_requests SET user_code=$1 WHERE id=$2")
+        .bind(code)
+        .bind(asked.id)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().constraint(),
+        Some("grant_requests_pending_user_code_index")
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn personal_list_paginates_and_reapproval_replaces_scopes(pool: PgPool) {
+    let mut apps = Vec::new();
+    for index in 0..5 {
+        let app =
+            insert_application(&pool, FIRST_OWNER + index, &format!("personal {index}")).await;
+        let scopes: Vec<_> = vc_core::delegation::Scope::ALL
+            .iter()
+            .map(|scope| scope.as_str())
+            .collect();
+        let asked = personal_request(&pool, app, ADMIN, &scopes).await;
+        approve_and_confirm(
+            router(pool.clone()),
+            from_dm(ADMIN, approve_options(&asked.user_code)),
+        )
+        .await;
+        apps.push(app);
+    }
+    let list = interaction(
+        router(pool.clone()),
+        from_dm(ADMIN, json!([{"name":"user","type":1}])),
+    )
+    .await;
+    assert!(texts(&list).join("\n").contains("Page 1/3"));
+    let last = vc_api::custom_id::ui::grant::user_page_custom_id(ADMIN, 3);
+    let last_page = interaction(
+        router(pool.clone()),
+        press_as(from_dm(ADMIN, json!([])), &last),
+    )
+    .await;
+    assert!(texts(&last_page).join("\n").contains("Page 3/3"));
+    let requested = personal_request(&pool, apps[0], ADMIN, &["vc.delegate.profile.read"]).await;
+    approve_and_confirm(
+        router(pool.clone()),
+        from_dm(ADMIN, approve_options(&requested.user_code)),
+    )
+    .await;
+    let scopes:Vec<String>=sqlx::query_scalar("SELECT s.scope::text FROM grant_scopes s JOIN grants g ON g.id=s.grant_id WHERE g.application_id=$1 AND g.discord_id=$2")
+        .bind(apps[0]).bind(ADMIN).fetch_all(&pool).await.unwrap();
+    assert_eq!(scopes, ["vc.delegate.profile.read"]);
+    for app in &apps[1..] {
+        let client = client_id_of(&pool, *app).await.parse().unwrap();
+        vc_core::grant::revoke_personal(&pool, client, ADMIN)
+            .await
+            .unwrap();
+    }
+    let clamped = interaction(router(pool), press_as(from_dm(ADMIN, json!([])), &last)).await;
+    assert!(texts(&clamped).join("\n").contains("Page 1/1"));
+}
+
+async fn poll_personal(pool: &PgPool, application: i64, device_code: &str) -> (u16, Value) {
+    use base64::Engine;
+
+    let client_id = support::client_id_of(pool, application).await;
+    let client_secret = support::client_secret_of(pool, application).await;
+    let basic =
+        base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{client_secret}"));
+
+    let response = axum::http::Request::builder()
+        .method("POST")
+        .uri("/oauth2/token")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("authorization", format!("Basic {basic}"))
+        .body(axum::body::Body::from(format!(
+            "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code={device_code}"
+        )))
+        .expect("request");
+
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(response)
+        .await
+        .expect("router response");
+
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+
+    (status, serde_json::from_slice(&bytes).expect("json body"))
 }

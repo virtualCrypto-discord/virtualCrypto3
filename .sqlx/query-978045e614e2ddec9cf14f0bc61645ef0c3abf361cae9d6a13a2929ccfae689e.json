@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE grant_requests SET status = 'approved', updated_at = $4\n          WHERE id = $1 AND guild_id IS NOT DISTINCT FROM $2\n            AND discord_id IS NOT DISTINCT FROM $3 AND status = 'pending'\n            AND inserted_at + make_interval(secs => expires_in) > $4\n            AND scopes = $5 AND resources = $6 AND application_id = $7",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp",
+        "TextArray",
+        "Int8Array",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "978045e614e2ddec9cf14f0bc61645ef0c3abf361cae9d6a13a2929ccfae689e"
+}

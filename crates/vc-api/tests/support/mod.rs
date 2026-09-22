@@ -524,10 +524,15 @@ pub fn state_with_notifier(
 #[derive(Default)]
 pub struct Recorded {
     grants: Mutex<Vec<(i64, i64)>>,
+    personal_grants: Mutex<Vec<(i64, i64, Vec<String>)>>,
     contracts: Mutex<Vec<(i64, i64)>>,
 }
 
 impl Recorded {
+    pub fn personal_grant_decisions(&self) -> Vec<(i64, i64, Vec<String>)> {
+        self.personal_grants.lock().unwrap().clone()
+    }
+
     /// The grant decisions so far, in order: the application, and the guild that
     /// decided what it may do there.
     pub fn grant_decisions(&self) -> Vec<(i64, i64)> {
@@ -557,6 +562,13 @@ impl Notifier for Recorded {
             .lock()
             .expect("the sink is not poisoned")
             .push((application_id, guild_id));
+    }
+
+    fn notify_personal_grant_decided(&self, app: i64, user: i64, scopes: &[String]) {
+        self.personal_grants
+            .lock()
+            .unwrap()
+            .push((app, user, scopes.to_vec()));
     }
 
     fn notify_contract_decided(&self, application_id: i64, contract_id: i64) {

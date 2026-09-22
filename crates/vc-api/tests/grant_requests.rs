@@ -684,7 +684,7 @@ async fn a_person_is_asked_and_only_their_code_answers_it(pool: PgPool) {
         vc_api::router(state(pool.clone(), fake())),
         "POST",
         Some(&token),
-        json!({ "discord_id": PERSON.to_string(), "scopes": ["vc.read", "vc.pay"] }),
+        json!({ "discord_id": PERSON.to_string(), "scopes": ["vc.delegate.balances.read", "vc.delegate.payments.create"] }),
     )
     .await;
     assert_eq!(asked.status, 201, "{}", asked.body);
@@ -743,7 +743,10 @@ async fn a_person_is_asked_and_only_their_code_answers_it(pool: PgPool) {
         resolved.account_id, 2,
         "the account is the person's, not the application's"
     );
-    assert_eq!(resolved.scopes, ["vc.read", "vc.pay"]);
+    assert_eq!(
+        resolved.scopes,
+        ["vc.delegate.balances.read", "vc.delegate.payments.create"]
+    );
 
     // And it is not a guild token: the guild extractor goes on the target, so the
     // one place a guild's token is accepted refuses this one.

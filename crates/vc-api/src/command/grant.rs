@@ -1,35 +1,17 @@
-//! `Command.handle/4` for `grant`: what a guild decides about applications that
-//! want to issue from its pool.
-//!
-//! No Elixir counterpart. There, a grant only ever appeared as a side effect of
-//! redeeming an authorization code, so allowing an application anything meant
-//! sending a person to an authorization URL. This command is that decision without
-//! the browser: `/grant approve code:<user_code>` answers an ask the application
-//! made with an API call, and `/grant list` shows the applications this guild has
-//! allowed, each with the button that takes the permission back.
-//!
-//! The approval is typed and the taking-back is pressed, and that is the whole of
-//! the division: the code names a row only the application can put in front of a
-//! person, while a permission the guild has granted is a row it can see. Asks in
-//! general are the application's own business — it holds the `device_code` it
-//! polls with, and `GET /oauth2/clients/@me/grant-requests` is where it reads
-//! them — so nothing here lists them.
-//!
-//! An approval is the only decision there is — there is no refusal, because an
-//! ask that is never approved simply stays pending until it expires. And every
-//! approval answers an ask: the code names the application's own request, with
-//! the scopes it asked for, so a permission nobody asked for cannot be written.
+//! Common grant approval and separate personal/server grant management.
+//! Every button rechecks the interaction actor and the request's live state.
 
 use serde_json::{Map, Value, json};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
-    as_int, as_permissions, is_administrator, value_text,
+    as_int, as_permissions, get_user, is_administrator, value_text,
 };
 use crate::components::{ButtonStyle, action_row, button, container, ephemeral, icon_button, text};
 use crate::custom_id::ui::grant::{Page, Pressed, page_custom_id, revoke_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
+use vc_core::grant::Target;
 
 /// How many applications one screen shows, for the contract screen's reason: five
 /// fits in one message without scrolling it off the screen, and a sixth waits for
@@ -40,141 +22,291 @@ const MAX_APPLICATIONS: usize = 5;
 /// one, as the claim list's do.
 const FIRST_PAGE: i64 = 1;
 
-/// `Command.handle/4` for `grant`: the subcommand picks a handler, and both of
-/// them need the guild and the administrator bit.
 pub async fn handle(
     state: &AppState,
     options: &Map<String, Value>,
     payload: &Value,
 ) -> Result<Value, CommandError> {
-    // Every clause takes a guild: permitting something is an administrator's act,
-    // and a direct message has no administrator to be.
-    let Some(guild_id) = payload.get("guild_id").and_then(as_int) else {
-        return Ok(render_error("エラー: DMでは実行できません。"));
-    };
-
-    if !administrator(payload)? {
-        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
-    }
-
+    let user = actor(payload)?;
     let subcommand = options
         .get("subcommand")
         .and_then(Value::as_str)
         .ok_or_else(|| CommandError::missing("grant has no subcommand"))?;
-
     match subcommand {
-        "approve" => approve(state, guild_id, options.get("sub_options")).await,
-        "list" => Ok(answered(
-            page(state, guild_id, FIRST_PAGE).await?,
+        "approve" => {
+            let code = options
+                .get("sub_options")
+                .and_then(|options| options.get("code"))
+                .map(value_text)
+                .ok_or_else(|| CommandError::missing("grant approve has no code"))?;
+            let reviews = vc_core::grant::review_requests(
+                state.pool(),
+                Some(code.trim()),
+                None,
+                user,
+                authorized_guild(payload),
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+            let Some(review) = reviews.first() else {
+                return Ok(render_error(NOT_FOUND));
+            };
+            // Global pending-code uniqueness makes this exactly one request.
+            if reviews.len() != 1 || !valid_scopes(review) {
+                return Ok(render_error(NOT_FOUND));
+            }
+            let units = crate::resource::units(state.pool(), &review.resources).await?;
+            let target = match review.target {
+                Target::User(id) => format!(
+                    "Your account ({id})\nApproval replaces this application's previous personal permissions."
+                ),
+                Target::Guild(id) => format!("This server ({id})"),
+            };
+            Ok(answered(
+                container(
+                    Some(COLOR_BRAND as u32),
+                    vec![
+                        text(format!(
+                            "**Review application access**\nApplication: {}\nClient: `{}`\nTarget: {}\n\n{}\nCurrencies: {}",
+                            name_of(review.client_name.as_deref()),
+                            review.client_id,
+                            target,
+                            permissions(&review.scopes),
+                            currencies(&units)
+                        )),
+                        action_row(vec![button(
+                            &crate::custom_id::ui::grant::confirm_custom_id(review.request_id),
+                            "Approve",
+                            ButtonStyle::Success,
+                        )]),
+                    ],
+                ),
+                CHANNEL_MESSAGE_WITH_SOURCE,
+            ))
+        }
+        "user" => Ok(answered(
+            personal_page(state, user, FIRST_PAGE).await?,
             CHANNEL_MESSAGE_WITH_SOURCE,
         )),
+        // Keep already-issued /grant list interactions as a server-list alias.
+        "server" | "list" => {
+            if payload.get("guild_id").and_then(as_int).is_none() {
+                return Ok(render_error("エラー: DMでは実行できません。"));
+            }
+            let Some(guild) = authorized_guild(payload) else {
+                return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+            };
+            Ok(answered(
+                page(state, guild, FIRST_PAGE).await?,
+                CHANNEL_MESSAGE_WITH_SOURCE,
+            ))
+        }
         _ => Err(CommandError::Unknown),
     }
 }
 
-/// A button of the list, pressed: taking one application's permission back, or a
-/// move from one page to another.
-///
-/// The screen is drawn again as a change to the message the button came from, and
-/// Discord sends nothing back but the `custom_id` — which is why the application,
-/// or the page, travelled in it. The administrator bit is asked for again here,
-/// because a message stays in a channel and what a press carries is the presser's
-/// own permissions, not the ones the screen was drawn with.
+const NOT_FOUND: &str = "No pending request is available for you here. Server requests require an administrator in that server.";
+
+fn actor(payload: &Value) -> Result<i64, CommandError> {
+    get_user(payload).ok_or_else(|| CommandError::missing("grant has no user"))
+}
+
+fn authorized_guild(payload: &Value) -> Option<i64> {
+    let guild = payload.get("guild_id").and_then(as_int)?;
+    let permissions = payload
+        .get("member")?
+        .get("permissions")
+        .and_then(as_permissions)?;
+    is_administrator(permissions).then_some(guild)
+}
+
+fn valid_scopes(review: &vc_core::grant::Review) -> bool {
+    match review.target {
+        Target::Guild(_) => vc_core::application::check_scopes(&review.scopes).is_ok(),
+        Target::User(_) => vc_core::application::check_personal_scopes(&review.scopes).is_ok(),
+    }
+}
+
 pub async fn component(
     state: &AppState,
     custom_id: &str,
     payload: &Value,
 ) -> Result<Value, CommandError> {
-    let guild_id = payload
-        .get("guild_id")
-        .and_then(as_int)
-        .ok_or_else(|| CommandError::missing("grant has no guild"))?;
-
-    if !administrator(payload)? {
-        return Ok(error_screen("実行には管理者権限が必要です。"));
-    }
-
+    let user = actor(payload)?;
     let pressed = crate::custom_id::ui::grant::parse(&crate::custom_id::parse(custom_id))
         .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
-
-    // A page button is the whole of its own answer: nothing is taken back, and the
-    // screen it draws is the page it named.
-    let client_id = match pressed {
-        Pressed::Paged(_, number) => {
-            return Ok(answered(
-                page(state, guild_id, number).await?,
+    match pressed {
+        Pressed::Confirmed(request) => {
+            let reviews = vc_core::grant::review_requests(
+                state.pool(),
+                None,
+                Some(request),
+                user,
+                authorized_guild(payload),
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+            let Some(review) = reviews.first().filter(|review| valid_scopes(review)) else {
+                return Ok(error_screen(NOT_FOUND));
+            };
+            if !vc_core::grant::approve_review(
+                state.pool(),
+                review,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?
+            {
+                return Ok(error_screen(NOT_FOUND));
+            }
+            match review.target {
+                Target::Guild(guild) => state
+                    .notifier()
+                    .notify_grant_decided(review.application_id, guild),
+                Target::User(user) => state.notifier().notify_personal_grant_decided(
+                    review.application_id,
+                    user,
+                    &review.scopes,
+                ),
+            }
+            let units = crate::resource::units(state.pool(), &review.resources).await?;
+            let message = match review.target {
+                Target::Guild(_) => format!(
+                    "発行を許可しました。この申請は、{}を操作できます。",
+                    currencies(&units)
+                ),
+                Target::User(_) => format!(
+                    "Access approved.\n{}\nCurrencies: {}",
+                    permissions(&review.scopes),
+                    currencies(&units)
+                ),
+            };
+            Ok(answered(
+                container(Some(COLOR_OK as u32), vec![text(message)]),
                 UPDATE_MESSAGE,
-            ));
+            ))
         }
-        Pressed::Revoked(client_id) => client_id,
-    };
-
-    let revoked = vc_core::grant::revoke_grant(state.pool(), &client_id, guild_id).await?;
-
-    // Only a taking-back is told, the way the guild's approval is: a device that
-    // named a webhook learns its token is dead without polling for the difference.
-    // A press whose application had already lost the permission tells nobody,
-    // because nothing changed.
-    if let Some(application_id) = revoked {
-        state
-            .notifier()
-            .notify_grant_decided(application_id, guild_id);
+        Pressed::UserPaged(owner, number) => {
+            if owner != user {
+                return Ok(error_screen("This is another user's grant list."));
+            }
+            Ok(answered(
+                personal_page(state, user, number).await?,
+                UPDATE_MESSAGE,
+            ))
+        }
+        Pressed::UserRevoked(owner, client) => {
+            if owner != user {
+                return Ok(error_screen("This is another user's grant list."));
+            }
+            if let Some(app) = vc_core::grant::revoke_personal(state.pool(), client, user).await? {
+                state
+                    .notifier()
+                    .notify_personal_grant_decided(app, user, &[]);
+            }
+            Ok(answered(
+                personal_page(state, user, FIRST_PAGE).await?,
+                UPDATE_MESSAGE,
+            ))
+        }
+        Pressed::Paged(_, number) => {
+            let Some(guild) = authorized_guild(payload) else {
+                return Ok(error_screen("実行には管理者権限が必要です。"));
+            };
+            Ok(answered(page(state, guild, number).await?, UPDATE_MESSAGE))
+        }
+        Pressed::Revoked(client) => {
+            let Some(guild) = authorized_guild(payload) else {
+                return Ok(error_screen("実行には管理者権限が必要です。"));
+            };
+            if let Some(app) = vc_core::grant::revoke_grant(state.pool(), &client, guild).await? {
+                state.notifier().notify_grant_decided(app, guild);
+            }
+            Ok(answered(
+                page(state, guild, FIRST_PAGE).await?,
+                UPDATE_MESSAGE,
+            ))
+        }
     }
-
-    // The first page, because the button says which application it is about and
-    // not which page it was on, and the row it removes moves what follows it up.
-    Ok(answered(
-        page(state, guild_id, FIRST_PAGE).await?,
-        UPDATE_MESSAGE,
-    ))
 }
 
-/// `/grant approve code:<user_code>`: the guild's yes to one ask.
-///
-/// The code names the application's own request — the scopes it asked for, in
-/// the guild this command runs in — and the grant is written from exactly
-/// those. A code that names nothing pending here is answered the same way
-/// whether it never existed, belongs to another guild, or already expired:
-/// an unapproved ask is not something this command explains.
-async fn approve(
-    state: &AppState,
-    guild_id: i64,
-    sub_options: Option<&Value>,
-) -> Result<Value, CommandError> {
-    let code = sub_options
-        .and_then(|options| options.get("code"))
-        .map(value_text)
-        .ok_or_else(|| CommandError::missing("grant approve has no code"))?;
-
-    let decided = vc_core::grant::decide_request(
-        state.pool(),
-        code.trim(),
-        vc_core::grant::Target::Guild(guild_id),
-        time::OffsetDateTime::now_utc(),
-    )
-    .await?;
-
-    match decided {
-        Some(decided) => {
-            state
-                .notifier()
-                .notify_grant_decided(decided.application_id, guild_id);
-
-            // What the code asked for, said back: an approval is of the ask, so
-            // the currencies are the ask's own and not anything the approver
-            // chose. A person who typed a code they were shown learns here what
-            // the narrowing they just approved was.
-            let units = crate::resource::units(state.pool(), &decided.resources).await?;
-
-            Ok(render_ok(&format!(
-                "発行を許可しました。この申請は、{}を操作できます。",
-                currencies(&units),
-            )))
-        }
-        None => Ok(render_error(
-            "エラー: そのコードの申請はこのサーバーにありません。",
-        )),
+fn permissions(scopes: &[String]) -> String {
+    if scopes.is_empty() {
+        return "No operations permitted.".to_owned();
     }
+    scopes
+        .iter()
+        .map(|scope| {
+            let description = if scope == "vc.issue" {
+                "Issue currency from this server's pool"
+            } else {
+                vc_core::delegation::Scope::parse(scope)
+                    .map(|scope| scope.description())
+                    .unwrap_or("Unsupported permission; request a new approval")
+            };
+            format!("- {description} (`{scope}`)")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Value, CommandError> {
+    // Scope descriptions need more space than the guild's single issuing scope.
+    const LIMIT: i64 = 2;
+    let (apps, total, page) =
+        vc_core::grant::personal_applications(state.pool(), user, requested, LIMIT).await?;
+    let last = ((total + LIMIT - 1) / LIMIT).max(1);
+    let mut children = vec![text(format!(
+        "**Applications with access to your account** ({total})\nPage {page}/{last}"
+    ))];
+    if apps.is_empty() {
+        children.push(text(
+            "No applications have access. Use `/grant approve code:` to review a request.",
+        ));
+    }
+    for app in apps {
+        let units = crate::resource::units(state.pool(), &app.resources).await?;
+        children.push(text(format!(
+            "**{}**\n`{}`\n{}\nCurrencies: {}",
+            name_of(app.client_name.as_deref()),
+            app.client_id,
+            permissions(&app.scopes),
+            currencies(&units)
+        )));
+        children.push(action_row(vec![button(
+            &crate::custom_id::ui::grant::user_revoke_custom_id(user, &app.client_id),
+            "Revoke",
+            ButtonStyle::Danger,
+        )]));
+    }
+    if last > 1 {
+        children.push(action_row(vec![
+            icon_button(
+                &crate::custom_id::ui::grant::user_page_custom_id(user, 1),
+                "⏪",
+                ButtonStyle::Secondary,
+                Some(page == 1),
+            ),
+            icon_button(
+                &crate::custom_id::ui::grant::user_page_custom_id(user, (page - 1).max(1)),
+                "⏮️",
+                ButtonStyle::Secondary,
+                Some(page == 1),
+            ),
+            icon_button(
+                &crate::custom_id::ui::grant::user_page_custom_id(user, (page + 1).min(last)),
+                "⏭️",
+                ButtonStyle::Secondary,
+                Some(page == last),
+            ),
+            icon_button(
+                &crate::custom_id::ui::grant::user_page_custom_id(user, last),
+                "⏩",
+                ButtonStyle::Secondary,
+                Some(page == last),
+            ),
+        ]));
+    }
+    Ok(container(Some(COLOR_BRAND as u32), children))
 }
 
 /// `/grant list`: the applications this guild has allowed to issue, newest first,
@@ -263,18 +395,6 @@ fn pagination_row(authorized: &vc_core::grant::AuthorizedApplications) -> Value 
     ])
 }
 
-/// `Command.continue_management_command?/2`'s question, as the interaction
-/// carries it: Discord computes the permissions, so there is nothing to look up.
-fn administrator(payload: &Value) -> Result<bool, CommandError> {
-    let permissions = payload
-        .get("member")
-        .and_then(|member| member.get("permissions"))
-        .and_then(as_permissions)
-        .ok_or_else(|| CommandError::missing("grant has no permissions"))?;
-
-    Ok(is_administrator(permissions))
-}
-
 fn name_of(client_name: Option<&str>) -> String {
     client_name
         .filter(|name| !name.is_empty())
@@ -313,18 +433,6 @@ fn error_screen(sentence: &str) -> Value {
         "data": ephemeral(vec![container(
             Some(COLOR_ERROR as u32),
             vec![text(format!("エラー: {sentence}"))],
-        )]),
-    })
-}
-
-/// An ephemeral answer to an approval, whose own sentence is all there is left
-/// to say.
-fn render_ok(content: &str) -> Value {
-    json!({
-        "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": ephemeral(vec![container(
-            Some(COLOR_OK as u32),
-            vec![text(content)],
         )]),
     })
 }

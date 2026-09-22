@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::PrimitiveDateTime;
 
-use crate::routes::limited::{Authorized, ReadClaims, WriteClaims};
+use crate::routes::limited::{Authorized, ClaimPatch, CreateClaims, ReadClaims};
 use crate::routes::pagination::{self, QueryParams, parse_number};
 use vc_core::claim::{ClaimFilter, ClaimView, Order, SrFilter};
 
@@ -187,7 +187,7 @@ pub async fn index(
 /// and a non-positive amount before any metadata validation.
 pub async fn create(
     State(state): State<AppState>,
-    user: Authorized<WriteClaims>,
+    user: Authorized<CreateClaims>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let object = body.as_object();
@@ -309,9 +309,8 @@ fn create_error(error: vc_core::claim::CreateError) -> ApiError {
 /// the database trigger can reject their metadata.
 pub async fn patch(
     State(state): State<AppState>,
-    user: Authorized<WriteClaims>,
     Path(id): Path<String>,
-    Json(body): Json<Value>,
+    user: ClaimPatch,
 ) -> Result<Json<Value>, ApiError> {
     let operator_id = user.account_id();
 
@@ -319,10 +318,7 @@ pub async fn patch(
     let claim_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     crate::resource::ensure_claim(state.pool(), user.resources(), claim_id).await?;
 
-    let object = body.as_object();
-    let status = object
-        .and_then(|object| object.get("status"))
-        .and_then(Value::as_str);
+    let object = user.body().as_object();
     let has_metadata = object.is_some_and(|object| object.contains_key("metadata"));
     // JSON null is Elixir's `nil`: it means "delete the metadata", not "store null".
     let metadata = object
@@ -330,14 +326,7 @@ pub async fn patch(
         .filter(|value| !value.is_null())
         .cloned();
 
-    let transition = match status {
-        Some("approved") => Some(vc_core::claim::Transition::Approved),
-        Some("denied") => Some(vc_core::claim::Transition::Denied),
-        Some("canceled") => Some(vc_core::claim::Transition::Canceled),
-        _ => None,
-    };
-
-    if let Some(transition) = transition {
+    if let Some(transition) = user.transition() {
         let metadata = if has_metadata {
             metadata
         } else {

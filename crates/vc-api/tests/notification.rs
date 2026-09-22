@@ -47,6 +47,8 @@ impl Notifier for Sink {
         // its own test.
     }
 
+    fn notify_personal_grant_decided(&self, _app: i64, _user: i64, _scopes: &[String]) {}
+
     fn notify_contract_decided(&self, _application_id: i64, _contract_id: i64) {
         // The same, and a contract decision's own test is
         // `tests/contract_notification.rs`.

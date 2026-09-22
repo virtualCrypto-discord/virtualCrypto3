@@ -1,0 +1,111 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id AS request_id, r.application_id,\n                  a.client_id::text AS \"client_id!\", a.client_name, r.guild_id, r.discord_id,\n                  r.scopes AS \"scopes!\", r.resources AS \"resources!\"\n             FROM grant_requests r JOIN applications a ON a.id = r.application_id\n            WHERE ((r.user_code = $1 AND $2::bigint IS NULL) OR r.id = $2)\n              AND (r.discord_id = $3 OR r.guild_id = $4)\n              AND r.status = 'pending'\n              AND r.inserted_at + make_interval(secs => r.expires_in) > $5\n            ORDER BY r.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "request_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "application_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "application_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "client_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "scopes!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "scopes"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "resources!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "resources"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d5d6222d12a341105d63298521d514cc6216ac79409a3d664e2a14acf4917248"
+}

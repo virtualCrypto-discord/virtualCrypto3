@@ -6,6 +6,7 @@ pub mod claim;
 pub mod contract;
 pub mod currency;
 pub mod db;
+pub mod delegation;
 pub mod error;
 pub mod grant;
 pub mod idempotency;

@@ -238,8 +238,14 @@ async fn a_narrowed_grant_refuses_an_act_in_another_currency(pool: PgPool) {
     let application = insert_application(&pool, OWNER, "an application").await;
 
     // A person's grant, narrowed to nyan: it may pay in nyan and nothing else.
-    let personal =
-        insert_personal_grant(&pool, application, PERSON, &["vc.pay"], &[CURRENCY_A]).await;
+    let personal = insert_personal_grant(
+        &pool,
+        application,
+        PERSON,
+        &["vc.delegate.payments.create"],
+        &[CURRENCY_A],
+    )
+    .await;
 
     let refused = request(
         router(pool.clone()),
@@ -306,7 +312,7 @@ async fn the_collection_form_covers_a_currency_created_later(pool: PgPool) {
     let (_, token, resources) = ask_and_approve(
         &pool,
         Some(json!([format!("{SITE}/api/v2/currencies")])),
-        &["vc.pay"],
+        &["vc.delegate.payments.create"],
     )
     .await;
     assert!(
@@ -334,7 +340,8 @@ async fn the_collection_form_covers_a_currency_created_later(pool: PgPool) {
 async fn the_omitted_form_covers_a_currency_created_later(pool: PgPool) {
     fixture(&pool).await;
 
-    let (_, token, resources) = ask_and_approve(&pool, None, &["vc.pay"]).await;
+    let (_, token, resources) =
+        ask_and_approve(&pool, None, &["vc.delegate.payments.create"]).await;
     assert!(
         resources.is_empty(),
         "naming none means every currency: {resources:?}"
@@ -441,7 +448,7 @@ async fn the_lists_are_filtered_to_the_grants_currencies(pool: PgPool) {
         &pool,
         application,
         PERSON,
-        &["vc.read", "vc.claim"],
+        &["vc.delegate.balances.read", "vc.delegate.claims.read"],
         &[CURRENCY_A],
     )
     .await;
@@ -485,8 +492,14 @@ async fn the_lists_are_filtered_to_the_grants_currencies(pool: PgPool) {
 async fn a_named_currency_read_is_refused_outside_the_grant(pool: PgPool) {
     fixture(&pool).await;
     let application = insert_application(&pool, OWNER, "an application").await;
-    let token =
-        insert_personal_grant(&pool, application, PERSON, &["vc.read"], &[CURRENCY_A]).await;
+    let token = insert_personal_grant(
+        &pool,
+        application,
+        PERSON,
+        &["vc.delegate.contracts.read"],
+        &[CURRENCY_A],
+    )
+    .await;
 
     let refused = get(
         router(pool.clone()),
@@ -549,7 +562,7 @@ async fn deleting_a_currency_does_not_widen_its_grant(pool: PgPool) {
     let (_, token, resources) = ask_and_approve(
         &pool,
         Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
-        &["vc.pay"],
+        &["vc.delegate.payments.create"],
     )
     .await;
     assert_eq!(resources, vec![CURRENCY_A]);
@@ -600,7 +613,7 @@ async fn deleting_one_resource_preserves_the_remaining_permission(pool: PgPool) 
             format!("{SITE}/api/v2/currencies/{CURRENCY_A}"),
             format!("{SITE}/api/v2/currencies/{CURRENCY_B}")
         ])),
-        &["vc.pay"],
+        &["vc.delegate.payments.create"],
     )
     .await;
     assert_eq!(
@@ -636,7 +649,7 @@ async fn deleting_one_resource_preserves_the_remaining_permission(pool: PgPool) 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn unrestricted_grants_still_cover_replacement_currencies(pool: PgPool) {
     fixture(&pool).await;
-    let (_, token, _) = ask_and_approve(&pool, None, &["vc.pay"]).await;
+    let (_, token, _) = ask_and_approve(&pool, None, &["vc.delegate.payments.create"]).await;
     assert_eq!(
         vc_core::currency::delete(&pool, GUILD_A, &format!("delete {UNIT_A}"))
             .await
@@ -663,7 +676,7 @@ async fn read_only_grant_cannot_approve_a_contract(pool: PgPool) {
     let (application, token, _) = ask_and_approve(
         &pool,
         Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
-        &["vc.read"],
+        &["vc.delegate.contracts.read"],
     )
     .await;
     let contract = vc_core::contract::create(
@@ -742,7 +755,7 @@ async fn currency_restriction_applies_to_claim_approval(pool: PgPool) {
     let (_, token, _) = ask_and_approve(
         &pool,
         Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
-        &["vc.claim"],
+        &["vc.delegate.claims.approve"],
     )
     .await;
     insert_claim(
@@ -840,7 +853,8 @@ async fn currency_restriction_applies_to_claim_approval(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn delegated_read_scope_is_independent_of_write_scopes(pool: PgPool) {
+async fn delegated_read_scopes_are_independent(pool: PgPool) {
+    use vc_core::delegation::Scope;
     fixture(&pool).await;
     let app = insert_application(&pool, OWNER, "contract owner").await;
     let id = vc_core::contract::create(
@@ -867,46 +881,30 @@ async fn delegated_read_scope_is_independent_of_write_scopes(pool: PgPool) {
         CURRENCY_A,
     )
     .await;
-    for (scope, expected) in [("vc.read", 200), ("vc.pay", 403), ("vc.claim", 403)] {
-        let (_, token, _) = ask_and_approve(&pool, None, &[scope]).await;
-        for path in [
-            "/api/v2/users/@me".to_owned(),
-            "/api/v2/users/@me/balances".to_owned(),
-            "/api/v2/users/@me/claims".to_owned(),
-            "/api/v2/users/@me/claims/1".to_owned(),
+    let reads = [
+        ("/api/v2/users/@me".to_owned(), Scope::ProfileRead),
+        ("/api/v2/users/@me/balances".to_owned(), Scope::BalancesRead),
+        ("/api/v2/users/@me/claims".to_owned(), Scope::ClaimsRead),
+        ("/api/v2/users/@me/claims/1".to_owned(), Scope::ClaimsRead),
+        (
             "/api/v2/users/@me/contracts".to_owned(),
-            format!("/api/v2/contracts/{id}"),
+            Scope::ContractsRead,
+        ),
+        (format!("/api/v2/contracts/{id}"), Scope::ContractsRead),
+        (
             format!("/api/v2/contracts/{id}/payments"),
-        ] {
-            let r = get(router(pool.clone()), &path, Some(&token)).await;
-            assert_eq!(r.status, expected, "{scope} GET {path}");
-        }
-        if scope == "vc.read" {
-            for (method, path, body) in [
-                (
-                    "POST",
-                    "/api/v2/users/@me/transactions",
-                    json!({"unit":UNIT_A,"amount":"10","receiver_discord_id":RECEIVER.to_string()}),
-                ),
-                (
-                    "POST",
-                    "/api/v2/users/@me/claims",
-                    json!({"unit":UNIT_A,"amount":"10","payer_discord_id":RECEIVER.to_string()}),
-                ),
-                (
-                    "PATCH",
-                    "/api/v2/users/@me/claims/1",
-                    json!({"status":"approved"}),
-                ),
-            ] {
-                assert_eq!(
-                    request(router(pool.clone()), method, path, Some(&token), body)
-                        .await
-                        .status,
-                    403,
-                    "{method} {path}"
-                );
-            }
+            Scope::ContractPaymentsRead,
+        ),
+    ];
+    for scope in Scope::ALL {
+        let (_, token, _) = ask_and_approve(&pool, None, &[scope.as_str()]).await;
+        for (path, required) in &reads {
+            assert_eq!(
+                get(router(pool.clone()), path, Some(&token)).await.status,
+                if scope == required { 200 } else { 403 },
+                "{} GET {path}",
+                scope.as_str()
+            );
         }
         for (method, path, body) in [
             (
@@ -940,18 +938,11 @@ async fn delegated_read_scope_is_independent_of_write_scopes(pool: PgPool) {
                     .await
                     .status,
                 403,
-                "{scope} {method} {path}"
+                "{} {path}",
+                scope.as_str()
             );
         }
     }
-    let balance: i64 =
-        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id=$1 AND currency_id=$2")
-            .bind(i64::from(PERSON_ACCOUNT))
-            .bind(CURRENCY_A)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(balance, 1000);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -960,7 +951,10 @@ async fn contract_currency_filter_precedes_pagination_and_covers_ledger(pool: Pg
     let (app, token, _) = ask_and_approve(
         &pool,
         Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
-        &["vc.read"],
+        &[
+            "vc.delegate.contracts.read",
+            "vc.delegate.contracts.payments.read",
+        ],
     )
     .await;
     let mut ids = Vec::new();
@@ -1132,6 +1126,242 @@ async fn legacy_application_scopes_still_read_write_claims_and_pay(pool: PgPool)
             router(pool.clone()),
             "/api/v2/users/@me/claims",
             Some(&pay_only)
+        )
+        .await
+        .status,
+        403
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn delegated_write_scopes_authorize_only_the_named_action(pool: PgPool) {
+    use vc_core::delegation::Scope;
+    fixture(&pool).await;
+    let actions = [
+        Scope::PaymentsCreate,
+        Scope::ClaimsCreate,
+        Scope::ClaimsApprove,
+        Scope::ClaimsDeny,
+        Scope::ClaimsCancel,
+        Scope::ClaimsMetadataWrite,
+    ];
+    let mut id = 1000;
+    for scope in Scope::ALL {
+        let (_, token, _) = ask_and_approve(&pool, None, &[scope.as_str()]).await;
+        for action in actions {
+            id += 10;
+            let (claimant, payer) = if action == Scope::ClaimsCancel {
+                (PERSON_ACCOUNT, RECEIVER_ACCOUNT)
+            } else {
+                (RECEIVER_ACCOUNT, PERSON_ACCOUNT)
+            };
+            insert_claim(&pool, id, 1, "pending", claimant, payer, CURRENCY_A).await;
+            let (method, path, body, success) = match action {
+                Scope::PaymentsCreate => (
+                    "POST",
+                    "/api/v2/users/@me/transactions".to_owned(),
+                    json!({"unit":UNIT_A,"amount":"1","receiver_discord_id":RECEIVER.to_string()}),
+                    201,
+                ),
+                Scope::ClaimsCreate => (
+                    "POST",
+                    "/api/v2/users/@me/claims".to_owned(),
+                    json!({"unit":UNIT_A,"amount":"1","payer_discord_id":RECEIVER.to_string()}),
+                    201,
+                ),
+                Scope::ClaimsApprove => (
+                    "PATCH",
+                    format!("/api/v2/users/@me/claims/{id}"),
+                    json!({"status":"approved"}),
+                    200,
+                ),
+                Scope::ClaimsDeny => (
+                    "PATCH",
+                    format!("/api/v2/users/@me/claims/{id}"),
+                    json!({"status":"denied"}),
+                    200,
+                ),
+                Scope::ClaimsCancel => (
+                    "PATCH",
+                    format!("/api/v2/users/@me/claims/{id}"),
+                    json!({"status":"canceled"}),
+                    200,
+                ),
+                Scope::ClaimsMetadataWrite => (
+                    "PATCH",
+                    format!("/api/v2/users/@me/claims/{id}"),
+                    json!({"metadata":{"key":"value"}}),
+                    200,
+                ),
+                _ => unreachable!(),
+            };
+            let response = request(router(pool.clone()), method, &path, Some(&token), body).await;
+            assert_eq!(
+                response.status,
+                if *scope == action { success } else { 403 },
+                "{} -> {}",
+                scope.as_str(),
+                action.as_str()
+            );
+        }
+    }
+    // Exactly one explicit payment and one claim approval may have spent money.
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id=$1 AND currency_id=$2")
+            .bind(i64::from(PERSON_ACCOUNT))
+            .bind(CURRENCY_A)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance, 998);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn combined_claim_changes_require_every_permission_before_writing(pool: PgPool) {
+    fixture(&pool).await;
+    for (index, scopes) in [
+        vec!["vc.delegate.claims.approve"],
+        vec!["vc.delegate.claims.metadata.write"],
+        vec![
+            "vc.delegate.claims.approve",
+            "vc.delegate.claims.metadata.write",
+        ],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (_, token, _) = ask_and_approve(&pool, None, scopes).await;
+        let id = 100 + index as i64;
+        insert_claim(
+            &pool,
+            id,
+            10,
+            "pending",
+            RECEIVER_ACCOUNT,
+            PERSON_ACCOUNT,
+            CURRENCY_A,
+        )
+        .await;
+        support::insert_claim_metadata(
+            &pool,
+            id,
+            RECEIVER_ACCOUNT,
+            PERSON_ACCOUNT,
+            PERSON_ACCOUNT,
+            json!({"keep":"original"}),
+        )
+        .await;
+        let r = request(
+            router(pool.clone()),
+            "PATCH",
+            &format!("/api/v2/users/@me/claims/{id}"),
+            Some(&token),
+            json!({"status":"approved","metadata":null}),
+        )
+        .await;
+        assert_eq!(r.status, if index == 2 { 200 } else { 403 });
+        let status: String = sqlx::query_scalar("SELECT status::text FROM claims WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, if index == 2 { "approved" } else { "pending" });
+        let metadata: Option<Value> = sqlx::query_scalar(
+            "SELECT metadata FROM claim_metadata WHERE claim_id=$1 AND owner_user_id=$2",
+        )
+        .bind(id)
+        .bind(i64::from(PERSON_ACCOUNT))
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            metadata,
+            if index == 2 {
+                None
+            } else {
+                Some(json!({"keep":"original"}))
+            }
+        );
+    }
+    let balance: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id=$1 AND currency_id=$2")
+            .bind(i64::from(PERSON_ACCOUNT))
+            .bind(CURRENCY_A)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance, 990);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn legacy_and_unknown_scopes_do_not_authorize_personal_delegations(pool: PgPool) {
+    fixture(&pool).await;
+    let (app, own) = application_token(&pool).await;
+    for scope in [
+        "vc.read",
+        "vc.pay",
+        "vc.claim",
+        "vc.delegate.*",
+        "vc.delegate.claims.*",
+        "vc.delegate.claims.approve.extra",
+    ] {
+        let r = ask(
+            &pool,
+            &own,
+            json!({"discord_id":PERSON.to_string(),"scopes":[scope]}),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{scope}");
+        assert_eq!(r.body["error"], "invalid_scope");
+    }
+    let duplicate=ask(&pool,&own,json!({"discord_id":PERSON.to_string(),"scopes":["vc.delegate.claims.approve","vc.delegate.claims.approve"]})).await;
+    assert_eq!(duplicate.status, 400);
+    // Old rows are not promoted into all of the new granular permissions.
+    let old =
+        insert_personal_grant(&pool, app, PERSON, &["vc.read", "vc.pay", "vc.claim"], &[]).await;
+    assert_eq!(
+        get(
+            router(pool.clone()),
+            "/api/v2/users/@me/balances",
+            Some(&old)
+        )
+        .await
+        .status,
+        403
+    );
+    assert_eq!(
+        request(
+            router(pool.clone()),
+            "POST",
+            "/api/v2/users/@me/transactions",
+            Some(&old),
+            json!({"unit":UNIT_A,"amount":"10","receiver_discord_id":RECEIVER.to_string()})
+        )
+        .await
+        .status,
+        403
+    );
+    // Nor do new names give an old application JWT implicit legacy permissions.
+    let account = account_of(&pool, app).await;
+    let jwt = mint_app(
+        &pool,
+        account,
+        &["vc.delegate.payments.create", "vc.delegate.claims.read"],
+    )
+    .await;
+    assert_eq!(
+        get(router(pool.clone()), "/api/v2/users/@me/claims", Some(&jwt))
+            .await
+            .status,
+        403
+    );
+    assert_eq!(
+        request(
+            router(pool.clone()),
+            "POST",
+            "/api/v2/users/@me/transactions",
+            Some(&jwt),
+            json!({"unit":UNIT_A,"amount":"10","receiver_discord_id":RECEIVER.to_string()})
         )
         .await
         .status,

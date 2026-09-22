@@ -491,3 +491,20 @@ says what the mechanism was. Newest first:
 | `docs/deploy.md` | the environment a deployment needs |
 | `docs/web-ui.md` | what the frontend replaced, and what the service answers |
 | `docs/qa.md` | this document |
+
+
+## Personal delegation scopes
+
+The account-token scope entries above describe legacy JWTs. Personal grant tokens
+use independent `vc.delegate.*` permissions, including separate claim creation,
+approval, denial, cancellation and metadata writes. See
+[authorization.md](authorization.md) for the policy and
+[personal-grants.md](personal-grants.md) for the request/approval flow and the
+`/grant approve`, `/grant user`, and `/grant server` commands. `grant_resources` tests the scope-by-operation
+matrix, compound claim patches, currency isolation and legacy JWT compatibility.
+
+`interactions_grant` also checks review-before-approval, personal access in DMs and
+non-admin server contexts, identity/administrator checks on every button, expiry,
+concurrent confirmation, stale request ids, revocation of issued tokens, personal
+pagination and scope replacement. A forced RNG collision verifies transaction
+retry and the globally unique pending-code constraint across target kinds.

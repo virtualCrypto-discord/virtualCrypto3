@@ -51,7 +51,7 @@ pub fn all() -> &'static [Command] {
         },
         Command {
             name: "grant",
-            usage: &["/grant list", "/grant approve code:<申請コード>"],
+            usage: &["/grant user", "/grant server", "/grant approve code:<code>"],
             sections: GRANT,
         },
         Command {
@@ -199,28 +199,20 @@ const ISSUE: &[Section] = &[
 
 const GRANT: &[Section] = &[
     section(
-        "使い方",
+        "Usage",
         &[
-            text(
-                "アプリケーションが「このサーバーの発行枠を使いたい」と申請してきたときに、\
-                 承認または取り消しを行います。実行には管理者権限が必要です。",
-            ),
+            text("Review requests to access your account or issue currency in your server."),
             list(&[
-                "`list` 発行を許可しているアプリケーションの一覧です。「取り消す」で許可を外せます。",
-                "`approve` アプリケーションが表示する申請コードを承認し、発行を許可します。",
+                "`approve code:` Review the application, target, permissions and currencies, then confirm with the Approve button. Nothing is granted by entering the code alone.",
+                "`user` List and revoke applications with access to your account. Available in servers and DMs.",
+                "`server` List and revoke applications allowed to issue in this server. Requires administrator permission in that server.",
             ]),
         ],
     ),
     section(
-        "承認できるもの",
+        "Who may approve",
         &[text(
-            "承認できるのは、そのアプリケーションが実際に申請したスコープだけです。",
-        )],
-    ),
-    section(
-        "詳しく",
-        &[text(
-            "申請と承認の流れは、[アプリケーション連携]({site}/document/applications)をご覧ください。",
+            "Personal requests can only be approved by the requested user. Server requests require an administrator in the requested server. Every button rechecks these permissions.",
         )],
     ),
 ];

@@ -585,6 +585,10 @@ async fn write_grant(
 ) -> Result<i64> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
+    if let Target::User(discord_id) = target {
+        crate::user::insert_if_not_exists(connection, discord_id).await?;
+    }
+
     // Two targets, one statement: the conflict is the pair the row is unique by,
     // which is the application and whichever id it names. A guild and a Discord
     // user can never share a snowflake, so the two live in one column space here
@@ -603,6 +607,13 @@ async fn write_grant(
     .fetch_one(&mut *connection)
     .await?;
 
+    // Personal consent replaces the exact operation/resource pair. Retaining an
+    // old spending scope while replacing its currencies would widen authority.
+    if matches!(target, Target::User(_)) {
+        sqlx::query!("DELETE FROM grant_scopes WHERE grant_id = $1", grant_id)
+            .execute(&mut *connection)
+            .await?;
+    }
     create_grant_scopes(connection, grant_id, scopes, now).await?;
     create_grant_resources(connection, grant_id, resources, now).await?;
 
@@ -928,6 +939,42 @@ pub async fn request_grant(
     expires_in: i64,
     now: OffsetDateTime,
 ) -> Result<GrantRequest> {
+    for attempt in 0..16 {
+        match request_grant_attempt(
+            pool,
+            application_id,
+            target,
+            scopes,
+            resources,
+            expires_in,
+            now,
+        )
+        .await
+        {
+            Err(crate::Error::Database(error))
+                if attempt < 15
+                    && error.as_database_error().is_some_and(|error| {
+                        error.is_unique_violation()
+                            && error.constraint() == Some("grant_requests_pending_user_code_index")
+                    }) =>
+            {
+                continue;
+            }
+            result => return result,
+        }
+    }
+    unreachable!("the last attempt returns its result")
+}
+
+async fn request_grant_attempt(
+    pool: &PgPool,
+    application_id: i64,
+    target: Target,
+    scopes: &[String],
+    resources: &[i64],
+    expires_in: i64,
+    now: OffsetDateTime,
+) -> Result<GrantRequest> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let mut tx = pool.begin().await?;
@@ -951,7 +998,7 @@ pub async fn request_grant(
 
     let row = sqlx::query!(
         r#"INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, resources, device_code, user_code, expires_in, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), substring(md5(random()::text) from 1 for 8), $6, $7, $7)
+         VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), substring(replace(gen_random_uuid()::text, '-', '') from 1 for 8), $6, $7, $7)
          ON CONFLICT (application_id, (COALESCE(guild_id, discord_id))) WHERE status = 'pending'
          DO UPDATE SET updated_at = EXCLUDED.updated_at
          RETURNING id, guild_id, discord_id, scopes AS "scopes!: Vec<String>", resources AS "resources!: Vec<i64>",
@@ -1193,4 +1240,157 @@ pub async fn revoke_refresh_token(pool: &PgPool, token: &str) -> Result<bool> {
         .await?;
 
     Ok(deleted.rows_affected() > 0)
+}
+
+/// A pending request shown to its target before consent. The request id
+/// binds the button to this exact request, not a user code that may be reused.
+#[derive(Debug, Clone)]
+pub struct Review {
+    pub request_id: i64,
+    pub application_id: i64,
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub target: Target,
+    pub scopes: Vec<String>,
+    pub resources: Vec<i64>,
+}
+
+/// Resolve only requests the caller is allowed to review. `guild` must already
+/// have been authorized by the interaction's administrator permission.
+pub async fn review_requests(
+    pool: &PgPool,
+    code: Option<&str>,
+    request_id: Option<i64>,
+    user: i64,
+    guild: Option<i64>,
+    now: OffsetDateTime,
+) -> Result<Vec<Review>> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+    let rows = sqlx::query!(
+        r#"SELECT r.id AS request_id, r.application_id,
+                  a.client_id::text AS "client_id!", a.client_name, r.guild_id, r.discord_id,
+                  r.scopes AS "scopes!", r.resources AS "resources!"
+             FROM grant_requests r JOIN applications a ON a.id = r.application_id
+            WHERE ((r.user_code = $1 AND $2::bigint IS NULL) OR r.id = $2)
+              AND (r.discord_id = $3 OR r.guild_id = $4)
+              AND r.status = 'pending'
+              AND r.inserted_at + make_interval(secs => r.expires_in) > $5
+            ORDER BY r.id"#,
+        code,
+        request_id,
+        user,
+        guild,
+        at
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(Review {
+                request_id: row.request_id,
+                application_id: row.application_id,
+                client_id: row.client_id,
+                client_name: row.client_name,
+                target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
+                scopes: row.scopes,
+                resources: row.resources,
+            })
+        })
+        .collect()
+}
+
+/// Confirm only the exact immutable request shown by the review screen. The
+/// caller must reauthenticate the target on this button press.
+pub async fn approve_review(pool: &PgPool, review: &Review, now: OffsetDateTime) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+    let changed = sqlx::query!(
+        "UPDATE grant_requests SET status = 'approved', updated_at = $4
+          WHERE id = $1 AND guild_id IS NOT DISTINCT FROM $2
+            AND discord_id IS NOT DISTINCT FROM $3 AND status = 'pending'
+            AND inserted_at + make_interval(secs => expires_in) > $4
+            AND scopes = $5 AND resources = $6 AND application_id = $7",
+        review.request_id,
+        review.target.guild(),
+        review.target.user(),
+        at,
+        &review.scopes,
+        &review.resources,
+        review.application_id
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Ok(false);
+    }
+    write_grant(
+        &mut tx,
+        review.application_id,
+        review.target,
+        &review.scopes,
+        &review.resources,
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+#[derive(Debug)]
+pub struct PersonalApplication {
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub scopes: Vec<String>,
+    pub resources: Vec<i64>,
+}
+
+/// A bounded page plus its count; the UI clamps pages after concurrent revocation.
+pub async fn personal_applications(
+    pool: &PgPool,
+    user: i64,
+    page: i64,
+    limit: i64,
+) -> Result<(Vec<PersonalApplication>, i64, i64)> {
+    let total = sqlx::query_scalar!(
+        "SELECT count(*) AS \"count!\" FROM grants WHERE discord_id = $1",
+        user
+    )
+    .fetch_one(pool)
+    .await?;
+    let last = ((total + limit - 1) / limit).max(1);
+    let page = page.clamp(1, last);
+    let rows = sqlx::query!(
+        r#"SELECT a.client_id::text AS "client_id!", a.client_name,
+                  ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS "scopes!",
+                  ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS "resources!"
+             FROM grants g JOIN applications a ON a.id = g.application_id
+            WHERE g.discord_id = $1 ORDER BY g.inserted_at DESC, g.id DESC LIMIT $2 OFFSET $3"#,
+        user, limit, (page - 1) * limit
+    ).fetch_all(pool).await?;
+    Ok((
+        rows.into_iter()
+            .map(|row| PersonalApplication {
+                client_id: row.client_id,
+                client_name: row.client_name,
+                scopes: row.scopes,
+                resources: row.resources,
+            })
+            .collect(),
+        total,
+        page,
+    ))
+}
+
+/// Deleting a personal grant revokes its access and refresh tokens by cascade.
+pub async fn revoke_personal(pool: &PgPool, client_id: Uuid, user: i64) -> Result<Option<i64>> {
+    Ok(sqlx::query_scalar!(
+        "DELETE FROM grants g USING applications a WHERE g.application_id = a.id
+          AND a.client_id = $1 AND g.discord_id = $2 RETURNING g.application_id",
+        client_id,
+        user
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten())
 }

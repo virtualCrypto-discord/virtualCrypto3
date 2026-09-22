@@ -1,5 +1,7 @@
 # virtualCrypto
 
+- [Authorization model and legacy v2 compatibility](docs/authorization.md)
+
 ## The build cache (mbx)
 
 Rust builds in this checkout go through [mbx](https://mr-boxington.jdx.dev), a
