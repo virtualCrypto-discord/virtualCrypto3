@@ -9,12 +9,24 @@ use crate::notification::Proxy;
 use crate::rate_limit::RateLimiter;
 use crate::rate_limit::VerificationLimiter;
 
-/// The public URLs the command responses link to, plus the logo their embeds show.
+/// The public URLs the command responses link to, plus the logo their screens show.
 #[derive(Clone, Debug)]
 pub struct Links {
     pub site_url: String,
     pub invite_url: String,
     pub support_guild_invite_url: String,
+}
+
+impl Links {
+    /// `Command.logo_url/0`: where this deployment serves the project's logo.
+    ///
+    /// The path is the Elixir deployment's — Phoenix served `priv/static/images/logo.jpg` at
+    /// `/static/images/logo.jpg` — and the same file is at `web/public/static/images/logo.jpg`
+    /// here: Vite copies `public/` into the built site as it stands, and `vc-api` serves that
+    /// directory, so a URL written for one deployment answers in the other.
+    pub fn logo_url(&self) -> String {
+        format!("{}/static/images/logo.jpg", self.site_url)
+    }
 }
 
 /// What the service signs with: the API's bearer tokens, and the browser's

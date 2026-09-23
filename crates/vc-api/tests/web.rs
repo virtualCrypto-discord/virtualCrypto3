@@ -6,7 +6,7 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::body::Body;
@@ -23,6 +23,38 @@ fn built_spa() -> PathBuf {
     std::fs::write(root.join("assets/app.js"), "console.log(1)").expect("an asset");
 
     root
+}
+
+/// The logo the screens show is a file this repository ships, at the path the URL names.
+///
+/// The URL and the file are written in different places — [`vc_api::state::Links::logo_url`]
+/// builds one, `web/public` holds the other — and nothing but this test keeps them in step.
+/// They disagreed for as long as the screens showed the Elixir deployment's path: a build step
+/// copies `web/public` into the site as it stands, so a file there is a file at that URL, and a
+/// missing one is a broken picture in Discord, which no other test in this suite would notice.
+#[test]
+fn the_logo_url_names_a_file_the_site_ships() {
+    let site = "https://example.test";
+
+    let links = vc_api::state::Links {
+        site_url: site.to_owned(),
+        invite_url: String::new(),
+        support_guild_invite_url: String::new(),
+    };
+
+    let url = links.logo_url();
+    let path = url.strip_prefix(site).expect("the logo is on this site");
+
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../web/public")
+        .join(path.trim_start_matches('/'));
+
+    assert!(
+        file.is_file(),
+        "{} does not name a file under web/public ({})",
+        url,
+        file.display()
+    );
 }
 
 async fn fetch(app: Router, uri: &str) -> (u16, String) {

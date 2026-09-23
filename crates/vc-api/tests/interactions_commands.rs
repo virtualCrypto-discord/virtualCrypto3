@@ -58,6 +58,14 @@ async fn help(pool: PgPool) {
     // registration payload rather than written down a second time.
     assert!(rendered.contains("**/issue**（管理者）"), "{rendered}");
 
+    // The list carries the project's logo as its accessory. That the URL behind it answers
+    // with a picture rather than a 404 is `tests/web.rs`'s business — this is the screen that
+    // shows it, so it is the screen that says the URL.
+    assert!(
+        rendered.contains(&format!("\"url\":\"{SITE_URL}/static/images/logo.jpg\"")),
+        "{rendered}"
+    );
+
     // The menu carries the id the dispatcher reads, and the addresses are the
     // deployment's.
     assert_eq!(
@@ -505,7 +513,14 @@ async fn invite(pool: PgPool) {
             "type": 17,
             "accent_color": 0x0062_21ED,
             "components": [
-                { "type": 10, "content": "**VirtualCrypto**" },
+                {
+                    "type": 9,
+                    "components": [{ "type": 10, "content": "**VirtualCrypto**" }],
+                    "accessory": {
+                        "type": 11,
+                        "media": { "url": format!("{SITE_URL}/static/images/logo.jpg") },
+                    },
+                },
                 { "type": 10, "content": description },
             ],
         }])

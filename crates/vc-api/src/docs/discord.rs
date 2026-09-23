@@ -16,7 +16,8 @@ use serde_json::Value;
 
 use super::{Block, INTRO, OptionKind, OptionLine, Page, Section, Showing, resolve};
 use crate::components::{
-    ButtonStyle, action_row, button, link_button, select, select_option, separator, text,
+    ButtonStyle, action_row, button, link_button, section, select, select_option, separator, text,
+    thumbnail,
 };
 use crate::state::Links;
 
@@ -34,7 +35,14 @@ pub fn index(links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
         .join("\n");
 
     vec![
-        greeting("**VirtualCrypto**", INTRO),
+        // The project's logo, as an accessory: the picture the Elixir deployment's site served
+        // under the same path. It is one screen's accessory rather than every screen's, because
+        // a picture beside every paragraph of an option list is noise — the list is where
+        // somebody arrives, and where a mark belongs.
+        section(
+            vec![greeting("**VirtualCrypto**", INTRO)],
+            thumbnail(&links.logo_url()),
+        ),
         separator(),
         text(format!("## コマンド\n\n{listing}")),
         menu(),
@@ -262,10 +270,9 @@ fn listing_line(showing: &Showing, ids: &BTreeMap<String, u64>) -> String {
 
 /// The title and the sentence under it.
 ///
-/// Both screens carried a thumbnail of the site's logo, which this deployment does not serve:
-/// `/static/images/logo.jpg` was the old site's path and the SPA has no `static/` at all, so
-/// what a person saw was a broken image. A screen that cannot show a picture is a screen with
-/// no accessory, which a section requires — so the title and the sentence are a Text Display.
+/// A Text Display rather than a section, because on its own it carries no accessory: the screen
+/// with a picture on it is [`index`], which wraps this in the section that holds the logo. The
+/// rest are the title, the sentence, and what the screen has to say.
 fn greeting(title: &str, description: &str) -> Value {
     text(format!("{title}\n{description}"))
 }
