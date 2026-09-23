@@ -524,6 +524,17 @@ async fn a_mixed_batch_notifies_only_the_changed_hands(pool: PgPool) {
     );
 }
 
+/// How long a released connection is held, and how long an acquire may wait for one.
+///
+/// The hold has to outlast the budget by a wide margin: the property under test is that the
+/// notification after the commit does *not* acquire, so an acquire that does happen must still
+/// fail. The budget, in turn, has to be long enough to *establish* the pool's first connection —
+/// `acquire_timeout` pays for connecting too, and on a loaded machine that is a tenth of a
+/// second or more. The two were 100 ms and 500 ms, which is why these two tests failed about
+/// once in five: a first connect that took longer than the budget was reported as pressure.
+const ACQUIRE_BUDGET: std::time::Duration = std::time::Duration::from_millis(500);
+const RELEASE_HOLD: std::time::Duration = std::time::Duration::from_millis(2_000);
+
 async fn approval_under_pool_pressure(pool: PgPool, bulk: bool) {
     support::insert_user(&pool, 1, 100000000000000001).await;
     support::insert_user(&pool, 2, 100000000000000002).await;
@@ -532,14 +543,14 @@ async fn approval_under_pool_pressure(pool: PgPool, bulk: bool) {
     support::insert_asset(&pool, 2, 1, 1000).await;
     support::insert_claim(&pool, 1, 500, "pending", 1, 2, 1).await;
 
-    // Hold the released transaction connection briefly, reproducing pool pressure
+    // Hold the released transaction connection, reproducing pool pressure
     // between committing the payment and acquiring a connection for its notification.
     let pressured = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .acquire_timeout(std::time::Duration::from_millis(100))
+        .acquire_timeout(ACQUIRE_BUDGET)
         .after_release(|_, _| {
             Box::pin(async {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(RELEASE_HOLD).await;
                 Ok(true)
             })
         })
@@ -581,6 +592,16 @@ async fn approval_under_pool_pressure(pool: PgPool, bulk: bool) {
     assert_eq!(deliveries[0].0, 1);
     assert_eq!(deliveries[0].1[0]["status"], "approved");
     assert_eq!(deliveries[0].1[0]["amount"], "500");
+
+    // And the pressure the property is about was really there: an acquire that does happen now
+    // fails, so a notification that had asked for a connection would have failed too rather
+    // than quietly waiting. The hold outlasts the budget by design, which is why this cannot
+    // race the release.
+    assert!(
+        pressured.acquire().await.is_err(),
+        "the pool has to be exhausted while the property is being checked"
+    );
+
     pressured.close().await;
 }
 
