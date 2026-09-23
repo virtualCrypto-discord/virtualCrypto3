@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM contracts c\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')\n            -- What the reader has chosen not to see: a muted currency's contracts, and the\n            -- contracts a muted person is named in. The count and the page below are the same\n            -- rows, and a page that hides fewer of them is an arrow that opens an empty page.\n            AND NOT EXISTS (\n                SELECT 1 FROM mutes mu\n                 WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)\n                   AND (mu.currency_id = c.currency_id\n                        OR EXISTS (SELECT 1\n                                     FROM contract_parties q\n                                     JOIN users mut ON mut.id = mu.muted_user_id\n                                    WHERE q.contract_id = c.id\n                                      AND q.discord_id = mut.discord_id)))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "db369b1529667b640a1639a8ce95ded80eaf7700b5982136d8240300b1def7b5"
+}

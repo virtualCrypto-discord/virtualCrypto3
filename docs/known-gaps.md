@@ -257,6 +257,34 @@ of the contract family takes an `app` token, and no scope changes a kind. The pa
 `approve`, `refuse`, `withdraw`, reading, and its own list — takes a user token and no scope at all,
 so a PAT does all of it, and `crates/vc-api/tests/pat.rs` pins that it does.
 
+### A list a reader can filter: the mute
+
+`/mute currency`, `/mute user`, `/mute list` and `/unmute` let an account leave a currency or
+somebody out of its own claim and contract lists, and it is an addition in the plain sense: the
+Elixir has no mute, no column that could hold one, and nothing that filters a list by its reader.
+`crates/vc-core/migrations/0019_mutes.sql` is the table, `vc_core::mute` is the domain, and
+`crates/vc-api/tests/interactions_mute.rs` is this tree's own suite.
+
+What it is, in one sentence: a row of (who is looking, what they are not looking at), which the
+claim and contract lists ask before they answer a page — for that reader's lists only, in Discord
+and in the API both, because they are the same lists.
+
+Three things about it are decisions rather than details:
+
+- **Nothing is forbidden.** A muted currency can still be issued, claimed, paid and contracted
+  into, and a muted person is refused nothing: what a mute changes is what the *reader* is
+  shown. That is why the command's own prose says so, and why no endpoint answers a 403 for it.
+- **A page and its count agree.** The filter is in the statements rather than in the callers, so
+  `:last` is the last page of what the reader can see and a full page is a page with more behind
+  it. A filter applied after the read leaves an arrow leading to an empty page.
+- **A single row is not filtered.** A claim by id, a contract by id and a contract's payments
+  answer what they are asked for; only the lists leave rows out. A mute is a preference about a
+  list, not a permission over a row.
+
+There is no end date. The row is deleted by the person who wrote it — from `/mute list`, or by
+`/unmute` — and no job would take it away; that is the whole of the lifetime, and it is why the
+table has no `expires` column.
+
 ### The consent screen's scope is `vc.issue`, where the Elixir's was `openid`
 
 `is_valid_scopes?/1` accepted `openid` and nothing else, and this port did the same until now.

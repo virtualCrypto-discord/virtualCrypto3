@@ -340,6 +340,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "1ページぶん返すと `link` ヘッダーが次のページのURLを示します。",
             "`discord` はDiscordから読んだプロフィールで、読めないときは `null` です。",
             "グラントのトークンで読むと、答えはそのグラントが対象にしている通貨の請求だけになります。対象でない通貨の請求は、エラーではなく、この一覧に出てきません。",
+            "Discordの `/mute` で指定した通貨と相手の請求も、エラーではなく、この一覧に出てきません。指定は、トークンの持ち主のアカウントのものです。",
         ],
         errors: &[
             NO_TOKEN,
@@ -576,6 +577,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
             "`status` は `pending` `active` `canceled` で、各対象者の `status` は `pending` `approved` `refused` `withdrawn` です。",
             "対象者はDiscordの利用者なので、アプリケーションが対象者になることはありません。アプリケーションのトークンでは空の配列になり、自分が作った契約は `GET /api/v2/contracts` です。",
+            "Discordの `/mute` で指定した通貨と相手の契約も、エラーではなく、この一覧に出てきません。指定は、トークンの持ち主のアカウントのものです。",
         ],
         errors: &[NO_TOKEN, BAD_TOKEN, INVALID_LIMIT, INVALID_CURSOR],
     },

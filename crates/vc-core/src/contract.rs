@@ -293,7 +293,19 @@ pub async fn open_of_party(
     let total = sqlx::query_scalar!(
         "SELECT count(*) AS \"count!\" FROM contracts c
            JOIN contract_parties p ON p.contract_id = c.id
-          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')",
+          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')
+            -- What the reader has chosen not to see: a muted currency's contracts, and the
+            -- contracts a muted person is named in. The count and the page below are the same
+            -- rows, and a page that hides fewer of them is an arrow that opens an empty page.
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
+                   AND (mu.currency_id = c.currency_id
+                        OR EXISTS (SELECT 1
+                                     FROM contract_parties q
+                                     JOIN users mut ON mut.id = mu.muted_user_id
+                                    WHERE q.contract_id = c.id
+                                      AND q.discord_id = mut.discord_id)))",
         discord_id
     )
     .fetch_one(pool)
@@ -309,6 +321,15 @@ pub async fn open_of_party(
            JOIN applications ON applications.id = c.application_id
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
+                   AND (mu.currency_id = c.currency_id
+                        OR EXISTS (SELECT 1
+                                     FROM contract_parties q
+                                     JOIN users mut ON mut.id = mu.muted_user_id
+                                    WHERE q.contract_id = c.id
+                                      AND q.discord_id = mut.discord_id)))
           ORDER BY c.id DESC
           LIMIT $2
          OFFSET $3",
@@ -369,6 +390,17 @@ pub async fn of_party_in(
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1
             AND (cardinality($5::bigint[]) = 0 OR c.currency_id = ANY($5))
+            -- The reader's own mutes, as the Discord list applies them: the API answers the same
+            -- person the same list, so a mute hides a contract from both or from neither.
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
+                   AND (mu.currency_id = c.currency_id
+                        OR EXISTS (SELECT 1
+                                     FROM contract_parties q
+                                     JOIN users mut ON mut.id = mu.muted_user_id
+                                    WHERE q.contract_id = c.id
+                                      AND q.discord_id = mut.discord_id)))
             AND ($2::bigint IS NULL OR c.id < $2)
             AND ($3::bigint IS NULL OR c.id <= $3)
           ORDER BY c.id DESC

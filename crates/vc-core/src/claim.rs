@@ -248,6 +248,16 @@ pub async fn list(pool: &PgPool, filter: ClaimFilter<'_>) -> Result<Vec<ClaimVie
               OR ($2 = 'claimed' AND c.claimant_user_id = $4))
             AND ($3::bigint IS NULL
                  OR c.payer_user_id = $3 OR c.claimant_user_id = $3)
+            -- What the reader has chosen not to see: a muted currency's claims, and the claims
+            -- of a muted person. In the statement rather than in the caller because the count
+            -- and the page are the same rows, and a page that leaves out fewer of them than the
+            -- count does is an arrow that opens an empty page.
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $4
+                   AND (mu.currency_id = c.currency_id
+                        OR mu.muted_user_id = c.claimant_user_id
+                        OR mu.muted_user_id = c.payer_user_id))
             AND ($6 = 'first'
                  OR ($7 = 'desc' AND $6 = 'next' AND c.id < COALESCE($5::bigint, 0))
                  OR ($7 = 'desc' AND $6 = 'on_next' AND c.id <= COALESCE($5::bigint, 0))
@@ -288,7 +298,15 @@ pub async fn last_page_number(
               OR ($2 = 'received' AND c.payer_user_id = $3)
               OR ($2 = 'claimed' AND c.claimant_user_id = $3))
             AND ($4::bigint IS NULL
-                 OR c.payer_user_id = $4 OR c.claimant_user_id = $4)",
+                 OR c.payer_user_id = $4 OR c.claimant_user_id = $4)
+            -- The page's own filter, so that the last page is the last page of what the reader
+            -- can see rather than of what the table holds.
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $3
+                   AND (mu.currency_id = c.currency_id
+                        OR mu.muted_user_id = c.claimant_user_id
+                        OR mu.muted_user_id = c.payer_user_id))",
         statuses,
         sr_filter.as_str(),
         i64::from(operator_id),
@@ -358,6 +376,15 @@ pub async fn list_page(
               OR ($2 = 'claimed' AND c.claimant_user_id = $4))
             AND ($3::bigint IS NULL
                  OR c.payer_user_id = $3 OR c.claimant_user_id = $3)
+            -- The same filter the count applies: one more row than the page holds is how the
+            -- caller learns whether another page follows, so a hidden row counted here would be
+            -- an arrow leading to an empty page.
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $4
+                   AND (mu.currency_id = c.currency_id
+                        OR mu.muted_user_id = c.claimant_user_id
+                        OR mu.muted_user_id = c.payer_user_id))
           ORDER BY c.id DESC
           LIMIT $5
          OFFSET $6",

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mutes (user_id, currency_id, inserted_at)\n              VALUES ($1, $2, $3)\n         ON CONFLICT (user_id, currency_id) WHERE currency_id IS NOT NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "13db48adc76f3801ed680bea148abd72d1dd44630dd87e80cbc55e0de4390e9f"
+}

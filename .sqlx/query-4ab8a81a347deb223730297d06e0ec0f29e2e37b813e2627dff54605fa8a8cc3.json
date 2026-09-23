@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(c.id) AS \"total!\"\n           FROM claims c\n          WHERE c.status::text = ANY($1)\n            AND (($2 = 'all' AND (c.payer_user_id = $3 OR c.claimant_user_id = $3))\n              OR ($2 = 'received' AND c.payer_user_id = $3)\n              OR ($2 = 'claimed' AND c.claimant_user_id = $3))\n            AND ($4::bigint IS NULL\n                 OR c.payer_user_id = $4 OR c.claimant_user_id = $4)\n            -- The page's own filter, so that the last page is the last page of what the reader\n            -- can see rather than of what the table holds.\n            AND NOT EXISTS (\n                SELECT 1 FROM mutes mu\n                 WHERE mu.user_id = $3\n                   AND (mu.currency_id = c.currency_id\n                        OR mu.muted_user_id = c.claimant_user_id\n                        OR mu.muted_user_id = c.payer_user_id))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4ab8a81a347deb223730297d06e0ec0f29e2e37b813e2627dff54605fa8a8cc3"
+}

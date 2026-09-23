@@ -17,6 +17,7 @@ pub mod grant;
 pub mod help;
 pub mod info;
 pub mod issue;
+pub mod mute;
 pub mod pat;
 pub mod pay;
 
@@ -215,6 +216,8 @@ pub async fn handle(
         "grant" => grant::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
         "issue" => issue::handle(state, options, payload).await,
+        "mute" => mute::handle(state, options, payload).await,
+        "unmute" => mute::unmute(state, options, payload).await,
         "pat" => pat::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),

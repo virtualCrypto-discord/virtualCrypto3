@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) AS \"count!\" FROM contracts c\n           JOIN contract_parties p ON p.contract_id = c.id\n          WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')",
+  "query": "SELECT count(*) AS \"count!\" FROM mutes WHERE user_id = $1",
   "describe": {
     "columns": [
       {
@@ -12,12 +12,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int4"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "7cdcb3faccce700f1c771a86973e88dc4a794c6b3722c20c40c35d5a855f1bf2"
+  "hash": "67e8ce2418e3dc869c0cca3bfd009cd55c7fef1a0d1cef567c2e8a2b0d5b7ddb"
 }

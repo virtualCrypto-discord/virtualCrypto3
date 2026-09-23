@@ -14,6 +14,7 @@ pub mod issue;
 pub mod job;
 pub mod metadata;
 pub mod model;
+pub mod mute;
 pub mod notification;
 pub mod page;
 pub mod payment;

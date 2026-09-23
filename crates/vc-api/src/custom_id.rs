@@ -679,6 +679,115 @@ pub mod ui {
         }
     }
 
+    /// The mutes screen: the arrows that move it, and the button each row carries.
+    ///
+    /// A head byte of its own, for the contract space's reason: an id here carries the target
+    /// of a mute after the action, and a parser that only accepts its own head refuses the
+    /// other spaces' bytes rather than reading them as its own.
+    pub mod mute {
+        use super::UiError;
+
+        const HEAD: u8 = 0xF6;
+
+        /// The head this space writes, so a test and a screen agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        /// Where a pagination button moves the list, which is the four moves the lists beside
+        /// it have rather than a cursor: a cursor cannot say "back".
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Page {
+            First,
+            Previous,
+            Next,
+            Last,
+        }
+
+        /// What a button in this space is about.
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum Pressed {
+            /// A currency's mute, by the id the row was built from.
+            Currency(i64),
+            /// Somebody's mute, by the Discord id the row shows.
+            User(i64),
+            /// A move from one page of the list to another.
+            Paged(Page, i64),
+        }
+
+        /// The string an unmute button carries: what kind of target, then which one.
+        ///
+        /// The target only, and not the person the mute belongs to: the reader a press unmutes
+        /// is the one who pressed, because a mute is the reader's own. A button sent by somebody
+        /// else is therefore a button that unmutes *their* mute of the same thing, which is
+        /// what makes this id harmless in the hands of anybody who has seen it.
+        pub fn unmute_custom_id(target: &vc_core::mute::Target) -> String {
+            match target {
+                vc_core::mute::Target::Currency { id, .. } => encoded(1, &id.to_string()),
+                vc_core::mute::Target::User { discord_id } => encoded(2, &discord_id.to_string()),
+            }
+        }
+
+        /// The string a pagination button carries: which move, then where to.
+        pub fn page_custom_id(page: Page, number: i64) -> String {
+            let action = match page {
+                Page::First => 3,
+                Page::Previous => 4,
+                Page::Next => 5,
+                Page::Last => 6,
+            };
+
+            encoded(action, &number.to_string())
+        }
+
+        fn encoded(action: u8, payload: &str) -> String {
+            let mut data = vec![HEAD, action];
+            data.extend_from_slice(payload.as_bytes());
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<Pressed, UiError> {
+            let [head, id, rest @ ..] = source else {
+                return Err(UiError::Head);
+            };
+
+            if *head != HEAD {
+                return Err(UiError::Head);
+            }
+
+            // The packing left-aligns the last group, so a decoded payload comes back padded
+            // with NULs — the grant space says so above. Neither an id nor a number contains
+            // one, which is what makes cutting them the inverse of what went in.
+            let trimmed = rest
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&rest[..0], |end| &rest[..=end]);
+            let number = || -> Result<i64, UiError> {
+                String::from_utf8(trimmed.to_vec())
+                    .map_err(|_| UiError::Head)?
+                    .parse()
+                    .map_err(|_| UiError::Head)
+            };
+
+            match id {
+                1 => Ok(Pressed::Currency(number()?)),
+                2 => Ok(Pressed::User(number()?)),
+                3..=6 => {
+                    let page = match id {
+                        3 => Page::First,
+                        4 => Page::Previous,
+                        5 => Page::Next,
+                        _ => Page::Last,
+                    };
+
+                    Ok(Pressed::Paged(page, number()?))
+                }
+                other => Err(UiError::Unknown(u16::from(*other))),
+            }
+        }
+    }
+
     /// The menu `/help` offers and the button that goes back to its list.
     ///
     /// A head byte of its own, for the developer space's reason: the dispatcher's
@@ -1016,6 +1125,62 @@ mod tests {
         );
         assert_eq!(
             ui::grant::parse(&[ui::grant::head(), 9, b'7']),
+            Err(UiError::Unknown(9))
+        );
+    }
+
+    /// What a row is about has to survive the round trip: a currency by its id and a person by
+    /// their Discord id, which is what the screen drew beside the button.
+    #[test]
+    fn a_mute_button_survives_the_round_trip() {
+        let currency = vc_core::mute::Target::Currency {
+            id: 12,
+            unit: "n".to_string(),
+            name: "nyan".to_string(),
+        };
+
+        assert_eq!(
+            ui::mute::parse(&parse(&ui::mute::unmute_custom_id(&currency))),
+            Ok(ui::mute::Pressed::Currency(12))
+        );
+
+        let person = vc_core::mute::Target::User {
+            discord_id: 100_000_000_000_000_001,
+        };
+        let encoded = ui::mute::unmute_custom_id(&person);
+
+        assert_eq!(
+            ui::mute::parse(&parse(&encoded)),
+            Ok(ui::mute::Pressed::User(100_000_000_000_000_001))
+        );
+        assert!(
+            encoded.chars().count() <= 100,
+            "{} chars",
+            encoded.chars().count()
+        );
+    }
+
+    /// And a page's number survives the same way, in the same space: what tells them apart is
+    /// the action byte, which is why a number here may mean a target or a page.
+    #[test]
+    fn a_mute_page_survives_the_round_trip() {
+        let encoded = ui::mute::page_custom_id(ui::mute::Page::Last, 3);
+        let pressed = ui::mute::parse(&parse(&encoded)).expect("a known page");
+
+        assert_eq!(pressed, ui::mute::Pressed::Paged(ui::mute::Page::Last, 3));
+    }
+
+    /// Its own head, for every other space's reason: the mutes screen's ids carry an id after
+    /// the action, and `0xF0` is every other space's.
+    #[test]
+    fn another_spaces_head_is_not_a_mutes() {
+        assert_eq!(ui::mute::parse(&[0xF0, 1, b'7']), Err(UiError::Head));
+        assert_eq!(
+            ui::mute::parse(&[ui::bal::head(), 1, b'7']),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::mute::parse(&[ui::mute::head(), 9, b'7']),
             Err(UiError::Unknown(9))
         );
     }

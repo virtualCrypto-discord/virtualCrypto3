@@ -50,6 +50,8 @@ pub fn commands() -> Vec<Value> {
         delete(),
         bal(),
         claim(),
+        mute(),
+        unmute(),
     ]
     .into_iter()
     .map(with_type)
@@ -532,6 +534,87 @@ fn options_for_listing(user_description: &str) -> Value {
 /// them are covered either.
 pub const API_BASE: &str = "https://discord.com/api/v10";
 
+/// The `unit` option the two mute commands share: a currency, by the unit the caller types and
+/// [`crate::command::autocomplete`] completes from their own.
+fn unit_option(description: &str) -> Value {
+    json!({
+        "name": "unit",
+        "description": description,
+        "type": 3,
+        "required": true,
+        "autocomplete": true,
+    })
+}
+
+/// The `user` option the two mute commands share.
+fn user_option(description: &str) -> Value {
+    json!({
+        "name": "user",
+        "description": description,
+        "type": 6,
+        "required": true,
+    })
+}
+
+/// `/mute`: what a person has chosen not to see.
+///
+/// In a guild and in a DM both, and about nobody but the caller: a mute filters the caller's own
+/// claim and contract lists, so there is no guild to be in, no administrator to ask and no
+/// permission to check. An addition rather than a port — the Elixir has no mute and nothing that
+/// filters a list by its reader — so what it mirrors is `/pat`'s shape: a personal command whose
+/// whole subject is the account that typed it.
+fn mute() -> Value {
+    json!({
+        "name": "mute",
+        "description": "自分の一覧に表示しない通貨・ユーザーを指定します。資金の移動は止まりません。",
+        "options": [
+            {
+                "name": "currency",
+                "description": "その通貨の請求と契約を、自分の一覧に表示しなくします。",
+                "type": 1,
+                "options": [unit_option("表示しなくする通貨の単位です。")],
+            },
+            {
+                "name": "user",
+                "description": "その人の請求と契約を、自分の一覧に表示しなくします。",
+                "type": 1,
+                "options": [user_option("表示しなくする相手です。")],
+            },
+            {
+                "name": "list",
+                "description": "ミュートしているものを表示し、1件ずつ解除できます。",
+                "type": 1,
+            },
+        ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
+    })
+}
+
+/// `/unmute`: the same two targets, without the screen between them.
+fn unmute() -> Value {
+    json!({
+        "name": "unmute",
+        "description": "ミュートを解除します。",
+        "options": [
+            {
+                "name": "currency",
+                "description": "通貨のミュートを解除します。",
+                "type": 1,
+                "options": [unit_option("解除する通貨の単位です。")],
+            },
+            {
+                "name": "user",
+                "description": "その人のミュートを解除します。",
+                "type": 1,
+                "options": [user_option("解除する相手です。")],
+            },
+        ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
+    })
+}
+
 /// The URL the list is `PUT` to. A guild id makes it that guild's commands rather than
 /// the application's, which is what the old script's optional argument did.
 pub fn url(base: &str, client_id: &str, guild: Option<i64>) -> String {
@@ -594,7 +677,9 @@ mod tests {
                 "create",
                 "delete",
                 "bal",
-                "claim"
+                "claim",
+                "mute",
+                "unmute"
             ]
         );
     }

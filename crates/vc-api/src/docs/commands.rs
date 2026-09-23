@@ -98,6 +98,23 @@ pub fn all() -> &'static [Command] {
             ],
             sections: CLAIM,
         },
+        Command {
+            name: "mute",
+            usage: &[
+                "/mute currency unit:<通貨の単位>",
+                "/mute user user:<相手>",
+                "/mute list",
+            ],
+            sections: MUTE,
+        },
+        Command {
+            name: "unmute",
+            usage: &[
+                "/unmute currency unit:<通貨の単位>",
+                "/unmute user user:<相手>",
+            ],
+            sections: UNMUTE,
+        },
     ]
 }
 
@@ -234,6 +251,10 @@ const CONTRACT: &[Section] = &[
                  期限のある契約は、その期間が終わると取り消せます。",
             ),
             text("このコマンドはサーバーの中でもDMでも実行できます。"),
+            text(
+                "`/mute` で指定した通貨と相手の契約は、一覧に表示されません。\
+                 件数にも含まれません。",
+            ),
         ],
     ),
     section(
@@ -444,6 +465,10 @@ const CLAIM: &[Section] = &[
                  何も指定しないときは、未決定（`pending`）の請求だけを表示します。",
             ),
             text("`user` を指定すると、そのユーザーが関わる請求だけを表示します。"),
+            text(
+                "`/mute` で指定した通貨と相手の請求は、一覧に表示されません。\
+                 件数にも含まれません。",
+            ),
         ],
     ),
     section(
@@ -472,3 +497,47 @@ const CLAIM: &[Section] = &[
         )],
     ),
 ];
+
+const MUTE: &[Section] = &[
+    section(
+        "使い方",
+        &[
+            text(
+                "自分の請求と契約の一覧に表示しないものを指定します。\
+                 資金の移動は止まりません。ミュートした通貨でも、請求・支払い・契約はそのまま行えます。",
+            ),
+            list(&[
+                "`/mute currency unit:<通貨の単位>` その通貨の請求と契約を、自分の一覧に表示しなくします。",
+                "`/mute user user:<相手>` その人の請求と契約を、自分の一覧に表示しなくします。",
+                "`/mute list` ミュートしているものを表示します。1件ずつの解除はこの画面のボタンです。",
+            ]),
+        ],
+    ),
+    section(
+        "表示されなくなるもの",
+        &[text(
+            "自分の請求の一覧と契約の一覧だけです。\
+             残高は変わりません。相手の画面も変わりません。\
+             ミュートは指定した本人の一覧にだけ効きます。",
+        )],
+    ),
+    section(
+        "解除",
+        &[text(
+            "無期限です。解除するまで続きます。\
+             `/mute list` の各行の「解除」を押すか、`/unmute` で解除できます。",
+        )],
+    ),
+];
+
+const UNMUTE: &[Section] = &[section(
+    "使い方",
+    &[
+        text("`/mute` で指定したものを解除します。"),
+        list(&[
+            "`/unmute currency unit:<通貨の単位>` その通貨のミュートを解除します。",
+            "`/unmute user user:<相手>` その人のミュートを解除します。",
+        ]),
+        text("ミュートしているものの一覧は `/mute list` です。"),
+    ],
+)];
