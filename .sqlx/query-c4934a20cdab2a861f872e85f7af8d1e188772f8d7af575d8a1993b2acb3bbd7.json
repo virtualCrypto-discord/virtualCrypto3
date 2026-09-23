@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO grants (application_id, guild_id, latest_code, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)\n         ON CONFLICT (application_id, guild_id) DO UPDATE SET latest_code = $3\n        RETURNING id",
+  "query": "INSERT INTO grants (application_id, guild_id, latest_code, inserted_at, updated_at, independent)\n         VALUES ($1, $2, $3, $4, $4, $5)\n         ON CONFLICT (application_id, guild_id) WHERE NOT independent DO UPDATE SET latest_code = $3\n        RETURNING id",
   "describe": {
     "columns": [
       {
@@ -20,12 +20,13 @@
         "Int8",
         "Int8",
         "Varchar",
-        "Timestamp"
+        "Timestamp",
+        "Bool"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "09d65f403ac1d38e5be4a9ec097df904190439fc190c7cb0a923071b97ece9ef"
+  "hash": "c4934a20cdab2a861f872e85f7af8d1e188772f8d7af575d8a1993b2acb3bbd7"
 }

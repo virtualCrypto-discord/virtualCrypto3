@@ -92,7 +92,7 @@ currencies they hold (`docs/personal-grants.md`).
 The 201 answers the device flow's four values: `device_code` (what the poll
 names), `user_code` (what the administrator types, eight characters), and
 `expires_in` (seconds remaining until the ask expires, ten minutes by default).
-Repeating a pending request keeps its codes and original deadline; the response
+Repeating an identical pending scope/resource set keeps its codes and original deadline; the response
 reports the remaining time rather than restarting its lifetime.
 `verification_uri` is `"discord"`: there is no URI to open, because the
 approval happens in the guild, where the administrator types the code the
@@ -127,11 +127,11 @@ require the requested user and also work in DMs.
   currencies; its confirmation button writes the grant from those exact values, so a narrowed ask is approved narrowed, not
   widened. A code that names nothing pending here is refused the same way
   whether it never existed, belongs to another guild, or already expired.
-- The list's revoke button takes a permission back by the application it belongs
-  to: the issuing scope goes and the grant row stays, which is what a guild token
-  already issued is read from — it stops issuing without being told. The owner's
-  page has the same taking-back behind
-  `DELETE /applications/{client_id}/grants/{guild_id}`.
+- Each device approval creates an independent grant. The list's revoke button
+  deletes only that grant and its dependent tokens. Different approvals for the
+  same application can coexist. The owner's existing
+  `DELETE /applications/{client_id}/grants/{guild_id}` remains a bulk removal of
+  issuing permission for the application in that guild.
 
 There is no refusal anywhere in this command on purpose: an approval is the
 only decision, and an ask that is never approved simply stays pending until it
@@ -187,3 +187,8 @@ subscribable, because a PING is a check rather than an event.
 its operator next to the code to type. A user token cannot ask a guild for a
 permission their application holds: the caller has to *be* the application the
 grant would be written for.
+
+Device approvals and Discord revocations include `grant_id` in their type-3 event
+and report the scopes of that individual grant. A revoked grant has empty scopes;
+other grants for the same application are unaffected. Device token responses also
+include `grant_id`. See [Independent approvals](personal-grants.md#independent-approvals).

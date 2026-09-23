@@ -107,11 +107,9 @@ async fn currency_guild(pool: &PgPool, id: i64) -> Result<Option<Option<i64>>, s
 /// each is a resource of this service and, for a guild's ask, a currency of that
 /// guild.
 ///
-/// The collection form contributes nothing, which is exactly the "every
-/// currency" fact: an ask that names the collection and one that names nothing
-/// resolve to the same empty set. Repeats are collapsed and the caller's order
-/// is kept, which is what `check_scopes` does to a scope list for the same
-/// reason.
+/// The collection includes every currency, even when individual URIs are also
+/// supplied. Every entry is validated before returning that unrestricted set.
+/// Without a collection URI, repeats are collapsed and input order is kept.
 pub async fn resolve(
     pool: &PgPool,
     site_url: &str,
@@ -119,9 +117,11 @@ pub async fn resolve(
     values: &[String],
 ) -> Result<Vec<i64>, InvalidTarget> {
     let mut ids: Vec<i64> = Vec::new();
+    let mut collection = false;
 
     for value in values {
         let Named::Currency(id) = parse(site_url, value)? else {
+            collection = true;
             continue;
         };
 
@@ -145,7 +145,7 @@ pub async fn resolve(
         ids.push(id);
     }
 
-    Ok(ids)
+    Ok(if collection { Vec::new() } else { ids })
 }
 
 /// Whether a grant that names these currencies covers this one.
@@ -218,18 +218,14 @@ pub fn covers_unit(covered: Option<&[String]>, unit: Option<&str>) -> bool {
 /// creates one — is named by its id instead, so a screen never has a blank where
 /// a currency should be.
 pub async fn units(pool: &PgPool, ids: &[i64]) -> Result<Vec<String>, sqlx::Error> {
-    let mut units = Vec::with_capacity(ids.len());
-
-    for id in ids {
-        let unit = sqlx::query_scalar!("SELECT unit FROM currencies WHERE id = $1", id)
-            .fetch_optional(pool)
-            .await?
-            .flatten();
-
-        units.push(unit.unwrap_or_else(|| id.to_string()));
-    }
-
-    Ok(units)
+    sqlx::query_scalar!(
+        r#"SELECT COALESCE(c.unit, requested.id::text) AS "unit!"
+        FROM UNNEST($1::bigint[]) WITH ORDINALITY AS requested(id, position)
+        LEFT JOIN currencies c ON c.id = requested.id ORDER BY requested.position"#,
+        ids
+    )
+    .fetch_all(pool)
+    .await
 }
 
 /// Refuse an act that lands on a currency the token is not for.

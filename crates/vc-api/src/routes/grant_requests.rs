@@ -210,6 +210,7 @@ pub async fn index(State(state): State<AppState>, user: AuthUser) -> Response {
                         "discord_id": request.target.user().map(|id| id.to_string()),
                         "scopes": request.scopes,
                         "status": request.status,
+                        "grant_id": request.grant_id.map(|id| id.to_string()),
                         "expires_in": request.expires_in,
                     })
                 })

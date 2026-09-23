@@ -320,6 +320,7 @@ async fn the_list_reads_back_what_was_asked(pool: PgPool) {
             "discord_id": Value::Null,
             "scopes": ["vc.issue"],
             "status": "approved",
+            "grant_id": response.body[0]["grant_id"],
             "expires_in": response.body[0]["expires_in"],
         }])
     );
@@ -587,26 +588,35 @@ async fn poll_after_discord_revocation(pool: PgPool, keep_another: bool) {
         .is_some()
     );
     let client_id = support::client_id_of(&pool, application).await;
-    let revoked = support::interaction(vc_api::router(state(pool.clone(), fake())), json!({
-        "type": 3,
-        "data": {"component_type": 2, "custom_id": vc_api::custom_id::ui::grant::revoke_custom_id(&client_id)},
-        "member": {"user": {"id": OWNER_DISCORD_ID.to_string()}, "permissions": support::DEFAULT_PERMISSIONS.to_string()},
-        "guild_id": GUILD.to_string()
-    })).await;
-    assert_eq!(revoked.status, 200, "{}", revoked.body);
-    let remaining = vc_core::grant::grants_of(&pool, application)
-        .await
-        .unwrap()
-        .remove(0)
-        .scopes;
-    assert_eq!(
-        remaining,
-        if keep_another {
-            vec!["vc.contract"]
-        } else {
-            vec![]
-        }
-    );
+    if keep_another {
+        // The legacy owner endpoint removes only issuing permission in bulk.
+        vc_core::grant::revoke_grant(&pool, &client_id, GUILD)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            vc_core::grant::grants_of(&pool, application).await.unwrap()[0].scopes,
+            ["vc.contract"]
+        );
+    } else {
+        let grant: i64 = sqlx::query_scalar("SELECT grant_id FROM grant_requests WHERE id = $1")
+            .bind(asked.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let revoked = support::interaction(vc_api::router(state(pool.clone(), fake())), json!({
+            "type":3, "data":{"component_type":2,"custom_id":vc_api::custom_id::ui::grant::revoke_one_custom_id(grant)},
+            "member":{"user":{"id":OWNER_DISCORD_ID.to_string()},"permissions":support::DEFAULT_PERMISSIONS.to_string()},
+            "guild_id":GUILD.to_string()
+        })).await;
+        assert_eq!(revoked.status, 200);
+        assert!(
+            vc_core::grant::grants_of(&pool, application)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
     let (status, body) = device_poll(&pool, application, &asked.device_code.to_string()).await;
     assert_eq!(status, 400, "revoked poll returned {body}");
     assert_eq!(body["error"], "invalid_grant");

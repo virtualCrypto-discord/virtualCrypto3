@@ -65,7 +65,9 @@ https://vcrypto.sumidora.com/api/v2/currencies
 Naming every currency one by one would say something else: a set frozen at the
 moment of the ask, which quietly leaves out a currency the guild creates
 tomorrow. The collection says all of them, now and later, and it is the same fact
-whether a client writes it or writes nothing at all.
+whether a client writes it or writes nothing at all. When the collection and
+individual currency URIs occur together, the collection covers all currencies;
+every URI is still validated, including guild ownership restrictions.
 
 What is *stored* is the currency id, never the URI. The URI is the wire form, and
 storing the id is what keeps a grant working when the site moves.
@@ -104,9 +106,9 @@ error code for it, and one this service did not have until now.
   currency cannot turn a restricted grant into an all-currency grant.
   Deleting the grant itself still removes its resource rows.
 
-An empty set is not a thing the request can write (see above), but an *old* grant
-has none: those rows mean "every currency of the target", which is what they meant
-before this existed, and a migration does not rewrite them.
+An empty stored set means "every currency of the target". Omitting `resource`,
+supplying an empty array, or including the collection URI all produce that set.
+Old grants with no resource rows retain the same meaning.
 
 ## What a token may then do
 
@@ -134,8 +136,11 @@ application takes for itself, which is what the issue scope's own token is.
 The common `/grant approve` review displays the target, exact operations and
 permitted currencies before its confirmation button grants anything. `/grant user`
 and `/grant server` list the corresponding grants and their currency restrictions.
-Personal reapproval replaces both scopes and currencies together; an old spending
-scope must not inherit the currencies of a new read-only approval.
+Each device or v3 browser approval creates a separate grant with its own scope/resource pair.
+A later approval never changes an earlier grant or its tokens. Long currency lists
+are paged in the review and grant Details screens. See
+[personal-grants.md](personal-grants.md#independent-approvals) for the model and
+legacy authorization-code compatibility.
 
 ## Where the pieces go
 

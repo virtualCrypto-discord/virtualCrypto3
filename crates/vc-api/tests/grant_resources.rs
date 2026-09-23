@@ -1368,3 +1368,227 @@ async fn legacy_and_unknown_scopes_do_not_authorize_personal_delegations(pool: P
         403
     );
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn independent_approvals_do_not_mix_scopes_resources_or_tokens(pool: PgPool) {
+    fixture(&pool).await;
+    let (app, own_token) = application_token(&pool).await;
+    let http = router(pool.clone());
+    // Both requests must coexist before either is approved.
+    let read = ask(&pool, &own_token, json!({"discord_id":PERSON.to_string(),
+        "scopes":["vc.delegate.balances.read"], "resource":[format!("{SITE}/api/v2/currencies/{CURRENCY_A}")]})).await;
+    let pay_b = ask(&pool, &own_token, json!({"discord_id":PERSON.to_string(),
+        "scopes":["vc.delegate.payments.create"], "resource":[format!("{SITE}/api/v2/currencies/{CURRENCY_B}")]})).await;
+    assert_eq!(read.status, 201);
+    assert_eq!(pay_b.status, 201);
+    assert_ne!(read.body["user_code"], pay_b.body["user_code"]);
+    let now = time::OffsetDateTime::now_utc();
+    for asked in [&read, &pay_b] {
+        vc_core::grant::decide_request(
+            &pool,
+            asked.body["user_code"].as_str().unwrap(),
+            Target::User(PERSON),
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+    let (status, a) = device_poll(&pool, app, read.body["device_code"].as_str().unwrap()).await;
+    assert_eq!(status, 200);
+    let (status, b) = device_poll(&pool, app, pay_b.body["device_code"].as_str().unwrap()).await;
+    assert_eq!(status, 200);
+    assert_ne!(a["grant_id"], b["grant_id"]);
+    let ta = a["access_token"].as_str().unwrap();
+    let tb = b["access_token"].as_str().unwrap();
+    let balances = get(http.clone(), "/api/v2/users/@me/balances", Some(ta)).await;
+    assert_eq!(balances.status, 200);
+    let resolved = vc_core::grant::resolve_token(&pool, ta.parse().unwrap(), now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.resources, [CURRENCY_A]);
+    assert_eq!(resolved.scopes, ["vc.delegate.balances.read"]);
+    assert_eq!(
+        get(http.clone(), "/api/v2/users/@me/balances", Some(tb))
+            .await
+            .status,
+        403
+    );
+    for token in [ta, tb] {
+        assert_eq!(
+            request(
+                http.clone(),
+                "POST",
+                "/api/v2/users/@me/transactions",
+                Some(token),
+                pay(UNIT_A, "1")
+            )
+            .await
+            .status,
+            403
+        );
+    }
+    assert_eq!(
+        request(
+            http.clone(),
+            "POST",
+            "/api/v2/users/@me/transactions",
+            Some(tb),
+            pay(UNIT_B, "1")
+        )
+        .await
+        .status,
+        201
+    );
+    let ga = a["grant_id"].as_str().unwrap().parse().unwrap();
+    let gb = b["grant_id"].as_str().unwrap().parse().unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let ra = vc_core::grant::create_refresh_token(&mut *conn, ga, now)
+        .await
+        .unwrap();
+    let rb = vc_core::grant::create_refresh_token(&mut *conn, gb, now)
+        .await
+        .unwrap();
+    drop(conn);
+    assert!(
+        !vc_core::grant::revoke_one(&pool, ga, PERSON + 1, None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        vc_core::grant::revoke_one(&pool, ga, PERSON, None)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        get(http.clone(), "/api/v2/users/@me/balances", Some(ta))
+            .await
+            .status,
+        401
+    );
+    assert!(
+        vc_core::grant::exchange_refresh_token(&pool, &ra, now)
+            .await
+            .is_err()
+    );
+    assert!(
+        vc_core::grant::exchange_refresh_token(&pool, &rb, now)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        request(
+            http,
+            "POST",
+            "/api/v2/users/@me/transactions",
+            Some(tb),
+            pay(UNIT_B, "1")
+        )
+        .await
+        .status,
+        201
+    );
+    assert_eq!(
+        device_poll(&pool, app, read.body["device_code"].as_str().unwrap())
+            .await
+            .0,
+        400
+    );
+    // A new approval for the same scopes does not resurrect an old device code.
+    let again = ask(
+        &pool,
+        &own_token,
+        json!({"discord_id":PERSON.to_string(), "scopes":["vc.delegate.balances.read"]}),
+    )
+    .await;
+    vc_core::grant::decide_request(
+        &pool,
+        again.body["user_code"].as_str().unwrap(),
+        Target::User(PERSON),
+        now,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        device_poll(&pool, app, read.body["device_code"].as_str().unwrap())
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        device_poll(&pool, app, again.body["device_code"].as_str().unwrap())
+            .await
+            .0,
+        200
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_collection_with_individual_resources_still_covers_all(pool: PgPool) {
+    fixture(&pool).await;
+    for resources in [
+        json!([
+            format!("{SITE}/api/v2/currencies"),
+            format!("{SITE}/api/v2/currencies/{CURRENCY_A}")
+        ]),
+        json!([
+            format!("{SITE}/api/v2/currencies/{CURRENCY_A}"),
+            format!("{SITE}/api/v2/currencies")
+        ]),
+    ] {
+        let resolved = vc_api::resource::resolve(
+            &pool,
+            SITE,
+            Target::User(PERSON),
+            &resources
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        assert!(resolved.is_empty());
+    }
+    let (_, token, resources) = ask_and_approve(
+        &pool,
+        Some(json!([
+            format!("{SITE}/api/v2/currencies"),
+            format!("{SITE}/api/v2/currencies/{CURRENCY_A}")
+        ])),
+        &["vc.delegate.payments.create"],
+    )
+    .await;
+    assert!(resources.is_empty());
+    assert_eq!(
+        request(
+            router(pool.clone()),
+            "POST",
+            "/api/v2/users/@me/transactions",
+            Some(&token),
+            pay(UNIT_B, "1")
+        )
+        .await
+        .status,
+        201
+    );
+    for invalid in [
+        "https://foreign.invalid/api/v2/currencies".to_owned(),
+        format!("{SITE}/api/v2/currencies/99999"),
+        format!("{SITE}/api/v2/currencies/{CURRENCY_B}"),
+    ] {
+        assert!(
+            vc_api::resource::resolve(
+                &pool,
+                SITE,
+                Target::Guild(GUILD_A),
+                &[format!("{SITE}/api/v2/currencies"), invalid]
+            )
+            .await
+            .is_err()
+        );
+    }
+}

@@ -1,10 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE grant_requests\n              SET status = 'approved', updated_at = $4\n            WHERE user_code = $1\n              AND guild_id IS NOT DISTINCT FROM $2\n              AND discord_id IS NOT DISTINCT FROM $3\n              AND status = 'pending'\n              AND inserted_at + make_interval(secs => expires_in) > $4\n         RETURNING application_id, scopes AS \"scopes!\", resources AS \"resources!\"",
+  "query": "UPDATE grant_requests\n              SET status = 'approved', updated_at = $4\n            WHERE user_code = $1\n              AND guild_id IS NOT DISTINCT FROM $2\n              AND discord_id IS NOT DISTINCT FROM $3\n              AND status = 'pending'\n              AND inserted_at + make_interval(secs => expires_in) > $4\n         RETURNING id, application_id, scopes AS \"scopes!\", resources AS \"resources!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
         "name": "application_id",
         "type_info": "Int8",
         "origin": {
@@ -15,7 +26,7 @@
         }
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "scopes!",
         "type_info": "TextArray",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "resources!",
         "type_info": "Int8Array",
         "origin": {
@@ -48,8 +59,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "6d3566505636407c6b3fdeb063ef48772f21286d0efbc5af8575a0c89d476f93"
+  "hash": "2a3b2c000d31d5c4a78ae560a94810bae0b71b785c6294de0042df295b4e8b7a"
 }

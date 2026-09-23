@@ -567,6 +567,9 @@ pub mod ui {
         pub enum Pressed {
             Revoked(String),
             Confirmed(i64),
+            ReviewPage(i64, i64),
+            Details(i64, i64),
+            RevokeOne(i64),
             UserRevoked(i64, uuid::Uuid),
             UserPaged(i64, i64),
             Paged(Page, i64),
@@ -615,6 +618,15 @@ pub mod ui {
         pub fn user_page_custom_id(user: i64, page: i64) -> String {
             encoded(8, &format!("{user}:{page}"))
         }
+        pub fn review_page_custom_id(request: i64, page: i64) -> String {
+            encoded(9, &format!("{request}:{page}"))
+        }
+        pub fn details_custom_id(grant: i64, page: i64) -> String {
+            encoded(10, &format!("{grant}:{page}"))
+        }
+        pub fn revoke_one_custom_id(grant: i64) -> String {
+            encoded(11, &grant.to_string())
+        }
         fn encoded(action: u8, payload: &str) -> String {
             let mut data = vec![HEAD, action];
             data.extend_from_slice(payload.as_bytes());
@@ -658,6 +670,20 @@ pub mod ui {
                 6 => Ok(Pressed::Confirmed(
                     text()?.parse().map_err(|_| UiError::Head)?,
                 )),
+                11 => Ok(Pressed::RevokeOne(
+                    text()?.parse().map_err(|_| UiError::Head)?,
+                )),
+                9 | 10 => {
+                    let value = text()?;
+                    let (key, page) = value.split_once(':').ok_or(UiError::Head)?;
+                    let key = key.parse().map_err(|_| UiError::Head)?;
+                    let page = page.parse().map_err(|_| UiError::Head)?;
+                    Ok(if *id == 9 {
+                        Pressed::ReviewPage(key, page)
+                    } else {
+                        Pressed::Details(key, page)
+                    })
+                }
                 7 | 8 => {
                     let value = text()?;
                     let (user, value) = value.split_once(':').ok_or(UiError::Head)?;
@@ -1124,8 +1150,8 @@ mod tests {
             Err(UiError::Head)
         );
         assert_eq!(
-            ui::grant::parse(&[ui::grant::head(), 9, b'7']),
-            Err(UiError::Unknown(9))
+            ui::grant::parse(&[ui::grant::head(), 12, b'7']),
+            Err(UiError::Unknown(12))
         );
     }
 

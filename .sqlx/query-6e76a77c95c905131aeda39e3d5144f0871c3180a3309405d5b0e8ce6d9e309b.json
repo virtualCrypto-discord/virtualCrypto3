@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, application_id, guild_id, discord_id, scopes AS \"scopes!\", resources AS \"resources!\",\n                  device_code AS \"device_code!: Uuid\", user_code AS \"user_code!\",\n                  status AS \"status!\", expires_in AS \"expires_in!\"\n             FROM grant_requests\n            WHERE application_id = $1 AND device_code = $2\n              AND inserted_at + make_interval(secs => expires_in) > $3",
+  "query": "SELECT id, grant_id, application_id, guild_id, discord_id, scopes AS \"scopes!\", resources AS \"resources!\",\n                  device_code AS \"device_code!: Uuid\", user_code AS \"user_code!\",\n                  status AS \"status!\", expires_in AS \"expires_in!\"\n             FROM grant_requests\n            WHERE application_id = $1\n            ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "grant_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "grant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "application_id",
         "type_info": "Int8",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "guild_id",
         "type_info": "Int8",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "discord_id",
         "type_info": "Int8",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "scopes!",
         "type_info": "TextArray",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "resources!",
         "type_info": "Int8Array",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "device_code!: Uuid",
         "type_info": "Uuid",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "user_code!",
         "type_info": "Varchar",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "status!",
         "type_info": "Varchar",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "expires_in!",
         "type_info": "Int8",
         "origin": {
@@ -116,13 +127,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Uuid",
-        "Timestamp"
+        "Int8"
       ]
     },
     "nullable": [
       false,
+      true,
       false,
       true,
       true,
@@ -134,5 +144,5 @@
       false
     ]
   },
-  "hash": "7619a7386586720b7a67cc3b329f7d5b97de7a81c2542c02bfb8a59b61992a47"
+  "hash": "6e76a77c95c905131aeda39e3d5144f0871c3180a3309405d5b0e8ce6d9e309b"
 }

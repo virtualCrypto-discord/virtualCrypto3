@@ -60,7 +60,15 @@ pub async fn grant_for_code(
     now: OffsetDateTime,
 ) -> Result<Option<i64>> {
     let mut connection = pool.acquire().await?;
-    grant_for_code_in(&mut connection, application_id, guild_id, latest_code, now).await
+    grant_for_code_in(
+        &mut connection,
+        application_id,
+        guild_id,
+        latest_code,
+        now,
+        false,
+    )
+    .await
 }
 
 async fn grant_for_code_in(
@@ -69,6 +77,7 @@ async fn grant_for_code_in(
     guild_id: i64,
     latest_code: &str,
     now: OffsetDateTime,
+    independent: bool,
 ) -> Result<Option<i64>> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
@@ -81,14 +90,15 @@ async fn grant_for_code_in(
     }
 
     let id = sqlx::query_scalar!(
-        "INSERT INTO grants (application_id, guild_id, latest_code, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $4)
-         ON CONFLICT (application_id, guild_id) DO UPDATE SET latest_code = $3
+        "INSERT INTO grants (application_id, guild_id, latest_code, inserted_at, updated_at, independent)
+         VALUES ($1, $2, $3, $4, $4, $5)
+         ON CONFLICT (application_id, guild_id) WHERE NOT independent DO UPDATE SET latest_code = $3
         RETURNING id",
         application_id,
         guild_id,
         latest_code,
-        at
+        at,
+        independent
     )
     .fetch_one(&mut *connection)
     .await?;
@@ -142,12 +152,9 @@ pub async fn create_grant_scopes(
 /// resource would turn a restricted grant into an unrestricted one. A subsequent
 /// approval can still replace the set explicitly.
 ///
-/// Unlike [`create_grant_scopes`], which only ever adds, this **replaces** the
-/// set: a grant carries what was last approved, so an application that
-/// re-asks for one currency where it had two is narrowed rather than quietly
-/// keeping the wider permission. The collection form and the omitted form are
-/// therefore able to clear a grant back to "every currency", which adding
-/// could never do.
+/// Replaces the resources on the supplied grant. Independent approvals get a
+/// fresh grant id, so this cannot alter an earlier approval. Only legacy code
+/// exchanges may reuse a grant and replace its resources for compatibility.
 pub async fn create_grant_resources(
     connection: &mut sqlx::PgConnection,
     grant_id: i64,
@@ -379,6 +386,11 @@ async fn exchange_code_in(
         taken.guild_id.unwrap_or_default(),
         code,
         now,
+        taken
+            .scopes
+            .iter()
+            .any(|scope| scope == crate::application::ISSUE)
+            || !taken.resources.is_empty(),
     )
     .await
     .map_err(|_| ExchangeError::InvalidCode)?;
@@ -391,9 +403,8 @@ async fn exchange_code_in(
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
 
-    // The browser flow's own narrowing, written the same way the device flow's
-    // is: the code carried the ids the consent screen resolved, and the grant
-    // they land on is the same grant.
+    // v3 issuing/resource consent gets its own grant just like device consent.
+    // Only legacy scope-less/OIDC exchanges retain the original shared slot.
     create_grant_resources(&mut *connection, grant_id, &taken.resources, now)
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
@@ -516,13 +527,11 @@ impl Target {
     }
 }
 
-/// The grant an application holds in a guild, if it holds one.
-///
-/// A client credentials request names a guild it wants a token for, and a guild
-/// the application has never been granted anything in is not one it can have.
+/// The legacy grant slot for an application and guild. Device grants are
+/// deliberately excluded: they must be addressed by their approval's grant id.
 pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Result<Option<i64>> {
     let found = sqlx::query_scalar!(
-        "SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2",
+        "SELECT id FROM grants WHERE application_id = $1 AND guild_id = $2 AND NOT independent",
         application_id,
         guild_id
     )
@@ -542,11 +551,14 @@ pub async fn create_device_token(
 ) -> Result<Option<String>> {
     let mut tx = pool.begin().await?;
     let grant_id = sqlx::query_scalar!(
-        "SELECT id FROM grants
-          WHERE application_id = $1
-            AND guild_id IS NOT DISTINCT FROM $2
-            AND discord_id IS NOT DISTINCT FROM $3",
+        "SELECT g.id FROM grants g JOIN grant_requests r ON r.grant_id = g.id
+          WHERE r.id = $1 AND r.application_id = $2 AND r.status = 'approved'
+            AND r.inserted_at + make_interval(secs => r.expires_in) > $3
+            AND g.guild_id IS NOT DISTINCT FROM $4
+            AND g.discord_id IS NOT DISTINCT FROM $5 FOR SHARE OF g, r",
+        request.id,
         request.application_id,
+        PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second(),
         request.target.guild(),
         request.target.user()
     )
@@ -582,6 +594,7 @@ async fn write_grant(
     scopes: &[String],
     resources: &[i64],
     now: OffsetDateTime,
+    independent: bool,
 ) -> Result<i64> {
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
@@ -589,31 +602,23 @@ async fn write_grant(
         crate::user::insert_if_not_exists(connection, discord_id).await?;
     }
 
-    // Two targets, one statement: the conflict is the pair the row is unique by,
-    // which is the application and whichever id it names. A guild and a Discord
-    // user can never share a snowflake, so the two live in one column space here
-    // the way they do in `grant_requests`' index.
+    // Only legacy rows participate in the unique slot. Device approvals always
+    // insert a new independent row; another consent cannot alter its authority.
     let grant_id = sqlx::query_scalar!(
-        "INSERT INTO grants (application_id, guild_id, discord_id, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $4)
-         ON CONFLICT (application_id, (COALESCE(guild_id, discord_id)))
+        "INSERT INTO grants (application_id, guild_id, discord_id, inserted_at, updated_at, independent)
+         VALUES ($1, $2, $3, $4, $4, $5)
+         ON CONFLICT (application_id, (COALESCE(guild_id, discord_id))) WHERE NOT independent
          DO UPDATE SET updated_at = EXCLUDED.updated_at
          RETURNING id",
         application_id,
         target.guild(),
         target.user(),
-        at
+        at,
+        independent
     )
     .fetch_one(&mut *connection)
     .await?;
 
-    // Personal consent replaces the exact operation/resource pair. Retaining an
-    // old spending scope while replacing its currencies would widen authority.
-    if matches!(target, Target::User(_)) {
-        sqlx::query!("DELETE FROM grant_scopes WHERE grant_id = $1", grant_id)
-            .execute(&mut *connection)
-            .await?;
-    }
     create_grant_scopes(connection, grant_id, scopes, now).await?;
     create_grant_resources(connection, grant_id, resources, now).await?;
 
@@ -650,6 +655,7 @@ pub async fn allow_in_guild(
         &scopes,
         resources,
         now,
+        false,
     )
     .await
 }
@@ -683,7 +689,7 @@ pub async fn revoke_grant(pool: &PgPool, code: &str, guild_id: i64) -> Result<Op
            SELECT g.application_id FROM grants g
              JOIN applications a ON a.id = g.application_id
             WHERE a.client_id = $1 AND g.guild_id = $2
-              AND EXISTS (SELECT 1 FROM ungranted)"#,
+              AND EXISTS (SELECT 1 FROM ungranted) LIMIT 1"#,
         client_id,
         guild_id
     )
@@ -712,13 +718,13 @@ pub struct GrantedGuild {
 pub async fn grants_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantedGuild>> {
     let rows = sqlx::query!(
         r#"SELECT g.guild_id AS "guild_id!",
-                  g.updated_at,
-                  COALESCE(array_agg(s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
+                  max(g.updated_at) AS "updated_at!",
+                  COALESCE(array_agg(DISTINCT s.scope::text) FILTER (WHERE s.scope IS NOT NULL),
                            ARRAY[]::text[]) AS "scopes!"
              FROM grants g
              LEFT JOIN grant_scopes s ON s.grant_id = g.id
             WHERE g.application_id = $1 AND g.guild_id IS NOT NULL AND g.guild_id <> 0
-            GROUP BY g.id, g.guild_id, g.updated_at
+            GROUP BY g.guild_id
             ORDER BY g.guild_id"#,
         application_id
     )
@@ -739,6 +745,7 @@ pub async fn grants_of(pool: &PgPool, application_id: i64) -> Result<Vec<Granted
 /// and the subject of the button that takes the permission back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedApplication {
+    pub grant_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
     /// The currencies the grant covers, as `grant_resources` ids. Empty is every
@@ -794,7 +801,7 @@ pub async fn authorized_in_guild(
     .await?;
 
     let rows = sqlx::query!(
-        r#"SELECT a.client_id::text AS "client_id!", a.client_name,
+        r#"SELECT g.id AS grant_id, a.client_id::text AS "client_id!", a.client_name,
                   COALESCE((SELECT array_agg(r.currency_id) FROM grant_resources r
                              WHERE r.grant_id = g.id), ARRAY[]::bigint[]) AS "resources!"
              FROM grants g
@@ -819,6 +826,7 @@ pub async fn authorized_in_guild(
         applications: rows
             .into_iter()
             .map(|row| AuthorizedApplication {
+                grant_id: row.grant_id,
                 client_id: row.client_id,
                 client_name: row.client_name,
                 resources: row.resources,
@@ -917,9 +925,8 @@ pub async fn resolve_token(
 ///
 /// The ask names the scopes it wants, because the grant it may become is
 /// written from exactly those: an approval that granted something else would be
-/// a permission nobody asked for. Asking twice is the same ask, so a second
-/// request while one is pending keeps the request that is there — the codes
-/// with it, so the application's poll and the target's screen keep agreeing.
+/// a permission nobody asked for. Retrying an identical pending scope/resource
+/// set keeps its codes and deadline. Different permission sets may coexist.
 ///
 /// `expires_in` is how long the ask lives, in seconds, and it is the caller's
 /// to name within reason: a device that will poll for ten minutes asks for ten
@@ -979,9 +986,15 @@ async fn request_grant_attempt(
 
     let mut tx = pool.begin().await?;
 
-    // Expired pending requests still occupy the unique slot until the purge.
-    // Remove ours and create its replacement in one transaction; concurrent
-    // requests then share the newly inserted live request through the upsert.
+    sqlx::query!(
+        "SELECT id FROM applications WHERE id = $1 FOR NO KEY UPDATE",
+        application_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Serialize retries for this application without blocking foreign-key reads
+    // made by a concurrent approval. Reuse only the exact live permission set.
     sqlx::query!(
         "DELETE FROM grant_requests
           WHERE application_id = $1 AND status = 'pending'
@@ -997,14 +1010,21 @@ async fn request_grant_attempt(
     .await?;
 
     let row = sqlx::query!(
-        r#"INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, resources, device_code, user_code, expires_in, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), substring(replace(gen_random_uuid()::text, '-', '') from 1 for 8), $6, $7, $7)
-         ON CONFLICT (application_id, (COALESCE(guild_id, discord_id))) WHERE status = 'pending'
-         DO UPDATE SET updated_at = EXCLUDED.updated_at
-         RETURNING id, guild_id, discord_id, scopes AS "scopes!: Vec<String>", resources AS "resources!: Vec<i64>",
+        r#"WITH existing AS (
+           SELECT * FROM grant_requests WHERE application_id = $1
+             AND guild_id IS NOT DISTINCT FROM $2 AND discord_id IS NOT DISTINCT FROM $3
+             AND status = 'pending' AND scopes @> $4 AND scopes <@ $4
+             AND resources @> $5 AND resources <@ $5
+           ORDER BY id LIMIT 1
+         ), inserted AS (
+           INSERT INTO grant_requests (application_id, guild_id, discord_id, scopes, resources, device_code, user_code, expires_in, inserted_at, updated_at)
+           SELECT $1, $2, $3, $4, $5, gen_random_uuid(), substring(replace(gen_random_uuid()::text, '-', '') from 1 for 8), $6, $7, $7
+           WHERE NOT EXISTS (SELECT 1 FROM existing) RETURNING *
+         ) SELECT id AS "id!", grant_id, guild_id, discord_id, scopes AS "scopes!: Vec<String>", resources AS "resources!: Vec<i64>",
                    device_code AS "device_code!: Uuid",
                    user_code AS "user_code!: String", status AS "status!: String",
-                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($7 - inserted_at))::bigint) AS "expires_in!: i64""#,
+                   GREATEST(0, expires_in - EXTRACT(EPOCH FROM ($7 - inserted_at))::bigint) AS "expires_in!: i64"
+           FROM (SELECT * FROM existing UNION ALL SELECT * FROM inserted) chosen"#,
         application_id,
         target.guild(),
         target.user(),
@@ -1020,6 +1040,7 @@ async fn request_grant_attempt(
 
     Ok(GrantRequest {
         id: row.id,
+        grant_id: row.grant_id,
         application_id,
         target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
         scopes: row.scopes,
@@ -1037,6 +1058,7 @@ async fn request_grant_attempt(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantRequest {
     pub id: i64,
+    pub grant_id: Option<i64>,
     pub application_id: i64,
     pub target: Target,
     pub scopes: Vec<String>,
@@ -1051,7 +1073,7 @@ pub struct GrantRequest {
 /// What an application has asked for, answered or not.
 pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<GrantRequest>> {
     let rows = sqlx::query!(
-        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!", resources AS "resources!",
+        r#"SELECT id, grant_id, application_id, guild_id, discord_id, scopes AS "scopes!", resources AS "resources!",
                   device_code AS "device_code!: Uuid", user_code AS "user_code!",
                   status AS "status!", expires_in AS "expires_in!"
              FROM grant_requests
@@ -1066,6 +1088,7 @@ pub async fn requests_of(pool: &PgPool, application_id: i64) -> Result<Vec<Grant
         .map(|row| {
             Ok(GrantRequest {
                 id: row.id,
+                grant_id: row.grant_id,
                 application_id: row.application_id,
                 target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
                 scopes: row.scopes,
@@ -1117,7 +1140,7 @@ pub async fn decide_request(
               AND discord_id IS NOT DISTINCT FROM $3
               AND status = 'pending'
               AND inserted_at + make_interval(secs => expires_in) > $4
-         RETURNING application_id, scopes AS "scopes!", resources AS "resources!""#,
+         RETURNING id, application_id, scopes AS "scopes!", resources AS "resources!""#,
         user_code,
         target.guild(),
         target.user(),
@@ -1130,14 +1153,22 @@ pub async fn decide_request(
         return Ok(None);
     };
 
-    write_grant(
+    let grant_id = write_grant(
         &mut tx,
         decided.application_id,
         target,
         &decided.scopes,
         &decided.resources,
         now,
+        true,
     )
+    .await?;
+    sqlx::query!(
+        "UPDATE grant_requests SET grant_id = $2 WHERE id = $1",
+        decided.id,
+        grant_id
+    )
+    .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
@@ -1177,7 +1208,7 @@ pub async fn poll_request(
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let row = sqlx::query!(
-        r#"SELECT id, application_id, guild_id, discord_id, scopes AS "scopes!", resources AS "resources!",
+        r#"SELECT id, grant_id, application_id, guild_id, discord_id, scopes AS "scopes!", resources AS "resources!",
                   device_code AS "device_code!: Uuid", user_code AS "user_code!",
                   status AS "status!", expires_in AS "expires_in!"
              FROM grant_requests
@@ -1196,6 +1227,7 @@ pub async fn poll_request(
 
     Ok(Some(GrantRequest {
         id: row.id,
+        grant_id: row.grant_id,
         application_id: row.application_id,
         target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
         scopes: row.scopes,
@@ -1301,7 +1333,11 @@ pub async fn review_requests(
 
 /// Confirm only the exact immutable request shown by the review screen. The
 /// caller must reauthenticate the target on this button press.
-pub async fn approve_review(pool: &PgPool, review: &Review, now: OffsetDateTime) -> Result<bool> {
+pub async fn approve_review(
+    pool: &PgPool,
+    review: &Review,
+    now: OffsetDateTime,
+) -> Result<Option<i64>> {
     let mut tx = pool.begin().await?;
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
     let changed = sqlx::query!(
@@ -1322,23 +1358,32 @@ pub async fn approve_review(pool: &PgPool, review: &Review, now: OffsetDateTime)
     .await?
     .rows_affected();
     if changed == 0 {
-        return Ok(false);
+        return Ok(None);
     }
-    write_grant(
+    let grant_id = write_grant(
         &mut tx,
         review.application_id,
         review.target,
         &review.scopes,
         &review.resources,
         now,
+        true,
     )
     .await?;
+    sqlx::query!(
+        "UPDATE grant_requests SET grant_id = $2 WHERE id = $1",
+        review.request_id,
+        grant_id
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(Some(grant_id))
 }
 
 #[derive(Debug)]
 pub struct PersonalApplication {
+    pub grant_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
     pub scopes: Vec<String>,
@@ -1361,7 +1406,7 @@ pub async fn personal_applications(
     let last = ((total + limit - 1) / limit).max(1);
     let page = page.clamp(1, last);
     let rows = sqlx::query!(
-        r#"SELECT a.client_id::text AS "client_id!", a.client_name,
+        r#"SELECT g.id AS grant_id, a.client_id::text AS "client_id!", a.client_name,
                   ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS "scopes!",
                   ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS "resources!"
              FROM grants g JOIN applications a ON a.id = g.application_id
@@ -1371,6 +1416,7 @@ pub async fn personal_applications(
     Ok((
         rows.into_iter()
             .map(|row| PersonalApplication {
+                grant_id: row.grant_id,
                 client_id: row.client_id,
                 client_name: row.client_name,
                 scopes: row.scopes,
@@ -1382,15 +1428,55 @@ pub async fn personal_applications(
     ))
 }
 
-/// Deleting a personal grant revokes its access and refresh tokens by cascade.
-pub async fn revoke_personal(pool: &PgPool, client_id: Uuid, user: i64) -> Result<Option<i64>> {
-    Ok(sqlx::query_scalar!(
-        "DELETE FROM grants g USING applications a WHERE g.application_id = a.id
-          AND a.client_id = $1 AND g.discord_id = $2 RETURNING g.application_id",
-        client_id,
-        user
+/// An existing grant is not an approval request and cannot be confirmed again.
+#[derive(Debug)]
+pub struct GrantDetails {
+    pub grant_id: i64,
+    pub application_id: i64,
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub target: Target,
+    pub scopes: Vec<String>,
+    pub resources: Vec<i64>,
+}
+
+/// Read one grant only for its owner or an administrator of its guild.
+pub async fn grant_details(
+    pool: &PgPool,
+    id: i64,
+    user: i64,
+    guild: Option<i64>,
+) -> Result<Option<GrantDetails>> {
+    let row = sqlx::query!(r#"SELECT g.id, g.application_id AS "application_id!", g.guild_id, g.discord_id,
+        a.client_id::text AS "client_id!", a.client_name,
+        ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS "scopes!",
+        ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS "resources!"
+        FROM grants g JOIN applications a ON a.id = g.application_id
+        WHERE g.id = $1 AND (g.discord_id = $2 OR g.guild_id = $3)"#, id, user, guild).fetch_optional(pool).await?;
+    row.map(|r| {
+        Ok(GrantDetails {
+            grant_id: r.id,
+            application_id: r.application_id,
+            client_id: r.client_id,
+            client_name: r.client_name,
+            target: Target::of(r.guild_id, r.discord_id).ok_or(sqlx::Error::RowNotFound)?,
+            scopes: r.scopes,
+            resources: r.resources,
+        })
+    })
+    .transpose()
+}
+
+/// Delete exactly one owned grant; its access and refresh tokens cascade.
+pub async fn revoke_one(pool: &PgPool, id: i64, user: i64, guild: Option<i64>) -> Result<bool> {
+    Ok(sqlx::query!(
+        "DELETE FROM grants WHERE id = $1 AND (discord_id = $2 OR guild_id = $3)",
+        id,
+        user,
+        guild
     )
-    .fetch_optional(pool)
+    .execute(pool)
     .await?
-    .flatten())
+    .rows_affected()
+        == 1)
 }

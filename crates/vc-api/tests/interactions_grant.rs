@@ -25,7 +25,7 @@ use support::{
     insert_application, insert_currency, interaction, state, state_with_notifier,
 };
 use tower::ServiceExt;
-use vc_api::custom_id::ui::grant::{Page, page_custom_id, revoke_custom_id};
+use vc_api::custom_id::ui::grant::{Page, page_custom_id};
 
 /// The administrator the interactions come from. The id is a Discord one, and the
 /// command never resolves it to an account.
@@ -188,7 +188,11 @@ async fn an_ask_is_not_on_the_list(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_shows_who_may_issue(pool: PgPool) {
-    let (_, client_id) = authorized(&pool, FIRST_OWNER, "an application").await;
+    let (app, client_id) = authorized(&pool, FIRST_OWNER, "an application").await;
+    let grant_id = vc_core::grant::grant_for(&pool, app, DEFAULT_GUILD)
+        .await
+        .unwrap()
+        .unwrap();
 
     let response = interaction(
         router(pool),
@@ -201,12 +205,15 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
         texts(&response),
         [
             "**発行を許可しているアプリケーション** (1件)\n\
-             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!("**an application**\n`{client_id}`\nこの申請は、すべての通貨を操作できます。"),
         ]
     );
-    assert_eq!(buttons(&response), [revoke_custom_id(&client_id)]);
+    assert_eq!(
+        buttons(&response),
+        [vc_api::custom_id::ui::grant::revoke_one_custom_id(grant_id)]
+    );
 }
 
 /// A grant narrowed to one currency reads as such: the screen names it by unit,
@@ -318,6 +325,12 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
     )
     .await;
 
+    let grant_id: i64 =
+        sqlx::query_scalar("SELECT grant_id FROM grant_requests WHERE application_id = $1")
+            .bind(application)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let response = interaction(
         router(pool),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
@@ -328,7 +341,10 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
         texts(&response)[1],
         format!("**an application**\n`{client_id}`\nこの申請は、すべての通貨を操作できます。")
     );
-    assert_eq!(buttons(&response), [revoke_custom_id(&client_id)]);
+    assert_eq!(
+        buttons(&response),
+        [vc_api::custom_id::ui::grant::revoke_one_custom_id(grant_id)]
+    );
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -386,7 +402,10 @@ async fn pressing_revoke_takes_the_permission_back(pool: PgPool) {
 
     let response = interaction(
         router_with(pool.clone(), notified.clone()),
-        button_from_guild(json!({ "custom_id": revoke_custom_id(&client_id) }), ADMIN),
+        button_from_guild(
+            json!({ "custom_id": revoke_button(&pool, &client_id).await }),
+            ADMIN,
+        ),
     )
     .await;
 
@@ -410,7 +429,7 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
 
     let payload = json!({
         "type": 3,
-        "data": { "custom_id": revoke_custom_id(&client_id), "component_type": 2 },
+        "data": { "custom_id": revoke_button(&pool, &client_id).await, "component_type": 2 },
         "member": { "user": { "id": ADMIN.to_string() }, "permissions": NOT_ADMIN },
         "guild_id": DEFAULT_GUILD.to_string(),
     });
@@ -418,7 +437,10 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
     let response = interaction(router(pool.clone()), payload).await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(texts(&response), ["エラー: 実行には管理者権限が必要です。"]);
+    assert_eq!(
+        texts(&response),
+        ["エラー: This grant is no longer available."]
+    );
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
 }
 
@@ -449,7 +471,7 @@ async fn the_list_pages(pool: PgPool) {
     assert_eq!(
         texts(&first)[0],
         "**発行を許可しているアプリケーション** (6件)\n\
-         取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+         取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
     );
 
     // The five rows' buttons, then the arrows: there is no page one from page one,
@@ -475,7 +497,7 @@ async fn the_list_pages(pool: PgPool) {
         texts(&second),
         [
             "**発行を許可しているアプリケーション** (6件)\n\
-             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
                 "**an application 0**\n`{}`\nこの申請は、すべての通貨を操作できます。",
@@ -511,7 +533,7 @@ async fn the_list_pages(pool: PgPool) {
         assert_eq!(
             texts(&back)[0],
             "**発行を許可しているアプリケーション** (6件)\n\
-             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
         );
         assert_eq!(
             buttons(&back).len(),
@@ -537,7 +559,7 @@ async fn the_list_pages(pool: PgPool) {
         texts(&last),
         [
             "**発行を許可しているアプリケーション** (6件)\n\
-             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。"
+             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
                 "**an application 0**\n`{}`\nこの申請は、すべての通貨を操作できます。",
@@ -571,7 +593,10 @@ async fn a_decision_pings_the_application(pool: PgPool) {
 
     interaction(
         router_with(pool.clone(), notified.clone()),
-        button_from_guild(json!({ "custom_id": revoke_custom_id(&client_id) }), ADMIN),
+        button_from_guild(
+            json!({ "custom_id": revoke_button(&pool, &client_id).await }),
+            ADMIN,
+        ),
     )
     .await;
 
@@ -855,7 +880,7 @@ async fn pending_codes_are_global_and_random_collisions_retry(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn personal_list_paginates_and_reapproval_replaces_scopes(pool: PgPool) {
+async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) {
     let mut apps = Vec::new();
     for index in 0..5 {
         let app =
@@ -893,12 +918,19 @@ async fn personal_list_paginates_and_reapproval_replaces_scopes(pool: PgPool) {
     .await;
     let scopes:Vec<String>=sqlx::query_scalar("SELECT s.scope::text FROM grant_scopes s JOIN grants g ON g.id=s.grant_id WHERE g.application_id=$1 AND g.discord_id=$2")
         .bind(apps[0]).bind(ADMIN).fetch_all(&pool).await.unwrap();
-    assert_eq!(scopes, ["vc.delegate.profile.read"]);
+    assert_eq!(scopes.len(), vc_core::delegation::Scope::ALL.len() + 1);
+    assert!(scopes.iter().any(|s| s == "vc.delegate.payments.create"));
     for app in &apps[1..] {
-        let client = client_id_of(&pool, *app).await.parse().unwrap();
-        vc_core::grant::revoke_personal(&pool, client, ADMIN)
+        let grant: i64 = sqlx::query_scalar("SELECT id FROM grants WHERE application_id = $1")
+            .bind(app)
+            .fetch_one(&pool)
             .await
             .unwrap();
+        assert!(
+            vc_core::grant::revoke_one(&pool, grant, ADMIN, None)
+                .await
+                .unwrap()
+        );
     }
     let clamped = interaction(router(pool), press_as(from_dm(ADMIN, json!([])), &last)).await;
     assert!(texts(&clamped).join("\n").contains("Page 1/1"));
@@ -933,4 +965,287 @@ async fn poll_personal(pool: &PgPool, application: i64, device_code: &str) -> (u
         .expect("body");
 
     (status, serde_json::from_slice(&bytes).expect("json body"))
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool: PgPool) {
+    use vc_api::custom_id::ui::grant as ids;
+    let app = insert_application(&pool, FIRST_OWNER, "normal").await;
+    let mut resources = Vec::new();
+    let mut expected = Vec::new();
+    for n in 1..=400i64 {
+        let unit = format!(
+            "aaaaaaaa{}{}",
+            (b'a' + (n / 26) as u8) as char,
+            (b'a' + (n % 26) as u8) as char
+        );
+        insert_currency(&pool, n, &unit, &unit, DEFAULT_GUILD + n, 1000).await;
+        resources.push(n);
+        expected.push(unit);
+    }
+    let scopes = vc_core::delegation::Scope::ALL
+        .iter()
+        .map(|scope| scope.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let asked = vc_core::grant::request_grant(
+        &pool,
+        app,
+        vc_core::grant::Target::User(ADMIN),
+        &scopes,
+        &resources,
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let http = router(pool.clone());
+    let first = interaction(
+        http.clone(),
+        from_dm(ADMIN, approve_options(&asked.user_code)),
+    )
+    .await;
+    let mut displayed = texts(&first).join("\n");
+    let mut current = first;
+    {
+        let last = buttons(&current).last().cloned().unwrap();
+        let ids::Pressed::ReviewPage(_, end) =
+            ids::parse(&vc_api::custom_id::parse(&last)).unwrap()
+        else {
+            panic!("page button");
+        };
+        // The request has 400 ten-character entries, spread across five pages.
+        for page in 2..=end {
+            current = interaction(
+                http.clone(),
+                press_as(
+                    from_dm(ADMIN, json!([])),
+                    &ids::review_page_custom_id(asked.id, page),
+                ),
+            )
+            .await;
+            displayed.push_str(&texts(&current).join("\n"));
+        }
+    }
+    for unit in &expected {
+        assert!(displayed.contains(unit), "missing {unit}");
+    }
+    let denied = interaction(
+        http.clone(),
+        press_as(
+            from_dm(ADMIN + 1, json!([])),
+            &ids::review_page_custom_id(asked.id, 2),
+        ),
+    )
+    .await;
+    assert!(buttons(&denied).is_empty());
+    interaction(
+        http.clone(),
+        press_as(from_dm(ADMIN, json!([])), &ids::confirm_custom_id(asked.id)),
+    )
+    .await;
+    let grant: i64 = sqlx::query_scalar("SELECT grant_id FROM grant_requests WHERE id = $1")
+        .bind(asked.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let list = interaction(
+        http.clone(),
+        from_dm(ADMIN, json!([{"name":"user","type":1}])),
+    )
+    .await;
+    assert!(texts(&list).join("\n").contains("400 currencies"));
+    assert!(buttons(&list).contains(&ids::details_custom_id(grant, 1)));
+    let details = interaction(
+        http.clone(),
+        press_as(
+            from_dm(ADMIN, json!([])),
+            &ids::details_custom_id(grant, i64::MAX),
+        ),
+    )
+    .await;
+    assert!(
+        texts(&details)
+            .join("\n")
+            .contains(expected.last().unwrap())
+    );
+    let denied = interaction(
+        http.clone(),
+        press_as(
+            from_dm(ADMIN + 1, json!([])),
+            &ids::details_custom_id(grant, 1),
+        ),
+    )
+    .await;
+    assert!(buttons(&denied).is_empty());
+    let second = personal_request(&pool, app, ADMIN, &["vc.delegate.profile.read"]).await;
+    approve_and_confirm(
+        http.clone(),
+        from_dm(ADMIN, approve_options(&second.user_code)),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 2);
+    interaction(
+        http,
+        press_as(from_dm(ADMIN, json!([])), &ids::revoke_one_custom_id(grant)),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 1);
+    assert_eq!(
+        poll_personal(&pool, app, &asked.device_code.to_string())
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        poll_personal(&pool, app, &second.device_code.to_string())
+            .await
+            .0,
+        200
+    );
+}
+
+async fn revoke_button(pool: &PgPool, client: &str) -> String {
+    let grant: i64 = sqlx::query_scalar("SELECT g.id FROM grants g JOIN applications a ON a.id = g.application_id WHERE a.client_id::text = $1").bind(client).fetch_one(pool).await.unwrap();
+    vc_api::custom_id::ui::grant::revoke_one_custom_id(grant)
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool) {
+    use vc_api::custom_id::ui::grant as ids;
+    let app = insert_application(&pool, FIRST_OWNER, "server app").await;
+    insert_currency(&pool, 1, "nyan", "nyan", DEFAULT_GUILD, 100).await;
+    let now = time::OffsetDateTime::now_utc();
+    let legacy = vc_core::grant::grant_for_code(&pool, app, DEFAULT_GUILD, "legacy-code", now)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    vc_core::grant::create_grant_scopes(&mut conn, legacy, &["vc.issue".to_owned()], now)
+        .await
+        .unwrap();
+    let legacy_token = vc_core::grant::create_access_token(&mut *conn, legacy, now)
+        .await
+        .unwrap();
+    drop(conn);
+    let a = vc_core::grant::request_grant(
+        &pool,
+        app,
+        vc_core::grant::Target::Guild(DEFAULT_GUILD),
+        &["vc.issue".into()],
+        &[],
+        600,
+        now,
+    )
+    .await
+    .unwrap();
+    let b = vc_core::grant::request_grant(
+        &pool,
+        app,
+        vc_core::grant::Target::Guild(DEFAULT_GUILD),
+        &["vc.issue".into()],
+        &[1],
+        600,
+        now,
+    )
+    .await
+    .unwrap();
+    assert_ne!(a.id, b.id);
+    let http = router(pool.clone());
+    for asked in [&a, &b] {
+        approve_and_confirm(
+            http.clone(),
+            grant_from_guild(
+                ADMIN,
+                DEFAULT_PERMISSIONS,
+                approve_options(&asked.user_code),
+            ),
+        )
+        .await;
+    }
+    let ga: i64 = sqlx::query_scalar("SELECT grant_id FROM grant_requests WHERE id = $1")
+        .bind(a.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let gb: i64 = sqlx::query_scalar("SELECT grant_id FROM grant_requests WHERE id = $1")
+        .bind(b.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_ne!(ga, gb);
+    assert_ne!(legacy, ga);
+    assert_ne!(legacy, gb);
+    let ta = vc_core::grant::create_device_token(&pool, &a, now)
+        .await
+        .unwrap()
+        .unwrap();
+    let tb = vc_core::grant::create_device_token(&pool, &b, now)
+        .await
+        .unwrap()
+        .unwrap();
+    for (token, resources) in [(&legacy_token, vec![]), (&ta, vec![]), (&tb, vec![1])] {
+        assert_eq!(
+            vc_core::grant::resolve_token(&pool, token.parse().unwrap(), now)
+                .await
+                .unwrap()
+                .unwrap()
+                .resources,
+            resources
+        );
+    }
+    // A browser authorization-code exchange still targets its legacy row.
+    assert_eq!(
+        vc_core::grant::grant_for_code(&pool, app, DEFAULT_GUILD, "next-legacy-code", now)
+            .await
+            .unwrap(),
+        Some(legacy)
+    );
+    let list = interaction(
+        http.clone(),
+        grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
+    )
+    .await;
+    for id in [legacy, ga, gb] {
+        assert!(buttons(&list).contains(&ids::revoke_one_custom_id(id)));
+    }
+    let revoke = ids::revoke_one_custom_id(ga);
+    let mut other_guild = button_from_guild(json!({"custom_id":revoke}), ADMIN);
+    other_guild["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());
+    interaction(http.clone(), other_guild).await;
+    interaction(http.clone(), press_as(from_dm(ADMIN, json!([])), &revoke)).await;
+    assert_eq!(grant_count(&pool).await, 3);
+    interaction(
+        http.clone(),
+        button_from_guild(json!({"custom_id":revoke}), ADMIN),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 2);
+    assert!(
+        vc_core::grant::resolve_token(&pool, ta.parse().unwrap(), now)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        vc_core::grant::create_device_token(&pool, &a, now)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for token in [legacy_token, tb] {
+        assert!(
+            vc_core::grant::resolve_token(&pool, token.parse().unwrap(), now)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    // A stale application-wide button must never revoke a later independent grant.
+    let client = client_id_of(&pool, app).await;
+    interaction(
+        http,
+        button_from_guild(json!({"custom_id":ids::revoke_custom_id(&client)}), ADMIN),
+    )
+    .await;
+    assert_eq!(grant_count(&pool).await, 2);
 }

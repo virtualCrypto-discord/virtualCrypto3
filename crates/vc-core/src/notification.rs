@@ -23,12 +23,13 @@ pub trait Notifier: Send + Sync {
     /// to do it, because its scopes are read from the grant.
     fn notify_grant_decided(&self, application_id: i64, guild_id: i64);
 
-    /// A personal approval or revocation. The committed scope snapshot is supplied
+    /// An independent personal/server approval or revocation. The committed scope snapshot is supplied
     /// because revocation deletes the grant and its dependent tokens.
-    fn notify_personal_grant_decided(
+    fn notify_delegation_decided(
         &self,
         application_id: i64,
-        discord_id: i64,
+        target: crate::grant::Target,
+        grant_id: i64,
         scopes: &[String],
     );
 
@@ -56,10 +57,11 @@ impl Notifier for NoopNotifier {
 
     fn notify_grant_decided(&self, _application_id: i64, _guild_id: i64) {}
 
-    fn notify_personal_grant_decided(
+    fn notify_delegation_decided(
         &self,
         _application_id: i64,
-        _discord_id: i64,
+        _target: crate::grant::Target,
+        _grant_id: i64,
         _scopes: &[String],
     ) {
     }

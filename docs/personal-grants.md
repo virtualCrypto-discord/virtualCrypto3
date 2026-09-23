@@ -24,9 +24,12 @@ An application's own token with `oauth2.register` calls
 
 Exactly one of `discord_id` and `guild_id` is required. `discord_id` selects a
 personal request; `guild_id` selects the guild issuing flow. The result contains
-`device_code`, `user_code`, `verification_uri` and `expires_in`. There is one
-pending request per application and target. Device polling and token refresh use
-the existing grant machinery.
+`device_code`, `user_code`, `verification_uri` and `expires_in`. Different scope/resource sets for the same application and target may be pending
+at the same time. Retrying an identical pending set reuses its codes and original
+deadline; input ordering does not change that identity. Each approved request
+creates its own grant. Device polling returns that grant's `grant_id` as a string
+alongside the access token. The request list also includes `grant_id` (null before
+approval or after revocation).
 
 For a personal request, each scope must be an exact member of this catalogue:
 
@@ -75,10 +78,10 @@ There is one approval command and two management commands:
 - `/grant approve code:<user_code>` reviews either a personal or a server request.
   It displays the application name/client id, target, exact scope names with their
   meanings, and the currencies. Only the confirmation button writes the grant.
-- `/grant user` lists applications with access to the caller's account, two per
+- `/grant user` lists grants for the caller's account, two per
   page, with their scopes, currencies and revoke buttons. It works in servers
   and DMs and does not require server administrator permissions.
-- `/grant server` lists applications allowed to issue in the current server, five
+- `/grant server` lists grants allowed to issue in the current server, five
   per page. It requires administrator permission in that server.
 
 Personal requests can be reviewed and approved only by the requested user.
@@ -98,24 +101,57 @@ secret device code. A deleted/expired/replaced request cannot be approved throug
 an old button. The decision checks pending status and expiry inside the transaction;
 concurrent confirmations can write the grant only once and notify only once.
 
-A personal approval creates the user's account if needed and replaces the existing
-grant's exact scopes and currencies. Old spending scopes cannot survive a new
-read-only approval and inherit its currencies. Issued tokens read the updated grant.
-The review screen explicitly states this replacement behavior.
+## Independent approvals
 
-Revoking a personal grant deletes it and its dependent access/refresh tokens.
-Guild revocation retains the existing behavior of removing `vc.issue` from the
-grant. Old `/grant list` interactions remain a server-list alias, but the registered
-commands are `approve`, `user`, and `server`.
+A personal approval creates the user's account if needed, then creates a new grant
+with exactly the approved scopes and currencies. A server device approval does the
+same for its guild. Browser approval of v3 issuing permissions or explicit currency
+restrictions is also independent. None replaces or merges any earlier grant, even for the
+same application and target. The review screen states this before confirmation.
 
-Personal approval and revocation notify the application using webhook event type 3:
+For example, granting `balances.read` for currency A and later `payments.create`
+for currency B produces two grants and two independently restricted token families.
+The first cannot pay B; the second cannot read A or pay A. Scopes and resources
+from different grants are never combined. An explicit collection URI includes all
+currencies even when individual currency URIs are also listed in the same request;
+this does not combine that request with a different approval.
+
+`grant_requests.grant_id` binds each approved request to its own grant. Device
+polling follows that link rather than searching by application and target. Deleting
+a grant clears the link and cascades deletion of its access and refresh tokens.
+A new approval cannot resurrect a revoked device code, token or refresh token.
+Concurrent confirmation still creates only one grant per request.
+
+Each `/grant user` or `/grant server` row represents one grant and revokes only
+that grant. Multiple rows can therefore name the same application. Long currency
+lists use paged review and Details screens without omitting currencies from consent.
+Every page and action rechecks the user or current server administrator permissions.
+Old application-wide Discord revoke buttons require reopening the list.
+
+### v2 compatibility
+
+Existing application/user JWT semantics are unchanged. Legacy scope-less/OIDC authorization-code exchanges retain their original
+application/guild grant slot and refresh behavior. Browser consent for v3
+`vc.issue` or an explicit currency restriction creates an independent grant. Migration `0020_independent_grants.sql` preserves those rows and adds
+separate v3 grants; legacy exchanges cannot overwrite those grants. Existing
+access and refresh tokens remain linked to their original grant. Previously
+approved device requests without a recorded grant link require a fresh approval;
+the migration does not guess which consent produced a shared row.
+
+The existing owner endpoint `DELETE /applications/{client_id}/grants/{guild_id}`
+remains a bulk removal of issuing permission for that application in that guild.
+Discord's grant-specific revoke buttons delete only the selected grant instead.
+
+Discord approval and individual revocation notify the application using webhook event type 3:
 
 ```json
 {"type":3,"data":{"guild_id":null,"discord_id":"123456789012345678",
-                  "scopes":["vc.delegate.balances.read"]}}
+                  "grant_id":"42","scopes":["vc.delegate.balances.read"]}}
 ```
 
-Revocation sends an empty scope list. The existing guild event shape is unchanged.
+For server grants, `guild_id` is set and `discord_id` is null. Revocation sends an
+empty scope list for the named `grant_id`, not for every grant of the application.
+The legacy bulk guild event shape is unchanged.
 
 ## Token and enforcement
 
@@ -128,6 +164,9 @@ Revocation sends an empty scope list. The existing guild event shape is unchange
 | Authority | A personal delegation, never `AuthUser` or an application's own credential |
 | Scopes/resources | Read from the grant when the token is authenticated |
 | Revocation | Deleting the grant removes its dependent tokens; a token can also be deleted independently |
+
+The device flow currently returns access tokens only; the shared refresh-token
+mechanism, when used, stays bound to the original grant.
 
 Personal grants cannot authorize application administration, guild issuing,
 application-side contract creation/charging, or a user's contract approval,

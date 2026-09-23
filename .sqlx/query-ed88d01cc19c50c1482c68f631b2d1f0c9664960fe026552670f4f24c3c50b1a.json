@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.guild_id AS \"guild_id!\",\n                  max(g.updated_at) AS \"updated_at!\",\n                  COALESCE(array_agg(DISTINCT s.scope::text) FILTER (WHERE s.scope IS NOT NULL),\n                           ARRAY[]::text[]) AS \"scopes!\"\n             FROM grants g\n             LEFT JOIN grant_scopes s ON s.grant_id = g.id\n            WHERE g.application_id = $1 AND g.guild_id IS NOT NULL AND g.guild_id <> 0\n            GROUP BY g.guild_id\n            ORDER BY g.guild_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "guild_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grants",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "updated_at!",
+        "type_info": "Timestamp",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "scopes!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "ed88d01cc19c50c1482c68f631b2d1f0c9664960fe026552670f4f24c3c50b1a"
+}

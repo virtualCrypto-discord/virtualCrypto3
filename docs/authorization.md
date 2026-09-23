@@ -136,7 +136,9 @@ and domain code must still enforce relationships, currencies and state. New
 endpoints also need individual-target checks and correct list pagination.
 
 Delegated scopes and resources are read from the grant on each authentication.
-Changes affect subsequent authentication, and revoked grants stop authenticating.
+Each device approval has an independent scope/resource pair and token family.
+New approvals cannot change existing tokens or combine their permissions. Revoking
+one grant stops its tokens from authenticating while other grants remain valid.
 This does not retroactively cancel a request that already passed authorization.
 Account APIs retain their account-based rate limit.
 

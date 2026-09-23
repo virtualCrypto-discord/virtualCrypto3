@@ -8,7 +8,7 @@ use super::{
     as_int, as_permissions, get_user, is_administrator, value_text,
 };
 use crate::components::{ButtonStyle, action_row, button, container, ephemeral, icon_button, text};
-use crate::custom_id::ui::grant::{Page, Pressed, page_custom_id, revoke_custom_id};
+use crate::custom_id::ui::grant::{self as ids, Page, Pressed, page_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
 use vc_core::grant::Target;
@@ -55,34 +55,13 @@ pub async fn handle(
             if reviews.len() != 1 || !valid_scopes(review) {
                 return Ok(render_error(NOT_FOUND));
             }
-            let units = crate::resource::units(state.pool(), &review.resources).await?;
-            let target = match review.target {
-                Target::User(id) => format!(
-                    "Your account ({id})\nApproval replaces this application's previous personal permissions."
-                ),
-                Target::Guild(id) => format!("This server ({id})"),
-            };
-            Ok(answered(
-                container(
-                    Some(COLOR_BRAND as u32),
-                    vec![
-                        text(format!(
-                            "**Review application access**\nApplication: {}\nClient: `{}`\nTarget: {}\n\n{}\nCurrencies: {}",
-                            name_of(review.client_name.as_deref()),
-                            review.client_id,
-                            target,
-                            permissions(&review.scopes),
-                            currencies(&units)
-                        )),
-                        action_row(vec![button(
-                            &crate::custom_id::ui::grant::confirm_custom_id(review.request_id),
-                            "Approve",
-                            ButtonStyle::Success,
-                        )]),
-                    ],
-                ),
+            review_screen(
+                state,
+                ReviewDisplay::Pending(review),
+                1,
                 CHANNEL_MESSAGE_WITH_SOURCE,
-            ))
+            )
+            .await
         }
         "user" => Ok(answered(
             personal_page(state, user, FIRST_PAGE).await?,
@@ -136,6 +115,53 @@ pub async fn component(
     let pressed = crate::custom_id::ui::grant::parse(&crate::custom_id::parse(custom_id))
         .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
     match pressed {
+        Pressed::ReviewPage(request, page) => {
+            let reviews = vc_core::grant::review_requests(
+                state.pool(),
+                None,
+                Some(request),
+                user,
+                authorized_guild(payload),
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+            let Some(review) = reviews.first().filter(|review| valid_scopes(review)) else {
+                return Ok(error_screen(NOT_FOUND));
+            };
+            review_screen(state, ReviewDisplay::Pending(review), page, UPDATE_MESSAGE).await
+        }
+        Pressed::Details(grant, page) => {
+            let Some(review) =
+                vc_core::grant::grant_details(state.pool(), grant, user, authorized_guild(payload))
+                    .await?
+            else {
+                return Ok(error_screen("This grant is no longer available."));
+            };
+            review_screen(state, ReviewDisplay::Granted(&review), page, UPDATE_MESSAGE).await
+        }
+        Pressed::RevokeOne(grant) => {
+            let guild = authorized_guild(payload);
+            let Some(review) =
+                vc_core::grant::grant_details(state.pool(), grant, user, guild).await?
+            else {
+                return Ok(error_screen("This grant is no longer available."));
+            };
+            if vc_core::grant::revoke_one(state.pool(), grant, user, guild).await? {
+                state.notifier().notify_delegation_decided(
+                    review.application_id,
+                    review.target,
+                    grant,
+                    &[],
+                );
+            }
+            Ok(answered(
+                match review.target {
+                    Target::User(id) => personal_page(state, id, FIRST_PAGE).await?,
+                    Target::Guild(id) => page(state, id, FIRST_PAGE).await?,
+                },
+                UPDATE_MESSAGE,
+            ))
+        }
         Pressed::Confirmed(request) => {
             let reviews = vc_core::grant::review_requests(
                 state.pool(),
@@ -149,35 +175,30 @@ pub async fn component(
             let Some(review) = reviews.first().filter(|review| valid_scopes(review)) else {
                 return Ok(error_screen(NOT_FOUND));
             };
-            if !vc_core::grant::approve_review(
+            let Some(grant_id) = vc_core::grant::approve_review(
                 state.pool(),
                 review,
                 time::OffsetDateTime::now_utc(),
             )
             .await?
-            {
+            else {
                 return Ok(error_screen(NOT_FOUND));
-            }
-            match review.target {
-                Target::Guild(guild) => state
-                    .notifier()
-                    .notify_grant_decided(review.application_id, guild),
-                Target::User(user) => state.notifier().notify_personal_grant_decided(
-                    review.application_id,
-                    user,
-                    &review.scopes,
-                ),
-            }
-            let units = crate::resource::units(state.pool(), &review.resources).await?;
+            };
+            state.notifier().notify_delegation_decided(
+                review.application_id,
+                review.target,
+                grant_id,
+                &review.scopes,
+            );
             let message = match review.target {
                 Target::Guild(_) => format!(
                     "発行を許可しました。この申請は、{}を操作できます。",
-                    currencies(&units)
+                    currency_label(state, &review.resources).await?.0
                 ),
                 Target::User(_) => format!(
                     "Access approved.\n{}\nCurrencies: {}",
                     permissions(&review.scopes),
-                    currencies(&units)
+                    currency_label(state, &review.resources).await?.0
                 ),
             };
             Ok(answered(
@@ -194,38 +215,18 @@ pub async fn component(
                 UPDATE_MESSAGE,
             ))
         }
-        Pressed::UserRevoked(owner, client) => {
-            if owner != user {
-                return Ok(error_screen("This is another user's grant list."));
-            }
-            if let Some(app) = vc_core::grant::revoke_personal(state.pool(), client, user).await? {
-                state
-                    .notifier()
-                    .notify_personal_grant_decided(app, user, &[]);
-            }
-            Ok(answered(
-                personal_page(state, user, FIRST_PAGE).await?,
-                UPDATE_MESSAGE,
-            ))
-        }
+        Pressed::UserRevoked(_, _) => Ok(error_screen(
+            "Open /grant user again to revoke an individual grant.",
+        )),
         Pressed::Paged(_, number) => {
             let Some(guild) = authorized_guild(payload) else {
                 return Ok(error_screen("実行には管理者権限が必要です。"));
             };
             Ok(answered(page(state, guild, number).await?, UPDATE_MESSAGE))
         }
-        Pressed::Revoked(client) => {
-            let Some(guild) = authorized_guild(payload) else {
-                return Ok(error_screen("実行には管理者権限が必要です。"));
-            };
-            if let Some(app) = vc_core::grant::revoke_grant(state.pool(), &client, guild).await? {
-                state.notifier().notify_grant_decided(app, guild);
-            }
-            Ok(answered(
-                page(state, guild, FIRST_PAGE).await?,
-                UPDATE_MESSAGE,
-            ))
-        }
+        Pressed::Revoked(_) => Ok(error_screen(
+            "Open /grant server again to revoke an individual grant.",
+        )),
     }
 }
 
@@ -256,27 +257,35 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
         vc_core::grant::personal_applications(state.pool(), user, requested, LIMIT).await?;
     let last = ((total + LIMIT - 1) / LIMIT).max(1);
     let mut children = vec![text(format!(
-        "**Applications with access to your account** ({total})\nPage {page}/{last}"
+        "**Grants for your account** ({total})\nPage {page}/{last}"
     ))];
     if apps.is_empty() {
         children.push(text(
-            "No applications have access. Use `/grant approve code:` to review a request.",
+            "No grants are active. Use `/grant approve code:` to review a request.",
         ));
     }
     for app in apps {
-        let units = crate::resource::units(state.pool(), &app.resources).await?;
+        let (label, needs_details) = currency_label(state, &app.resources).await?;
         children.push(text(format!(
             "**{}**\n`{}`\n{}\nCurrencies: {}",
             name_of(app.client_name.as_deref()),
             app.client_id,
             permissions(&app.scopes),
-            currencies(&units)
+            label
         )));
-        children.push(action_row(vec![button(
-            &crate::custom_id::ui::grant::user_revoke_custom_id(user, &app.client_id),
-            "Revoke",
+        let mut actions = vec![button(
+            &ids::revoke_one_custom_id(app.grant_id),
+            &format!("Revoke #{}", app.grant_id),
             ButtonStyle::Danger,
-        )]));
+        )];
+        if needs_details {
+            actions.push(button(
+                &ids::details_custom_id(app.grant_id, 1),
+                "Details",
+                ButtonStyle::Secondary,
+            ));
+        }
+        children.push(action_row(actions));
     }
     if last > 1 {
         children.push(action_row(vec![
@@ -333,7 +342,7 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
     } else {
         children.push(text(format!(
             "**発行を許可しているアプリケーション** ({}件)\n\
-             取り消すと、そのアプリケーションはこのサーバーの発行枠から発行できなくなります。",
+             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。",
             authorized.total
         )));
 
@@ -347,23 +356,31 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
         }
 
         for application in &authorized.applications {
+            let (label, needs_details) = currency_label(state, &application.resources).await?;
             // What the application may touch, by unit rather than by id: the
             // screen is where the narrowing stops being something only the API
             // knows, so a grant for one currency and one for all of them have to
             // read differently.
-            let units = crate::resource::units(state.pool(), &application.resources).await?;
 
             children.push(text(format!(
                 "**{}**\n`{}`\nこの申請は、{}を操作できます。",
                 name_of(application.client_name.as_deref()),
                 application.client_id,
-                currencies(&units),
+                label,
             )));
-            children.push(action_row(vec![button(
-                &revoke_custom_id(&application.client_id),
-                "取り消す",
+            let mut actions = vec![button(
+                &ids::revoke_one_custom_id(application.grant_id),
+                &format!("取り消す #{}", application.grant_id),
                 ButtonStyle::Danger,
-            )]));
+            )];
+            if needs_details {
+                actions.push(button(
+                    &ids::details_custom_id(application.grant_id, 1),
+                    "Details",
+                    ButtonStyle::Secondary,
+                ));
+            }
+            children.push(action_row(actions));
         }
 
         if authorized.next.is_some() || authorized.page > 1 {
@@ -402,17 +419,157 @@ fn name_of(client_name: Option<&str>) -> String {
         .to_string()
 }
 
-/// The currencies a grant covers, as the screens name them: 「すべての通貨」 when
-/// the grant named none (or named the collection), and 「通貨 nyan だけ」 when it
-/// named one. The two are what tell a narrowed grant from a wide one, which is
-/// the whole reason the screen shows them — nothing else about the screen would
-/// change, so the difference would otherwise be something only the API knows.
-fn currencies(units: &[String]) -> String {
-    if units.is_empty() {
-        "すべての通貨".to_string()
-    } else {
-        format!("通貨 {} だけ", units.join("、"))
+async fn currency_label(
+    state: &AppState,
+    resources: &[i64],
+) -> Result<(String, bool), CommandError> {
+    if resources.is_empty() {
+        return Ok(("すべての通貨".to_owned(), false));
     }
+    let units = crate::resource::units(state.pool(), resources).await?;
+    let label = format!("通貨 {} だけ", units.join("、"));
+    if label.chars().count() <= 300 {
+        Ok((label, false))
+    } else {
+        Ok((
+            format!(
+                "{} currencies (open /grant user or /grant server, then Details, for the complete list)",
+                resources.len()
+            ),
+            true,
+        ))
+    }
+}
+
+/// Keep the complete consent visible without exceeding Discord's message limits.
+/// Currency entries are at most 255 characters in the database; a page uses at
+/// most 1200 characters, leaving room for all operation descriptions and identity.
+enum ReviewDisplay<'a> {
+    Pending(&'a vc_core::grant::Review),
+    Granted(&'a vc_core::grant::GrantDetails),
+}
+
+async fn review_screen(
+    state: &AppState,
+    display: ReviewDisplay<'_>,
+    requested: i64,
+    kind: i64,
+) -> Result<Value, CommandError> {
+    let (key, target, client_name, client_id, scopes, resources, pending) = match display {
+        ReviewDisplay::Pending(r) => (
+            r.request_id,
+            r.target,
+            &r.client_name,
+            &r.client_id,
+            &r.scopes,
+            &r.resources,
+            true,
+        ),
+        ReviewDisplay::Granted(g) => (
+            g.grant_id,
+            g.target,
+            &g.client_name,
+            &g.client_id,
+            &g.scopes,
+            &g.resources,
+            false,
+        ),
+    };
+    let units = crate::resource::units(state.pool(), resources).await?;
+    let mut pages = vec![String::new()];
+    if units.is_empty() {
+        pages[0] = "すべての通貨".to_owned();
+    }
+    for unit in &units {
+        let line = format!("- {unit}\n");
+        if pages.last().unwrap().chars().count() + line.chars().count() > 1200 {
+            pages.push(String::new());
+        }
+        pages.last_mut().unwrap().push_str(&line);
+    }
+    let last = pages.len() as i64;
+    let page = requested.clamp(1, last);
+    let target_label = match target {
+        Target::User(id) => format!("Your account ({id})"),
+        Target::Guild(id) => format!("This server ({id})"),
+    };
+    let heading = if pending {
+        "Review application access"
+    } else {
+        "Granted access"
+    };
+    let mut children = vec![text(format!(
+        "**{heading}**\nApplication: {}\nClient: `{}`\nTarget: {target_label}\n\n{}\nCurrencies ({} selected; page {page}/{last}):\n{}",
+        name_of(client_name.as_deref()),
+        client_id,
+        permissions(scopes),
+        if units.is_empty() {
+            "all".to_owned()
+        } else {
+            units.len().to_string()
+        },
+        pages[(page - 1) as usize]
+    ))];
+    if pending {
+        children.push(text("Approval creates a separate grant. Existing grants remain unchanged. Approval covers every currency listed across these pages."));
+    }
+    let id = |p| {
+        if pending {
+            ids::review_page_custom_id(key, p)
+        } else {
+            ids::details_custom_id(key, p)
+        }
+    };
+    if last > 1 {
+        children.push(action_row(vec![
+            icon_button(&id(1), "⏪", ButtonStyle::Secondary, Some(page == 1)),
+            icon_button(
+                &id((page - 1).max(1)),
+                "⏮️",
+                ButtonStyle::Secondary,
+                Some(page == 1),
+            ),
+            icon_button(
+                &id((page + 1).min(last)),
+                "⏭️",
+                ButtonStyle::Secondary,
+                Some(page == last),
+            ),
+            icon_button(&id(last), "⏩", ButtonStyle::Secondary, Some(page == last)),
+        ]));
+    }
+    // Keep the action in a consistent position across currency pages.
+    children.insert(
+        1,
+        action_row(vec![if pending {
+            button(
+                &ids::confirm_custom_id(key),
+                "Approve",
+                ButtonStyle::Success,
+            )
+        } else {
+            button(
+                &ids::revoke_one_custom_id(key),
+                "Revoke",
+                ButtonStyle::Danger,
+            )
+        }]),
+    );
+    if !pending {
+        let back = match target {
+            Target::User(user) => ids::user_page_custom_id(user, 1),
+            Target::Guild(_) => ids::page_custom_id(Page::First, 1),
+        };
+        children.push(action_row(vec![button(
+            &back,
+            "Back",
+            ButtonStyle::Secondary,
+        )]));
+    }
+    Ok(answered(
+        container(Some(COLOR_BRAND as u32), children),
+        kind,
+    ))
 }
 
 /// A screen as the answer to what was typed or pressed: a new ephemeral message

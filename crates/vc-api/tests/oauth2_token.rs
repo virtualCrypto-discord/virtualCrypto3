@@ -793,3 +793,85 @@ async fn json_code_exchange_remains_supported(pool: PgPool) {
     assert!(body["access_token"].is_string());
     assert_eq!(body["token_type"], "Bearer");
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn v3_browser_approvals_have_independent_grants_and_refresh_tokens(pool: PgPool) {
+    let (app, client) = application_with_callback(&pool).await;
+    sqlx::query("UPDATE applications SET grant_types = ARRAY['authorization_code','refresh_token']::openid_connect_grant_types[] WHERE id = $1").bind(app).execute(&pool).await.unwrap();
+    support::insert_currency(&pool, 1, "nyan", "nyan", 42, 100).await;
+    let now = OffsetDateTime::now_utc();
+    let callback = "https://app.example/callback";
+    let mut tokens = Vec::new();
+    for resources in [vec![1], vec![]] {
+        let code = authorize(
+            &pool,
+            42,
+            &["vc.issue".into()],
+            &resources,
+            callback,
+            &client,
+            now,
+        )
+        .await
+        .unwrap();
+        tokens.push(
+            exchange_code(&pool, &client, callback, &code, now)
+                .await
+                .unwrap(),
+        );
+    }
+    let mut grants = Vec::new();
+    for token in &tokens {
+        let id: i64 = sqlx::query_scalar("SELECT grant_id FROM access_tokens WHERE token_id = $1")
+            .bind(Uuid::parse_str(&token.access_token).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        grants.push(id);
+    }
+    assert_ne!(grants[0], grants[1]);
+    let resources: Vec<i64> =
+        sqlx::query_scalar("SELECT currency_id FROM grant_resources WHERE grant_id = $1")
+            .bind(grants[0])
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(resources, [1]);
+    // The second approval must not rotate away the first grant's refresh token.
+    let first = exchange_refresh_token(&pool, tokens[0].refresh_token.as_deref().unwrap(), now)
+        .await
+        .unwrap();
+    assert!(
+        vc_core::grant::revoke_one(&pool, grants[0], 9, Some(42))
+            .await
+            .unwrap()
+    );
+    assert!(
+        exchange_refresh_token(&pool, &first.refresh_token, now)
+            .await
+            .is_err()
+    );
+    assert!(
+        exchange_refresh_token(&pool, tokens[1].refresh_token.as_deref().unwrap(), now)
+            .await
+            .is_ok()
+    );
+    // Old scope-less authorization still reuses its legacy slot, separately.
+    let mut legacy = Vec::new();
+    for _ in 0..2 {
+        let code = authorize(&pool, 42, &[], &[], callback, &client, now)
+            .await
+            .unwrap();
+        let token = exchange_code(&pool, &client, callback, &code, now)
+            .await
+            .unwrap();
+        let id: i64 = sqlx::query_scalar("SELECT grant_id FROM access_tokens WHERE token_id = $1")
+            .bind(Uuid::parse_str(&token.access_token).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        legacy.push(id);
+    }
+    assert_eq!(legacy[0], legacy[1]);
+    assert_ne!(legacy[0], grants[1]);
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(c.unit, requested.id::text) AS \"unit!\"\n        FROM UNNEST($1::bigint[]) WITH ORDINALITY AS requested(id, position)\n        LEFT JOIN currencies c ON c.id = requested.id ORDER BY requested.position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "unit!",
+        "type_info": "Varchar",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2e823107095e7774f0fdaae4ae380e8793a543177646b5ac3f3d0d9e0df96f3c"
+}

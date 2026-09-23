@@ -186,6 +186,7 @@ async fn device(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Respo
 
     Json(json!({
         "access_token": access_token,
+        "grant_id": asked.grant_id.map(|id| id.to_string()),
         "token_type": "Bearer",
         "expires_in": EXPIRES_IN,
     }))

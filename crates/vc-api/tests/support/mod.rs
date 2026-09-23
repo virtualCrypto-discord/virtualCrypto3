@@ -564,7 +564,20 @@ impl Notifier for Recorded {
             .push((application_id, guild_id));
     }
 
-    fn notify_personal_grant_decided(&self, app: i64, user: i64, scopes: &[String]) {
+    fn notify_delegation_decided(
+        &self,
+        app: i64,
+        target: vc_core::grant::Target,
+        _grant: i64,
+        scopes: &[String],
+    ) {
+        let user = match target {
+            vc_core::grant::Target::Guild(guild) => {
+                self.notify_grant_decided(app, guild);
+                return;
+            }
+            vc_core::grant::Target::User(user) => user,
+        };
         self.personal_grants
             .lock()
             .unwrap()
