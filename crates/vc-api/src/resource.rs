@@ -240,6 +240,50 @@ pub fn ensure(resources: &[i64], currency_id: i64) -> Result<(), ApiError> {
     }
 }
 
+/// Authorize the currencies a write will use and keep their units bound to
+/// those IDs until commit. The caller must refuse missing units instead of
+/// resolving them again: an absent row cannot be locked against later creation.
+/// Lock in ID order so overlapping batches acquire currency locks consistently.
+pub async fn lock_units_in(
+    tx: &mut sqlx::PgConnection,
+    resources: &[i64],
+    units: &[String],
+) -> Result<bool, ApiError> {
+    let rows = sqlx::query!(
+        "SELECT id, unit FROM currencies WHERE unit = ANY($1) ORDER BY id FOR KEY SHARE",
+        units
+    )
+    .fetch_all(tx)
+    .await
+    .map_err(vc_core::Error::from)?;
+    for row in &rows {
+        ensure(resources, row.id)?;
+    }
+    Ok(units
+        .iter()
+        .all(|unit| rows.iter().any(|row| row.unit.as_ref() == Some(unit))))
+}
+
+/// Issue under the same currency lock as issue_in. Taking the write lock now
+/// avoids competing issuers both upgrading a shared lock later.
+pub async fn lock_guild_in(
+    tx: &mut sqlx::PgConnection,
+    resources: &[i64],
+    guild_id: i64,
+) -> Result<bool, ApiError> {
+    let id = sqlx::query_scalar!(
+        "SELECT id FROM currencies WHERE guild_id = $1 FOR UPDATE",
+        guild_id
+    )
+    .fetch_optional(tx)
+    .await
+    .map_err(vc_core::Error::from)?;
+    if let Some(id) = id {
+        ensure(resources, id)?;
+    }
+    Ok(id.is_some())
+}
+
 /// [`ensure`] for an act that names its currency by a unit: the unit is resolved
 /// to the currency it names and the same check is made.
 ///

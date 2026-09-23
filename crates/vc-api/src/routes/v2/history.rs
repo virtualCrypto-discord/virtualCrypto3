@@ -11,8 +11,8 @@
 //! paid. It is the wallet's own movements, out of both ledgers: a payment names both sides — the
 //! caller is one of them, and which one is the question — a lock names the caller on the sender
 //! side and the contract's application on the other, a return names them the other way round, and
-//! a charge is not here at all, because it moves the money an application already held rather
-//! than the wallet. An issuance is the pool paying the caller, which is money arriving like any
+//! a charge credits its recipient without debiting the wallet that already locked the money.
+//! An issuance is the pool paying the caller, which is money arriving like any
 //! other, so it is here too, merged with the rest newest first. `event` and `ledger` say which of
 //! those a row is.
 //!
@@ -132,8 +132,8 @@ pub async fn issuances(
 /// what makes `id` mean something in a list of both. `event` is what kind of movement it is
 /// within that ledger: `lock` when a party locked money into a contract (the caller on the sender
 /// side, `null` on the receiver), `return` when a contract gave money back (the other way round),
-/// `issue` when the pool paid the caller, and `null` for a payment between people. A charge is
-/// never here at all.
+/// `charge` when this wallet received a contract payment, `issue` when the pool paid
+/// the caller, and `null` for a payment between people.
 fn render_movement(movement: &vc_core::history::Movement) -> Value {
     match movement {
         vc_core::history::Movement::Payment(payment) => json!({

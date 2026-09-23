@@ -230,10 +230,12 @@ pub async fn create(
             .and_then(Value::as_str)
             .ok_or(ApiError::InvalidRequest("not_found_currency"))?;
 
-        crate::resource::ensure_unit(state.pool(), user.resources(), unit).await?;
-
-        let claim_id = vc_core::claim::create(
-            state.pool(),
+        let mut tx = state.pool().begin().await.map_err(vc_core::Error::from)?;
+        if !crate::resource::lock_units_in(&mut tx, user.resources(), &[unit.to_owned()]).await? {
+            return Err(ApiError::InvalidRequest("not_found_currency"));
+        }
+        let claim_id = vc_core::claim::create_in(
+            &mut tx,
             operator_id,
             payer_discord_id,
             unit,
@@ -242,6 +244,7 @@ pub async fn create(
         )
         .await
         .map_err(create_error)?;
+        tx.commit().await.map_err(vc_core::Error::from)?;
 
         let view = vc_core::claim::view(state.pool(), operator_id, claim_id)
             .await?

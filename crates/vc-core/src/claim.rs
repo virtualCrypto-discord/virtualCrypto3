@@ -443,11 +443,33 @@ pub async fn create(
     amount: i64,
     metadata: Option<Value>,
 ) -> std::result::Result<i64, CreateError> {
+    let mut tx = pool.begin().await.map_err(CreateError::Database)?;
+    let claim_id = create_in(
+        &mut tx,
+        claimant_id,
+        payer_discord_id,
+        unit,
+        amount,
+        metadata,
+    )
+    .await?;
+    tx.commit().await.map_err(CreateError::Database)?;
+    Ok(claim_id)
+}
+
+/// Create on the caller's transaction, so a resource authorization lock can
+/// cover both the unit lookup and the insert.
+pub async fn create_in(
+    tx: &mut PgConnection,
+    claimant_id: i32,
+    payer_discord_id: i64,
+    unit: &str,
+    amount: i64,
+    metadata: Option<Value>,
+) -> std::result::Result<i64, CreateError> {
     if amount <= 0 {
         return Err(CreateError::InvalidAmount);
     }
-
-    let mut tx = pool.begin().await.map_err(CreateError::Database)?;
 
     let currency_id = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
         .fetch_optional(&mut *tx)
@@ -455,7 +477,7 @@ pub async fn create(
         .map_err(CreateError::Database)?
         .ok_or(CreateError::NotFoundCurrency)?;
 
-    let payer = crate::user::insert_if_not_exists(&mut tx, payer_discord_id)
+    let payer = crate::user::insert_if_not_exists(&mut *tx, payer_discord_id)
         .await
         .map_err(CreateError::Database)?;
 
@@ -490,8 +512,6 @@ pub async fn create(
         .await
         .map_err(CreateError::Database)?;
     }
-
-    tx.commit().await.map_err(CreateError::Database)?;
 
     Ok(claim_id)
 }

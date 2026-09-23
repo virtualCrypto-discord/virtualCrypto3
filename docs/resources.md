@@ -118,6 +118,14 @@ the currency is named in the request or is the one on the row the request names.
 An act that lands on a currency the grant does not cover is `403
 insufficient_scope`: the token is a real one, for something else.
 
+Writes check the currency again inside their transaction. Payments and claim
+creation hold key-share locks on the currencies resolved from the units;
+issuance checks under the pool's write lock. The locks keep a checked unit or
+guild bound to the same currency until commit. A missing currency is refused,
+so creation after a lookup cannot silently authorize it. Idempotent payment and
+issuance requests perform this check after acquiring the key, including after a
+wait for another attempt.
+
 The reads answer differently, and deliberately: a list is *filtered* to the
 currencies the grant covers rather than refused, because a list that cannot
 mention a currency is no reason to fail a request that did not name one.

@@ -50,8 +50,8 @@ pub struct Payment {
     pub contract_client_name: Option<String>,
     /// Which contract movement this is, when it is one: `Some("lock")` for money a party locked by
     /// approving, `Some("return")` for money the contract gave back, and `None` for a plain
-    /// payment. A charge is never in this list and so is also `None` here — see the predicate
-    /// below.
+    /// payment. `Some("charge")` is a contract payment received by this wallet;
+    /// spending an escrow never appears as another debit from the payer's wallet.
     pub event: Option<&'static str>,
 }
 
@@ -204,10 +204,9 @@ pub async fn payments(
         // What moved this person's wallet, out of both ledgers. Out of the payment ledger it is a
         // row with no contract (a payment between people) or a contract row with a NULL side — a
         // lock (no receiver: the escrow took it) or a return (no sender: the escrow sent it). A
-        // contract row with both sides set is a charge, and a charge moves the escrow rather than
-        // the wallet, so it is not in this list at all. The NULL side is the whole of that
-        // distinction, which is what let the three kinds share the one table and the one pair of
-        // columns. Out of the issuance ledger it is every row, because the pool paid this account.
+        // contract row with both sides set is a charge. It credits the receiver's wallet,
+        // but must not count again as a debit to the party who already locked the funds.
+        // Out of the issuance ledger it is every row, because the pool paid this account.
         "SELECT count(*) AS \"count!\"
            FROM (
                    SELECT history.currency_id, history.sender_id, history.receiver_id
@@ -215,7 +214,8 @@ pub async fn payments(
                     WHERE (history.sender_id = $1 OR history.receiver_id = $1)
                       AND (history.contract_id IS NULL
                            OR history.sender_id IS NULL
-                           OR history.receiver_id IS NULL)
+                           OR history.receiver_id IS NULL
+                           OR history.receiver_id = $1)
                    UNION ALL
                    SELECT given.currency_id, NULL::bigint, given.receiver_id
                      FROM currency_given_histories given
@@ -378,7 +378,8 @@ async fn query_payments(
                     WHERE (history.sender_id = $3 OR history.receiver_id = $3)
                       AND (history.contract_id IS NULL
                            OR history.sender_id IS NULL
-                           OR history.receiver_id IS NULL)
+                           OR history.receiver_id IS NULL
+                           OR history.receiver_id = $3)
                    UNION ALL
                    SELECT given.id, $2::smallint, given.amount,
                           COALESCE(given.\"time\", given.inserted_at),
@@ -449,12 +450,12 @@ async fn query_payments(
 }
 
 /// Which contract movement a wallet row is, when it is one: a contract row with no receiver is a
-/// lock and one with no sender is a return, and anything else here — a plain payment, or a charge
-/// the predicate kept out — is no kind at all.
+/// lock and one with no sender is a return. A charge is visible only to its receiver.
 fn event(contract: bool, sender_unset: bool, receiver_unset: bool) -> Option<&'static str> {
     match (contract, sender_unset, receiver_unset) {
         (true, _, true) => Some("lock"),
         (true, true, _) => Some("return"),
+        (true, false, false) => Some("charge"),
         _ => None,
     }
 }

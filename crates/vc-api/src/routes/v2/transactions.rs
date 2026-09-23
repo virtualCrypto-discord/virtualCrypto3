@@ -37,7 +37,7 @@ pub async fn post(
     ensure_currency(&state, &user, &asked).await?;
 
     idempotency::guard(&state, &headers, operator_id, true, |tx| {
-        Box::pin(async move { paid(tx, operator_id, asked).await })
+        Box::pin(async move { paid(tx, operator_id, asked, user.resources()).await })
     })
     .await
 }
@@ -168,7 +168,25 @@ async fn paid(
     tx: &mut sqlx::PgConnection,
     operator_id: i32,
     asked: Asked,
+    resources: &[i64],
 ) -> Result<(StatusCode, Value), ApiError> {
+    // The preflight may precede a wait for an idempotency key. Authorize again
+    // under currency locks, which keep the core's unit lookups on these IDs.
+    let units = match &asked {
+        Asked::Single { unit, .. } => vec![unit.clone()],
+        Asked::Bulk(payments) => {
+            if payments.iter().any(|payment| payment.amount <= 0) {
+                return payment_error(PayError::InvalidAmount);
+            }
+            payments
+                .iter()
+                .map(|payment| payment.unit.clone())
+                .collect()
+        }
+    };
+    if !crate::resource::lock_units_in(tx, resources, &units).await? {
+        return payment_error(PayError::NotFoundCurrency);
+    }
     let answered = match asked {
         Asked::Single {
             unit,

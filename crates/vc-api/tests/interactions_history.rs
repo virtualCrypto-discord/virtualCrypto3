@@ -5,8 +5,8 @@
 //! `docs/known-gaps.md` is the design, and this file holds it to the two things that file
 //! claims. What may be seen follows what may be done, and what a row says is what happened:
 //! a payment names both sides, and a contract's lock and return name the contract beside the one
-//! side of the wallet that moved — the charge in between is the escrow's movement, not the
-//! wallet's, and is not here at all.
+//! side of the wallet that moved. A charge credits the recipient, but does not
+//! debit the payer's wallet a second time after the lock.
 
 mod support;
 
@@ -185,6 +185,14 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         "a charge is not the wallet's: {screen}"
     );
     assert!(!screen.contains("**25**"), "{screen}");
+
+    let receiver =
+        rendered(&interaction(router(pool.clone()), history(OTHER, "pay", vec![])).await);
+    assert!(receiver.contains("**送金の履歴** (1件)"), "{receiver}");
+    assert!(
+        receiver.contains("契約から受取: **25** `n` ← a metered service（契約）"),
+        "{receiver}"
+    );
 
     // The end of the contract returns what is left of the lock, and that is a movement.
     vc_core::contract::withdraw(&pool, contract, 1, now)

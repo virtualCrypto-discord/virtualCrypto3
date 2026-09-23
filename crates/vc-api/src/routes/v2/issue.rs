@@ -52,7 +52,7 @@ pub async fn post(
         &headers,
         guild.account_id,
         guild.scopes.vc_issue,
-        |tx| Box::pin(async move { issued(tx, guild.guild_id, asked).await }),
+        |tx| Box::pin(async move { issued(tx, guild.guild_id, asked, &guild.resources).await }),
     )
     .await
 }
@@ -91,8 +91,12 @@ async fn issued(
     tx: &mut sqlx::PgConnection,
     guild_id: i64,
     asked: (i64, i64),
+    resources: &[i64],
 ) -> Result<(StatusCode, Value), ApiError> {
     let (receiver_discord_id, amount) = asked;
+    if !crate::resource::lock_guild_in(tx, resources, guild_id).await? {
+        return issue_error(IssueError::NotFoundCurrency);
+    }
 
     // The amount is required where the command may leave it out. There an omitted
     // amount is `:all`, and the person who typed it is looking at the pool; here it

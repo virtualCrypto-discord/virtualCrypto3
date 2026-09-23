@@ -1491,8 +1491,8 @@ const ENDPOINTS: &[Endpoint] = &[
         notes: &[
             "1件は1つのお金の動きです。`ledger` がどちらの台帳の行かを言います（`payment` は送金の台帳、`issuance` は発行の台帳）。二つの台帳はidを別々に数えるので、idは `ledger` と組で意味を持ちます。",
             "並び順は `time` の新しい順です。`time` は秒までの値なので、同じ秒の中では `ledger`（`issuance` が先、`payment` が後）、そのあと id の新しい順で並びます。`next` と `on_next` のカーソルは、この順の最後の行の位置そのものです（台帳の番号は `payment` が0、`issuance` が1）。",
-            "本人が送った・受け取った行のほかに、請求を承諾したときの支払い、契約を承認したときのロックと契約が返した分、発行枠から自分に発行された分が入ります。`event` がどれかを言います（`lock` `return` `issue`。普通の送金は `null`）。ロックは `sender_discord_id` だけが入り `receiver_discord_id` は `null`、返却はその逆で、`contract_client_name` がどの契約かを示します。発行は `sender_discord_id` が `null` です。",
-            "契約がロックから使った分（`charge`）は、本人の残高ではなくアプリケーションが預かっていた分を動かすので、この一覧には入りません。それは契約自身の支払いの記録（`GET /api/v2/contracts/…/payments`）で読めます。",
+            "本人が送った・受け取った行のほかに、請求を承諾したときの支払い、契約を承認したときのロックと契約が返した分、契約から受け取った分、発行枠から自分に発行された分が入ります。`event` がどれかを言います（`lock` `return` `charge` `issue`。普通の送金は `null`）。ロックは `sender_discord_id` だけが入り `receiver_discord_id` は `null`、返却はその逆で、`contract_client_name` がどの契約かを示します。発行は `sender_discord_id` が `null` です。",
+            "契約がロックから使った分（`charge`）は、受取人の一覧に入金として表示されます。預託した人はロック時点で残高が減っているため、出金としては再計上されません。契約全体の支払いは、契約自身の記録（`GET /api/v2/contracts/…/payments`）で読めます。",
             "署名した委譲トークン（パーソナルグラント）では読めません。台帳はアカウント自身の記録で、委譲は操作を貸すものだからです。",
         ],
         errors: &[

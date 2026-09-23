@@ -308,9 +308,11 @@ already recorded. Both are now written into `currency_payment_histories`, and **
 what tells the three contract movements apart**: a charge sets both `sender_id` and `receiver_id`, a
 lock names only the party who approved and leaves the receiver NULL because the escrow that took
 the money is nobody's account, and a return names only the party it went home to and leaves the
-sender NULL. A person's ledger is the wallet's own movements, so it shows a lock and a return and
-never a charge — a charge spends money the application was already handed, not the person's
-balance, and the application that cares reconciles it from the contract's own statement
+sender NULL. A person's ledger is the wallet's own movements, so it shows a lock and a return.
+A charge appears only in the receiving wallet, with `event: "charge"`: it increases that
+wallet's balance even when the receiver is not a contract party. The paying party already
+recorded the lock, so the charge is not another debit in their wallet. The application
+reconciles the escrow from the contract's own statement
 (`GET /api/v2/contracts/{id}/payments`), which shows all three and names which with `event`. A
 movement of nothing writes no row, and each is written where the money moves, in the same
 transaction that moves it.

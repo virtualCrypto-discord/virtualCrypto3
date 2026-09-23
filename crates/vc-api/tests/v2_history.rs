@@ -20,6 +20,115 @@ use support::{
 const OTHER: i64 = 100_000_000_000_000_003;
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
+async fn contract_charges_credit_the_receivers_ledger_without_debiting_the_parties_twice(
+    pool: PgPool,
+) {
+    let money = setup_money(&pool).await;
+    support::insert_user(&pool, 9, OTHER).await;
+    let application = insert_application(&pool, MONEY_USER1, "merchant service").await;
+    let now = time::OffsetDateTime::now_utc();
+    let contract = vc_core::contract::create(
+        &pool,
+        application,
+        &money.unit,
+        &[
+            vc_core::contract::NewParty {
+                discord_id: MONEY_USER1,
+                amount: 20,
+            },
+            vc_core::contract::NewParty {
+                discord_id: MONEY_USER2,
+                amount: 30,
+            },
+        ],
+        Some(OTHER),
+        None,
+        now,
+    )
+    .await
+    .unwrap();
+    for user in [1, 2] {
+        vc_core::contract::approve(&pool, contract, user, now)
+            .await
+            .unwrap();
+    }
+    vc_core::contract::pay(&pool, contract, application, OTHER, None, 35, now)
+        .await
+        .unwrap();
+    let amount: i64 =
+        sqlx::query_scalar("SELECT amount FROM assets WHERE user_id=9 AND currency_id=$1")
+            .bind(money.currency)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(amount, 35);
+
+    let token = mint(&pool, 9, &[]).await;
+    let app = router(pool.clone());
+    // The merchant is not a contract party and cannot rely on its statement.
+    assert_eq!(
+        get(
+            app.clone(),
+            &format!("/api/v2/contracts/{contract}/payments"),
+            Some(&token)
+        )
+        .await
+        .status,
+        404
+    );
+    let first = get(
+        app.clone(),
+        "/api/v2/users/@me/transactions?limit=1",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(first.status, 200);
+    assert_eq!(first.body.as_array().unwrap().len(), 1);
+    let next = next_from(&first);
+    let second = get(
+        app.clone(),
+        &format!("/api/v2/users/@me/transactions?limit=1&next={next}"),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(second.status, 200);
+    assert_eq!(second.body.as_array().unwrap().len(), 1);
+    assert_ne!(first.body[0]["id"], second.body[0]["id"]);
+    let mut amounts = Vec::new();
+    for response in [&first, &second] {
+        let row = &response.body[0];
+        assert_eq!(row["event"], "charge");
+        assert_eq!(row["receiver_discord_id"], OTHER.to_string());
+        assert_eq!(row["contract_client_name"], "merchant service");
+        amounts.push(row["amount"].as_str().unwrap().parse::<i64>().unwrap());
+    }
+    amounts.sort();
+    assert_eq!(amounts, [15, 20]);
+    let filtered = get(
+        app.clone(),
+        &format!("/api/v2/users/@me/transactions?unit=n&related_discord_user_id={MONEY_USER1}"),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(filtered.body.as_array().unwrap().len(), 1);
+    assert_eq!(filtered.body[0]["amount"], "20");
+
+    // The numbered reader used by Discord must count the same rows as the API.
+    let page = vc_core::history::payments(&pool, 9, None, None, 1, 1)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.next, Some(2));
+    assert_eq!(page.rows.len(), 1);
+    for user in [1, 2] {
+        let token = mint(&pool, user, &[]).await;
+        let payer = get(app.clone(), "/api/v2/users/@me/transactions", Some(&token)).await;
+        assert_eq!(payer.body.as_array().unwrap().len(), 1);
+        assert_eq!(payer.body[0]["event"], "lock");
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_currency_replacement_does_not_expand_a_restricted_grants_history(pool: PgPool) {
     let money = setup_money(&pool).await;
     let application = insert_application(&pool, MONEY_USER1, "history reader").await;

@@ -3,8 +3,8 @@
 //! Two subcommands, one screen each, and the arrows between pages — the shape `/bal` and the
 //! mute list have. What is being read is `vc_core::history`: the pool's issuances, which
 //! `/issue` writes, and the wallet's own movements, which `/pay`, a claim's approval, and a
-//! contract's lock and return all write — a charge is not one of them, because it moves the
-//! money an application was already given rather than the person's balance.
+//! contract's lock and return all write. A charge appears as an incoming payment for its
+//! receiver, while the payer's wallet already recorded the lock.
 //!
 //! The payments screen is the caller's own ledger, and an issuance to them is money arriving in
 //! their wallet like any other, so it is on that screen too: both ledgers, merged, newest first.
@@ -274,6 +274,10 @@ fn paid_line(payment: &Payment, me: i64) -> String {
         ),
         Some("return") => format!(
             "契約から返却: {amount} ← {} ・ {time}",
+            contract_name(payment)
+        ),
+        Some("charge") => format!(
+            "契約から受取: {amount} ← {} ・ {time}",
             contract_name(payment)
         ),
         _ => match (
