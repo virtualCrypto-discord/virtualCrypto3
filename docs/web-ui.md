@@ -205,7 +205,7 @@ without saying which reads as unbuilt, which this one has already been read as o
    that must work when JavaScript does not, because OAuth2 sends browsers to it.
 
    **This one is answered and not by the SPA.** It is a server-rendered route in
-   `routes/consent.rs` — `GET` shows the form, `POST` decides — so a browser sent
+   `routes/oauth2.rs` and `routes/oauth2/consent.rs` — `GET` shows the form, `POST` decides — so a browser sent
    here by a client library needs no script to get through it, which is what the
    paragraph above asks for. Nothing of it belongs in `web/`.
 2. **Discord login and logout**, with the `continue` return path and the CSRF
@@ -756,4 +756,3 @@ Both are decisions rather than readings, so they are here rather than in the cod
 is not a decision: the write is `bind_bot`, and its `Taken` outcome is
 `すでにそのBotは別のApplicationに紐付けられています` — that one has a message because
 the Elixir has one.
-

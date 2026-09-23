@@ -99,6 +99,7 @@ pub async fn issuances(
     if vc_core::history::guild_currency(state.pool(), guild.guild_id).await? != Some(id) {
         return Err(ApiError::NotFound);
     }
+    crate::resource::ensure(&guild.resources, id)?;
 
     let params = QueryParams::parse(raw.as_deref().unwrap_or_default());
     let related = params.one("related_discord_user_id");

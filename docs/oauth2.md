@@ -116,7 +116,11 @@ client only after those checks have established the destination.
    roles' permissions include the administrator bit.
 
 and then renders a form with one **Approve** button and hidden fields carrying all
-of the above plus a CSRF token. There is no deny button and no `deny` action.
+of the above. The Rust endpoint renders HTML for `Accept: text/html`; other callers
+keep the JSON consent description. The form preserves optional `state` and every
+`resource` URI, including repeated values. It displays the requested permissions
+and currency units, or explicitly says the grant covers all of the guild's
+currencies. There is no deny button and no `deny` action.
 
 `POST` repeats the validations, calls `Auth.authorize/1` for the code, and answers
 **303 to the redirect URI** with `code`, `guild_id`, `scope` and `state`. Its
@@ -145,7 +149,7 @@ deliberate differences, and `/login` existing is what made the second answerable
 ### CSRF, which the old form had and this one gets from the cookie
 
 The Elixir's consent form carries a hidden `_csrf_token`, minted and checked by
-Phoenix. The SPA's consent POST does not need one, because the session cookie is
+Phoenix. The Rust consent form instead relies on the session cookie being
 `SameSite=Lax`: a cross-site POST does not carry it, so a forged consent cannot
 be submitted with somebody's session attached. That is the whole of the
 protection, and it is worth knowing that it rests on that attribute.
@@ -629,4 +633,3 @@ URI after a good client name — changes nothing.
 The refusals are the metadata validator's, unchanged, and the redirect URI's is the
 same pair as registration's: `invalid_redirect_uri` with
 `redirect_uri_scheme_must_be_http_or_https`.
-

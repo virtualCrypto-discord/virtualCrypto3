@@ -11,8 +11,9 @@
 //! it — claims the key in it, runs the write on the same connection and
 //! registers the answer before committing — so a key can never be left claimed
 //! with nothing recorded under it (the state a retry can do nothing with), and a
-//! write that failed takes its claim down with it, leaving the key free to be used
-//! again. That is also what makes the three endpoints one shape rather than three
+//! database failure takes its claim down with it, leaving the key free to be used
+//! again. A business refusal rolls back its writes but keeps its cached answer.
+//! That is also what makes the three endpoints one shape rather than three
 //! that each have to remember the order.
 
 use std::future::Future;
@@ -22,7 +23,7 @@ use axum::Json;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
-use sqlx::PgConnection;
+use sqlx::{Acquire, PgConnection};
 
 use vc_core::idempotency::Slot;
 
@@ -60,6 +61,8 @@ const CLAIM_WAIT: &str = "1s";
 
 /// Run a write under its key: claim the key, run the write, store the answer, and
 /// commit all three together.
+/// Only a successful HTTP answer commits the write; other answers are cached
+/// after rolling the write back to a savepoint. An `Err` frees the key too.
 ///
 /// `allowed` is whether the caller's token may do the thing at all — the payment
 /// endpoint's scope for paying, the issuing endpoint's for issuing, the contract
@@ -108,12 +111,24 @@ where
         }
     };
 
-    let (status, body) = match write(&mut tx).await {
-        Ok(answer) => answer,
+    // A business refusal is still an answer to cache, but must not commit any
+    // preparatory writes (for example, creating a payment's receiver). Keep the
+    // key outside the savepoint so that rolling back the write preserves it.
+    let mut operation = tx.begin().await.map_err(db)?;
+    let (status, body) = match write(&mut operation).await {
+        Ok((status, body)) => {
+            if status.is_success() {
+                operation.commit().await.map_err(db)?;
+            } else {
+                operation.rollback().await.map_err(db)?;
+            }
+            (status, body)
+        }
         Err(failure) => {
             // The claim rolls back with the write: it did not happen, and the key
             // is free for the caller to use again — which is what a caller retrying
             // a database blip needs, rather than a stored error it cannot get past.
+            operation.rollback().await.map_err(db)?;
             tx.rollback().await.map_err(db)?;
 
             return Err(failure);

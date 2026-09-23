@@ -113,6 +113,52 @@ fn pay(amount: &str) -> Value {
     })
 }
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_refused_payment_does_not_create_its_receiver_even_when_the_answer_is_cached(
+    pool: PgPool,
+) {
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+    let app = build(pool.clone());
+    let stranger = 100_000_000_000_000_009_i64;
+
+    // Both failures happen after pay_in has attempted to insert the receiver.
+    for (amount_requested, status) in [("1000000", 409), ("0", 400)] {
+        for keyed in [false, true] {
+            let body = json!({"unit": "nyan", "receiver_discord_id": stranger.to_string(), "amount": amount_requested});
+            let key = keyed.then(|| key_header(&format!("refused-{amount_requested}")));
+            let refused = send(app.clone(), &token, body, key.clone()).await;
+            assert_eq!(refused.status, status, "{}", refused.body);
+            assert_eq!(
+                idempotency_status(&refused),
+                Some(if keyed { "OK" } else { "Not Requested" })
+            );
+            assert!(
+                vc_core::user::find_by_discord_id(&pool, stranger)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+
+            if keyed {
+                // Even an affordable request replays the stored refusal under
+                // this key; rolling back the write must not free the claim.
+                let duplicate = send(app.clone(), &token, json!({"unit": "nyan", "receiver_discord_id": stranger.to_string(), "amount": "1"}), key).await;
+                assert_eq!(duplicate.status, status);
+                assert_eq!(duplicate.body, refused.body);
+                assert_eq!(idempotency_status(&duplicate), Some("Duplicate"));
+                assert!(
+                    vc_core::user::find_by_discord_id(&pool, stranger)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+    }
+    assert_eq!(amount(&pool, USER1).await, 199_500);
+}
+
 // --- single payment --------------------------------------------------------
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

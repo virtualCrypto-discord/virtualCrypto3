@@ -288,6 +288,12 @@ async fn an_unaffordable_entry_rolls_the_whole_request_back(pool: PgPool) {
     assert_eq!(amount_of(&pool, USER1, NYAN).await, 199_500);
     assert_eq!(amount_of(&pool, USER2, NYAN).await, 1_000);
     assert_eq!(amount_of_discord(&pool, STRANGER_A, NYAN).await, 0);
+    assert!(
+        vc_core::user::find_by_discord_id(&pool, STRANGER_A)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// The entries are affordable one at a time but not together: 199500 < 200000.

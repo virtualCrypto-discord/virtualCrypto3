@@ -1,8 +1,9 @@
 //! The consent screen.
 //!
-//! What is here so far is the part of it worth getting wrong-proof separately:
-//! how a refusal is answered. The rest of the screen is a validation chain, and
-//! each link of it lands on one of these.
+//! Validate the authorization request, show the browser an approval form, and
+//! repeat the checks on submission before issuing a code.
+
+mod consent;
 
 use axum::Json;
 use axum::extract::{FromRequest, Query, RawQuery, Request as HttpRequest, State};
@@ -479,33 +480,38 @@ pub async fn authorize(
     // The currencies the ask is for. This is after the client and the redirect
     // URI, so a refusal here may go back to the client — which is the only way
     // it learns the ask named something that is not ours.
-    let resources = match resources_of(
-        &state,
-        request.guild_id,
-        values_named(
-            &raw_query_pairs(raw.as_deref().unwrap_or_default()),
-            "resource",
-        ),
-    )
-    .await
-    {
+    let resource_uris = values_named(
+        &raw_query_pairs(raw.as_deref().unwrap_or_default()),
+        "resource",
+    );
+    let resources = match resources_of(&state, request.guild_id, resource_uris.clone()).await {
         Ok(resources) => resources,
         Err(refusal) => return answer(refusal, &request.redirect_uri, request.state.as_deref()),
     };
 
     match describe(&state, &request, account_id).await {
-        Ok(guild_id) => Json(Consent {
-            client_name: preauthorized.client_name,
-            client_id: request.client_id,
-            redirect_uri: request.redirect_uri,
-            scopes: request.scopes,
-            resources: crate::resource::units(state.pool(), &resources)
-                .await
-                .unwrap_or_default(),
-            guild_id,
-            state: request.state,
-        })
-        .into_response(),
+        Ok(guild_id) => {
+            let units = match crate::resource::units(state.pool(), &resources).await {
+                Ok(units) => units,
+                Err(error) => {
+                    return crate::error::ApiError::from(vc_core::Error::from(error))
+                        .into_response();
+                }
+            };
+            consent::respond(
+                &headers,
+                Consent {
+                    client_name: preauthorized.client_name,
+                    client_id: request.client_id,
+                    redirect_uri: request.redirect_uri,
+                    scopes: request.scopes,
+                    resources: units,
+                    guild_id,
+                    state: request.state,
+                },
+                &resource_uris,
+            )
+        }
         Err(refusal) => answer(refusal, &request.redirect_uri, request.state.as_deref()),
     }
 }

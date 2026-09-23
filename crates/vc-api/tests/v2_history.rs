@@ -19,6 +19,61 @@ use support::{
 /// Somebody the money fixture does not have.
 const OTHER: i64 = 100_000_000_000_000_003;
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_currency_replacement_does_not_expand_a_restricted_grants_history(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let application = insert_application(&pool, MONEY_USER1, "history reader").await;
+    let restricted = support::insert_grant_for(
+        &pool,
+        application,
+        MONEY_GUILD,
+        &["vc.issue"],
+        &[money.currency],
+    )
+    .await;
+    let app = router(pool.clone());
+    let before = get(
+        app.clone(),
+        &format!("/api/v2/currencies/{}/issuances", money.currency),
+        Some(&restricted),
+    )
+    .await;
+    assert_eq!(before.status, 200);
+
+    assert_eq!(
+        vc_core::currency::delete(&pool, MONEY_GUILD, "delete n")
+            .await
+            .unwrap(),
+        vc_core::currency::DeleteResult::Deleted
+    );
+    vc_core::currency::create(&pool, MONEY_GUILD, "replacement", "new", MONEY_USER1, 1000)
+        .await
+        .unwrap();
+    let replacement = vc_core::history::guild_currency(&pool, MONEY_GUILD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(replacement, money.currency);
+    vc_core::issue::issue(&pool, MONEY_GUILD, MONEY_USER2, Some(3))
+        .await
+        .unwrap();
+    let uri = format!("/api/v2/currencies/{replacement}/issuances");
+
+    let refused = get(app.clone(), &uri, Some(&restricted)).await;
+    assert_eq!(refused.status, 403, "{}", refused.body);
+    assert_eq!(refused.body["error"], "insufficient_scope");
+
+    // A fresh grant for this currency, and an unrestricted grant, may read it.
+    for resources in [vec![replacement], vec![]] {
+        let token =
+            support::insert_grant_for(&pool, application, MONEY_GUILD, &["vc.issue"], &resources)
+                .await;
+        let allowed = get(app.clone(), &uri, Some(&token)).await;
+        assert_eq!(allowed.status, 200, "{}", allowed.body);
+        assert_eq!(allowed.body.as_array().unwrap().len(), 1);
+    }
+}
+
 fn router(pool: PgPool) -> Router {
     vc_api::router(state(pool, fake()))
 }
