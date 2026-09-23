@@ -214,7 +214,11 @@ refusals distinguish why:
 | no application has that `client_id` | `invalid_request`, `not_found_client` |
 | the code belongs to a different application | `invalid_grant`, `issued_to_other_client` |
 | the redirect URI differs from the code's original URI or is no longer registered | `invalid_grant`, `redirect_uri_mismatch` |
-| the application may not take an authorization code | `invalid_grant_type` |
+
+The application's `grant_types` must include `authorization_code` before a
+code can be issued. The token exchange does not recheck this setting, matching
+v2 behavior: removing `authorization_code` prevents new codes from being issued
+but does not invalidate an already-issued code that passes the checks above.
 
 Then a grant is found or created for (application, guild), its scopes are
 recorded, an access token is made, and — **only if the application lists
