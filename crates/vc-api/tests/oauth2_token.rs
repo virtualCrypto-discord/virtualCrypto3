@@ -875,3 +875,63 @@ async fn v3_browser_approvals_have_independent_grants_and_refresh_tokens(pool: P
     assert_eq!(legacy[0], legacy[1]);
     assert_ne!(legacy[0], grants[1]);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn code_exchange_requires_the_original_redirect_and_preserves_rejected_codes(pool: PgPool) {
+    use tower::ServiceExt;
+    let (app, client) = application_with_callback(&pool).await;
+    let original = "https://app.example/callback";
+    let other = "https://app.example/other-callback";
+    sqlx::query("INSERT INTO redirect_uris (application_id, redirect_uri, inserted_at, updated_at) VALUES ($1, $2, now(), now())")
+        .bind(app).bind(other).execute(&pool).await.unwrap();
+    let code = authorize(
+        &pool,
+        42,
+        &["vc.issue".into()],
+        &[],
+        original,
+        &client,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let http = vc_api::router(support::state(pool.clone(), support::fake()));
+    for (uri, expected) in [(other, 400), (original, 200)] {
+        let response = http
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/oauth2/token")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({
+                            "grant_type":"authorization_code", "client_id":client,
+                            "redirect_uri":uri, "code":code
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), expected);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if expected == 400 {
+            assert_eq!(body["error"], "invalid_grant");
+            assert_eq!(body["error_description"], "redirect_uri_mismatch");
+            let grants: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM grants WHERE application_id = $1")
+                    .bind(app)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(grants, 0);
+        } else {
+            assert!(body["access_token"].is_string());
+        }
+    }
+}

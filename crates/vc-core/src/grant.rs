@@ -373,9 +373,12 @@ async fn exchange_code_in(
         return Err(ExchangeError::IssuedToOtherClient);
     }
 
-    if !redirect_uri_is_registered(&mut *connection, application.id, redirect_uri)
-        .await
-        .unwrap_or(false)
+    // Registration alone is insufficient: the code belongs to the exact URI
+    // used for consent. A mismatch rolls back consumption of the code.
+    if taken.redirect_uri.as_deref() != Some(redirect_uri)
+        || !redirect_uri_is_registered(&mut *connection, application.id, redirect_uri)
+            .await
+            .unwrap_or(false)
     {
         return Err(ExchangeError::RedirectUriMismatch);
     }

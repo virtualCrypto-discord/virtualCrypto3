@@ -213,7 +213,7 @@ refusals distinguish why:
 | it has expired | `invalid_grant`, `invalid_code` |
 | no application has that `client_id` | `invalid_request`, `not_found_client` |
 | the code belongs to a different application | `invalid_grant`, `issued_to_other_client` |
-| the redirect URI is not one of the application's | `invalid_grant`, `redirect_uri_mismatch` |
+| the redirect URI differs from the code's original URI or is no longer registered | `invalid_grant`, `redirect_uri_mismatch` |
 | the application may not take an authorization code | `invalid_grant_type` |
 
 Then a grant is found or created for (application, guild), its scopes are
