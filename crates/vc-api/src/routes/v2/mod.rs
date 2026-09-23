@@ -1,6 +1,7 @@
 pub mod claims;
 pub mod contracts;
 pub mod currencies;
+pub mod history;
 pub mod issue;
 pub mod transactions;
 pub mod users;
@@ -22,9 +23,11 @@ pub fn router() -> Router<AppState> {
             "/api/v2/users/@me/claims/{id}",
             get(claims::get_by_id).patch(claims::patch),
         )
+        // One path, two halves of one ledger: the payment a caller sends, and what it
+        // and its counterparties were paid.
         .route(
             "/api/v2/users/@me/transactions",
-            axum::routing::post(transactions::post),
+            get(history::transactions).post(transactions::post),
         )
         // The contracts this user is named in. The application's own side of the
         // same set is `/api/v2/contracts`, which is an `app` token's.
@@ -50,6 +53,9 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v2/currencies", get(currencies::index))
         .route("/api/v2/currencies/{id}", get(currencies::show))
+        // The issuance ledger of the currency in the path, which is the guild token's, like the
+        // pool the token may spend from.
+        .route("/api/v2/currencies/{id}/issuances", get(history::issuances))
         // A static segment beside `{id}`, which the router prefers: the path the
         // browser would read as a currency id can never be this one, because an id
         // is a number.

@@ -35,6 +35,7 @@ pub enum Operation {
     ReadBalances,
     ReadContracts,
     ReadContractPayments,
+    ReadTransactions,
     ReadClaims,
     Pay,
     CreateClaims,
@@ -57,6 +58,7 @@ permissions! {
     ReadBalances => ReadBalances,
     ReadContracts => ReadContracts,
     ReadContractPayments => ReadContractPayments,
+    ReadTransactions => ReadTransactions,
     ReadClaims => ReadClaims,
     Pay => Pay,
     CreateClaims => CreateClaims,
@@ -94,6 +96,11 @@ impl Principal {
                     ReadBalances => scopes.contains(&Scope::BalancesRead),
                     ReadContracts => scopes.contains(&Scope::ContractsRead),
                     ReadContractPayments => scopes.contains(&Scope::ContractPaymentsRead),
+                    // A ledger is the account's own record of what it did with its money. A
+                    // delegation lends an operation, not the account's history of having done
+                    // it, so no scope reaches this and the token is refused rather than
+                    // answered with an empty list.
+                    ReadTransactions => false,
                     ReadClaims => scopes.contains(&Scope::ClaimsRead),
                     Pay => scopes.contains(&Scope::PaymentsCreate),
                     CreateClaims => scopes.contains(&Scope::ClaimsCreate),
@@ -116,7 +123,8 @@ impl Principal {
             Self::Own(user) => (
                 // Preserve the account credentials' existing API contract.
                 match operation {
-                    ReadProfile | ReadBalances | ReadContracts | ReadContractPayments => true,
+                    ReadProfile | ReadBalances | ReadContracts | ReadContractPayments
+                    | ReadTransactions => true,
                     ReadClaims | CreateClaims | PatchClaims => user.scopes.vc_claim,
                     Pay => user.scopes.vc_pay,
                     ApplicationContracts => user.kind == Kind::App && user.scopes.vc_contract,

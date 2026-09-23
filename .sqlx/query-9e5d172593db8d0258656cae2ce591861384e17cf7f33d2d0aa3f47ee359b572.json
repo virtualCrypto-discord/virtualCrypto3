@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT history.id, history.amount AS \"amount!\",\n                COALESCE(history.\"time\", history.inserted_at) AS \"time!\",\n                sender.discord_id AS sender_discord_id,\n                receiver.discord_id AS receiver_discord_id,\n                currencies.unit,\n                applications.client_name AS client_name\n           FROM currency_payment_histories history\n           JOIN currencies ON currencies.id = history.currency_id\n           JOIN users sender ON sender.id = history.sender_id\n           JOIN users receiver ON receiver.id = history.receiver_id\n           LEFT JOIN contracts ON contracts.id = history.contract_id\n           LEFT JOIN applications ON applications.id = contracts.application_id\n          WHERE (sender.discord_id = $1 OR receiver.discord_id = $1)\n            AND ($2::text IS NULL OR currencies.unit = $2)\n            AND ($3::bigint IS NULL\n                 OR sender.discord_id = $3 OR receiver.discord_id = $3)\n          ORDER BY history.id DESC\n          LIMIT $4\n         OFFSET $5",
+  "query": "SELECT history.id, history.amount AS \"amount!\",\n                COALESCE(history.\"time\", history.inserted_at) AS \"time!\",\n                sender.discord_id AS sender_discord_id,\n                receiver.discord_id AS receiver_discord_id,\n                currencies.unit,\n                applications.client_name AS client_name\n           FROM currency_payment_histories history\n           JOIN currencies ON currencies.id = history.currency_id\n           JOIN users sender ON sender.id = history.sender_id\n           JOIN users receiver ON receiver.id = history.receiver_id\n           LEFT JOIN contracts ON contracts.id = history.contract_id\n           LEFT JOIN applications ON applications.id = contracts.application_id\n          WHERE (history.sender_id = $1 OR history.receiver_id = $1)\n            AND ($2::text IS NULL OR currencies.unit = $2)\n            AND ($3::bigint IS NULL\n                 OR sender.discord_id = $3 OR receiver.discord_id = $3)\n            AND ($4::bigint IS NULL OR history.id < $4)\n            AND ($5::bigint IS NULL OR history.id <= $5)\n          ORDER BY history.id DESC\n          LIMIT $6\n         OFFSET $7",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,8 @@
         "Text",
         "Int8",
         "Int8",
+        "Int8",
+        "Int8",
         "Int8"
       ]
     },
@@ -95,5 +97,5 @@
       true
     ]
   },
-  "hash": "ffec8b9cdb7c79084ca3e1623c7cfa305adc1e0c3dcfe2e9f7f36826c81a13ed"
+  "hash": "9e5d172593db8d0258656cae2ce591861384e17cf7f33d2d0aa3f47ee359b572"
 }

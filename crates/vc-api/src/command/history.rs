@@ -104,9 +104,18 @@ async fn paid(
     me: i64,
     kind: i64,
 ) -> Result<Value, CommandError> {
+    // The ledger is keyed by account, which is what the API's side of this holds, so a Discord
+    // id is resolved first. Somebody who has never used this service has no ledger to show.
+    let Some(account) = vc_core::user::find_by_discord_id(state.pool(), me)
+        .await?
+        .map(|user| user.id)
+    else {
+        return Ok(answer(vec![text("送金の履歴はありません。")], kind));
+    };
+
     let page = vc_core::history::payments(
         state.pool(),
-        me,
+        account,
         listing.unit.as_deref(),
         listing.discord_id,
         listing.page,
@@ -169,9 +178,21 @@ async fn issued(
         return Ok(refused("エラー: 実行には管理者権限が必要です。"));
     }
 
+    // The ledger is the currency's, which is what the API's path names; the guild is what a
+    // screen has, so the currency is looked up. A guild whose pool has never paid anybody — and
+    // one that has no currency at all — reads as the empty ledger rather than as an error.
+    let Some(currency) = vc_core::history::guild_currency(state.pool(), guild_id).await? else {
+        return Ok(answer(
+            vec![text(
+                "発行の履歴はありません。このサーバーでは、まだ発行枠から発行されていません。",
+            )],
+            kind,
+        ));
+    };
+
     let page = vc_core::history::issuances(
         state.pool(),
-        guild_id,
+        currency,
         listing.discord_id,
         listing.page,
         PER_PAGE,
