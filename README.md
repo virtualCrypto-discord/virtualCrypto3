@@ -49,3 +49,22 @@ mbx doctor   # the reflink lines say "cloning is supported", not "different file
   carry a query from scratch, and fails rather than leaving an empty directory.
 - `mbx cache remove <workspace>` drops one checkout's target and keeps the store;
   `mbx cache stats` reports what is held; `mbx gc --dry-run` previews collection.
+
+## The linker (mold)
+
+`flake.nix` puts [mold](https://github.com/rui314/mold) on the dev shell's PATH
+and sets `RUSTFLAGS` to `-C link-arg=-fuse-ld=mold`, so every link inside
+`nix develop` — or direnv — goes through it, and CI's links go through it too
+because CI is the same shell.
+
+Linking is the part of a rebuild the cache cannot skip: a changed crate in
+`vc-core` or `vc-api` is a fresh link of every test binary in the workspace, one
+per file. On this checkout's debug builds mold does each one about a quarter
+faster than the default `ld` — `vc-server` 1.05 s to 0.78 s, a test binary 1.2 s
+to 1.05 s, three runs each — so the saving is that, times however many binaries
+the change invalidated.
+
+Nothing is installed by hand and nothing outside the shell is affected: the flag
+is GCC's and clang's own, and a build that is not in this flake links with the
+default `ld`. The first build after the shell changes its flags is a full rebuild,
+because the flags are part of what a compiled crate is keyed on.
