@@ -616,7 +616,7 @@ fn unmute() -> Value {
     })
 }
 
-/// `/history`: the ledger behind `/issue` and `/pay`, read back.
+/// `/history`: the ledgers behind `/issue` and `/pay`, read back.
 ///
 /// In a guild and in a DM both, because `pay` is about the caller's own account and works
 /// anywhere. `issue` needs a guild and the administrator bit; it asks for both in its own
@@ -625,14 +625,17 @@ fn unmute() -> Value {
 ///
 /// An addition rather than a port: the Elixir writes both ledgers and reads neither, and no
 /// command of its names a history.
+///
+/// `pay` reads the caller's own account out of both ledgers — what they paid and were paid, and
+/// what the pool issued to them — which is what its description says now that it does.
 fn history() -> Value {
     json!({
         "name": "history",
-        "description": "発行と送金の履歴を表示します。",
+        "description": "自分の入出金と、このサーバーの発行の履歴を表示します。",
         "options": [
             {
                 "name": "pay",
-                "description": "自分が送った・受け取った通貨の履歴を表示します。",
+                "description": "自分の通貨の出入りの履歴を表示します。発行で受け取った分も含みます。",
                 "type": 1,
                 "options": [
                     {

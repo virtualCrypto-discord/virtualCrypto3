@@ -33,51 +33,51 @@ pub const PER_PAGE: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 
 /// What a list was asked for: how many rows, and where to resume from.
-pub struct Page {
+///
+/// The cursor is the ordered column's own value, so this is generic over it: an id for the
+/// claim list and the contract family, and the merged ledger's own place for
+/// `/api/v2/users/@me/transactions`, which reads two tables at once.
+pub struct Page<T = i64> {
     pub limit: Option<i64>,
-    pub cursor: Cursor,
+    pub cursor: Cursor<T>,
 }
 
-impl Page {
+impl Page<i64> {
     /// Read `limit`, `next` and `on_next` off the query.
-    ///
-    /// The order the two are read in is the claim list's, and it is load
-    /// bearing: a request that is wrong in both ways is answered with the
-    /// `limit` complaint, because that is the one the Elixir reaches first.
     pub fn asked(params: &QueryParams) -> Result<Self, ApiError> {
-        let limit = match params.one("limit") {
-            None => None,
-            Some(value) => {
-                let limit =
-                    parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?;
-
-                // A negative limit is a client's typo, and Postgres answers it with
-                // an error of its own — a 500 for something the caller can fix. A
-                // limit above [`MAX_LIMIT`] is a page size this service will not
-                // honour, and saying so is better than quietly answering a page and
-                // letting the caller think it asked for everything. Zero is a page of
-                // nothing and is allowed. Neither is one of the crashes
-                // `docs/known-gaps.md` reproduces: the non-numeric case beside them is
-                // already a 400.
-                if !(0..=MAX_LIMIT).contains(&limit) {
-                    return Err(ApiError::InvalidRequest("invalid_limit"));
-                }
-
-                Some(limit)
-            }
-        };
-
-        let on_next = params.one("on_next");
-        let next = params.one("next");
+        let limit = limit(params)?;
+        let (on_next, next) = cursors(params)?;
 
         let cursor = match (on_next, next) {
-            (Some(_), Some(_)) => return Err(ApiError::InvalidRequest("invalid_cursor")),
-            (Some(value), None) => {
+            (Some(value), _) => {
                 Cursor::OnNext(parse_number(&value).ok_or_else(cursor_cannot_be_read)?)
             }
             (None, Some(value)) => {
                 Cursor::Next(parse_number(&value).ok_or_else(cursor_cannot_be_read)?)
             }
+            (None, None) => Cursor::First,
+        };
+
+        Ok(Page { limit, cursor })
+    }
+}
+
+impl<T> Page<T> {
+    /// The same page for a list whose cursor is not one number: `read` is the list's own reader
+    /// for the value it wrote, because a cursor is the ordered column's own value and here that
+    /// is not an id. A value it cannot read is `invalid_cursor`, the same complaint a
+    /// non-numeric id gets, since both say the caller named a place to resume from that cannot be
+    /// read.
+    pub fn asked_text(
+        params: &QueryParams,
+        read: impl Fn(&str) -> Option<T>,
+    ) -> Result<Self, ApiError> {
+        let limit = limit(params)?;
+        let (on_next, next) = cursors(params)?;
+
+        let cursor = match (on_next, next) {
+            (Some(value), _) => Cursor::OnNext(read(&value).ok_or_else(cursor_cannot_be_read)?),
+            (None, Some(value)) => Cursor::Next(read(&value).ok_or_else(cursor_cannot_be_read)?),
             (None, None) => Cursor::First,
         };
 
@@ -101,11 +101,56 @@ impl Page {
     ///
     /// The key is the caller's, because which column orders a list is the list's
     /// business — a claim is ordered by its id, a contract by its own.
-    pub fn next_cursor<T>(&self, rows: &[T], key: impl Fn(&T) -> i64) -> Option<i64> {
+    pub fn next_cursor<R>(&self, rows: &[R], key: impl Fn(&R) -> i64) -> Option<i64> {
         let last = rows.last().map(key)?;
 
         (self.limit == Some(rows.len() as i64)).then_some(last)
     }
+
+    /// The same, for a list whose cursor is not a number: the key is the row's own spelling of
+    /// the ordered column, which is what a caller hands back as `next` — and what the list reads
+    /// again with [`Page::asked_text`].
+    pub fn next_text<R>(&self, rows: &[R], key: impl Fn(&R) -> String) -> Option<String> {
+        let last = rows.last().map(key)?;
+
+        (self.limit == Some(rows.len() as i64)).then_some(last)
+    }
+}
+
+/// How many rows the caller asked for, which is read before the cursor for the claim list's
+/// reason: a request that is wrong in both ways is answered with the `limit` complaint, because
+/// that is the one the Elixir reaches first.
+///
+/// A negative limit is a client's typo, and Postgres answers it with an error of its own — a 500
+/// for something the caller can fix. A limit above [`MAX_LIMIT`] is a page size this service will
+/// not honour, and saying so is better than quietly answering a page and letting the caller think
+/// it asked for everything. Zero is a page of nothing and is allowed. Neither is one of the
+/// crashes `docs/known-gaps.md` reproduces: the non-numeric case beside them is already a 400.
+fn limit(params: &QueryParams) -> Result<Option<i64>, ApiError> {
+    let Some(value) = params.one("limit") else {
+        return Ok(None);
+    };
+
+    let limit = parse_number(&value).ok_or(ApiError::InvalidRequest("invalid_limit"))?;
+
+    if !(0..=MAX_LIMIT).contains(&limit) {
+        return Err(ApiError::InvalidRequest("invalid_limit"));
+    }
+
+    Ok(Some(limit))
+}
+
+/// `next` and `on_next` as they arrived, whichever of the two there is: both together name two
+/// places to resume from, which is a request this service refuses.
+fn cursors(params: &QueryParams) -> Result<(Option<String>, Option<String>), ApiError> {
+    let on_next = params.one("on_next");
+    let next = params.one("next");
+
+    if on_next.is_some() && next.is_some() {
+        return Err(ApiError::InvalidRequest("invalid_cursor"));
+    }
+
+    Ok((on_next, next))
 }
 
 /// The `link` header a page offers, as `Rest.md` writes it: the scheme from

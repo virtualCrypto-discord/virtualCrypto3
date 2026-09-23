@@ -11,14 +11,18 @@
 
 /// Where to resume from. `First` is the start, `Next` is exclusive (`<`/`>`) and
 /// `OnNext` is inclusive (`<=`/`>=`).
+///
+/// The value is the ordered column's own, which is why this is not fixed to a number: an id
+/// for most lists here, and the merged ledger's own place for the one that reads two tables.
+/// A cursor is the list's to spell, and what a list orders by is the list's business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cursor {
+pub enum Cursor<T = i64> {
     First,
-    Next(i64),
-    OnNext(i64),
+    Next(T),
+    OnNext(T),
 }
 
-impl Cursor {
+impl<T> Cursor<T> {
     pub(crate) fn kind(self) -> &'static str {
         match self {
             Cursor::First => "first",
@@ -27,7 +31,7 @@ impl Cursor {
         }
     }
 
-    pub(crate) fn value(self) -> Option<i64> {
+    pub(crate) fn value(self) -> Option<T> {
         match self {
             Cursor::First => None,
             Cursor::Next(value) | Cursor::OnNext(value) => Some(value),

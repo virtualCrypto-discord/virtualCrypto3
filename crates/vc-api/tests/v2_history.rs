@@ -1,9 +1,11 @@
-//! The two ledger endpoints: a person's payments and a currency's issuances.
+//! The two ledger endpoints: a person's own movements and a currency's issuances.
 //!
 //! An addition rather than a port — the Elixir's `/api/v1|2/…/transactions` are writers and it
 //! reads neither history table anywhere — so `docs/known-gaps.md` is the design, and this file
-//! holds the API half of it to the same two rules the screens are held to: what may be seen
-//! follows what may be done, and a page 2 is the same list as page 1.
+//! holds the API half of it to the same three rules the screens are held to: what may be seen
+//! follows what may be done, a page 2 is the same list as page 1, and the person's list is both
+//! ledgers at once — the payments and what the pool issued to them, merged newest first, which
+//! here is `time`, then the ledger, then the id.
 
 mod support;
 
@@ -37,6 +39,16 @@ fn link(response: &Response) -> String {
         .and_then(|value| value.to_str().ok())
         .expect("a next page")
         .to_owned()
+}
+
+/// The cursor a full page offers, as the link header spells it.
+fn next_from(response: &Response) -> String {
+    let link = link(response);
+    let start = link.find("next=").expect("a cursor") + "next=".len();
+    let rest = &link[start..];
+    let end = rest.find(['&', '>']).unwrap_or(rest.len());
+
+    rest[..end].to_owned()
 }
 
 /// Both directions on one list, and nobody else's rows in it.
@@ -111,6 +123,183 @@ async fn the_transactions_list_is_the_callers_own(pool: PgPool) {
     .await;
 
     assert_eq!(mine.body.as_array().expect("a list").len(), 1);
+}
+
+/// An issuance to the caller is money arriving in their wallet, so it is in their list: the same
+/// list as the payments, `event` saying `issue`, and no sender at all — the pool paid, and the
+/// pool has no Discord id.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_issuance_to_the_caller_is_in_their_list(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    vc_core::issue::issue(&pool, MONEY_GUILD, MONEY_USER2, Some(300))
+        .await
+        .expect("an issuance");
+
+    let token = mint(&pool, 2, &[]).await;
+    let listed = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/transactions",
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(listed.status, 200, "body: {}", listed.body);
+
+    let rows = listed.body.as_array().expect("a list").to_vec();
+    assert_eq!(rows.len(), 1, "body: {}", listed.body);
+
+    assert_eq!(rows[0]["ledger"], "issuance");
+    assert_eq!(rows[0]["event"], "issue");
+    assert_eq!(rows[0]["amount"], "300");
+    assert_eq!(rows[0]["unit"], money.unit);
+    assert_eq!(rows[0]["receiver_discord_id"], MONEY_USER2.to_string());
+    assert_eq!(
+        rows[0]["sender_discord_id"],
+        serde_json::Value::Null,
+        "no sender: the pool paid"
+    );
+    assert_eq!(rows[0]["contract_client_name"], serde_json::Value::Null);
+
+    // Somebody else was not issued anything, so their list is empty.
+    let other = mint(&pool, 1, &[]).await;
+    let theirs = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/transactions",
+        Some(&other),
+    )
+    .await;
+    assert_eq!(
+        theirs.body.as_array().expect("a list").len(),
+        0,
+        "body: {}",
+        theirs.body
+    );
+}
+
+/// The merged order and the cursor that resumes in it: `time` newest first, the ledger breaking a
+/// second's tie — an issuance before a payment — and the id breaking what is left. The cursor is
+/// the last row's own place in that order, so page 2 is the rest of *this* list.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_merged_list_is_ordered_and_its_cursor_resumes_it(pool: PgPool) {
+    setup_money(&pool).await;
+
+    // Written with times of their own: two writers in one test usually share a second and
+    // sometimes do not, and the tie is the thing under test here.
+    let same_second = time::macros::datetime!(2026-01-01 00:00:02);
+    let a_second_earlier = time::macros::datetime!(2026-01-01 00:00:01);
+
+    // A payment and an issuance in the same second, and an older payment.
+    sqlx::query!(
+        "INSERT INTO currency_payment_histories
+             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at)
+         SELECT 10, sender.id, receiver.id, 1, $3, $3, $3
+           FROM users sender, users receiver
+          WHERE sender.discord_id = $1 AND receiver.discord_id = $2",
+        MONEY_USER1,
+        MONEY_USER2,
+        same_second
+    )
+    .execute(&pool)
+    .await
+    .expect("a payment");
+
+    sqlx::query!(
+        "INSERT INTO currency_given_histories
+             (amount, receiver_id, currency_id, \"time\", inserted_at, updated_at)
+         SELECT 300, receiver.id, 1, $2, $2, $2 FROM users receiver WHERE receiver.discord_id = $1",
+        MONEY_USER2,
+        same_second
+    )
+    .execute(&pool)
+    .await
+    .expect("an issuance");
+
+    sqlx::query!(
+        "INSERT INTO currency_payment_histories
+             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at)
+         SELECT 20, sender.id, receiver.id, 1, $3, $3, $3
+           FROM users sender, users receiver
+          WHERE sender.discord_id = $1 AND receiver.discord_id = $2",
+        MONEY_USER1,
+        MONEY_USER2,
+        a_second_earlier
+    )
+    .execute(&pool)
+    .await
+    .expect("a payment");
+
+    let token = mint(&pool, 2, &[]).await;
+    let first = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/transactions?limit=2",
+        Some(&token),
+    )
+    .await;
+
+    let rows = first.body.as_array().expect("a list").to_vec();
+    assert_eq!(rows.len(), 2, "body: {}", first.body);
+    assert_eq!(
+        rows[0]["ledger"], "issuance",
+        "the same second, and the pool's arrival reads first: {}",
+        first.body
+    );
+    assert_eq!(rows[0]["amount"], "300");
+    assert_eq!(rows[1]["ledger"], "payment");
+    assert_eq!(rows[1]["amount"], "10");
+
+    // The cursor is the last row's own place, spelled as `docs/api.rs` documents it.
+    assert_eq!(next_from(&first), "2026-01-01T00:00:02Z:0:1");
+
+    // `next` resumes after it: the rest of the list, newest first.
+    let rest = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/transactions?limit=2&next=2026-01-01T00:00:02Z:0:1",
+        Some(&token),
+    )
+    .await;
+
+    let rows = rest.body.as_array().expect("a list").to_vec();
+    assert_eq!(rows.len(), 1, "body: {}", rest.body);
+    assert_eq!(rows[0]["amount"], "20");
+
+    // And `on_next` includes the row it names, which is the same list one place back.
+    let from_here = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/transactions?limit=2&on_next=2026-01-01T00:00:02Z:0:1",
+        Some(&token),
+    )
+    .await;
+
+    let rows = from_here.body.as_array().expect("a list").to_vec();
+    assert_eq!(rows.len(), 2, "body: {}", from_here.body);
+    assert_eq!(rows[0]["amount"], "10");
+    assert_eq!(rows[1]["amount"], "20");
+
+    // A cursor that cannot be read is the complaint a non-numeric id gets.
+    let refused = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/transactions?next=nonsense",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(refused.status, 400, "body: {}", refused.body);
+
+    // The counterparty filter asks about a person on the other side, and an issuance has none.
+    let narrowed = get(
+        router(pool.clone()),
+        &format!("/api/v2/users/@me/transactions?related_discord_user_id={MONEY_USER1}"),
+        Some(&token),
+    )
+    .await;
+
+    let rows = narrowed.body.as_array().expect("a list").to_vec();
+    assert_eq!(rows.len(), 2, "body: {}", narrowed.body);
+    assert!(
+        rows.iter().all(|row| row["ledger"] == "payment"),
+        "{}",
+        narrowed.body
+    );
 }
 
 /// The issuance ledger belongs to the guild that may spend from it: its own currency answers,

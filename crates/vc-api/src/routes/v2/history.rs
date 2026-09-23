@@ -1,4 +1,4 @@
-//! Two ledgers, read by token: what an account paid and was paid, and what a currency's pool
+//! Two ledgers, read by token: what an account's wallet moved, and what a currency's pool
 //! issued.
 //!
 //! The Elixir has no reader for either — its `/api/v1|2/…/transactions` are writers, its web has
@@ -8,13 +8,19 @@
 //!
 //! `/users/@me/transactions` is the path the payment writer already lives on, which is why the
 //! reader is a `GET` there rather than a route of its own: a caller that may pay may read what it
-//! paid. It is the wallet's own movements: a payment names both sides — the caller is one of
-//! them, and which one is the question — a lock names the caller on the sender side and the
-//! contract's application on the other, a return names them the other way round, and a charge is
-//! not here at all, because it moves the money an application already held rather than the
-//! wallet. `event` says which of those a row is.
+//! paid. It is the wallet's own movements, out of both ledgers: a payment names both sides — the
+//! caller is one of them, and which one is the question — a lock names the caller on the sender
+//! side and the contract's application on the other, a return names them the other way round, and
+//! a charge is not here at all, because it moves the money an application already held rather
+//! than the wallet. An issuance is the pool paying the caller, which is money arriving like any
+//! other, so it is here too, merged with the rest newest first. `event` and `ledger` say which of
+//! those a row is.
 //!
-//! `/currencies/{id}/issuances` is the guild's side of the same table, gated the way issuing is:
+//! The merged order is not one column, so the cursor is not one number: `next` and `on_next` are
+//! the last row's own place in it — see `vc_core::history::Place`, and the endpoint's `next` in
+//! `docs/api.rs` for the spelling.
+//!
+//! `/currencies/{id}/issuances` is the guild's side of the one table, gated the way issuing is:
 //! a guild token with `vc.issue`, reading the ledger of the one currency that token can spend
 //! from. What may be seen follows what may be done, and this is where that was said before.
 
@@ -45,7 +51,10 @@ pub async fn transactions(
     let related = params.one("related_discord_user_id");
     let counterparty = related.as_deref().map(related_id).transpose()?;
 
-    let page = pagination::Page::asked(&params)?.limited_to(pagination::PER_PAGE);
+    // The cursor the endpoint writes is the merged order's own place, which is what
+    // `vc_core::history` spells and reads — not the id this module's other lists use.
+    let page = pagination::Page::asked_text(&params, vc_core::history::Place::parse)?
+        .limited_to(pagination::PER_PAGE);
 
     let entries = vc_core::history::payments_after(
         state.pool(),
@@ -57,8 +66,8 @@ pub async fn transactions(
     )
     .await?;
 
-    let next = page.next_cursor(&entries, |payment| payment.id);
-    let body = Value::Array(entries.iter().map(render_payment).collect());
+    let next = page.next_text(&entries, |movement| movement.place().encode());
+    let body = Value::Array(entries.iter().map(render_movement).collect());
 
     Ok(paged(
         body,
@@ -101,7 +110,9 @@ pub async fn issuances(
         vc_core::history::issuances_after(state.pool(), id, receiver, page.cursor, page.limit)
             .await?;
 
-    let next = page.next_cursor(&entries, |issuance| issuance.id);
+    let next = page
+        .next_cursor(&entries, |issuance| issuance.id)
+        .map(|id| id.to_string());
     let body = Value::Array(entries.iter().map(render_issuance).collect());
 
     Ok(paged(
@@ -114,23 +125,40 @@ pub async fn issuances(
     ))
 }
 
-/// One payment: both sides by Discord id, the amount and the currency as strings — the numbers
-/// this API has always answered as strings — the application whose contract the row belongs to,
-/// when it is a contract movement, and the `event` that names which kind: `lock` when a party
-/// locked money into a contract (present on the sender side, `null` on the receiver), `return`
-/// when a contract gave money back (the other way round), and `null` for a payment between
-/// people.
-fn render_payment(payment: &vc_core::history::Payment) -> Value {
-    json!({
-        "id": payment.id.to_string(),
-        "amount": payment.amount.to_string(),
-        "unit": payment.unit,
-        "sender_discord_id": payment.sender_discord_id.map(|id| id.to_string()),
-        "receiver_discord_id": payment.receiver_discord_id.map(|id| id.to_string()),
-        "contract_client_name": payment.contract_client_name,
-        "event": payment.event,
-        "time": format_timestamp(payment.time),
-    })
+/// One movement of the caller's ledger, whichever ledger it came from.
+///
+/// `ledger` is the table the row is a row of, and the two count their ids separately — so it is
+/// what makes `id` mean something in a list of both. `event` is what kind of movement it is
+/// within that ledger: `lock` when a party locked money into a contract (the caller on the sender
+/// side, `null` on the receiver), `return` when a contract gave money back (the other way round),
+/// `issue` when the pool paid the caller, and `null` for a payment between people. A charge is
+/// never here at all.
+fn render_movement(movement: &vc_core::history::Movement) -> Value {
+    match movement {
+        vc_core::history::Movement::Payment(payment) => json!({
+            "id": payment.id.to_string(),
+            "ledger": "payment",
+            "amount": payment.amount.to_string(),
+            "unit": payment.unit,
+            "sender_discord_id": payment.sender_discord_id.map(|id| id.to_string()),
+            "receiver_discord_id": payment.receiver_discord_id.map(|id| id.to_string()),
+            "contract_client_name": payment.contract_client_name,
+            "event": payment.event,
+            "time": format_timestamp(payment.time),
+        }),
+        // No sender at all: the pool paid, and the pool has no Discord id to name.
+        vc_core::history::Movement::Issuance(issuance) => json!({
+            "id": issuance.id.to_string(),
+            "ledger": "issuance",
+            "amount": issuance.amount.to_string(),
+            "unit": issuance.unit,
+            "sender_discord_id": Value::Null,
+            "receiver_discord_id": issuance.receiver_discord_id.map(|id| id.to_string()),
+            "contract_client_name": Value::Null,
+            "event": "issue",
+            "time": format_timestamp(issuance.time),
+        }),
+    }
 }
 
 /// One issuance. There is no sender: the pool paid, and the currency in the path says which.
@@ -160,11 +188,12 @@ fn related_id(value: &str) -> Result<i64, ApiError> {
 ///
 /// The filters travel in the link, unlike the contract family's three lists — those are filtered
 /// by who is asking and by nothing else, and a page 2 that dropped one of these would be a
-/// different list. Neither a unit nor a Discord id needs escaping, so they are written as they
-/// arrived.
+/// different list. The cursor travels as the list spelled it, because it is the list's own: an id
+/// for the issuance ledger, and the merged ledger's `time:ledger:id` for the payments one. Neither
+/// a unit, a Discord id nor that cursor needs escaping, so they are written as they arrived.
 fn paged(
     body: Value,
-    next: Option<i64>,
+    next: Option<String>,
     limit: Option<i64>,
     filters: &[(&str, Option<String>)],
     headers: &HeaderMap,

@@ -288,7 +288,10 @@ table has no `expires` column.
 ### A ledger a person can read: `/history`
 
 `/history pay` and `/history issue` show back the two ledgers this service has been writing since
-the Elixir: what one account paid and was paid, and what one guild's pool issued.
+the Elixir: what one account paid and was paid, and what one guild's pool issued. The person's is
+both ledgers at once, because an issuance to somebody is money arriving in their wallet like any
+other, so the payments screen shows the payments and what the pool issued to the reader, merged
+newest first; the guild's issuance ledger is one table and is not merged with anything.
 
 The Elixir writes both and reads neither. Its command list — `help invite give pay info create
 delete bal claim` — names no history; `lib/virtualCrypto_web/controllers/api/v2/user_transaction_controller.ex`
@@ -312,15 +315,41 @@ balance, and the application that cares reconciles it from the contract's own st
 movement of nothing writes no row, and each is written where the money moves, in the same
 transaction that moves it.
 
+**A third thing, and a repair rather than an addition.** An application may name one of the
+contract's own parties as the receiver of a contract payment, and that moves money out of the
+escrow into that party's wallet — which is the party's balance moving, whatever it is called. The
+row was written charge-shaped, with both sides set, so the wallet history, which believes the NULL
+side, treated it as a charge and left the money arriving out of the list entirely. It is written
+the way a return is written now — `sender_id` NULL, the party's own account on the receiver side —
+because that is what happened. The application-receiver case is untouched, and so is the refusal
+that stops one party's remainder being paid to another person where the receiver is fixed. One
+escrow paying one wallet is **one row for the whole movement** rather than one per remainder drawn
+on: the sender side is the escrow, which is nobody's account, so which slice came from where is not
+a thing such a row could say.
+
 Two things about it are decisions rather than details:
 
 - **What may be seen follows what may be done.** The payments screen is the caller's own rows and
   needs no permission; the issuance screen asks for the administrator bit `/issue` asks for, read
   the same way in the same handler, because the pool is the guild's and who it paid is the business
   of whoever may spend it.
-- **No API endpoint.** A person's ledger is not in `Rest.md`, the Elixir has no route for it, and
-  an application has no business reading it — so this is Discord-only rather than a second surface
-  invented to match. If it is ever needed there, the shape to copy is the claim list's.
+- **Read by its owner, in Discord and in the API.** `/history pay` and
+  `GET /api/v2/users/@me/transactions` are one list — the caller's own account, and nothing beyond
+  a token that may pay, because a caller that may pay may read what it paid. The guild's side is
+  the same pair: `/history issue` and `GET /api/v2/currencies/{id}/issuances`, gated the way
+  issuing is. Neither is in `Rest.md` and the Elixir has no route for either — an earlier version
+  of this file said the person's ledger was Discord-only on the grounds that an application has no
+  business reading it, and what changed that is the payments endpoint being the path the payment
+  writer already lived on.
+
+**The person's list is the one list here whose cursor is not an id.** Its two tables count their
+ids separately, so "newest first" has to be a place both have: `"time"` descending, the ledger
+(`payment` = 0, `issuance` = 1) and then the id breaking the tie, because `"time"` is whole seconds
+and ties are ordinary. The cursor is that place, spelled `2026-01-01T00:00:00Z:1:5`, and it is a
+string where every other list's is a number: `docs/api.rs` documents the shape under `next` and
+`on_next` of that endpoint, and `vc_core::history::Place` is where it is spelled and read. A
+counterparty filter narrows an issuance out — the pool is not the person the caller asked about —
+and the count on the Discord screen is the merged list's, not one table's.
 
 ### The consent screen's scope is `vc.issue`, where the Elixir's was `openid`
 

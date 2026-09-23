@@ -1,10 +1,14 @@
-//! `/history`: the ledger behind `/issue` and `/pay`, read back.
+//! `/history`: the ledgers behind `/issue` and `/pay`, read back.
 //!
 //! Two subcommands, one screen each, and the arrows between pages — the shape `/bal` and the
 //! mute list have. What is being read is `vc_core::history`: the pool's issuances, which
 //! `/issue` writes, and the wallet's own movements, which `/pay`, a claim's approval, and a
 //! contract's lock and return all write — a charge is not one of them, because it moves the
 //! money an application was already given rather than the person's balance.
+//!
+//! The payments screen is the caller's own ledger, and an issuance to them is money arriving in
+//! their wallet like any other, so it is on that screen too: both ledgers, merged, newest first.
+//! The issuance screen is the guild's one ledger, and is not merged with anything.
 //!
 //! An addition rather than a port. The Elixir writes both ledgers and never reads either: no
 //! command of its names a history, and its `/api/v1|2/…/transactions` are writers.
@@ -25,7 +29,7 @@ use crate::components::{ButtonStyle, action_row, container, ephemeral, icon_butt
 use crate::custom_id::ui::history::{Listing, Screen, page_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
-use vc_core::history::{Issuance, PER_PAGE, Payment};
+use vc_core::history::{Issuance, Movement, PER_PAGE, Payment};
 
 /// Where a screen starts, and where an arrow counts from.
 const FIRST_PAGE: i64 = 1;
@@ -129,8 +133,8 @@ async fn paid(
     if page.total == 0 {
         children.push(text("送金の履歴はありません。"));
     } else {
-        // The count is everything the person sent and received, not what this page shows: that
-        // is the number they are looking for, as it is in every list here.
+        // The count is everything the person sent, received and was issued, not what this page
+        // shows: that is the number they are looking for, as it is in every list here.
         children.push(text(format!("**送金の履歴** ({}件)", page.total)));
 
         if page.rows.is_empty() {
@@ -141,8 +145,8 @@ async fn paid(
             ));
         }
 
-        for payment in &page.rows {
-            children.push(text(paid_line(payment, me)));
+        for movement in &page.rows {
+            children.push(text(movement_line(movement, me)));
         }
 
         if page.next.is_some() || page.page > 1 {
@@ -225,6 +229,29 @@ async fn issued(
     }
 
     Ok(answer(children, kind))
+}
+
+/// One row of the caller's own ledger, whichever ledger wrote it.
+///
+/// The two are one screen because they are one thing to the person reading it: money that arrived
+/// and money that left. Which table the row is in is what the line says when it is a 発行 rather
+/// than a 受取 — the other end is the pool, not a person.
+fn movement_line(movement: &Movement, me: i64) -> String {
+    match movement {
+        Movement::Payment(payment) => paid_line(payment, me),
+        Movement::Issuance(issuance) => issued_to_me(issuance),
+    }
+}
+
+/// Money the pool issued to the reader: it arrived in the wallet, so it reads as money coming in,
+/// and what it came from is the issuance pool rather than a person to mention.
+fn issued_to_me(issuance: &Issuance) -> String {
+    format!(
+        "発行: **{}** `{}` ← 発行枠 ・ {}",
+        issuance.amount,
+        issuance.unit,
+        format_date_time(issuance.time)
+    )
 }
 
 /// One row of the payments ledger: which way the money went, how much, and when.

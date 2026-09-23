@@ -10,6 +10,12 @@
 //! a party their own remainder is not a spend to somebody else. What it is not
 //! is a way to move one party's remainder to another person, which is why the
 //! exemption holds only when the receiver *is* the party being drawn on.
+//!
+//! A payment whose receiver is one of the contract's parties is a `return` in the
+//! ledger rather than a `charge` — the escrow on the sender side, the party's own
+//! account on the receiver side — because that is what happened: money left the
+//! escrow and arrived in that party's wallet. A charge-shaped row said the opposite,
+//! and the party's own history, which reads the NULL side, left it out.
 
 mod support;
 
@@ -313,6 +319,65 @@ async fn a_return_may_not_pay_somebody_else(pool: PgPool) {
     assert_eq!(refused.status, 400, "body: {}", refused.body);
     assert_eq!(refused.body["error_description"], "receiver_is_fixed");
     assert_eq!(balance(&pool, BOB).await, 950, "still locked");
+}
+
+/// The money going home is a movement of the party's own wallet, and the ledger says so: the
+/// statement calls it a `return` — the escrow on the sender side, which is `null` — rather than a
+/// `charge` that names both sides. Read as a charge it said the application was paid, and a
+/// person's own ledger, which believes the NULL side, left the money arriving out of it.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn the_money_going_home_is_a_return_in_the_statement(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+
+    // Billed 30 to the operator, then that charge undone.
+    charge(
+        &pool,
+        &fixture,
+        Some(ALICE_DISCORD_ID),
+        RECEIVER_DISCORD_ID,
+        30,
+    )
+    .await;
+    let returned = charge(
+        &pool,
+        &fixture,
+        Some(ALICE_DISCORD_ID),
+        ALICE_DISCORD_ID,
+        30,
+    )
+    .await;
+
+    assert_eq!(returned.status, 201, "body: {}", returned.body);
+
+    let listed = send(
+        vc_api::router(state(pool.clone(), fake())),
+        "GET",
+        &format!("/api/v2/contracts/{}/payments", fixture.contract),
+        &fixture.token,
+        Value::Null,
+    )
+    .await;
+
+    let rows = listed.body.as_array().expect("an array");
+
+    // Newest first: the return, the charge, and the two approvals' locks.
+    assert_eq!(rows.len(), 4, "body: {}", listed.body);
+
+    assert_eq!(rows[0]["event"], "return");
+    assert_eq!(rows[0]["amount"], "30");
+    assert_eq!(rows[0]["receiver_discord_id"], ALICE_DISCORD_ID.to_string());
+    assert_eq!(
+        rows[0]["discord_id"],
+        Value::Null,
+        "a return has no sender: the escrow sent it"
+    );
+
+    assert_eq!(rows[1]["event"], "charge");
+    assert_eq!(rows[1]["discord_id"], ALICE_DISCORD_ID.to_string());
+    assert_eq!(
+        rows[1]["receiver_discord_id"],
+        RECEIVER_DISCORD_ID.to_string()
+    );
 }
 
 /// The party is an id like every other one here, and is read the way they are.

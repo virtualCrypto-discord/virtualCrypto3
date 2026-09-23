@@ -384,3 +384,101 @@ async fn an_empty_ledger_says_so(pool: PgPool) {
         issued.body
     );
 }
+
+/// An issuance to the reader is money arriving in their wallet, so it is on their own ledger's
+/// screen too: merged with the payments in one list, counted with them, and read as money coming
+/// in — the pool rather than a person on the other side of the arrow.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_issuance_to_the_reader_is_on_their_own_screen(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    issue(&pool, MONEY_USER2, 300).await;
+    pay(&pool, MONEY_USER1, MONEY_USER2, &money.unit, 500).await;
+
+    let screen =
+        rendered(&interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await);
+
+    // Both ledgers, and the count is the merged list's rather than one table's.
+    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
+    assert!(screen.contains("発行: **300** `n` ← 発行枠"), "{screen}");
+    assert!(screen.contains("受取: **500**"), "{screen}");
+
+    // And it is personal: what was issued to somebody else is not on this screen.
+    let other =
+        rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
+    assert!(!other.contains("発行: **300**"), "{other}");
+}
+
+/// A payment whose receiver is one of the contract's parties puts the money back in that party's
+/// wallet, and their own ledger shows it: a return, not a charge the wallet's history hides.
+///
+/// Two parties and no fixed receiver, so the draw is the oldest approval first and the money
+/// lands in one of their wallets — one movement of the escrow into one wallet, which is why the
+/// ledger gets one row for it rather than a slice per party drawn on.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_payment_to_a_party_is_a_return_in_the_wallet_history(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    let application = insert_application(&pool, MONEY_USER1, "a metered service").await;
+    let now = time::OffsetDateTime::now_utc();
+    let contract = vc_core::contract::create(
+        &pool,
+        application,
+        &money.unit,
+        &[
+            vc_core::contract::NewParty {
+                discord_id: MONEY_USER1,
+                amount: 100,
+            },
+            vc_core::contract::NewParty {
+                discord_id: MONEY_USER2,
+                amount: 60,
+            },
+        ],
+        None,
+        None,
+        now,
+    )
+    .await
+    .expect("a contract");
+
+    vc_core::contract::approve(&pool, contract, 1, now)
+        .await
+        .expect("an approval");
+    vc_core::contract::approve(&pool, contract, 2, now)
+        .await
+        .expect("an approval");
+
+    // 120 out of the escrow into the first party's wallet: her own hundred and twenty of the
+    // second party's.
+    let payed = vc_core::contract::pay(&pool, contract, application, MONEY_USER1, None, 120, now)
+        .await
+        .expect("a return");
+
+    assert_eq!(payed.amount, 120);
+
+    // The wallet's ledger has the lock and the return, and not a charge.
+    let screen =
+        rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
+    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
+    assert!(
+        screen.contains("契約にロック: **100** `n` → a metered service（契約）"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("契約から返却: **120** `n` ← a metered service（契約）"),
+        "{screen}"
+    );
+
+    // And the contract's own statement agrees, in one row: the escrow sent it, and the party
+    // received it.
+    let statement =
+        vc_core::contract::payments(&pool, contract, vc_core::page::Cursor::First, None)
+            .await
+            .expect("a statement");
+
+    assert_eq!(statement[0].event, "return");
+    assert_eq!(statement[0].amount, 120);
+    assert_eq!(statement[0].discord_id, None, "the escrow sent it");
+    assert_eq!(statement[0].receiver_discord_id, Some(MONEY_USER1));
+}
