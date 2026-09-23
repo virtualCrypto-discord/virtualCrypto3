@@ -1010,11 +1010,13 @@ const ENDPOINTS: &[Endpoint] = &[
         notes: &[
             "結果は `redirect_uri` へ `code`・`guild_id`・`scope` と、あれば `state` を付けて返ります。",
             "`GET` と違い、失敗しても `redirect_uri` へは送りません。",
+            "CSRF対策として、ブラウザが送る `Sec-Fetch-Site: same-origin` を確認します。このヘッダーが無い場合は `Origin`、それも無ければ `Referer` がこのサービスのオリジンと一致する必要があります。別サブドメインや確認できない要求は拒否します。フォームにCSRFトークンを埋め込む必要はありません。",
         ],
         errors: &[
             "400 `{\"error\": \"invalid_request\"}` `action` が `approve` でない、項目が足りない、`client_id` と `redirect_uri` が登録と合わない、`scope` が `vc.issue` 以外、またはそのサーバーの管理者でないとき。",
             "400 `{\"error\": \"invalid_target\"}` `resource` が絶対URIでない、このサービスのものでない、通貨でない、またはそのサーバーの通貨でないとき。",
             "401 `{\"error\": \"invalid_token\"}` セッションが無いとき。",
+            "403 `{\"error\": \"forbidden\", \"error_description\": \"invalid_origin\"}` 同一オリジンからの要求と確認できないとき。",
         ],
     },
     Endpoint {

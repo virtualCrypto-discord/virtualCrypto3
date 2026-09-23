@@ -50,6 +50,7 @@ port is the first to set:
 - `VCRYPTO_SETTLE_INTERVAL_SECS`
 - `WEBHOOK_PROXY_URL`
 - `WEB_ROOT`
+- `VCRYPTO_ENV` (`production` by default; `development` is the only other value)
 
 `WEB_ROOT` is the one that matters to a deployment of the frontend: it is where the
 built SPA is unpacked. Unset, `default_web_root()` decides, and `web/dist` is what
@@ -60,16 +61,25 @@ above that a deployment does not have to provide: the emitter is a published end
 of this project's, routed by its Worker to `vcrypto-webhook-emitter.sumidora.com` for
 every environment (see `wrangler.toml` in
 `virtualCrypto-discord/webhook-emitter-cf-workers`), so it defaults like
-`VCRYPTO_SITE_URL` does. What decides whether there is a proxy at all is the
-certificate below.
+`VCRYPTO_SITE_URL` does.
 
 `VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` are the mTLS client the
 webhook handshake goes through — the Cloudflare Worker in front of an application's
 webhook requires a client certificate, which is why the pair is required together
-rather than separately. `#` in the PEM values is read as a newline. Without the
-pair there is no proxy at all, and both the webhook handshake and the deliveries
-go straight at each application's own `webhook_url` — the development path,
-where a machine has no worker to reach applications through.
+rather than separately. `#` in the PEM values is read as a newline. In production,
+both are required: a missing or invalid pair stops startup before any jobs or
+HTTP listener start. Neither registration handshakes nor notifications can fall
+back to direct requests in production.
+
+Only `VCRYPTO_ENV=development` permits direct requests to an application's
+`webhook_url` when both proxy credentials are absent. A partial or invalid pair
+is still an error. `scripts/discord-env.sh` selects development by default for
+local runs; `fly.toml` explicitly selects production. Keep development mode local,
+since its direct transport can reach local and private network addresses.
+
+`VCRYPTO_SITE_URL` must match the public browser origin. OAuth consent submissions
+use Fetch Metadata and Origin/Referer headers for CSRF protection, comparing to
+this configured origin rather than the request's Host or forwarding headers.
 
 ## The schema
 
@@ -91,4 +101,3 @@ that are tested in `crates/vc-api/tests/web.rs`.
 
 No `Dockerfile` and no target-specific configuration. What is above is the input to
 writing one, not the thing itself.
-

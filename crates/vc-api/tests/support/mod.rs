@@ -486,7 +486,7 @@ pub fn state_with_limiter(
         links(),
         discord,
         vc_api::state::Outbound {
-            proxy: None,
+            transport: Arc::new(vc_api::notification::Direct::default()),
             notifier: Arc::new(NoopNotifier),
             handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
@@ -508,7 +508,7 @@ pub fn state_with_notifier(
         links(),
         discord,
         vc_api::state::Outbound {
-            proxy: None,
+            transport: Arc::new(vc_api::notification::Direct::default()),
             notifier,
             handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },

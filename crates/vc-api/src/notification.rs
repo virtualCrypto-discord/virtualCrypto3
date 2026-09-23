@@ -89,6 +89,10 @@ impl Proxy {
 }
 
 impl Transport for Proxy {
+    fn is_proxy(&self) -> bool {
+        true
+    }
+
     fn http(&self) -> &reqwest::Client {
         &self.http
     }
@@ -153,6 +157,10 @@ pub trait Transport: Send + Sync {
     fn http(&self) -> &reqwest::Client;
     fn endpoint<'a>(&'a self, delivery: &'a Delivery) -> &'a str;
     fn status(&self, response: &reqwest::Response) -> Option<u16>;
+
+    fn is_proxy(&self) -> bool {
+        false
+    }
 }
 
 /// Bound each delivery, including connection setup and reading the response body.
@@ -600,20 +608,14 @@ pub async fn verify(
 /// oauth2_clients`]'s `unverified` answers an application's `Failed` and this
 /// service's `Unreachable`).
 ///
-/// With no proxy configured the handshake goes straight at the webhook: a
-/// development machine has no proxy, and a registration that names a `webhook_url`
-/// has to be verifiable there for the application flow to be exercised at all.
+/// Use the transport selected at startup, also used for notifications. Production
+/// requires the proxy; direct delivery is an explicit development configuration.
 pub async fn check_webhook(
     state: &crate::state::AppState,
     url: &str,
     private_key: &[u8; 32],
 ) -> (Handshake, bool) {
-    let proxy = state.webhook_proxy();
-    let direct = Direct::default();
-    let transport: &dyn Transport = match proxy {
-        Some(proxy) => proxy.as_ref(),
-        None => &direct,
-    };
+    let transport = state.webhook_transport();
 
     let at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -622,7 +624,7 @@ pub async fn check_webhook(
 
     (
         verify(transport, url, private_key, at).await,
-        proxy.is_some(),
+        transport.is_proxy(),
     )
 }
 

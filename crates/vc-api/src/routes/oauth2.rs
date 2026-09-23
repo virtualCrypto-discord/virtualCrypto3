@@ -266,6 +266,10 @@ pub async fn approve(
         return unauthorized();
     };
 
+    if !super::csrf::same_origin(&headers, &state.links().site_url) {
+        return crate::error::ApiError::Forbidden("invalid_origin").into_response();
+    }
+
     if vc_core::application::preauthorize(
         state.pool(),
         &request.scopes,

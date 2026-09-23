@@ -7,6 +7,8 @@ use vc_api::AppState;
 use vc_api::discord::{CachedDiscord, HttpDiscordApi};
 use vc_api::state::Links;
 
+mod outbound;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -54,23 +56,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // missing flag would send session cookies in the clear.
     let secure_cookies = optional_env("SECURE_COOKIES", "true") != "false";
 
+    // Validate outbound policy before connecting to the database or starting
+    // jobs. Production is the default and cannot fall back to direct webhooks.
+    let environment = outbound::Environment::parse(std::env::var("VCRYPTO_ENV").ok().as_deref())?;
+    let transport = outbound::transport(
+        environment,
+        &optional_env(
+            "WEBHOOK_PROXY_URL",
+            "https://vcrypto-webhook-emitter.sumidora.com",
+        ),
+        std::env::var("VCRYPTO_WEBHOOK_PROXY_CERT").ok().as_deref(),
+        std::env::var("VCRYPTO_WEBHOOK_PROXY_KEY").ok().as_deref(),
+    )?;
+
     let pool = vc_core::db::connect(&database_url, 10).await?;
 
-    // Deliveries go through the proxy where there is one, and straight at the
-    // application's own webhook where there is not — the same choice the
-    // handshake makes, so a machine that can register a webhook can be told about
-    // a decision through it. There is no notifier that drops events: a
-    // deployment with nowhere to deliver to is a deployment that cannot register
-    // a webhook in the first place.
-    let proxy = webhook_proxy().map(Arc::new);
-
-    let transport: Arc<dyn vc_api::notification::Transport> = match proxy.clone() {
-        Some(proxy) => proxy,
-        None => Arc::new(vc_api::notification::Direct::default()),
-    };
-
     let notifier: Arc<dyn vc_core::notification::Notifier> = Arc::new(
-        vc_api::notification::WebhookNotifier::new(pool.clone(), transport),
+        vc_api::notification::WebhookNotifier::new(pool.clone(), Arc::clone(&transport)),
     );
 
     let state = AppState::new(
@@ -90,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| "http://localhost:8080/callback/discord".to_string()),
         )))),
         vc_api::state::Outbound {
-            proxy,
+            transport,
             notifier,
             handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
@@ -130,37 +132,4 @@ fn require_env(key: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 fn optional_env(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
-/// The proxy to deliver webhooks through, if one is configured.
-///
-/// The certificate and its key arrive with `#` standing in for a newline, which
-/// is how they are set: a PEM in an environment variable is otherwise a single
-/// line of nothing. That trick is the Elixir's, and the deployment sets them the
-/// same way.
-///
-/// No proxy at all is development, and is answered with `None`. A proxy whose
-/// certificate will not parse is a configuration mistake and panics, because a
-/// server that boots without ever delivering is worse than one that says so.
-fn webhook_proxy() -> Option<vc_api::notification::Proxy> {
-    // The emitter is a published endpoint of this project's, not a per-deployment
-    // one: its Worker routes to `vcrypto-webhook-emitter.sumidora.com` for every
-    // environment (wrangler.toml in virtualCrypto-discord/webhook-emitter-cf-workers).
-    // So it has a default like `VCRYPTO_SITE_URL` does, and what decides whether
-    // there is a proxy at all is the client certificate below.
-    let url = optional_env(
-        "WEBHOOK_PROXY_URL",
-        "https://vcrypto-webhook-emitter.sumidora.com",
-    );
-    let certificate = std::env::var("VCRYPTO_WEBHOOK_PROXY_CERT")
-        .ok()?
-        .replace('#', "\n");
-    let key = std::env::var("VCRYPTO_WEBHOOK_PROXY_KEY")
-        .ok()?
-        .replace('#', "\n");
-
-    Some(
-        vc_api::notification::Proxy::new(url, certificate.as_bytes(), key.as_bytes())
-            .expect("the webhook proxy certificate could not be used"),
-    )
 }

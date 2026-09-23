@@ -164,6 +164,131 @@ fn hidden_inputs(html: &str) -> Vec<(String, String)> {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approval_requires_same_origin_browser_headers(pool: PgPool) {
+    use support::{MONEY_GUILD, MONEY_USER1, MONEY_USER2};
+    support::setup_money(&pool).await;
+    let application = support::insert_application(&pool, MONEY_USER2, "requesting app").await;
+    sqlx::query("UPDATE applications SET grant_types=ARRAY['authorization_code']::openid_connect_grant_types[] WHERE id=$1")
+        .bind(application).execute(&pool).await.unwrap();
+    let redirect = "https://other.example/callback";
+    sqlx::query("INSERT INTO redirect_uris(application_id,redirect_uri,inserted_at,updated_at) VALUES($1,$2,now(),now())")
+        .bind(application).bind(redirect).execute(&pool).await.unwrap();
+    let client = support::client_id_of(&pool, application).await;
+    let app = vc_api::router(state(
+        pool.clone(),
+        support::FakeDiscord::with_member(MONEY_USER1, &[], &[]),
+    ));
+    let session = vc_api::session::Session::logged_in(1)
+        .sign(support::SESSION_SECRET.as_bytes())
+        .unwrap();
+    let mut form = reqwest::Url::parse("https://vcrypto.sumidora.com/").unwrap();
+    form.query_pairs_mut().extend_pairs([
+        ("action", "approve"),
+        ("response_type", "code"),
+        ("client_id", &client),
+        ("redirect_uri", redirect),
+        ("scope", "vc.issue"),
+        ("guild_id", &MONEY_GUILD.to_string()),
+    ]);
+    let mut issued = 0;
+    for (fields, allowed) in [
+        (vec![], false),
+        (
+            vec![
+                ("origin", "https://attacker.sumidora.com"),
+                ("sec-fetch-site", "same-site"),
+            ],
+            false,
+        ),
+        (
+            vec![
+                ("origin", "https://attacker.example"),
+                ("sec-fetch-site", "cross-site"),
+            ],
+            false,
+        ),
+        (
+            vec![
+                ("origin", "null"),
+                ("referer", "https://vcrypto.sumidora.com/"),
+            ],
+            false,
+        ),
+        (vec![("origin", "https://attacker.sumidora.com")], false),
+        (
+            vec![
+                ("origin", "https://attacker.example"),
+                ("host", "attacker.example"),
+            ],
+            false,
+        ),
+        (
+            vec![
+                ("sec-fetch-site", "same-origin"),
+                ("origin", "https://attacker.example"),
+            ],
+            false,
+        ),
+        (vec![("origin", "https://vcrypto.sumidora.com")], true),
+        (
+            vec![(
+                "referer",
+                "https://vcrypto.sumidora.com/oauth2/authorize?client_id=1",
+            )],
+            true,
+        ),
+        (vec![("sec-fetch-site", "same-origin")], true),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/oauth2/authorize")
+            .header(
+                "cookie",
+                format!("{}={session}", vc_api::session::COOKIE_NAME),
+            )
+            .header("content-type", "application/x-www-form-urlencoded");
+        for (name, value) in &fields {
+            request = request.header(*name, *value);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::from(form.query().unwrap().to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if allowed { 303 } else { 403 },
+            "{fields:?}"
+        );
+        if allowed {
+            issued += 1;
+            assert!(
+                response.headers()[LOCATION]
+                    .to_str()
+                    .unwrap()
+                    .starts_with(redirect)
+            );
+        } else {
+            assert!(!response.headers().contains_key(LOCATION));
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error_description"], "invalid_origin");
+        }
+        let codes: i64 = sqlx::query_scalar("SELECT count(*) FROM authorization_codes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(codes, issued, "{fields:?}");
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
 async fn browser_consent_preserves_the_request_through_approval_and_token_exchange(pool: PgPool) {
     use support::{MONEY_GUILD, MONEY_USER1};
     let money = support::setup_money(&pool).await;
@@ -262,6 +387,8 @@ async fn browser_consent_preserves_the_request_through_approval_and_token_exchan
                     .method("POST")
                     .uri("/oauth2/authorize")
                     .header("cookie", &cookie)
+                    .header("origin", support::links().site_url)
+                    .header("sec-fetch-site", "same-origin")
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form.query().unwrap().to_owned()))
                     .unwrap(),

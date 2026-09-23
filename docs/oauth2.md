@@ -37,7 +37,7 @@ The order matters, and each step is a different refusal:
    `invalid_redirect_uri` / `redirect_uri_scheme_must_be_http_or_https`;
 5. the webhook URL is verified by handshake, and a failure is answered by whose it
    is: an application that answers wrongly — or that does not answer when this
-   service asked it directly, which is what happens where no proxy is configured
+   service asked it directly, which is allowed only in development without a proxy
    — is `webhook_verification_failed`, while a proxy that does not answer at all
    is `server_error`, because reaching applications is this service's own job.
 6. the application is created, and a fresh `app` token with the

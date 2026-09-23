@@ -5,7 +5,7 @@ use vc_auth::AuthState;
 use vc_core::notification::Notifier;
 
 use crate::discord::DiscordApi;
-use crate::notification::Proxy;
+use crate::notification::Transport;
 use crate::rate_limit::RateLimiter;
 use crate::rate_limit::VerificationLimiter;
 
@@ -50,19 +50,12 @@ impl Signing {
     }
 }
 
-/// What this service sends with: the proxy that reaches applications, when one is
-/// configured, and the notifier that delivers through it.
-///
-/// The two travel together because they answer the same question — how a webhook
-/// is reached — and they answer it the same way. `proxy` is `None` when none is
-/// configured, which is development and any deployment that has not been given
-/// the certificate; that is not a service which tells nobody, it is one with no
-/// worker in the way, and both the handshake a registration performs and the
-/// deliveries an application receives go straight at its own `webhook_url`
-/// instead. See [`crate::notification::Direct`].
+/// The explicitly selected webhook transport and its notifier. The server
+/// requires a proxy in production and permits Direct only in development;
+/// request handlers never choose a fallback transport themselves.
 #[derive(Clone)]
 pub struct Outbound {
-    pub proxy: Option<Arc<Proxy>>,
+    pub transport: Arc<dyn Transport>,
     pub notifier: Arc<dyn Notifier>,
     /// The handshake's allowance. In the state rather than built where it is asked
     /// for, because a limiter per request is a limiter whose windows reset every
@@ -171,13 +164,9 @@ impl AppState {
         self.outbound.notifier.as_ref()
     }
 
-    /// The proxy that reaches applications, when one is configured.
-    ///
-    /// `None` is a service that delivers nothing and verifies nothing: the claim
-    /// paths still complete, and a registration that asks for a webhook has
-    /// something this service cannot do.
-    pub fn webhook_proxy(&self) -> Option<&Arc<Proxy>> {
-        self.outbound.proxy.as_ref()
+    /// The same transport that notifications use, selected at startup.
+    pub fn webhook_transport(&self) -> &dyn Transport {
+        self.outbound.transport.as_ref()
     }
 
     /// The allowance a webhook handshake is held to, which is per requester.

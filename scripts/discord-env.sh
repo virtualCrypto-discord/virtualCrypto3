@@ -26,6 +26,7 @@ export VCRYPTO_PUBLIC_KEY="${VCRYPTO_PUBLIC_KEY:-$(jq -r '.verify_key' <<<"$appl
 
 # Local defaults; the Elixir test config's values stand in for the OAuth paths,
 # which the interaction endpoint does not use.
+export VCRYPTO_ENV="${VCRYPTO_ENV:-development}"
 export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@localhost:5432/virtualcrypto_dev}"
 export VCRYPTO_API_JWT_SECRET_KEY="${VCRYPTO_API_JWT_SECRET_KEY:-a188rolUOVnGqP7wseWeTW0qkFCfsDMNvbo2Bz6O3dmO9TEyKPD8+Yf1bfiUFRBI}"
 export VCRYPTO_CLIENT_SECRET="${VCRYPTO_CLIENT_SECRET:-test-client-secret}"
