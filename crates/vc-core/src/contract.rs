@@ -644,6 +644,27 @@ pub async fn approve(
     .await
     .map_err(ContractError::Database)?;
 
+    // The lock is a movement, so it is written where the movement is: the party's
+    // own account on the sender side and the escrow on the receiver side. A NULL
+    // there rather than an account is the whole of what says this row is a lock
+    // where a charge sets both sides — the escrow is not an account, so it has no
+    // id to name, and a person's history can read "mine or the escrow's" out of
+    // the same two columns it reads every payment's sides from.
+    sqlx::query!(
+        "INSERT INTO currency_payment_histories
+             (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
+              updated_at)
+         VALUES ($1, $2, NULL, $3, $4, $5, $5, $5)",
+        party.amount,
+        i64::from(user_id),
+        contract.currency_id,
+        contract_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ContractError::Database)?;
+
     sqlx::query!(
         "UPDATE contract_parties
             SET status = 'approved', remaining = amount, updated_at = $2,
@@ -1030,23 +1051,37 @@ pub async fn pay_in(
     })
 }
 
-/// One payment a contract made, in the shape a statement names it: which party's
-/// remainder was drawn on, how much of it, where it went, and when.
+/// One row of a contract's statement, in the shape it names it: which movement it
+/// was, which party's remainder it drew on, how much, where it went, and when.
 ///
 /// One API payment writes **one row per party drawn on** — a payment that names
 /// no party draws oldest-approval-first across as many as it needs — so a list of
 /// these is a list of ledger rows rather than of charges. For the one-party
 /// contract a metered application writes, the two are the same list.
+///
+/// A statement now holds three kinds of row in one table, and the kind is the
+/// `event`: a **lock** is a party's approval (their account on the sender side,
+/// the escrow — no account — on the receiver side), a **return** is the escrow
+/// sending a remainder home (the mirror of the lock), and a **charge** is the
+/// application spending what was locked (both sides set). The NULL side is what
+/// tells them apart, so no column was added for it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Payment {
     /// The ledger row, which is what a page resumes from and what a reader can
     /// point at.
     pub id: i64,
-    /// The party the money came out of: the account the row names is theirs, and
-    /// this is the Discord id it belongs to.
-    pub discord_id: i64,
+    /// `lock` when the row is a party's approval, `return` when it is money going
+    /// home, `charge` when it is the application spending. Computed from which
+    /// side of the row is NULL.
+    pub event: &'static str,
+    /// The party the money came out of — the account the row names is theirs, and
+    /// this is the Discord id it belongs to. `None` on a return, which has no
+    /// sender: the escrow sent it.
+    pub discord_id: Option<i64>,
     pub amount: i64,
-    pub receiver_discord_id: i64,
+    /// The party the money went to, by Discord id. `None` on a lock, which has no
+    /// receiver: the escrow received it.
+    pub receiver_discord_id: Option<i64>,
     pub time: PrimitiveDateTime,
 }
 
@@ -1056,10 +1091,11 @@ pub struct Payment {
 /// them the way the list reads and pages without a timestamp to collide on — and
 /// `(contract_id, id)` is exactly the index this query wants.
 ///
-/// Every row here was written by `pay` above, which always fills these four
-/// columns; the schema's nullability is the Elixir's, which writes rows this
-/// never selects (`amount`, `time`) or writes them for an account with a Discord
-/// id (`sender_id`, `receiver_id`).
+/// Every row here is one of the three contract movements `approve`, `pay` and
+/// `end` write, and each leaves one side of the row NULL where it has no account
+/// to name — the escrow, which is not a user — so both joins are outer and both
+/// Discord ids are nullable. The schema's nullability is the Elixir's besides:
+/// it writes rows this never selects (`amount`, `time`).
 pub async fn payments(
     pool: &PgPool,
     contract_id: i64,
@@ -1070,11 +1106,13 @@ pub async fn payments(
 
     let rows = sqlx::query_as!(
         PaymentRow,
-        "SELECT history.id, sender.discord_id AS \"discord_id!\", history.amount AS \"amount!\",
-                receiver.discord_id AS \"receiver_discord_id!\", history.\"time\" AS \"time!\"
+        "SELECT history.id, sender.discord_id AS discord_id, history.amount AS \"amount!\",
+                receiver.discord_id AS receiver_discord_id, history.\"time\" AS \"time!\",
+                history.sender_id IS NULL AS \"sender_unset!\",
+                history.receiver_id IS NULL AS \"receiver_unset!\"
            FROM currency_payment_histories history
-           JOIN users sender ON sender.id = history.sender_id
-           JOIN users receiver ON receiver.id = history.receiver_id
+           LEFT JOIN users sender ON sender.id = history.sender_id
+           LEFT JOIN users receiver ON receiver.id = history.receiver_id
           WHERE history.contract_id = $1
             AND ($2::bigint IS NULL OR history.id < $2)
             AND ($3::bigint IS NULL OR history.id <= $3)
@@ -1093,6 +1131,7 @@ pub async fn payments(
         .into_iter()
         .map(|row| Payment {
             id: row.id,
+            event: event(row.sender_unset, row.receiver_unset),
             discord_id: row.discord_id,
             amount: row.amount,
             receiver_discord_id: row.receiver_discord_id,
@@ -1103,10 +1142,23 @@ pub async fn payments(
 
 struct PaymentRow {
     id: i64,
-    discord_id: i64,
+    discord_id: Option<i64>,
     amount: i64,
-    receiver_discord_id: i64,
+    receiver_discord_id: Option<i64>,
     time: PrimitiveDateTime,
+    sender_unset: bool,
+    receiver_unset: bool,
+}
+
+/// Which movement a statement row is, out of which side of it is NULL: a lock has
+/// no receiver, a return has no sender, and a charge — both sides set — is what
+/// is left.
+fn event(sender_unset: bool, receiver_unset: bool) -> &'static str {
+    match (sender_unset, receiver_unset) {
+        (false, true) => "lock",
+        (true, false) => "return",
+        _ => "charge",
+    }
 }
 
 /// The two comparisons a cursor may be, as the pair the list queries bind: `next`
@@ -1245,6 +1297,26 @@ async fn end(
          ON CONFLICT (user_id, currency_id)
          DO UPDATE SET amount = assets.amount + EXCLUDED.amount,
                        updated_at = EXCLUDED.updated_at",
+        contract_id,
+        currency_id,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // And the ledger says the same thing the balances just did: one row per party
+    // whose remainder went home, the escrow on the sender side this time — a NULL
+    // there is what marks a return where a charge sets both sides, the mirror of
+    // the lock the approval wrote. A party with nothing left is not a movement
+    // and writes no row, as the refund above writes no balance for them.
+    sqlx::query!(
+        "INSERT INTO currency_payment_histories
+             (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
+              updated_at)
+         SELECT p.remaining, NULL, u.id, $2, $1, $3, $3, $3
+           FROM contract_parties p
+           JOIN users u ON u.discord_id = p.discord_id
+          WHERE p.contract_id = $1 AND p.remaining > 0",
         contract_id,
         currency_id,
         now

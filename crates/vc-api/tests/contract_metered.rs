@@ -228,7 +228,7 @@ async fn a_quota_is_drawn_down_a_use_at_a_time(pool: PgPool) {
 
     // What the approval locked is what the operator was paid, a draw at a time —
     // the subscriber's balance went at the approval, not at each use — and the
-    // ledger has one row per charge.
+    // ledger has one row per charge, beside the lock the approval itself wrote.
     assert_eq!(balance(&pool, SUBSCRIBER, 1).await, 900);
 
     let operator = vc_core::user::find_by_discord_id(&pool, OPERATOR_DISCORD_ID)
@@ -237,5 +237,9 @@ async fn a_quota_is_drawn_down_a_use_at_a_time(pool: PgPool) {
         .expect("the receiver");
 
     assert_eq!(balance(&pool, operator.id, 1).await, QUOTA);
-    assert_eq!(histories(&pool).await, 3, "one per draw");
+    assert_eq!(
+        histories(&pool).await,
+        4,
+        "the lock (the approval) and one row per draw"
+    );
 }

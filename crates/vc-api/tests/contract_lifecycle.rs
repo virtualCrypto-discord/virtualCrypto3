@@ -113,9 +113,12 @@ async fn contract_payments_draw_from_the_first_approval_first(pool: PgPool) {
     )
     .await
     .unwrap();
+    // The two approvals' locks first, then the money the charges drew: the lock
+    // names the party whose account it left, and a charge names the party it came
+    // out of. (A return row would have a NULL sender, but none has happened yet.)
     let history: Vec<(i64, i64)> = sqlx::query_as("SELECT sender_id, amount FROM currency_payment_histories WHERE contract_id = $1 ORDER BY id")
         .bind(id).fetch_all(&pool).await.unwrap();
-    assert_eq!(history, vec![(3, 20), (3, 80), (2, 50)]);
+    assert_eq!(history, vec![(3, 100), (2, 100), (3, 20), (3, 80), (2, 50)]);
     vc_core::contract::withdraw(&pool, id, 2, now + time::Duration::seconds(30))
         .await
         .unwrap();

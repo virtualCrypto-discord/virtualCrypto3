@@ -613,7 +613,9 @@ async fn the_application_spends_what_was_locked(pool: PgPool) {
             .await
             .expect("the ledger");
 
-    assert_eq!(histories, 2, "one per party whose remainder was drawn on");
+    // The two approvals' locks, and then one row per party whose remainder the
+    // payment drew on.
+    assert_eq!(histories, 4, "the locks and the payment's own rows");
 }
 
 /// More than what is left is refused, and neither the receiver nor the parties

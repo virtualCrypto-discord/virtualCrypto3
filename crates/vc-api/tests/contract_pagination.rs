@@ -330,7 +330,8 @@ async fn a_statement_pages_by_default(pool: PgPool) {
     let next = next_of(&first).expect("a cursor");
     let rest = statement(&pool, &fixture, contract, &format!("next={next}")).await;
 
-    assert_eq!(ids(&rest).len(), 1, "the rest of it");
+    // The last charge and the approval's lock, which is a row in this statement too.
+    assert_eq!(ids(&rest).len(), 2, "the rest of it");
     assert_eq!(next_of(&rest), None);
 }
 

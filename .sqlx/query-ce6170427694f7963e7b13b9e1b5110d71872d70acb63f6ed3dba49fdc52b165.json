@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT history.id, history.amount AS \"amount!\",\n                COALESCE(history.\"time\", history.inserted_at) AS \"time!\",\n                sender.discord_id AS sender_discord_id,\n                receiver.discord_id AS receiver_discord_id,\n                currencies.unit,\n                applications.client_name AS client_name,\n                history.contract_id IS NOT NULL AS \"contract!\",\n                history.sender_id IS NULL AS \"sender_unset!\",\n                history.receiver_id IS NULL AS \"receiver_unset!\"\n           FROM currency_payment_histories history\n           JOIN currencies ON currencies.id = history.currency_id\n           LEFT JOIN users sender ON sender.id = history.sender_id\n           LEFT JOIN users receiver ON receiver.id = history.receiver_id\n           LEFT JOIN contracts ON contracts.id = history.contract_id\n           LEFT JOIN applications ON applications.id = contracts.application_id\n          WHERE (history.sender_id = $1 OR history.receiver_id = $1)\n            AND (history.contract_id IS NULL\n                 OR history.sender_id IS NULL\n                 OR history.receiver_id IS NULL)\n            AND ($2::text IS NULL OR currencies.unit = $2)\n            AND ($3::bigint IS NULL\n                 OR sender.discord_id = $3 OR receiver.discord_id = $3)\n            AND ($4::bigint IS NULL OR history.id < $4)\n            AND ($5::bigint IS NULL OR history.id <= $5)\n          ORDER BY history.id DESC\n          LIMIT $6\n         OFFSET $7",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_payment_histories",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "amount!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_payment_histories",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "time!",
+        "type_info": "Timestamp",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "sender_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "receiver_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "client_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "contract!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "sender_unset!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "receiver_unset!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ce6170427694f7963e7b13b9e1b5110d71872d70acb63f6ed3dba49fdc52b165"
+}

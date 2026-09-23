@@ -8,9 +8,11 @@
 //!
 //! `/users/@me/transactions` is the path the payment writer already lives on, which is why the
 //! reader is a `GET` there rather than a route of its own: a caller that may pay may read what it
-//! paid. Its rows name both sides — the caller is one of them, and which one is the question —
-//! and a contract's charge names the application that took the money, because the account on the
-//! other end of one has no Discord id to name.
+//! paid. It is the wallet's own movements: a payment names both sides — the caller is one of
+//! them, and which one is the question — a lock names the caller on the sender side and the
+//! contract's application on the other, a return names them the other way round, and a charge is
+//! not here at all, because it moves the money an application already held rather than the
+//! wallet. `event` says which of those a row is.
 //!
 //! `/currencies/{id}/issuances` is the guild's side of the same table, gated the way issuing is:
 //! a guild token with `vc.issue`, reading the ledger of the one currency that token can spend
@@ -113,8 +115,11 @@ pub async fn issuances(
 }
 
 /// One payment: both sides by Discord id, the amount and the currency as strings — the numbers
-/// this API has always answered as strings — and the application whose contract took the money,
-/// when the row is a charge.
+/// this API has always answered as strings — the application whose contract the row belongs to,
+/// when it is a contract movement, and the `event` that names which kind: `lock` when a party
+/// locked money into a contract (present on the sender side, `null` on the receiver), `return`
+/// when a contract gave money back (the other way round), and `null` for a payment between
+/// people.
 fn render_payment(payment: &vc_core::history::Payment) -> Value {
     json!({
         "id": payment.id.to_string(),
@@ -123,6 +128,7 @@ fn render_payment(payment: &vc_core::history::Payment) -> Value {
         "sender_discord_id": payment.sender_discord_id.map(|id| id.to_string()),
         "receiver_discord_id": payment.receiver_discord_id.map(|id| id.to_string()),
         "contract_client_name": payment.contract_client_name,
+        "event": payment.event,
         "time": format_timestamp(payment.time),
     })
 }

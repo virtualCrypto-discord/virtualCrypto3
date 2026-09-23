@@ -160,7 +160,8 @@ async fn statement(pool: &PgPool, fixture: &Fixture, token: &str) -> Response {
 }
 
 /// Two charges are two rows, newest first, and each one says which party paid,
-/// how much, where it went and when.
+/// how much, where it went and when — and the approval that preceded them is a
+/// row too, a lock that names the party and no receiver.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_statement_names_the_charges_newest_first(pool: PgPool) {
     let fixture = fixture(&pool, &[(ALICE, ALICE_DISCORD_ID, 100)]).await;
@@ -176,14 +177,25 @@ async fn a_statement_names_the_charges_newest_first(pool: PgPool) {
     assert_eq!(listed.status, 200, "body: {}", listed.body);
 
     let rows = listed.body.as_array().expect("an array");
-    assert_eq!(rows.len(), 2, "body: {}", listed.body);
+    assert_eq!(rows.len(), 3, "body: {}", listed.body);
 
+    assert_eq!(rows[0]["event"], "charge");
     assert_eq!(rows[0]["amount"], "30", "the newest first");
+    assert_eq!(rows[1]["event"], "charge");
     assert_eq!(rows[1]["amount"], "25");
 
+    // The approval, which the statement now carries: a lock names only the party
+    // whose account the money left, and leaves the escrow's side out.
+    assert_eq!(rows[2]["event"], "lock");
+    assert_eq!(rows[2]["amount"], "100");
+    assert_eq!(rows[2]["discord_id"], ALICE_DISCORD_ID.to_string());
+    assert_eq!(
+        rows[2]["receiver_discord_id"],
+        Value::Null,
+        "a lock has no receiver: the escrow took it"
+    );
+
     for row in rows {
-        assert_eq!(row["discord_id"], ALICE_DISCORD_ID.to_string());
-        assert_eq!(row["receiver_discord_id"], RECEIVER_DISCORD_ID.to_string());
         assert!(
             row["id"].as_str().is_some_and(|id| !id.is_empty()),
             "a row to point at: {row}"
@@ -193,6 +205,14 @@ async fn a_statement_names_the_charges_newest_first(pool: PgPool) {
                 .as_str()
                 .is_some_and(|time| time.contains('T') && time.ends_with('Z')),
             "the family's timestamp: {row}"
+        );
+    }
+
+    for charged in &rows[..2] {
+        assert_eq!(charged["discord_id"], ALICE_DISCORD_ID.to_string());
+        assert_eq!(
+            charged["receiver_discord_id"],
+            RECEIVER_DISCORD_ID.to_string()
         );
     }
 }
@@ -221,14 +241,25 @@ async fn one_payment_of_two_parties_is_two_rows(pool: PgPool) {
     let listed = statement(&pool, &fixture, &fixture.token).await;
     let rows = listed.body.as_array().expect("an array");
 
-    assert_eq!(rows.len(), 2, "body: {}", listed.body);
+    // The payment's two rows, and the two approvals' locks beneath them.
+    assert_eq!(rows.len(), 4, "body: {}", listed.body);
 
     // Newest first, and a payment's rows are written in the order it drew them —
     // so the later slice is the one on top.
+    assert_eq!(rows[0]["event"], "charge");
     assert_eq!(rows[0]["discord_id"], BOB_DISCORD_ID.to_string());
     assert_eq!(rows[0]["amount"], "20");
+    assert_eq!(rows[1]["event"], "charge");
     assert_eq!(rows[1]["discord_id"], ALICE_DISCORD_ID.to_string());
     assert_eq!(rows[1]["amount"], "100");
+
+    // And the locks: each party's own approval, newest approval first.
+    assert_eq!(rows[2]["event"], "lock");
+    assert_eq!(rows[2]["discord_id"], BOB_DISCORD_ID.to_string());
+    assert_eq!(rows[2]["amount"], "50");
+    assert_eq!(rows[3]["event"], "lock");
+    assert_eq!(rows[3]["discord_id"], ALICE_DISCORD_ID.to_string());
+    assert_eq!(rows[3]["amount"], "100");
 }
 
 /// The same readers as the contract itself, and a stranger is answered as a
@@ -245,7 +276,8 @@ async fn only_its_own_people_can_read_it(pool: PgPool) {
         let listed = statement(&pool, &fixture, token).await;
 
         assert_eq!(listed.status, 200, "body: {}", listed.body);
-        assert_eq!(listed.body.as_array().map(Vec::len), Some(1));
+        // The charge, and the approval's lock.
+        assert_eq!(listed.body.as_array().map(Vec::len), Some(2));
     }
 
     let refused = statement(&pool, &fixture, &stranger).await;
@@ -279,6 +311,11 @@ async fn a_payment_that_names_no_contract_is_not_in_it(pool: PgPool) {
     let listed = statement(&pool, &fixture, &fixture.token).await;
     let rows = listed.body.as_array().expect("an array");
 
-    assert_eq!(rows.len(), 1, "body: {}", listed.body);
+    // The charge and the approval's lock: the ordinary payment above names no
+    // contract and is in neither.
+    assert_eq!(rows.len(), 2, "body: {}", listed.body);
+    assert_eq!(rows[0]["event"], "charge");
     assert_eq!(rows[0]["amount"], "25");
+    assert_eq!(rows[1]["event"], "lock");
+    assert_eq!(rows[1]["amount"], "100");
 }

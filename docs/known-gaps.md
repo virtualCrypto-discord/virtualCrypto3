@@ -297,6 +297,21 @@ therefore nothing to port: `vc_core::history` is the read, `crates/vc-api/src/co
 is the screens, and `crates/vc-api/tests/interactions_history.rs` is this tree's own suite. The
 tables are the Elixir's, unchanged — no column was added for this.
 
+The ledger gained two kinds of row, and they too needed no column. Locking money into a contract
+(`contract::approve`) and returning what was left of it (`contract::withdraw`, `contract::settle`,
+a refusal, an expiry) each move a balance, and neither wrote anything — so the largest movements of
+a person's money were the invisible ones, while the charge that spends the locked money was
+already recorded. Both are now written into `currency_payment_histories`, and **the NULL side is
+what tells the three contract movements apart**: a charge sets both `sender_id` and `receiver_id`, a
+lock names only the party who approved and leaves the receiver NULL because the escrow that took
+the money is nobody's account, and a return names only the party it went home to and leaves the
+sender NULL. A person's ledger is the wallet's own movements, so it shows a lock and a return and
+never a charge — a charge spends money the application was already handed, not the person's
+balance, and the application that cares reconciles it from the contract's own statement
+(`GET /api/v2/contracts/{id}/payments`), which shows all three and names which with `event`. A
+movement of nothing writes no row, and each is written where the money moves, in the same
+transaction that moves it.
+
 Two things about it are decisions rather than details:
 
 - **What may be seen follows what may be done.** The payments screen is the caller's own rows and

@@ -4,7 +4,9 @@
 //! command of its names a history — so nothing here has an Elixir case behind it:
 //! `docs/known-gaps.md` is the design, and this file holds it to the two things that file
 //! claims. What may be seen follows what may be done, and what a row says is what happened:
-//! a payment names both sides, and a contract's charge names the application it paid.
+//! a payment names both sides, and a contract's lock and return name the contract beside the one
+//! side of the wallet that moved — the charge in between is the escrow's movement, not the
+//! wallet's, and is not here at all.
 
 mod support;
 
@@ -13,7 +15,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
     MONEY_GUILD, MONEY_USER1, MONEY_USER2, Response, execute_from_dm, execute_from_guild, fake,
-    from_guild, insert_user, interaction, setup_money, state,
+    from_guild, insert_application, insert_user, interaction, setup_money, state,
 };
 
 /// Somebody the money fixture does not have: a second person to pay and be paid by, so that a
@@ -129,6 +131,73 @@ async fn pay_shows_both_what_was_sent_and_what_came_in(pool: PgPool) {
     let stranger =
         rendered(&interaction(router(pool.clone()), history(OTHER, "pay", vec![])).await);
     assert!(stranger.contains("送金の履歴はありません"), "{stranger}");
+}
+
+/// A contract's money is the wallet's money when it moves. Approving locks it and the screen
+/// says so; what the application then spends from the lock is the escrow's movement, not the
+/// wallet's, and is not in this ledger; and the end of the contract sends the remainder home as
+/// a return. The charge that happened in between is nowhere in the count, which is the whole of
+/// what the predicate is for.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    let application = insert_application(&pool, MONEY_USER1, "a metered service").await;
+    let now = time::OffsetDateTime::now_utc();
+    let contract = vc_core::contract::create(
+        &pool,
+        application,
+        &money.unit,
+        &[vc_core::contract::NewParty {
+            discord_id: MONEY_USER1,
+            amount: 100,
+        }],
+        None,
+        None,
+        now,
+    )
+    .await
+    .expect("a contract");
+
+    // The approval locks the money, so it is a movement and it shows.
+    vc_core::contract::approve(&pool, contract, 1, now)
+        .await
+        .expect("an approval");
+
+    let screen =
+        rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
+    assert!(screen.contains("**送金の履歴** (1件)"), "{screen}");
+    assert!(
+        screen.contains("契約にロック: **100** `n` → a metered service（契約）"),
+        "{screen}"
+    );
+
+    // What the application spends from the lock moves the escrow, not the wallet, so it is not in
+    // this ledger at all.
+    vc_core::contract::pay(&pool, contract, application, OTHER, None, 25, now)
+        .await
+        .expect("a charge");
+
+    let screen =
+        rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
+    assert!(
+        screen.contains("**送金の履歴** (1件)"),
+        "a charge is not the wallet's: {screen}"
+    );
+    assert!(!screen.contains("**25**"), "{screen}");
+
+    // The end of the contract returns what is left of the lock, and that is a movement.
+    vc_core::contract::withdraw(&pool, contract, 1, now)
+        .await
+        .expect("a withdrawal");
+
+    let screen =
+        rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
+    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
+    assert!(
+        screen.contains("契約から返却: **75** `n` ← a metered service（契約）"),
+        "{screen}"
+    );
 }
 
 /// The count is the whole ledger and the arrows move through it: five rows on the first page,

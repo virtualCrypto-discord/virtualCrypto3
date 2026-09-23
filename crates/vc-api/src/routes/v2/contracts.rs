@@ -371,12 +371,18 @@ pub async fn payments(
     Ok(paged(body, next, page.limit, &headers, uri.path()))
 }
 
+/// One row of a contract's statement: the `event` first, because it is what says how to read the
+/// two Discord ids beside it. A `charge` names both sides; a `lock` names only the party whose
+/// approval wrote it (`discord_id`) and leaves `receiver_discord_id` `null`, because the escrow
+/// that took the money is not a user; and a `return` names only the party it went home to
+/// (`receiver_discord_id`).
 fn render_payment(payment: &contract::Payment) -> Value {
     json!({
         "id": payment.id.to_string(),
-        "discord_id": payment.discord_id.to_string(),
+        "event": payment.event,
+        "discord_id": payment.discord_id.map(|id| id.to_string()),
         "amount": payment.amount.to_string(),
-        "receiver_discord_id": payment.receiver_discord_id.to_string(),
+        "receiver_discord_id": payment.receiver_discord_id.map(|id| id.to_string()),
         "time": format_timestamp(payment.time),
     })
 }

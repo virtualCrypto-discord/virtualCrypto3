@@ -2,8 +2,9 @@
 //!
 //! Two subcommands, one screen each, and the arrows between pages — the shape `/bal` and the
 //! mute list have. What is being read is `vc_core::history`: the pool's issuances, which
-//! `/issue` writes, and the payments between accounts, which `/pay`, a claim's approval and a
-//! contract's charge all three write.
+//! `/issue` writes, and the wallet's own movements, which `/pay`, a claim's approval, and a
+//! contract's lock and return all write — a charge is not one of them, because it moves the
+//! money an application was already given rather than the person's balance.
 //!
 //! An addition rather than a port. The Elixir writes both ledgers and never reads either: no
 //! command of its names a history, and its `/api/v1|2/…/transactions` are writers.
@@ -230,24 +231,49 @@ async fn issued(
 ///
 /// 「送金」 and 「受取」 rather than an arrow each, because that is the question a person opens a
 /// ledger with — and the amount is what they are looking for on the line.
+///
+/// A contract's money is the same ledger, so it needs the same line: a lock is money leaving for
+/// a contract and a return is money coming back from one, and both say so in words. What is on
+/// the other side is the contract rather than a person — the escrow is nobody's account — so
+/// naming the contract's application where the mention would go is what makes the line readable.
 fn paid_line(payment: &Payment, me: i64) -> String {
     let amount = format!("**{}** `{}`", payment.amount, payment.unit);
     let time = format_date_time(payment.time);
 
-    match (
-        payment.sender_discord_id == Some(me),
-        payment.receiver_discord_id == Some(me),
-    ) {
-        (true, false) => format!(
-            "送金: {amount} → {} ・ {time}",
-            counterparty(payment.receiver_discord_id, payment)
+    match payment.event {
+        Some("lock") => format!(
+            "契約にロック: {amount} → {} ・ {time}",
+            contract_name(payment)
         ),
-        (false, true) => format!(
-            "受取: {amount} ← {} ・ {time}",
-            counterparty(payment.sender_discord_id, payment)
+        Some("return") => format!(
+            "契約から返却: {amount} ← {} ・ {time}",
+            contract_name(payment)
         ),
-        // To themselves, which an account may do: the claim list's own fixture holds one.
-        _ => format!("{amount} ・ {time}"),
+        _ => match (
+            payment.sender_discord_id == Some(me),
+            payment.receiver_discord_id == Some(me),
+        ) {
+            (true, false) => format!(
+                "送金: {amount} → {} ・ {time}",
+                counterparty(payment.receiver_discord_id, payment)
+            ),
+            (false, true) => format!(
+                "受取: {amount} ← {} ・ {time}",
+                counterparty(payment.sender_discord_id, payment)
+            ),
+            // To themselves, which an account may do: the claim list's own fixture holds one.
+            _ => format!("{amount} ・ {time}"),
+        },
+    }
+}
+
+/// The contract a lock or a return belongs to, named the way a charge's counterparty is: the
+/// application's client name and the word for what it is, or just the word where an old row
+/// names none.
+fn contract_name(payment: &Payment) -> String {
+    match &payment.contract_client_name {
+        Some(name) => format!("{name}（契約）"),
+        None => "契約".to_owned(),
     }
 }
 

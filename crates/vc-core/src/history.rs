@@ -33,14 +33,20 @@ pub struct Payment {
     pub id: i64,
     pub amount: i64,
     /// Nullable because the column is: an account made for an application has no Discord id, and
-    /// one of those is who a contract's charge is paid to.
+    /// one of those is who a contract's charge is paid to — and because a contract row names the
+    /// escrow rather than an account on one side.
     pub sender_discord_id: Option<i64>,
     pub receiver_discord_id: Option<i64>,
     pub unit: String,
     pub time: PrimitiveDateTime,
-    /// The application whose contract took this, when the row is a charge rather than a payment
-    /// between people. `None` for `/pay` and for a claim's approval.
+    /// The application whose contract this belongs to, when the row is a contract movement:
+    /// `None` for `/pay` and for a claim's approval.
     pub contract_client_name: Option<String>,
+    /// Which contract movement this is, when it is one: `Some("lock")` for money a party locked by
+    /// approving, `Some("return")` for money the contract gave back, and `None` for a plain
+    /// payment. A charge is never in this list and so is also `None` here — see the predicate
+    /// below.
+    pub event: Option<&'static str>,
 }
 
 /// One issuance, as a screen has to say it. There is no sender: the pool paid, and the pool is
@@ -88,12 +94,21 @@ pub async fn payments(
     let page = page.max(1);
 
     let total = sqlx::query_scalar!(
+        // The wallet's own movements, which is what a person's ledger is: a row with no contract
+        // is a payment between people, and a contract row with a NULL side is a lock (no receiver
+        // — the escrow took it) or a return (no sender — the escrow sent it). A contract row with
+        // both sides set is a charge, and a charge moves the escrow rather than the wallet, so it
+        // is not in this list at all. The NULL side is the whole of the distinction, which is what
+        // let the three kinds share the one table and the one pair of columns.
         "SELECT count(*) AS \"count!\"
            FROM currency_payment_histories history
            JOIN currencies ON currencies.id = history.currency_id
-           JOIN users sender ON sender.id = history.sender_id
-           JOIN users receiver ON receiver.id = history.receiver_id
+           LEFT JOIN users sender ON sender.id = history.sender_id
+           LEFT JOIN users receiver ON receiver.id = history.receiver_id
           WHERE (history.sender_id = $1 OR history.receiver_id = $1)
+            AND (history.contract_id IS NULL
+                 OR history.sender_id IS NULL
+                 OR history.receiver_id IS NULL)
             AND ($2::text IS NULL OR currencies.unit = $2)
             AND ($3::bigint IS NULL
                  OR sender.discord_id = $3 OR receiver.discord_id = $3)",
@@ -213,19 +228,29 @@ async fn query_payments(
     offset: i64,
 ) -> Result<Vec<Payment>> {
     let rows = sqlx::query!(
+        // The same wallet-only predicate the count above carries, and for the same reason: a
+        // payment between people, plus a contract lock and a contract return, and never a charge.
+        // Both sides are outer joins because a lock or a return names the escrow — no user — on
+        // one of them.
         "SELECT history.id, history.amount AS \"amount!\",
                 COALESCE(history.\"time\", history.inserted_at) AS \"time!\",
                 sender.discord_id AS sender_discord_id,
                 receiver.discord_id AS receiver_discord_id,
                 currencies.unit,
-                applications.client_name AS client_name
+                applications.client_name AS client_name,
+                history.contract_id IS NOT NULL AS \"contract!\",
+                history.sender_id IS NULL AS \"sender_unset!\",
+                history.receiver_id IS NULL AS \"receiver_unset!\"
            FROM currency_payment_histories history
            JOIN currencies ON currencies.id = history.currency_id
-           JOIN users sender ON sender.id = history.sender_id
-           JOIN users receiver ON receiver.id = history.receiver_id
+           LEFT JOIN users sender ON sender.id = history.sender_id
+           LEFT JOIN users receiver ON receiver.id = history.receiver_id
            LEFT JOIN contracts ON contracts.id = history.contract_id
            LEFT JOIN applications ON applications.id = contracts.application_id
           WHERE (history.sender_id = $1 OR history.receiver_id = $1)
+            AND (history.contract_id IS NULL
+                 OR history.sender_id IS NULL
+                 OR history.receiver_id IS NULL)
             AND ($2::text IS NULL OR currencies.unit = $2)
             AND ($3::bigint IS NULL
                  OR sender.discord_id = $3 OR receiver.discord_id = $3)
@@ -255,8 +280,20 @@ async fn query_payments(
             unit: row.unit.unwrap_or_default(),
             time: row.time,
             contract_client_name: row.client_name,
+            event: event(row.contract, row.sender_unset, row.receiver_unset),
         })
         .collect())
+}
+
+/// Which contract movement a wallet row is, when it is one: a contract row with no receiver is a
+/// lock and one with no sender is a return, and anything else here — a plain payment, or a charge
+/// the predicate kept out — is no kind at all.
+fn event(contract: bool, sender_unset: bool, receiver_unset: bool) -> Option<&'static str> {
+    match (contract, sender_unset, receiver_unset) {
+        (true, _, true) => Some("lock"),
+        (true, true, _) => Some("return"),
+        _ => None,
+    }
 }
 
 /// The issuance query itself, for the same reason.

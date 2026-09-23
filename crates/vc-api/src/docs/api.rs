@@ -818,6 +818,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "[",
                 "  {",
                 "    \"id\": \"1\",",
+                "    \"event\": \"charge\",",
                 "    \"discord_id\": \"100000000000000001\",",
                 "    \"amount\": \"25\",",
                 "    \"receiver_discord_id\": \"100000000000000002\",",
@@ -827,8 +828,9 @@ const ENDPOINTS: &[Endpoint] = &[
             ],
         }),
         notes: &[
-            "1件は台帳の1行で、1回の支払いが複数行になることがあります（複数の対象者から引いたとき）。",
-            "`discord_id` は引かれた対象者、`receiver_discord_id` は受け取った相手です。",
+            "1件は台帳の1行です。1回の支払いが複数行になることがあります（複数の対象者から引いたとき）。",
+            "`event` はその行が何かです。`charge` はアプリケーションが使った分（両方のDiscord IDが入ります）、`lock` は対象者が承認してロックした分（`discord_id` だけが入り、`receiver_discord_id` は `null`）、`return` は契約が返した分（`receiver_discord_id` だけが入り、`discord_id` は `null`）です。",
+            "`discord_id` は引かれた対象者、`receiver_discord_id` は受け取った相手です。ロックは送り手だけを、返却は受け取り手だけを名指しします。",
             "既定は50件、上限は200件です。続きは `link` ヘッダーが示します。",
         ],
         errors: &[
@@ -1468,6 +1470,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "    \"sender_discord_id\": \"100000000000000001\",",
                 "    \"receiver_discord_id\": \"100000000000000002\",",
                 "    \"contract_client_name\": null,",
+                "    \"event\": null,",
                 "    \"time\": \"2026-01-01T00:00:00Z\"",
                 "  }",
                 "]",
@@ -1475,7 +1478,8 @@ const ENDPOINTS: &[Endpoint] = &[
         }),
         notes: &[
             "本人が送った送金と受け取った送金の両方が出ます。どちらだったかは `sender_discord_id` と `receiver_discord_id` のどちらが自分かで分かります。",
-            "`/pay` のほかに、請求を承諾したときの支払いと、契約が通貨を使ったときの支払いも入ります。契約による支払いは受け取り手がアプリケーションなので `receiver_discord_id` が `null` になり、`contract_client_name` がどの契約かを示します。",
+            "`/pay` のほかに、請求を承諾したときの支払い、契約を承認したときのロック、契約が終わって戻ってきた分が入ります。`event` がその三つを区別します（`lock` はロック、`return` は返却、普通の送金は `null`）。ロックは `sender_discord_id` だけが入り `receiver_discord_id` は `null`、返却はその逆で、`contract_client_name` がどの契約かを示します。",
+            "契約がロックから使った分（`charge`）は、本人の残高ではなくアプリケーションが預かっていた分を動かすので、この一覧には入りません。それは契約自身の支払いの記録（`GET /api/v2/contracts/…/payments`）で読めます。",
             "署名した委譲トークン（パーソナルグラント）では読めません。台帳はアカウント自身の記録で、委譲は操作を貸すものだからです。",
         ],
         errors: &[
