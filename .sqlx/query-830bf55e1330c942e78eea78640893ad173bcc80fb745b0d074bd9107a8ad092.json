@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\"\n           FROM currency_given_histories given\n           JOIN currencies ON currencies.id = given.currency_id\n           JOIN users receiver ON receiver.id = given.receiver_id\n          WHERE currencies.guild_id = $1\n            AND ($2::bigint IS NULL OR receiver.discord_id = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "830bf55e1330c942e78eea78640893ad173bcc80fb745b0d074bd9107a8ad092"
+}

@@ -15,6 +15,7 @@ pub mod create;
 pub mod delete;
 pub mod grant;
 pub mod help;
+pub mod history;
 pub mod info;
 pub mod issue;
 pub mod mute;
@@ -214,6 +215,7 @@ pub async fn handle(
         "create" => create::handle(state, options, payload).await,
         "delete" => delete::handle(state, options, payload).await,
         "grant" => grant::handle(state, options, payload).await,
+        "history" => history::handle(state, options, payload).await,
         "info" => info::handle(state, options, payload).await,
         "issue" => issue::handle(state, options, payload).await,
         "mute" => mute::handle(state, options, payload).await,

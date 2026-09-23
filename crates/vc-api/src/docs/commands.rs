@@ -115,6 +115,16 @@ pub fn all() -> &'static [Command] {
             ],
             sections: UNMUTE,
         },
+        Command {
+            name: "history",
+            usage: &[
+                "/history pay",
+                "/history pay unit:<通貨の単位> user:<相手>",
+                "/history issue",
+                "/history issue user:<相手>",
+            ],
+            sections: HISTORY,
+        },
     ]
 }
 
@@ -541,3 +551,35 @@ const UNMUTE: &[Section] = &[section(
         text("ミュートしているものの一覧は `/mute list` です。"),
     ],
 )];
+
+const HISTORY: &[Section] = &[
+    section(
+        "使い方",
+        &[
+            text(
+                "自分の送金の履歴と、このサーバーの発行の履歴を表示します。どちらも新しい順です。",
+            ),
+            list(&[
+                "`/history pay` 自分が送った・受け取った通貨の履歴を表示します。",
+                "`/history pay unit:<通貨の単位> user:<相手>` 表示する履歴を絞ります。",
+                "`/history issue` このサーバーの発行枠から発行された履歴を表示します（管理者）。",
+                "`/history issue user:<相手>` その人に発行された履歴だけを表示します。",
+            ]),
+        ],
+    ),
+    section(
+        "送金の履歴に出るもの",
+        &[text(
+            "自分が関わった送金のすべてです。`/pay` のほかに、請求を承諾したときの支払いと、\
+             契約が通貨を使ったときの支払いも入ります。\
+             契約の支払いは、受け取った側がアプリケーションなので、その契約のアプリケーション名で表示されます。",
+        )],
+    ),
+    section(
+        "実行できる人",
+        &[text(
+            "`/history pay` は自分の履歴なので、誰でも実行できます。\
+             `/history issue` は発行枠を確認するものなので、`/issue` と同じく管理者権限が必要です。",
+        )],
+    ),
+];

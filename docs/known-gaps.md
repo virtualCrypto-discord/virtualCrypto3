@@ -285,6 +285,28 @@ There is no end date. The row is deleted by the person who wrote it — from `/m
 `/unmute` — and no job would take it away; that is the whole of the lifetime, and it is why the
 table has no `expires` column.
 
+### A ledger a person can read: `/history`
+
+`/history pay` and `/history issue` show back the two ledgers this service has been writing since
+the Elixir: what one account paid and was paid, and what one guild's pool issued.
+
+The Elixir writes both and reads neither. Its command list — `help invite give pay info create
+delete bal claim` — names no history; `lib/virtualCrypto_web/controllers/api/v2/user_transaction_controller.ex`
+and its v1 twin have a `post` and nothing else; and no web page reads either table. There is
+therefore nothing to port: `vc_core::history` is the read, `crates/vc-api/src/command/history.rs`
+is the screens, and `crates/vc-api/tests/interactions_history.rs` is this tree's own suite. The
+tables are the Elixir's, unchanged — no column was added for this.
+
+Two things about it are decisions rather than details:
+
+- **What may be seen follows what may be done.** The payments screen is the caller's own rows and
+  needs no permission; the issuance screen asks for the administrator bit `/issue` asks for, read
+  the same way in the same handler, because the pool is the guild's and who it paid is the business
+  of whoever may spend it.
+- **No API endpoint.** A person's ledger is not in `Rest.md`, the Elixir has no route for it, and
+  an application has no business reading it — so this is Discord-only rather than a second surface
+  invented to match. If it is ever needed there, the shape to copy is the claim list's.
+
 ### The consent screen's scope is `vc.issue`, where the Elixir's was `openid`
 
 `is_valid_scopes?/1` accepted `openid` and nothing else, and this port did the same until now.

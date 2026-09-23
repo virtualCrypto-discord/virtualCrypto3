@@ -814,6 +814,116 @@ pub mod ui {
         }
     }
 
+    /// The history screens: the arrows that move one page of a ledger.
+    ///
+    /// A head byte of its own, for the contract space's reason: an id here carries which ledger
+    /// it is and what that ledger is narrowed to, and a parser that only accepts its own head
+    /// refuses the other spaces' bytes rather than reading them as its own.
+    pub mod history {
+        use super::UiError;
+
+        const HEAD: u8 = 0xF7;
+
+        /// The head this space writes, so a test and a screen agree on it.
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        /// Which ledger a screen shows: what one person paid and was paid, or what one guild's
+        /// pool issued.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Screen {
+            Paid,
+            Issued,
+        }
+
+        /// A screen, the page it is on, and what it is narrowed to.
+        ///
+        /// The filters travel with the page because Discord sends the `custom_id` back and
+        /// nothing else: an arrow that forgot the filter would answer a narrowed list with an
+        /// unnarrowed page.
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct Listing {
+            pub screen: Screen,
+            pub page: i64,
+            /// The currency's unit, when the screen is narrowed to one.
+            pub unit: Option<String>,
+            /// The Discord id on the other side, when the screen is narrowed to one person.
+            pub discord_id: Option<i64>,
+        }
+
+        /// The string a pagination button carries: `kind:page:unit:discord id`.
+        ///
+        /// Four fields with a colon between them, as the grant space writes its two: text a
+        /// test can write down and a person can recognise in a log. An absent filter is an
+        /// empty field, and neither a unit nor an id is ever empty.
+        pub fn page_custom_id(listing: &Listing) -> String {
+            let kind = match listing.screen {
+                Screen::Paid => "paid",
+                Screen::Issued => "issued",
+            };
+
+            let unit = listing.unit.as_deref().unwrap_or_default();
+            let discord_id = listing
+                .discord_id
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+
+            let mut data = vec![HEAD];
+            data.extend_from_slice(
+                format!("{kind}:{}:{unit}:{discord_id}", listing.page).as_bytes(),
+            );
+
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<Listing, UiError> {
+            let [head, rest @ ..] = source else {
+                return Err(UiError::Head);
+            };
+
+            if *head != HEAD {
+                return Err(UiError::Head);
+            }
+
+            // The packing left-aligns the last group, so a decoded payload comes back padded
+            // with NULs — the grant space says so above. None of the four fields holds one,
+            // which is what makes cutting the text the inverse of what went in.
+            let trimmed = rest
+                .iter()
+                .rposition(|byte| *byte != 0)
+                .map_or(&rest[..0], |end| &rest[..=end]);
+            let text = String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head)?;
+            let mut fields = text.split(':');
+
+            let screen = match fields.next() {
+                Some("paid") => Screen::Paid,
+                Some("issued") => Screen::Issued,
+                _ => return Err(UiError::Head),
+            };
+
+            let page = fields
+                .next()
+                .and_then(|page| page.parse().ok())
+                .ok_or(UiError::Head)?;
+            let unit = fields
+                .next()
+                .filter(|unit| !unit.is_empty())
+                .map(str::to_owned);
+            let discord_id = match fields.next() {
+                Some("") | None => None,
+                Some(id) => Some(id.parse().map_err(|_| UiError::Head)?),
+            };
+
+            Ok(Listing {
+                screen,
+                page,
+                unit,
+                discord_id,
+            })
+        }
+    }
+
     /// The menu `/help` offers and the button that goes back to its list.
     ///
     /// A head byte of its own, for the developer space's reason: the dispatcher's
@@ -1208,6 +1318,60 @@ mod tests {
         assert_eq!(
             ui::mute::parse(&[ui::mute::head(), 9, b'7']),
             Err(UiError::Unknown(9))
+        );
+    }
+
+    /// A history arrow is which ledger, where in it, and what it is narrowed to — all three,
+    /// because Discord sends the `custom_id` back and nothing else.
+    #[test]
+    fn a_history_arrow_survives_the_round_trip() {
+        let listing = ui::history::Listing {
+            screen: ui::history::Screen::Paid,
+            page: 3,
+            unit: Some("n".to_string()),
+            discord_id: Some(100_000_000_000_000_001),
+        };
+        let encoded = ui::history::page_custom_id(&listing);
+
+        assert_eq!(ui::history::parse(&parse(&encoded)), Ok(listing));
+        assert!(
+            encoded.chars().count() <= 100,
+            "{} chars",
+            encoded.chars().count()
+        );
+    }
+
+    /// And an unnarrowed one, which is the same id with two empty fields.
+    #[test]
+    fn an_unfiltered_history_arrow_survives_it_too() {
+        let listing = ui::history::Listing {
+            screen: ui::history::Screen::Issued,
+            page: 1,
+            unit: None,
+            discord_id: None,
+        };
+
+        assert_eq!(
+            ui::history::parse(&parse(&ui::history::page_custom_id(&listing))),
+            Ok(listing)
+        );
+    }
+
+    /// Its own head, for every other space's reason: an id here carries a ledger and a filter,
+    /// and `0xF0` is every other space's.
+    #[test]
+    fn another_spaces_head_is_not_a_histories() {
+        assert_eq!(
+            ui::history::parse(&[0xF0, b'p', b'a', b'i', b'd']),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::history::parse(&[ui::mute::head(), b'p']),
+            Err(UiError::Head)
+        );
+        assert_eq!(
+            ui::history::parse(&[ui::history::head(), b'?']),
+            Err(UiError::Head)
         );
     }
 }

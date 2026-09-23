@@ -9,6 +9,7 @@ pub mod db;
 pub mod delegation;
 pub mod error;
 pub mod grant;
+pub mod history;
 pub mod idempotency;
 pub mod issue;
 pub mod job;

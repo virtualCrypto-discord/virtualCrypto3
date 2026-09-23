@@ -52,6 +52,7 @@ pub fn commands() -> Vec<Value> {
         claim(),
         mute(),
         unmute(),
+        history(),
     ]
     .into_iter()
     .map(with_type)
@@ -615,6 +616,54 @@ fn unmute() -> Value {
     })
 }
 
+/// `/history`: the ledger behind `/issue` and `/pay`, read back.
+///
+/// In a guild and in a DM both, because `pay` is about the caller's own account and works
+/// anywhere. `issue` needs a guild and the administrator bit; it asks for both in its own
+/// handler rather than through Discord's permission field, the way `/issue` beside it does —
+/// one command with two halves cannot carry a permission that belongs to one of them.
+///
+/// An addition rather than a port: the Elixir writes both ledgers and reads neither, and no
+/// command of its names a history.
+fn history() -> Value {
+    json!({
+        "name": "history",
+        "description": "発行と送金の履歴を表示します。",
+        "options": [
+            {
+                "name": "pay",
+                "description": "自分が送った・受け取った通貨の履歴を表示します。",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "unit",
+                        "description": "表示する通貨の単位です。",
+                        "type": 3,
+                        "autocomplete": true,
+                    },
+                    {
+                        "name": "user",
+                        "description": "この相手との履歴だけを表示します。",
+                        "type": 6,
+                    },
+                ],
+            },
+            {
+                "name": "issue",
+                "description": "このサーバーの発行枠から発行された履歴を表示します。管理者権限が必要です。",
+                "type": 1,
+                "options": [{
+                    "name": "user",
+                    "description": "この人に発行された履歴だけを表示します。",
+                    "type": 6,
+                }],
+            },
+        ],
+        "contexts": [0, 1],
+        "integration_types": [0, 1],
+    })
+}
+
 /// The URL the list is `PUT` to. A guild id makes it that guild's commands rather than
 /// the application's, which is what the old script's optional argument did.
 pub fn url(base: &str, client_id: &str, guild: Option<i64>) -> String {
@@ -679,7 +728,8 @@ mod tests {
                 "bal",
                 "claim",
                 "mute",
-                "unmute"
+                "unmute",
+                "history"
             ]
         );
     }
