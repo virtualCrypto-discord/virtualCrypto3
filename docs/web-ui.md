@@ -332,6 +332,13 @@ flow: an application's account is created with no Discord id, and connecting bin
 to the bot that speaks for it, having checked with Discord that the bot is in the guild
 and that its description carries this application's token.
 
+If payments or claims already created an ordinary account for that bot, connecting
+merges its balances, payment and issuance history, claims and claim metadata into
+the application's account. The application account id stays unchanged, so existing
+tokens keep working. Rust also carries over mute preferences and removes the old
+account's payment idempotency entries, all in the same transaction. An account
+already bound to a different application is rejected.
+
 The failures are distinguished rather than collapsed, which is most of the file:
 
 - integrations 403 → the guild is read to say which of the two it is: the service is
@@ -477,11 +484,10 @@ And one branch that is a rule rather than a message:
 
 - `{:error, :conflicted_user_id}` → 「すでにそのBotは別のApplicationに紐付けられています。」
   (l.138-139). **One bot belongs to one application**, and the schema says so:
-  `users_discord_id_index` is `UNIQUE` on `users.discord_id`, so the second
-  application to try to bind that bot gets a unique violation rather than taking the
-  binding away. The write has to answer that violation as this message, and it is
-  worth knowing that the constraint is what catches it — a lookup that returned the
-  first match would have overwritten the other application's binding silently.
+  `users_discord_id_index` is `UNIQUE` on `users.discord_id`. The binding transaction
+  locks the accounts and checks whether the bot's existing account belongs to an
+  application: an ordinary account is merged, the same application can reconnect,
+  and another application receives this conflict.
 
 An earlier version of this section said the persistence was unread and asked whether
 there was any. There is: the binding, and this is the branch that says it is exclusive.

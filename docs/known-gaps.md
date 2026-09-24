@@ -293,6 +293,10 @@ both ledgers at once, because an issuance to somebody is money arriving in their
 other, so the payments screen shows the payments and what the pool issued to the reader, merged
 newest first; the guild's issuance ledger is one table and is not merged with anything.
 
+Contract movements identify the application by its bound Discord Bot, as the approval
+screen does. An unbound application shows its sanitized name and client ID; editing
+the name cannot insert mentions or extra movement lines into old history.
+
 The Elixir writes both and reads neither. Its command list — `help invite give pay info create
 delete bal claim` — names no history; `lib/virtualCrypto_web/controllers/api/v2/user_transaction_controller.ex`
 and its v1 twin have a `post` and nothing else; and no web page reads either table. There is

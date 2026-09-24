@@ -48,6 +48,8 @@ pub struct Payment {
     /// The application whose contract this belongs to, when the row is a contract movement:
     /// `None` for `/pay` and for a claim's approval.
     pub contract_client_name: Option<String>,
+    pub contract_client_id: Option<String>,
+    pub contract_bot_discord_id: Option<i64>,
     /// Which contract movement this is, when it is one: `Some("lock")` for money a party locked by
     /// approving, `Some("return")` for money the contract gave back, and `None` for a plain
     /// payment. `Some("charge")` is a contract payment received by this wallet;
@@ -366,6 +368,8 @@ async fn query_payments(
                 receiver.discord_id AS receiver_discord_id,
                 currencies.unit,
                 applications.client_name AS client_name,
+                applications.client_id::text AS client_id,
+                bot.discord_id AS bot_discord_id,
                 movement.contract_id IS NOT NULL AS \"contract!\",
                 movement.sender_id IS NULL AS \"sender_unset!\",
                 movement.receiver_id IS NULL AS \"receiver_unset!\"
@@ -393,6 +397,7 @@ async fn query_payments(
            LEFT JOIN users receiver ON receiver.id = movement.receiver_id
            LEFT JOIN contracts ON contracts.id = movement.contract_id
            LEFT JOIN applications ON applications.id = contracts.application_id
+           LEFT JOIN users bot ON bot.application_id = applications.id
           WHERE ($5::text IS NULL OR currencies.unit = $5)
             AND ($4::bigint IS NULL
                  OR sender.discord_id = $4 OR receiver.discord_id = $4)
@@ -442,6 +447,8 @@ async fn query_payments(
                     unit,
                     time: row.time,
                     contract_client_name: row.client_name,
+                    contract_client_id: row.client_id,
+                    contract_bot_discord_id: row.bot_discord_id,
                     event: event(row.contract, row.sender_unset, row.receiver_unset),
                 })
             }

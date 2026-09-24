@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, discord_id FROM users WHERE discord_id = ANY($1)",
+  "query": "SELECT id, discord_id, status FROM users WHERE discord_id = $1 FOR KEY SHARE",
   "describe": {
     "columns": [
       {
@@ -24,17 +24,29 @@
             "name": "discord_id"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "status"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Int8Array"
+        "Int8"
       ]
     },
     "nullable": [
       false,
+      true,
       true
     ]
   },
-  "hash": "685c6768b2f70e54e8809439fb24d95fd76b014015a1cc1f567b2bc6511eaaa6"
+  "hash": "3133a78f84b296f41a4b91867c81ea8584129346bbbd70728564b3ae24c916a4"
 }

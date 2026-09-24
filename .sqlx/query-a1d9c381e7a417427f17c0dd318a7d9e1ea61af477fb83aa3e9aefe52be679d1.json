@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH moved AS (\n             DELETE FROM assets WHERE user_id = $1 RETURNING currency_id, amount\n         )\n         INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)\n         SELECT $2, currency_id, amount, now(), now() FROM moved\n         ON CONFLICT (user_id, currency_id)\n         DO UPDATE SET amount = assets.amount + EXCLUDED.amount, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a1d9c381e7a417427f17c0dd318a7d9e1ea61af477fb83aa3e9aefe52be679d1"
+}

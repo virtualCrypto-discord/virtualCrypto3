@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH moved AS (\n             DELETE FROM mutes WHERE user_id = $1 OR muted_user_id = $1\n             RETURNING user_id, currency_id, muted_user_id, inserted_at\n         )\n         INSERT INTO mutes (user_id, currency_id, muted_user_id, inserted_at)\n         SELECT CASE WHEN user_id = $1 THEN $2 ELSE user_id END, currency_id,\n                CASE WHEN muted_user_id = $1 THEN $2 ELSE muted_user_id END, inserted_at\n           FROM moved\n         ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7d35a80396d3708f6a9aa5f4fd9318cd00fd9388c4b1589e26151c7c60aa5331"
+}

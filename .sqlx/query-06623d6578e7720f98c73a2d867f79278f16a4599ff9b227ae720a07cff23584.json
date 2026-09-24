@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH moved AS (\n             UPDATE claims\n                SET claimant_user_id = CASE WHEN claimant_user_id = $1 THEN $2 ELSE claimant_user_id END,\n                    payer_user_id = CASE WHEN payer_user_id = $1 THEN $2 ELSE payer_user_id END\n              WHERE claimant_user_id = $1 OR payer_user_id = $1\n              RETURNING id, claimant_user_id, payer_user_id\n         )\n         UPDATE claim_metadata m\n            SET claimant_user_id = moved.claimant_user_id,\n                payer_user_id = moved.payer_user_id,\n                owner_user_id = CASE WHEN m.owner_user_id = $1 THEN $2 ELSE m.owner_user_id END\n           FROM moved WHERE m.claim_id = moved.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "06623d6578e7720f98c73a2d867f79278f16a4599ff9b227ae720a07cff23584"
+}

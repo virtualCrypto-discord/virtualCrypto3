@@ -75,9 +75,19 @@ async fn connect_with(
     client_id: &str,
     body: Value,
 ) -> Response {
+    post(
+        vc_api::router(state(pool, discord)),
+        &format!("/applications/{client_id}/connect"),
+        token,
+        body,
+    )
+    .await
+}
+
+async fn post(app: axum::Router, uri: &str, token: &str, body: Value) -> Response {
     let request = axum::http::Request::builder()
         .method("POST")
-        .uri(format!("/applications/{client_id}/connect"))
+        .uri(uri)
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
@@ -86,10 +96,7 @@ async fn connect_with(
         ))
         .expect("request");
 
-    let response = vc_api::router(state(pool, discord))
-        .oneshot(request)
-        .await
-        .expect("router response");
+    let response = app.oneshot(request).await.expect("router response");
     let status = response.status().as_u16();
     let headers = response.headers().clone();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -268,6 +275,59 @@ async fn a_bot_described_with_the_token_is_bound(pool: PgPool) {
     .expect("the account");
 
     assert_eq!(bound, Some(BOT_ID));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_previously_paid_bot_connects_and_can_spend_its_balance(pool: PgPool) {
+    let money = support::setup_money(&pool).await;
+    let application = insert_application(&pool, money.user1, "first connection").await;
+    let account = support::account_of(&pool, application).await;
+    let client_id = client_id_of(&pool, application).await;
+    let owner_token = mint(&pool, 1, &["oauth2.register"]).await;
+    let payer_token = mint(&pool, 2, &["vc.pay"]).await;
+    // A token issued before binding must still address the merged wallet.
+    let app_token = mint_app(&pool, account, &["vc.pay"]).await;
+    let described = token_of(&client_id);
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({"name": "TestGuild"}),
+        &[(BOT_ID, &described)],
+    ));
+    let app = vc_api::router(state(pool.clone(), discord));
+    let paid = post(
+        app.clone(),
+        "/api/v2/users/@me/transactions",
+        &payer_token,
+        json!({"unit": "n", "receiver_discord_id": BOT_ID.to_string(), "amount": "1"}),
+    )
+    .await;
+    assert_eq!(paid.status, 201, "{}", paid.body);
+    let connected = post(
+        app.clone(),
+        &format!("/applications/{client_id}/connect"),
+        &owner_token,
+        json!({"bot_id": BOT_ID.to_string(), "guild_id": money.guild.to_string()}),
+    )
+    .await;
+    assert_eq!(connected.status, 204, "{}", connected.body);
+    let bot = vc_core::user::find_by_discord_id(&pool, BOT_ID)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bot.id, account);
+    assert_eq!(support::get_amount(&pool, BOT_ID, money.currency).await, 1);
+    let returned = post(
+        app,
+        "/api/v2/users/@me/transactions",
+        &app_token,
+        json!({"unit": "n", "receiver_discord_id": money.user2.to_string(), "amount": "1"}),
+    )
+    .await;
+    assert_eq!(returned.status, 201, "{}", returned.body);
+    assert_eq!(support::get_amount(&pool, BOT_ID, money.currency).await, 0);
+    assert_eq!(
+        support::get_amount(&pool, money.user2, money.currency).await,
+        1000
+    );
 }
 
 /// And the token is the address rather than the `client_id` inside it: a description that

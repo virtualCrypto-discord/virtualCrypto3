@@ -262,7 +262,7 @@ fn issued_to_me(issuance: &Issuance) -> String {
 /// A contract's money is the same ledger, so it needs the same line: a lock is money leaving for
 /// a contract and a return is money coming back from one, and both say so in words. What is on
 /// the other side is the contract rather than a person — the escrow is nobody's account — so
-/// naming the contract's application where the mention would go is what makes the line readable.
+/// identifying the contract's application tells the reader where the money was delegated.
 fn paid_line(payment: &Payment, me: i64) -> String {
     let amount = format!("**{}** `{}`", payment.amount, payment.unit);
     let time = format_date_time(payment.time);
@@ -270,15 +270,15 @@ fn paid_line(payment: &Payment, me: i64) -> String {
     match payment.event {
         Some("lock") => format!(
             "契約にロック: {amount} → {} ・ {time}",
-            contract_name(payment)
+            contract_identity(payment)
         ),
         Some("return") => format!(
             "契約から返却: {amount} ← {} ・ {time}",
-            contract_name(payment)
+            contract_identity(payment)
         ),
         Some("charge") => format!(
             "契約から受取: {amount} ← {} ・ {time}",
-            contract_name(payment)
+            contract_identity(payment)
         ),
         _ => match (
             payment.sender_discord_id == Some(me),
@@ -298,12 +298,15 @@ fn paid_line(payment: &Payment, me: i64) -> String {
     }
 }
 
-/// The contract a lock or a return belongs to, named the way a charge's counterparty is: the
-/// application's client name and the word for what it is, or just the word where an old row
-/// names none.
-fn contract_name(payment: &Payment) -> String {
-    match &payment.contract_client_name {
-        Some(name) => format!("{name}（契約）"),
+/// Use the same identity as the approval screen. A later name edit must not
+/// turn a past movement into somebody else's mention or another ledger line.
+fn contract_identity(payment: &Payment) -> String {
+    match &payment.contract_client_id {
+        Some(client_id) => super::application_identity(
+            payment.contract_bot_discord_id,
+            client_id,
+            payment.contract_client_name.as_deref(),
+        ),
         None => "契約".to_owned(),
     }
 }
@@ -329,8 +332,8 @@ fn issued_line(issuance: &Issuance) -> String {
 fn counterparty(discord_id: Option<i64>, payment: &Payment) -> String {
     match discord_id {
         Some(discord_id) => mention(discord_id),
-        None => match &payment.contract_client_name {
-            Some(name) => format!("{name}（契約）"),
+        None => match &payment.contract_client_id {
+            Some(_) => contract_identity(payment),
             None => "アプリケーション".to_owned(),
         },
     }

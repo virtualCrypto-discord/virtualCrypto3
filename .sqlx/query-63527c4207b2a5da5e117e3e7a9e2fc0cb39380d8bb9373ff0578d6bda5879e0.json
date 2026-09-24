@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE currency_given_histories SET receiver_id = $2 WHERE receiver_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "63527c4207b2a5da5e117e3e7a9e2fc0cb39380d8bb9373ff0578d6bda5879e0"
+}

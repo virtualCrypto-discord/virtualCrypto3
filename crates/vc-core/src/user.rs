@@ -36,7 +36,31 @@ pub async fn insert_if_not_exists(
     conn: &mut PgConnection,
     discord_id: i64,
 ) -> std::result::Result<User, sqlx::Error> {
-    let inserted = sqlx::query_as!(
+    loop {
+        if let Some(user) = insert_account_if_missing(conn, discord_id).await? {
+            return Ok(user);
+        }
+        // Keep the resolved id alive until the caller commits its payment,
+        // claim or issuance. A binding may replace it while this read waits;
+        // in that case resolve the Discord id again using a fresh snapshot.
+        if let Some(user) = sqlx::query_as!(
+            User,
+            "SELECT id, discord_id, status FROM users WHERE discord_id = $1 FOR KEY SHARE",
+            discord_id
+        )
+        .fetch_optional(&mut *conn)
+        .await?
+        {
+            return Ok(user);
+        }
+    }
+}
+
+async fn insert_account_if_missing(
+    conn: &mut PgConnection,
+    discord_id: i64,
+) -> std::result::Result<Option<User>, sqlx::Error> {
+    sqlx::query_as!(
         User,
         "INSERT INTO users (discord_id, status, inserted_at, updated_at)
          VALUES ($1, 0, $2, $2)
@@ -45,21 +69,8 @@ pub async fn insert_if_not_exists(
         discord_id,
         crate::model::utc_now()
     )
-    .fetch_optional(&mut *conn)
-    .await?;
-
-    match inserted {
-        Some(user) => Ok(user),
-        None => {
-            sqlx::query_as!(
-                User,
-                "SELECT id, discord_id, status FROM users WHERE discord_id = $1",
-                discord_id
-            )
-            .fetch_one(&mut *conn)
-            .await
-        }
-    }
+    .fetch_optional(conn)
+    .await
 }
 
 /// `UserResolver.resolve_id/1` for a discord id: the account's id, creating the
@@ -87,28 +98,33 @@ pub async fn resolve_ids(
         return Ok(std::collections::HashMap::new());
     }
 
-    let now = crate::model::utc_now();
-    sqlx::query!(
-        "INSERT INTO users (discord_id, status, inserted_at, updated_at)
-         SELECT t.discord_id, 0, $2, $2 FROM UNNEST($1::bigint[]) AS t(discord_id)
-         ON CONFLICT (discord_id) DO NOTHING",
-        discord_ids,
-        now
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    let rows = sqlx::query!(
-        "SELECT id, discord_id FROM users WHERE discord_id = ANY($1)",
-        discord_ids
-    )
-    .fetch_all(&mut *conn)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| row.discord_id.map(|discord_id| (discord_id, row.id)))
-        .collect())
+    loop {
+        let now = crate::model::utc_now();
+        sqlx::query!(
+            "INSERT INTO users (discord_id, status, inserted_at, updated_at)
+             SELECT t.discord_id, 0, $2, $2 FROM UNNEST($1::bigint[]) AS t(discord_id)
+             ON CONFLICT (discord_id) DO NOTHING",
+            discord_ids,
+            now
+        )
+        .execute(&mut *conn)
+        .await?;
+        let rows = sqlx::query!(
+            "SELECT id, discord_id FROM users WHERE discord_id = ANY($1) ORDER BY id FOR KEY SHARE",
+            discord_ids
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        let resolved: std::collections::HashMap<_, _> = rows
+            .into_iter()
+            .filter_map(|row| row.discord_id.map(|discord_id| (discord_id, row.id)))
+            .collect();
+        if discord_ids.iter().all(|id| resolved.contains_key(id)) {
+            return Ok(resolved);
+        }
+        // A binding deleted or reassigned a row while the SELECT waited.
+        // Resolve again, recreating the old bot's account after a rebind.
+    }
 }
 
 pub async fn find_discord_auth(pool: &PgPool, discord_user_id: i64) -> Result<Option<DiscordAuth>> {
@@ -235,8 +251,7 @@ pub async fn application_id(
 /// What binding a bot to an application ran into.
 #[derive(Debug)]
 pub enum BindError {
-    /// The bot is already another application's. `users.discord_id` is unique, so
-    /// this is the database saying so rather than a check of ours.
+    /// The bot already belongs to another application.
     Taken,
     Database(sqlx::Error),
 }
@@ -253,36 +268,190 @@ impl std::fmt::Display for BindError {
 /// `ConnectUser.set_discord_user_id/2`: an application's account, and the bot that
 /// speaks for it.
 ///
-/// The account registration created has no `discord_id`; this is what gives it one,
-/// once Discord has confirmed the bot is in the guild and carries the application's
-/// uuid in its integration description.
-///
-/// **The write is attempted rather than checked.** `users_discord_id_index` is unique,
-/// so the database is what decides whether a bot is already taken — and asking first
-/// would be a check that another request can pass between it and the write. Which is
-/// also why the unique violation is a named outcome here: the Elixir has
-/// `:conflicted_user_id` for exactly this, and it is a case with a message of its own
-/// rather than a database error.
+/// Payments and claims can create the bot's ordinary account before its owner
+/// connects it. Merge that account into the application's existing account, whose
+/// id must remain stable for already-issued application tokens. Lock both accounts
+/// in transfer order; all balances and references move in the same transaction.
 pub async fn bind_bot(
     pool: &sqlx::PgPool,
     application_user_id: i32,
     bot_id: i64,
 ) -> std::result::Result<(), BindError> {
-    let written = sqlx::query!(
-        "UPDATE users SET discord_id = $1, updated_at = now() WHERE id = $2",
-        bot_id,
-        application_user_id
-    )
-    .execute(pool)
-    .await;
-
-    match written {
-        Ok(_) => Ok(()),
-        Err(sqlx::Error::Database(error))
-            if error.constraint() == Some("users_discord_id_index") =>
+    loop {
+        let mut tx = pool.begin().await.map_err(BindError::Database)?;
+        // Materialize an absent account too, so concurrent first connections have
+        // an existing row to arbitrate over rather than racing the final UPDATE.
+        insert_account_if_missing(&mut tx, bot_id)
+            .await
+            .map_err(BindError::Database)?;
+        let accounts = sqlx::query!(
+            "SELECT id, discord_id, application_id, contract_id FROM users
+              WHERE id = $1 OR discord_id = $2 ORDER BY id FOR UPDATE NOWAIT",
+            application_user_id,
+            bot_id
+        )
+        .fetch_all(&mut *tx)
+        .await;
+        let accounts = match accounts {
+            Ok(accounts) => accounts,
+            Err(error) if lock_unavailable(&error) => {
+                // A writer can already hold a shared reference to one account
+                // and need the other's transfer lock. Release both and retry
+                // rather than holding the other half while waiting for it.
+                tx.rollback().await.map_err(BindError::Database)?;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                continue;
+            }
+            Err(error) => return Err(BindError::Database(error)),
+        };
+        if !accounts
+            .iter()
+            .any(|account| account.id == application_user_id && account.application_id.is_some())
         {
-            Err(BindError::Taken)
+            return Err(BindError::Database(sqlx::Error::RowNotFound));
         }
-        Err(error) => Err(BindError::Database(error)),
+        let Some(source) = accounts
+            .iter()
+            .find(|account| account.discord_id == Some(bot_id))
+        else {
+            // Another connection merged the source while we waited for its lock.
+            // A fresh transaction sees the account that now owns this Discord id.
+            tx.rollback().await.map_err(BindError::Database)?;
+            continue;
+        };
+        if source.id != application_user_id {
+            if source.application_id.is_some() || source.contract_id.is_some() {
+                return Err(BindError::Taken);
+            }
+            match merge_bot_account(&mut tx, application_user_id, source.id).await {
+                Ok(()) => {}
+                Err(error) if lock_unavailable(&error) => {
+                    tx.rollback().await.map_err(BindError::Database)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
+                }
+                Err(error) => return Err(BindError::Database(error)),
+            }
+        }
+        sqlx::query!(
+            "UPDATE users SET discord_id = $1, updated_at = now() WHERE id = $2",
+            bot_id,
+            application_user_id
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(BindError::Database)?;
+        tx.commit().await.map_err(BindError::Database)?;
+        return Ok(());
     }
+}
+
+fn lock_unavailable(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|error| error.code().as_deref() == Some("55P03"))
+}
+
+async fn merge_bot_account(
+    conn: &mut PgConnection,
+    destination: i32,
+    source: i32,
+) -> std::result::Result<(), sqlx::Error> {
+    // Issuance locks a currency before resolving its receiver, and claim
+    // transitions lock the claim before transferring money. Do not wait for
+    // either while holding the account locks they may still need.
+    sqlx::query!(
+        "SELECT id FROM currencies WHERE id IN
+             (SELECT currency_id FROM assets WHERE user_id IN ($1, $2))
+         ORDER BY id FOR KEY SHARE NOWAIT",
+        i64::from(source),
+        i64::from(destination)
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "SELECT id FROM claims WHERE claimant_user_id = $1 OR payer_user_id = $1
+         ORDER BY id FOR UPDATE NOWAIT",
+        i64::from(source)
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "WITH moved AS (
+             DELETE FROM assets WHERE user_id = $1 RETURNING currency_id, amount
+         )
+         INSERT INTO assets (user_id, currency_id, amount, inserted_at, updated_at)
+         SELECT $2, currency_id, amount, now(), now() FROM moved
+         ON CONFLICT (user_id, currency_id)
+         DO UPDATE SET amount = assets.amount + EXCLUDED.amount, updated_at = now()",
+        i64::from(source),
+        i64::from(destination)
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "UPDATE currency_given_histories SET receiver_id = $2 WHERE receiver_id = $1",
+        i64::from(source),
+        i64::from(destination)
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "UPDATE currency_payment_histories
+            SET sender_id = CASE WHEN sender_id = $1 THEN $2 ELSE sender_id END,
+                receiver_id = CASE WHEN receiver_id = $1 THEN $2 ELSE receiver_id END
+          WHERE sender_id = $1 OR receiver_id = $1",
+        i64::from(source),
+        i64::from(destination)
+    )
+    .execute(&mut *conn)
+    .await?;
+    // The composite foreign key is immediate: move the claim and its metadata
+    // together in one statement so every reference is valid at statement end.
+    sqlx::query!(
+        "WITH moved AS (
+             UPDATE claims
+                SET claimant_user_id = CASE WHEN claimant_user_id = $1 THEN $2 ELSE claimant_user_id END,
+                    payer_user_id = CASE WHEN payer_user_id = $1 THEN $2 ELSE payer_user_id END
+              WHERE claimant_user_id = $1 OR payer_user_id = $1
+              RETURNING id, claimant_user_id, payer_user_id
+         )
+         UPDATE claim_metadata m
+            SET claimant_user_id = moved.claimant_user_id,
+                payer_user_id = moved.payer_user_id,
+                owner_user_id = CASE WHEN m.owner_user_id = $1 THEN $2 ELSE m.owner_user_id END
+           FROM moved WHERE m.claim_id = moved.id",
+        i64::from(source),
+        i64::from(destination)
+    )
+    .execute(&mut *conn)
+    .await?;
+    // Preserve incoming mutes, as well as any preferences of the old account.
+    // If both accounts were muted, the resulting preference is still one mute.
+    sqlx::query!(
+        "WITH moved AS (
+             DELETE FROM mutes WHERE user_id = $1 OR muted_user_id = $1
+             RETURNING user_id, currency_id, muted_user_id, inserted_at
+         )
+         INSERT INTO mutes (user_id, currency_id, muted_user_id, inserted_at)
+         SELECT CASE WHEN user_id = $1 THEN $2 ELSE user_id END, currency_id,
+                CASE WHEN muted_user_id = $1 THEN $2 ELSE muted_user_id END, inserted_at
+           FROM moved
+         ON CONFLICT DO NOTHING",
+        source,
+        destination
+    )
+    .execute(&mut *conn)
+    .await?;
+    // These keys belonged to the retired account, not to the application.
+    sqlx::query!(
+        "DELETE FROM payments_idempotency WHERE user_id = $1",
+        i64::from(source)
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!("DELETE FROM users WHERE id = $1", source)
+        .execute(conn)
+        .await?;
+    Ok(())
 }

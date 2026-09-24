@@ -100,7 +100,7 @@ pub fn mention(id: impl std::fmt::Display) -> String {
     format!("<@{id}>")
 }
 
-/// The identity shown for grants, contracts, and an application's claims.
+/// The identity shown for grants, contracts, claims, and transaction history.
 pub(super) fn application_identity(
     bot_discord_id: Option<i64>,
     client_id: &str,

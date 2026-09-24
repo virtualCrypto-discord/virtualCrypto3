@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE currency_payment_histories\n            SET sender_id = CASE WHEN sender_id = $1 THEN $2 ELSE sender_id END,\n                receiver_id = CASE WHEN receiver_id = $1 THEN $2 ELSE receiver_id END\n          WHERE sender_id = $1 OR receiver_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b14993ffe8a11724d135ca43e59cda38a99fcdf8f933a283ffb8fa8691e39768"
+}

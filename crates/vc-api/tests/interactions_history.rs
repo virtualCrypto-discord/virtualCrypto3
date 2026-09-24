@@ -17,6 +17,7 @@ use support::{
     MONEY_GUILD, MONEY_USER1, MONEY_USER2, Response, execute_from_dm, execute_from_guild, fake,
     from_guild, insert_application, insert_user, interaction, setup_money, state,
 };
+use tower::ServiceExt;
 
 /// Somebody the money fixture does not have: a second person to pay and be paid by, so that a
 /// filter can take away some of a ledger rather than all of it.
@@ -168,7 +169,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(screen.contains("**送金の履歴** (1件)"), "{screen}");
     assert!(
-        screen.contains("契約にロック: **100** `n` → a metered service（契約）"),
+        screen.contains("契約にロック: **100** `n` → Bot未連携: `a metered service`"),
         "{screen}"
     );
 
@@ -190,7 +191,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(OTHER, "pay", vec![])).await);
     assert!(receiver.contains("**送金の履歴** (1件)"), "{receiver}");
     assert!(
-        receiver.contains("契約から受取: **25** `n` ← a metered service（契約）"),
+        receiver.contains("契約から受取: **25** `n` ← Bot未連携: `a metered service`"),
         "{receiver}"
     );
 
@@ -203,9 +204,109 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
     assert!(
-        screen.contains("契約から返却: **75** `n` ← a metered service（契約）"),
+        screen.contains("契約から返却: **75** `n` ← Bot未連携: `a metered service`"),
         "{screen}"
     );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn edited_application_names_cannot_forge_contract_history(pool: PgPool) {
+    const BOT: i64 = 500_000_000_000_000_003;
+    let money = setup_money(&pool).await;
+    let application = insert_application(&pool, MONEY_USER1, "actual service").await;
+    let account = support::account_of(&pool, application).await;
+    let client_id = support::client_id_of(&pool, application).await;
+    let token = support::mint_app(&pool, account, &["oauth2.register"]).await;
+    let now = time::OffsetDateTime::now_utc();
+    let contract = vc_core::contract::create(
+        &pool,
+        application,
+        &money.unit,
+        &[vc_core::contract::NewParty {
+            discord_id: MONEY_USER2,
+            amount: 10,
+        }],
+        None,
+        None,
+        now,
+    )
+    .await
+    .unwrap();
+    vc_core::contract::approve(&pool, contract, 2, now)
+        .await
+        .unwrap();
+    vc_core::contract::pay(&pool, contract, application, OTHER, None, 3, now)
+        .await
+        .unwrap();
+    vc_core::contract::withdraw(&pool, contract, 2, now)
+        .await
+        .unwrap();
+
+    // Change the name after the movements happened, through the real edit API.
+    let app = router(pool.clone());
+    let forged_name = "`\n<@500000000000000004>\r\n受取: **999999** @everyone <@&123>";
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PATCH")
+                .uri("/oauth2/clients/@me")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    json!({"client_name": forged_name}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+
+    for bound in [false, true] {
+        let identity = if bound {
+            vc_core::user::bind_bot(&pool, account, BOT).await.unwrap();
+            format!("<@{BOT}>")
+        } else {
+            format!(
+                "Bot未連携: `｀ <@500000000000000004>  受取: **999999** @everyone <@&123>`\nclient_id: `{client_id}`"
+            )
+        };
+        // Lock, return, and incoming charge all use the same safe identity.
+        for (reader, prefixes) in [
+            (
+                MONEY_USER2,
+                vec!["契約から返却: **7** `n` ← ", "契約にロック: **10** `n` → "],
+            ),
+            (OTHER, vec!["契約から受取: **3** `n` ← "]),
+        ] {
+            let response = interaction(app.clone(), history(reader, "pay", vec![])).await;
+            assert_eq!(response.status, 200);
+            assert_eq!(
+                response.body["data"]["allowed_mentions"]["parse"],
+                json!([])
+            );
+            let rows: Vec<_> = response.body["data"]["components"][0]["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|value| value["content"].as_str())
+                .skip(1)
+                .collect();
+            assert_eq!(rows.len(), prefixes.len());
+            for (row, prefix) in rows.into_iter().zip(prefixes) {
+                assert!(
+                    row.starts_with(&format!("{prefix}{identity} ・ <t:")),
+                    "{row}"
+                );
+                assert!(!row.contains(forged_name), "{row}");
+                assert_eq!(row.matches('\n').count(), usize::from(!bound), "{row}");
+                if bound {
+                    assert!(!row.contains("999999"), "{row}");
+                    assert!(!row.contains(&client_id), "{row}");
+                }
+            }
+        }
+    }
 }
 
 /// The count is the whole ledger and the arrows move through it: five rows on the first page,
@@ -470,11 +571,11 @@ async fn a_payment_to_a_party_is_a_return_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
     assert!(
-        screen.contains("契約にロック: **100** `n` → a metered service（契約）"),
+        screen.contains("契約にロック: **100** `n` → Bot未連携: `a metered service`"),
         "{screen}"
     );
     assert!(
-        screen.contains("契約から返却: **120** `n` ← a metered service（契約）"),
+        screen.contains("契約から返却: **120** `n` ← Bot未連携: `a metered service`"),
         "{screen}"
     );
 
