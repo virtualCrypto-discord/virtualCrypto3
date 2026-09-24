@@ -20,7 +20,7 @@ use vc_auth::AuthUser;
 
 use vc_core::application::check_application_type as check_application_type_again;
 use vc_core::application::{
-    Changes, MetadataError, NewApplication, check_application_type, check_event_types,
+    Changes, MetadataError, NewApplication, TextField, check_application_type, check_event_types,
     check_grant_types, check_logo_uri, check_response_types, check_slug, check_url,
 };
 
@@ -363,8 +363,21 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
     let application_type = body.application_type.unwrap_or_else(|| "web".to_owned());
     check_application_type(&application_type).map_err(metadata)?;
 
-    // `client_name` is taken as it comes: the Elixir's validator for it is
-    // `&{:ok, &1}`, which is to say there is none.
+    for (field, value) in [
+        (TextField::ClientName, body.client_name.as_deref()),
+        (TextField::ClientUri, body.client_uri.as_deref()),
+        (TextField::LogoUri, body.logo_uri.as_deref()),
+        (TextField::WebhookUrl, body.webhook_url.as_deref()),
+        (
+            TextField::SupportInviteSlug,
+            body.discord_support_server_invite_slug.as_deref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            field.check(value).map_err(metadata)?;
+        }
+    }
+
     if let Some(client_uri) = body.client_uri.as_deref() {
         check_url(client_uri, MetadataError::ClientUri).map_err(metadata)?;
     }
@@ -552,7 +565,7 @@ fn validate_redirects(uris: &[String]) -> Result<(), Box<Refusal>> {
                 RedirectUriError::Scheme => "redirect_uri_scheme_must_be_http_or_https",
                 RedirectUriError::TooLong => "redirect_uri_must_be_at_most_255_characters",
                 RedirectUriError::ListTooLong => {
-                    "redirect_uris_must_be_at_most_2000_characters_including_newlines"
+                    "redirect_uris_must_be_at_most_1000_characters_including_newlines"
                 }
             },
         )
@@ -822,7 +835,7 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
         }
     };
 
-    let changes = Changes {
+    let mut changes = Changes {
         rotate_client_secret,
         client_name: text(body, "client_name"),
         client_uri: text(body, "client_uri"),
@@ -836,6 +849,21 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
         subscribed_events: events(body),
     };
 
+    for (field, value) in [
+        (TextField::ClientName, &changes.client_name),
+        (TextField::ClientUri, &changes.client_uri),
+        (TextField::LogoUri, &changes.logo_uri),
+        (TextField::WebhookUrl, &changes.webhook_url),
+        (
+            TextField::SupportInviteSlug,
+            &changes.discord_support_server_invite_slug,
+        ),
+    ] {
+        if let Some(Some(value)) = value {
+            field.check(value).map_err(metadata)?;
+        }
+    }
+
     // A value that is not a number is not a value the service knows: the menu
     // sends what it was given, so a request naming one is refused here rather
     // than stored as if it had named nothing.
@@ -844,7 +872,7 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
     }
 
     if let Some(types) = changes.subscribed_events.as_deref() {
-        check_event_types(types).map_err(metadata)?;
+        changes.subscribed_events = Some(check_event_types(types).map_err(metadata)?);
     }
 
     // The same rules registration applies, to the fields that are here: an edit is
@@ -870,11 +898,11 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
     }
 
     if let Some(types) = changes.grant_types.as_deref() {
-        check_grant_types(types).map_err(metadata)?;
+        changes.grant_types = Some(check_grant_types(types).map_err(metadata)?);
     }
 
     if let Some(types) = changes.response_types.as_deref() {
-        check_response_types(types).map_err(metadata)?;
+        changes.response_types = Some(check_response_types(types).map_err(metadata)?);
     }
 
     if let Some(uris) = changes.redirect_uris.as_deref() {

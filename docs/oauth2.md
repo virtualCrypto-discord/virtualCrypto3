@@ -376,6 +376,38 @@ the endpoint exists.
 
 ## The metadata validator, rule by rule
 
+Registration and PATCH enforce the same text limits, also used by the Discord
+settings forms. Counts are Unicode characters, not UTF-8 bytes:
+
+| Field | Maximum characters |
+| --- | --- |
+| `client_name` | 100 |
+| `client_uri` | 255 |
+| `logo_uri` | 255, including a `data:` URI's prefix and payload |
+| `webhook_url` | 512 |
+| `discord_support_server_invite_slug` | 100 |
+| Each redirect URI | 255 |
+| All redirect URIs | 1,000, including one newline between entries |
+
+An overlong text field returns 400 `invalid_client_metadata` with
+`<field>_must_be_at_most_<limit>_characters`. Redirect length errors use
+`invalid_redirect_uri`; the list error is
+`redirect_uris_must_be_at_most_1000_characters_including_newlines`.
+Validation runs before webhook verification or writes, so a rejected update
+preserves all settings and the client secret.
+
+These limits budget for the entire Discord settings message. The regression
+test fills every field, includes every menu value, reserves a 255-character
+secret and a 512-character bot connection URL, and uses many short redirect
+URIs to maximize display separators. All Text Displays together use 3,862
+characters, below Discord's 4,000-character limit, without truncation.
+PATCH stores `grant_types`, `response_types` and `subscribed_events` as sets,
+like registration, so repetitions cannot increase the display length.
+Existing records are not truncated or rewritten by this change; imported
+settings above these limits need to be adjusted through PATCH.
+
+The original metadata rules below still apply after these length checks:
+
 `Application.Metadata.Validator` is where registration decides what it will
 accept. Every field except `application_type` accepts `nil` and means "not
 given", and every refusal is an `invalid_client_metadata` with a description that

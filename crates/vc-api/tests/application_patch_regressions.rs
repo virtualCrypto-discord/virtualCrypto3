@@ -274,10 +274,10 @@ fn registration_and_edits_share_redirect_length_limits() {
     assert_eq!(uri(255).chars().count(), 255);
     accepted(vec![uri(255)], true);
     accepted(vec![uri(256)], false);
-    let mut list = vec![uri(249); 8];
-    list[7] = uri(250);
-    assert_eq!(list.join("\n").chars().count(), 2000);
+    let mut list = vec![uri(249); 4];
+    list[3] = uri(250);
+    assert_eq!(list.join("\n").chars().count(), 1000);
     accepted(list.clone(), true);
-    list[7].push('a');
+    list[3].push('a');
     accepted(list, false);
 }

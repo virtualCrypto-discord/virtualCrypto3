@@ -22,7 +22,7 @@ use crate::routes::oauth2_clients::{
     Registration, apply, changes, create, details, render, validated,
 };
 use crate::state::AppState;
-use vc_core::application::NewApplication;
+use vc_core::application::{NewApplication, TextField};
 
 /// The subcommand that was run, and its own options if it has any.
 ///
@@ -613,7 +613,7 @@ async fn edit_field(
             "クライアント名",
             found.client_name.as_deref(),
             crate::components::TextInputStyle::Short,
-            None,
+            Some(TextField::ClientName.max_chars() as u64),
         ),
         "redirect_uris" => (
             "リダイレクト URI",
@@ -625,25 +625,25 @@ async fn edit_field(
             "クライアント URI",
             found.client_uri.as_deref(),
             crate::components::TextInputStyle::Short,
-            None,
+            Some(TextField::ClientUri.max_chars() as u64),
         ),
         "logo_uri" => (
             "ロゴ URI",
             found.logo_uri.as_deref(),
             crate::components::TextInputStyle::Short,
-            None,
+            Some(TextField::LogoUri.max_chars() as u64),
         ),
         "webhook_url" => (
             "webhook URL",
             found.webhook_url.as_deref(),
             crate::components::TextInputStyle::Short,
-            None,
+            Some(TextField::WebhookUrl.max_chars() as u64),
         ),
         "discord_support_server_invite_slug" => (
             "サポートサーバーの招待 slug",
             found.discord_support_server_invite_slug.as_deref(),
             crate::components::TextInputStyle::Short,
-            None,
+            Some(TextField::SupportInviteSlug.max_chars() as u64),
         ),
         // A field with no form, which means a button this module did not build.
         _ => return Err(CommandError::Unknown),

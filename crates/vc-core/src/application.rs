@@ -265,7 +265,7 @@ fn check_set(scopes: &[String], allowed: &[&str]) -> Result<(), ScopeError> {
 /// application may register none at all is a separate question, asked where the
 /// payload is read.
 pub const REDIRECT_URI_MAX_CHARS: usize = 255;
-pub const REDIRECT_URIS_MAX_CHARS: usize = 2000;
+pub const REDIRECT_URIS_MAX_CHARS: usize = 1000;
 
 pub fn check_redirect_uris(uris: &[String]) -> Result<(), RedirectUriError> {
     let mut total = uris.len().saturating_sub(1);
@@ -529,9 +529,50 @@ pub async fn record_webhook_verification(
     .map(|_| ())
 }
 
+/// The free-text settings share these limits across registration, updates and
+/// Discord inputs. Together they leave room for the labels, secret and bot
+/// connection instructions within a 4,000-character settings message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextField {
+    ClientName,
+    ClientUri,
+    LogoUri,
+    WebhookUrl,
+    SupportInviteSlug,
+}
+
+impl TextField {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ClientName => "client_name",
+            Self::ClientUri => "client_uri",
+            Self::LogoUri => "logo_uri",
+            Self::WebhookUrl => "webhook_url",
+            Self::SupportInviteSlug => "discord_support_server_invite_slug",
+        }
+    }
+
+    pub fn max_chars(self) -> usize {
+        match self {
+            Self::ClientName | Self::SupportInviteSlug => 100,
+            Self::ClientUri | Self::LogoUri => 255,
+            Self::WebhookUrl => 512,
+        }
+    }
+
+    pub fn check(self, value: &str) -> Result<(), MetadataError> {
+        if value.chars().count() > self.max_chars() {
+            Err(MetadataError::TextLength(self))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Why a piece of client metadata was refused, in the API's own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataError {
+    TextLength(TextField),
     ResponseTypes,
     GrantTypes,
     ClientUri,
@@ -552,8 +593,16 @@ impl MetadataError {
     /// The description a client is given, which is the field's name and its rule
     /// run together — the Elixir's wording, kept as it is because a client may be
     /// matching on it.
-    pub fn description(self) -> &'static str {
+    pub fn description(self) -> std::borrow::Cow<'static, str> {
         match self {
+            MetadataError::TextLength(field) => {
+                return format!(
+                    "{}_must_be_at_most_{}_characters",
+                    field.name(),
+                    field.max_chars()
+                )
+                .into();
+            }
             MetadataError::ResponseTypes => "response_types_must_constructed_from_code",
             MetadataError::GrantTypes => {
                 "grant_types_must_constructed_from_authorization_code_or_refresh_token"
@@ -569,6 +618,7 @@ impl MetadataError {
             MetadataError::ApplicationType => "application_type_must_be_web_or_native",
             MetadataError::Events => "subscribed_events_must_be_known_event_types",
         }
+        .into()
     }
 }
 
