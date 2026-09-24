@@ -48,6 +48,16 @@ async fn dispatch(state: &AppState, payload: &Value, id: &str) -> Result<Respons
     .rows_affected();
 
     if claimed == 0 {
+        // Discord retries on its own, and a receipt still pending answers 409 —
+        // so one duplicate is ordinary traffic. What is warned about is the
+        // repetition, which the signal's own threshold decides: replay is
+        // somebody resending what was already accepted, not a client's manners.
+        state.monitor().observe(
+            crate::security::Signal::ReplayDuplicate,
+            "interaction-receipts",
+            "an interaction id was already received",
+        );
+
         let receipt = sqlx::query!(
             "SELECT status, content_type, body FROM discord_interactions WHERE id = $1",
             id

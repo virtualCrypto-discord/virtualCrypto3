@@ -10,6 +10,7 @@ use crate::discord::DiscordApi;
 use crate::notification::Transport;
 use crate::rate_limit::RateLimiter;
 use crate::rate_limit::VerificationLimiter;
+use crate::security::BehaviorMonitor;
 
 /// The public URLs the command responses link to, plus the logo their screens show.
 #[derive(Clone, Debug)]
@@ -74,12 +75,20 @@ pub struct AppState {
     discord: Arc<dyn DiscordApi>,
     outbound: Outbound,
     limiter: Arc<RateLimiter>,
+    /// What suspicious behaviour looks like from inside this process: counted
+    /// per subject, warned about once per window. Beside the limiter rather
+    /// than in it, because the limiter refuses and this only watches.
+    monitor: Arc<BehaviorMonitor>,
     /// This application's commands and their ids, which a command mention is written with.
     /// Read from Discord once and remembered; see [`AppState::command_ids`].
     command_ids: Arc<CommandIds>,
 }
 
 impl AppState {
+    /// Eight things, because that is what the service is made of; grouping any
+    /// of them would move a decision about *one* of them (a secret, a transport,
+    /// a limiter) behind a struct a caller must assemble anyway.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         signing: Signing,
@@ -88,6 +97,7 @@ impl AppState {
         discord: Arc<dyn DiscordApi>,
         outbound: Outbound,
         limiter: Arc<RateLimiter>,
+        monitor: Arc<BehaviorMonitor>,
     ) -> Self {
         Self {
             pool,
@@ -97,6 +107,7 @@ impl AppState {
             discord,
             outbound,
             limiter,
+            monitor,
             command_ids: Arc::new(CommandIds::default()),
         }
     }
@@ -171,6 +182,12 @@ impl AppState {
     /// proved to be.
     pub fn limiter(&self) -> &RateLimiter {
         &self.limiter
+    }
+
+    /// What this process has seen that is worth an operator's attention, counted
+    /// and warned about per window. Observing only: nothing here refuses.
+    pub fn monitor(&self) -> &BehaviorMonitor {
+        &self.monitor
     }
 
     /// The claim-update dispatcher, which a test replaces with its own sink.

@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -75,6 +76,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vc_api::notification::WebhookNotifier::new(pool.clone(), Arc::clone(&transport)),
     );
 
+    // Watching for behaviour worth a warning: how long a subject's counts are
+    // held, the tighter observation-only window that fires before a 429, and
+    // where the warnings go besides the log. Nothing here refuses a request.
+    let monitor = Arc::new(vc_api::security::BehaviorMonitor::new(
+        Duration::from_secs(
+            std::env::var("VCRYPTO_SECURITY_WINDOW_SECS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(300),
+        ),
+        std::env::var("VCRYPTO_WATCH_LIMIT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(30),
+        Duration::from_secs(
+            std::env::var("VCRYPTO_WATCH_WINDOW_SECS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(10),
+        ),
+        std::env::var("VCRYPTO_REQUEST_SURGE_PER_MIN")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(3000),
+        std::env::var("VCRYPTO_SECURITY_WEBHOOK_URL").ok(),
+    ));
+
     let state = AppState::new(
         pool,
         vc_api::state::Signing::new(jwt_secret, session_secret, secure_cookies),
@@ -104,7 +132,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(vc_api::rate_limit::DEFAULT_LIMIT),
             vc_api::rate_limit::DEFAULT_WINDOW,
         )),
+        Arc::clone(&monitor),
     );
+
+    // The sweep that ends each observation window and sends whatever it owes.
+    // Its own task rather than the scheduler's, so `VCRYPTO_SETTLE_INTERVAL_SECS=0`
+    // — which silences contract settlement — does not silence these warnings.
+    tokio::spawn(monitor.run());
 
     // The clock, which the state does not carry because it is not asked anything:
     // a contract whose deadline has passed is settled here, so the parties' money

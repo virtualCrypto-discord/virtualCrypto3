@@ -693,11 +693,33 @@ pub async fn create(
         // requester spending all of it.
         if let Some((too_soon, remaining)) = state.handshake_limiter().refuse(&subject.to_string())
         {
+            state.monitor().observe(
+                crate::security::Signal::HandshakeRefused,
+                &format!("subject:{subject}"),
+                match too_soon {
+                    TooSoon::Seconds3 => "the three-second window refused",
+                    TooSoon::Hour => "the hour's window refused",
+                    TooSoon::Day => "the day's window refused",
+                },
+            );
             return Err(Box::new(rate_limited(too_soon, remaining)));
         }
 
         let (handshake, through_proxy) =
             crate::notification::check_webhook(state, webhook_url, &private_key).await;
+
+        // A webhook that answered wrongly — one that verifies nothing, or
+        // verifies the wrong things — is the application's to fix, and an
+        // operator hearing about a fleet of them is hearing about a pattern.
+        // Unreachable is not counted here: that is this service's own way of
+        // reaching applications, not the application's behaviour.
+        if handshake == Handshake::Failed {
+            state.monitor().observe(
+                crate::security::Signal::WebhookUnverified,
+                &format!("subject:{subject}"),
+                "the registration's webhook did not verify the handshake",
+            );
+        }
 
         if handshake != Handshake::Passed {
             return Err(unverified(handshake, through_proxy));

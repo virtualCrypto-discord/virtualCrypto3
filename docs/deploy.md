@@ -47,7 +47,12 @@ port is the first to set:
 
 - `RATE_LIMIT_PER_MINUTE`
 - `SECURE_COOKIES`
+- `VCRYPTO_REQUEST_SURGE_PER_MIN`
+- `VCRYPTO_SECURITY_WEBHOOK_URL`
+- `VCRYPTO_SECURITY_WINDOW_SECS`
 - `VCRYPTO_SETTLE_INTERVAL_SECS`
+- `VCRYPTO_WATCH_LIMIT`
+- `VCRYPTO_WATCH_WINDOW_SECS`
 - `WEBHOOK_PROXY_URL`
 - `WEB_ROOT`
 - `VCRYPTO_ENV` (`production` by default; `development` is the only other value)
@@ -62,6 +67,22 @@ of this project's, routed by its Worker to `vcrypto-webhook-emitter.sumidora.com
 every environment (see `wrangler.toml` in
 `virtualCrypto-discord/webhook-emitter-cf-workers`), so it defaults like
 `VCRYPTO_SITE_URL` does.
+
+The `VCRYPTO_SECURITY_*` and `VCRYPTO_WATCH_*` entries are the behaviour warnings:
+this service watches the refusals it already makes (an `invalid_token`, a failed
+`same_origin` check, a signature Discord would not have signed, a 429 against the
+loose limit) plus its own error rate and request volume, counts them per subject for
+`VCRYPTO_SECURITY_WINDOW_SECS` (default 300) and warns once per subject per window.
+Warnings always go to the log under the tracing target `vc_security`, so
+`RUST_LOG=vc_security=warn` collects exactly these; `VCRYPTO_SECURITY_WEBHOOK_URL`,
+when set, is where they are also POSTed — one line for a Discord webhook URL, one
+line for a Slack one, structured JSON for anything else. Unset (or blank), it is the
+log alone. `VCRYPTO_WATCH_LIMIT` (default 30) over `VCRYPTO_WATCH_WINDOW_SECS`
+(default 10) is a second, tighter window held beside the loose limit purely to notice
+a burst *before* it becomes a 429; `VCRYPTO_WATCH_LIMIT=0` disables it.
+`VCRYPTO_REQUEST_SURGE_PER_MIN` (default 3000) is what total request volume has to
+exceed before that is warned about; zero disables it. None of this refuses a
+request — it only tells the operator.
 
 `VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` are the mTLS client the
 webhook handshake goes through — the Cloudflare Worker in front of an application's

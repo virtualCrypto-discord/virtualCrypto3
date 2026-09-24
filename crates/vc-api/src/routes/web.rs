@@ -111,6 +111,12 @@ pub struct CallbackQuery {
 fn refuse(state: &AppState, why: &str) -> Response {
     tracing::info!(why, "refusing a Discord callback");
 
+    state.monitor().observe(
+        crate::security::Signal::CallbackRefused,
+        "discord-callback",
+        why,
+    );
+
     (
         [(SET_COOKIE, clear_cookie(state.secure_cookies()))],
         Redirect::to("/"),

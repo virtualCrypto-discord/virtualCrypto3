@@ -19,11 +19,19 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
     let timestamp = single_header(&headers, "x-signature-timestamp");
 
     let (Some(signature), Some(timestamp)) = (signature, timestamp) else {
-        return text(StatusCode::UNAUTHORIZED, "invalid request signature");
+        return refused(
+            &state,
+            "the signature headers were not both present",
+            "invalid request signature",
+        );
     };
 
     if !crate::discord::verify_signature(state.discord_public_key(), signature, timestamp, &body) {
-        return text(StatusCode::UNAUTHORIZED, "invalid request signature");
+        return refused(
+            &state,
+            "the signature is not Discord's",
+            "invalid request signature",
+        );
     }
 
     // Receipts are purged after 24 hours. Accept signed requests for only five
@@ -34,7 +42,11 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         .parse::<i64>()
         .is_ok_and(|signed_at| (now - 300..=now + 30).contains(&signed_at))
     {
-        return text(StatusCode::UNAUTHORIZED, "expired request signature");
+        return refused(
+            &state,
+            "the signature's timestamp is outside the window",
+            "expired request signature",
+        );
     }
 
     // An unparsable body is a `Type Not Found` rather than a signature failure:
@@ -44,14 +56,20 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
     };
 
     // A loose per-user allowance, held against the authenticated Discord user.
-    if let Some(user) = crate::command::get_user(&payload)
-        && let Err(remaining) = state.limiter().allow(&format!("discord:{user}"))
-    {
-        let mut response = text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
-        response
-            .headers_mut()
-            .insert(RETRY_AFTER, crate::rate_limit::retry_after(remaining));
-        return response;
+    if let Some(user) = crate::command::get_user(&payload) {
+        state.monitor().watch(&format!("discord:{user}"));
+        if let Err(remaining) = state.limiter().allow(&format!("discord:{user}")) {
+            state.monitor().observe(
+                crate::security::Signal::RateLimited,
+                &format!("discord:{user}"),
+                "the loose per-caller limit refused a request",
+            );
+            let mut response = text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, crate::rate_limit::retry_after(remaining));
+            return response;
+        }
     }
 
     if matches!(
@@ -73,6 +91,20 @@ pub(super) async fn dispatch(state: &AppState, payload: &Value) -> Response {
         Some(5) => modal(state, payload).await,
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }
+}
+
+/// An interaction Discord would not have sent: no signature, one that does not
+/// verify, or a timestamp outside the window. The caller keeps the answer it
+/// always had — which part failed is this service's to know, and the repetition
+/// of any of them is what is worth saying to an operator.
+fn refused(state: &AppState, why: &str, body: &'static str) -> Response {
+    state.monitor().observe(
+        crate::security::Signal::InteractionSignature,
+        "interaction-signature",
+        why,
+    );
+
+    text(StatusCode::UNAUTHORIZED, body)
 }
 
 /// `verified/2` for `type` 4: the option being typed, and the path that says

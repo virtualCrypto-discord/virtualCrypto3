@@ -555,6 +555,24 @@ pub fn state_with_limiter(
     discord: Arc<FakeDiscord>,
     limiter: Arc<RateLimiter>,
 ) -> AppState {
+    state_watched(
+        pool,
+        discord,
+        limiter,
+        Arc::new(vc_api::security::BehaviorMonitor::for_test()),
+    )
+}
+
+/// A state whose requests are held to `limiter` and whose behaviour is counted
+/// by `monitor`, which is how a test reads what would have been warned about —
+/// the same monitor instance, shared across the states a test builds per
+/// request, so the counts survive the state that made them.
+pub fn state_watched(
+    pool: PgPool,
+    discord: Arc<FakeDiscord>,
+    limiter: Arc<RateLimiter>,
+    monitor: Arc<vc_api::security::BehaviorMonitor>,
+) -> AppState {
     AppState::new(
         pool,
         vc_api::state::Signing::new(JWT_SECRET, SESSION_SECRET, false),
@@ -567,6 +585,7 @@ pub fn state_with_limiter(
             handshake: Arc::new(vc_api::rate_limit::VerificationLimiter::new()),
         },
         limiter,
+        monitor,
     )
 }
 
@@ -590,6 +609,7 @@ pub fn state_with_notifier(
         },
         // Unlimited by default, so the other tests are not held to it.
         Arc::new(RateLimiter::new(0, vc_api::rate_limit::DEFAULT_WINDOW)),
+        Arc::new(vc_api::security::BehaviorMonitor::for_test()),
     )
 }
 

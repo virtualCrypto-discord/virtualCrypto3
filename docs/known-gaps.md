@@ -128,6 +128,35 @@ what is *not* is the OAuth2 surface — registration, the edit, and
 unfinished: registration's real cost is the handshake, which has a limiter of its
 own, per requester and much tighter.
 
+## Behaviour warnings are observed per process, and only where a subject is known
+
+`crates/vc-api/src/security.rs` counts the refusals this service already makes —
+429s, `invalid_token`s, failed `same_own` checks, refused Discord callbacks,
+bad interaction signatures, duplicate receipts — plus the whole service's error
+rate and request volume, and warns the operator once per subject per window
+(under the tracing target `vc_security`, and to `VCRYPTO_SECURITY_WEBHOOK_URL`
+when one is set). What it does *not* do, and why:
+
+- **No address-based keys.** A subject is the account, application, or Discord
+  user when something has established one, and a fixed label
+  (`discord-callback`, `interaction-signature`, …) when nothing has. The
+  anonymous attempts a label groups — CSRF probes, forged interaction
+  signatures — cannot be told apart by *who* sent them: this server does not
+  take `ConnectInfo`, and behind Fly the peer address is a proxy while
+  `X-Forwarded-For` is caller-controlled unless a trusted-proxy layer parses
+  it. Per-address counting is therefore still a gap, same as it is for the
+  rate limiters above.
+- **Everything is in memory, per process.** A restart loses counts that had not
+  reached their window's end, and every Fly machine counts its own — the same
+  property the rate limiters have. What survives a restart is the log line that
+  was already written.
+- **It warns; it never refuses.** The loose limit still decides what a caller
+  is answered, and the tighter `VCRYPTO_WATCH_LIMIT` window beside it only
+  counts. Nothing here changes a response.
+- **A duplicate receipt needs ten before it speaks.** Discord retries on its
+  own and a pending receipt answers `409`, so `ReplayDuplicate` has a threshold
+  of ten per window rather than one; every other signal warns on the first.
+
 ## Not yet verified against captures
 
 - The pagination `link` header on `GET /api/v2/users/@me/claims` follows the

@@ -17,7 +17,7 @@ pub mod web;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
@@ -128,6 +128,36 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
                 .on_request(DefaultOnRequest::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
+}
+
+/// Count every response by status class, for the two warnings no single
+/// subject owns: an error rate and a surge are properties of the whole
+/// service, and the sweep that reads these counts is what turns them into
+/// warnings (or leaves them as a quiet window).
+///
+/// Applied over the whole router in [`crate::router_with_web`], where the state
+/// it counts for actually exists — a layer built inside this module would have
+/// no state to name.
+///
+/// `/health` is excluded on purpose: it is this deployment's own heartbeat,
+/// polled by whatever checks it, and counting it would make the service's
+/// health look like the callers' behaviour.
+pub(crate) async fn record_behaviour(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+
+    if path != "/health" {
+        state
+            .monitor()
+            .counters()
+            .record(response.status().as_u16());
+    }
+
+    response
 }
 
 async fn health() -> Json<serde_json::Value> {

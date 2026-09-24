@@ -57,14 +57,14 @@ impl FromRequestParts<AppState> for GuildToken {
             .headers
             .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .ok_or_else(unauthorized)?;
+            .ok_or_else(|| unauthorized(state))?;
 
-        let token = vc_auth::extractor::bearer_token(header).ok_or_else(unauthorized)?;
+        let token = vc_auth::extractor::bearer_token(header).ok_or_else(|| unauthorized(state))?;
 
         // Anything that is not a UUID is not a grant token, rather than a database
         // error: the column is a uuid.
         let Ok(token_id) = Uuid::parse_str(token) else {
-            return Err(unauthorized());
+            return Err(unauthorized(state));
         };
 
         let resolved =
@@ -73,7 +73,7 @@ impl FromRequestParts<AppState> for GuildToken {
                 .map_err(|error| ApiError::from(error).into_response())?;
 
         let Some(resolved) = resolved else {
-            return Err(unauthorized());
+            return Err(unauthorized(state));
         };
 
         // A guild token is a guild's. A personal grant's token resolves to the
@@ -81,15 +81,25 @@ impl FromRequestParts<AppState> for GuildToken {
         // the target is what says so, so a token written for a person is refused
         // here the same way a token for a guild nobody granted anything in is.
         let Target::Guild(guild_id) = resolved.target else {
-            return Err(unauthorized());
+            return Err(unauthorized(state));
         };
 
+        // The watch's own, tighter count beside the loose limit's: a burst by
+        // one application is worth a warning before it is worth a 429.
+        state
+            .monitor()
+            .watch(&format!("app:{}", resolved.application_id));
         // Counted per application, which is the identity a guild token has: one
         // application's tokens cannot spend another's allowance.
         if let Err(remaining) = state
             .limiter()
             .allow(&format!("guild:{}", resolved.application_id))
         {
+            state.monitor().observe(
+                crate::security::Signal::RateLimited,
+                &format!("app:{}", resolved.application_id),
+                "the loose per-caller limit refused a request",
+            );
             let mut response = (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({ "error": "rate_limited" })),
@@ -115,7 +125,17 @@ impl FromRequestParts<AppState> for GuildToken {
 /// revoked, or issued for a guild nobody granted anything in. One answer for all
 /// of them, which is what `AuthUser` gives too: a caller learns that this token
 /// does not work here, and not which part of it failed.
-fn unauthorized() -> Response {
+///
+/// Counted as well, under one subject for all of those reasons: the reasons are
+/// this service's business to tell apart, and the *repetition* of any of them is
+/// one thing worth an operator's attention.
+fn unauthorized(state: &AppState) -> Response {
+    state.monitor().observe(
+        crate::security::Signal::AuthFailed,
+        "guild-token",
+        "a credential that is not a usable guild token",
+    );
+
     (
         StatusCode::UNAUTHORIZED,
         Json(json!({ "error": "invalid_token" })),

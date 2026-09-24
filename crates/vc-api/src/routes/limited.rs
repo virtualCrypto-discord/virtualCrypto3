@@ -44,6 +44,27 @@ pub enum Operation {
     DecideContract,
 }
 
+impl Operation {
+    /// The operation's name, which is what a refusal is warned to an operator
+    /// with: "account 7 was refused Pay" is a sentence; an enum tag that does
+    /// not print is not.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ReadProfile => "read_profile",
+            Self::ReadBalances => "read_balances",
+            Self::ReadContracts => "read_contracts",
+            Self::ReadContractPayments => "read_contract_payments",
+            Self::ReadTransactions => "read_transactions",
+            Self::ReadClaims => "read_claims",
+            Self::Pay => "pay",
+            Self::CreateClaims => "create_claims",
+            Self::PatchClaims => "patch_claims",
+            Self::ApplicationContracts => "application_contracts",
+            Self::DecideContract => "decide_contract",
+        }
+    }
+}
+
 macro_rules! permissions {
     ($($name:ident => $operation:ident),* $(,)?) => {$(
         pub enum $name {}
@@ -179,6 +200,11 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                 let Some(resolved) =
                     resolved.filter(|grant| matches!(grant.target, Target::User(_)))
                 else {
+                    state.monitor().observe(
+                        crate::security::Signal::AuthFailed,
+                        "invalid-token",
+                        "a bearer token resolved to nothing usable",
+                    );
                     return Err((
                         StatusCode::UNAUTHORIZED,
                         Json(json!({"error":"invalid_token"})),
@@ -195,18 +221,35 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                     resources: resolved.resources,
                 }
             }
-            None => Principal::Own(
-                AuthUser::from_request_parts(parts, state)
-                    .await
-                    .map_err(IntoResponse::into_response)?,
-            ),
+            None => Principal::Own(AuthUser::from_request_parts(parts, state).await.map_err(
+                |error| {
+                    // A credential that did not authenticate is worth
+                    // counting: missing once is normal, and the same
+                    // absence repeated is somebody's vocabulary.
+                    state.monitor().observe(
+                        crate::security::Signal::AuthFailed,
+                        "unauthenticated",
+                        "a request without a credential that resolves",
+                    );
+                    error.into_response()
+                },
+            )?),
         };
         let account_id = match &principal {
             Principal::Own(user) => i32::try_from(user.subject)
                 .map_err(|_| ApiError::Internal("subject out of range".into()).into_response())?,
             Principal::Delegated { account_id, .. } => *account_id,
         };
+        // The watch's own, tighter window: a burst is worth saying before it is
+        // worth refusing, and this count is held beside the loose limit's rather
+        // than inside it.
+        state.monitor().watch(&format!("account:{account_id}"));
         if let Err(remaining) = state.limiter().allow(&format!("v2:{account_id}")) {
+            state.monitor().observe(
+                crate::security::Signal::RateLimited,
+                &format!("account:{account_id}"),
+                "the loose per-caller limit refused a request",
+            );
             let mut response = (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({"error":"rate_limited"})),
@@ -217,9 +260,14 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                 .insert(RETRY_AFTER, crate::rate_limit::retry_after(remaining));
             return Err(response);
         }
-        principal
-            .authorize(P::OPERATION)
-            .map_err(IntoResponse::into_response)?;
+        if let Err(error) = principal.authorize(P::OPERATION) {
+            state.monitor().observe(
+                crate::security::Signal::Forbidden,
+                &format!("account:{account_id}"),
+                P::OPERATION.name(),
+            );
+            return Err(error.into_response());
+        }
         Ok(Self {
             principal,
             account_id,

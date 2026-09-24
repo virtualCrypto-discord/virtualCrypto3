@@ -267,6 +267,14 @@ pub async fn approve(
     };
 
     if !super::csrf::same_origin(&headers, &state.links().site_url) {
+        // A write that failed the browser's own headers: from a sibling origin,
+        // from nowhere at all, from a client that sends no provenance. Refused
+        // is the decision; counted is the pattern, if it repeats.
+        state.monitor().observe(
+            crate::security::Signal::CsrfRejected,
+            "oauth2-approve",
+            "the approval did not come from this site's own origin",
+        );
         return crate::error::ApiError::Forbidden("invalid_origin").into_response();
     }
 

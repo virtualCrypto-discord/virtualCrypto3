@@ -17,6 +17,7 @@ pub mod rate_limit;
 pub mod resource;
 pub mod routes;
 pub mod scheduler;
+pub mod security;
 pub mod session;
 pub mod state;
 
@@ -42,6 +43,15 @@ pub fn default_web_root() -> std::path::PathBuf {
 ///
 /// The SPA is the *fallback*, not a mount: `/api` and `/health` keep their
 /// routes, and only what nothing else claims is treated as a client-side route.
+///
+/// The behaviour-counting middleware is layered here, over everything, because
+/// it needs the state its counters belong to — and because a warning about the
+/// *service's* error rate must see every route's responses, fallback included.
 pub fn router_with_web(state: AppState, web_root: std::path::PathBuf) -> Router {
-    routes::router(web_root).with_state(state)
+    routes::router(web_root)
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            routes::record_behaviour,
+        ))
 }
