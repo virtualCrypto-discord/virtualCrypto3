@@ -12,6 +12,7 @@ pub enum Payload {
     GuildCommands,
     InteractionResponse,
     Followup,
+    OriginalResponse,
 }
 
 impl Payload {
@@ -20,6 +21,7 @@ impl Payload {
         static GUILD: OnceLock<Validator> = OnceLock::new();
         static CALLBACK: OnceLock<Validator> = OnceLock::new();
         static FOLLOWUP: OnceLock<Validator> = OnceLock::new();
+        static ORIGINAL: OnceLock<Validator> = OnceLock::new();
         let (cached, path, method) = match self {
             Self::GlobalCommands => (&GLOBAL, "/applications/{application_id}/commands", "put"),
             Self::GuildCommands => (
@@ -33,6 +35,11 @@ impl Payload {
                 "post",
             ),
             Self::Followup => (&FOLLOWUP, "/webhooks/{webhook_id}/{webhook_token}", "post"),
+            Self::OriginalResponse => (
+                &ORIGINAL,
+                "/webhooks/{webhook_id}/{webhook_token}/messages/@original",
+                "patch",
+            ),
         };
 
         cached.get_or_init(|| {

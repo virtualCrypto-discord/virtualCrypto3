@@ -52,6 +52,48 @@ async fn delete_asks_for_confirmation(pool: PgPool) {
     assert_eq!(input["placeholder"], json!(required));
 }
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn delete_requires_current_administrator_permissions(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let balance = support::get_amount(&pool, money.user1, money.currency).await;
+    // Missing and malformed permissions must fail closed as well as a valid non-admin bit set.
+    for permissions in [json!("0"), json!("32"), json!("invalid"), Value::Null] {
+        let mut command = from_guild(money.user1, money.guild);
+        command["member"]["permissions"] = permissions.clone();
+        let response = interaction(router(pool.clone()), command).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body["type"], 4, "no modal without permission");
+        assert!(response.body.to_string().contains("管理者権限"));
+
+        // The form was opened while the user was an administrator, but submitted after revocation.
+        let opened = interaction(router(pool.clone()), from_guild(money.user1, money.guild)).await;
+        assert_eq!(opened.body["type"], 9);
+        let submission = json!({
+            "type": 5,
+            "guild_id": money.guild.to_string(),
+            "member": {"user": {"id": money.user1.to_string()}, "permissions": permissions},
+            "data": {
+                "custom_id": opened.body["data"]["custom_id"],
+                "components": [{"type":18,"component":{
+                    "type":4,"custom_id":"confirm","value":format!("delete {}", money.unit)
+                }}],
+            },
+        });
+        let response = interaction(router(pool.clone()), submission).await;
+        assert_eq!(response.status, 200);
+        assert!(response.body.to_string().contains("管理者権限"));
+        assert!(
+            support::currency_by_unit(&pool, &money.unit)
+                .await
+                .is_some()
+        );
+        assert_eq!(
+            support::get_amount(&pool, money.user1, money.currency).await,
+            balance
+        );
+    }
+}
+
 /// The Elixir test moves the clock past the window instead; ageing the row is
 /// the same thing from the query's point of view.
 #[sqlx::test(migrations = "../vc-core/migrations")]

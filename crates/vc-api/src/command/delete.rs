@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 use vc_core::currency::DeleteCheck;
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, as_int};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, as_int, as_permissions, is_administrator};
 use crate::state::AppState;
 
 /// `Command.handle/4` for `delete`, rendered by `InteractionsJSON.delete/1`
@@ -20,6 +20,10 @@ pub async fn handle(
         .get("guild_id")
         .and_then(as_int)
         .ok_or_else(|| CommandError::missing("delete requires a guild"))?;
+
+    if !may_delete(payload) {
+        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+    }
 
     let check =
         vc_core::currency::deletable(state.pool(), guild_id, vc_core::model::utc_now()).await?;
@@ -66,6 +70,11 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
         .and_then(as_int)
         .ok_or_else(|| CommandError::missing("delete requires a guild"))?;
 
+    // Opening a modal grants no lasting permission: use the signed submission's current roles.
+    if !may_delete(payload) {
+        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+    }
+
     let value = payload
         .get("data")
         .and_then(|data| data.get("components"))
@@ -107,6 +116,14 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
             vec![crate::components::text("通貨を削除しました。")],
         )]),
     }))
+}
+
+fn may_delete(payload: &Value) -> bool {
+    payload
+        .get("member")
+        .and_then(|member| member.get("permissions"))
+        .and_then(as_permissions)
+        .is_some_and(is_administrator)
 }
 
 /// `Interactions.Delete.render/3` for `{:error, reason, _}`.

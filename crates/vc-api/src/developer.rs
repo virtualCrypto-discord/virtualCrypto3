@@ -76,6 +76,7 @@ pub fn applications_page(
             let client_id = application["client_id"].as_str()?;
             let name = application["client_name"]
                 .as_str()
+                .filter(|name| !name.is_empty())
                 .unwrap_or("（名前なし）");
 
             // The uuid is the value and the name is the label: the label is what somebody
@@ -225,7 +226,7 @@ pub fn application(
             Some("種類を選ぶ"),
             APPLICATION_TYPES
                 .iter()
-                .map(|kind| select_option(kind, kind, None))
+                .map(|kind| setting_option(kind, kind, *kind == fields.application_type))
                 .collect(),
             1,
             1,
@@ -243,7 +244,13 @@ pub fn application(
             Some("グラントタイプを選ぶ"),
             GRANT_TYPES
                 .iter()
-                .map(|kind| select_option(kind, kind, None))
+                .map(|kind| {
+                    setting_option(
+                        kind,
+                        kind,
+                        fields.grant_types.iter().any(|value| value == *kind),
+                    )
+                })
                 .collect(),
             0,
             GRANT_TYPES.len() as u8,
@@ -261,13 +268,19 @@ pub fn application(
             Some("レスポンスタイプを選ぶ"),
             RESPONSE_TYPES
                 .iter()
-                .map(|kind| select_option(kind, kind, None))
+                .map(|kind| {
+                    setting_option(
+                        kind,
+                        kind,
+                        fields.response_types.iter().any(|value| value == *kind),
+                    )
+                })
                 .collect(),
             0,
             RESPONSE_TYPES.len() as u8,
         )]),
         // The events the webhook wants, as the `type` values the deliveries
-        // carry: 2 for a claim update, 3 for a grant decision. A string
+        // carry: 2 for a claim update, 3 for a grant decision, 4 for a contract decision. A string
         // select is the one select a message may carry with options we
         // choose, which is exactly what an enumerated field is — the same
         // shape as the two menus above, and for the same reason. The set
@@ -287,7 +300,13 @@ pub fn application(
             Some("イベントを選ぶ"),
             EVENT_TYPES
                 .iter()
-                .map(|kind| select_option(&kind.to_string(), event_name(*kind), None))
+                .map(|kind| {
+                    setting_option(
+                        &kind.to_string(),
+                        event_name(*kind),
+                        fields.subscribed_events.contains(kind),
+                    )
+                })
                 .collect(),
             0,
             EVENT_TYPES.len() as u8,
@@ -309,6 +328,13 @@ pub fn application(
     ]);
 
     container(Some(if connected { WORKING } else { REFUSED }), children)
+}
+
+/// Editing a set starts with its saved values checked, so adding a choice retains the others.
+fn setting_option(value: &str, label: &str, selected: bool) -> Value {
+    let mut option = select_option(value, label, None);
+    option["default"] = Value::Bool(selected);
+    option
 }
 
 /// One field that is free text: what it is now, and the button that opens its form.
@@ -355,6 +381,7 @@ fn event_name(kind: i64) -> &'static str {
     match kind {
         2 => "請求の更新",
         3 => "発行許可の決定",
+        4 => "契約の決定",
         _ => "（不明）",
     }
 }

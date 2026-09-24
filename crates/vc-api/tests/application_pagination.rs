@@ -2,7 +2,11 @@ mod support;
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{execute_from_dm, fake, insert_application, insert_user, interaction, state};
+use support::{
+    account_of, execute_from_dm, fake, insert_application, insert_user, interaction, mint_app,
+    state,
+};
+use tower::ServiceExt;
 
 const USER: i64 = 100_000_000_000_000_001;
 
@@ -90,6 +94,40 @@ async fn all_applications_are_reachable_through_the_four_arrows(pool: PgPool) {
     assert_eq!(options(&shrunk).len(), 25);
     assert_eq!(options(&shrunk)[0]["label"], "app25");
     assert_eq!(arrows(&shrunk)[3]["disabled"], true);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_empty_name_saved_through_the_api_still_has_a_valid_menu_label(pool: PgPool) {
+    insert_user(&pool, 1, USER).await;
+    let application = insert_application(&pool, USER, "before").await;
+    let account = account_of(&pool, application).await;
+    let token = mint_app(&pool, account, &["oauth2.register"]).await;
+    let request = axum::http::Request::builder()
+        .method("PATCH")
+        .uri("/oauth2/clients/@me")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            json!({"client_name":""}).to_string(),
+        ))
+        .unwrap();
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 204);
+
+    // `interaction` also validates the entire response against Discord's schema.
+    let response = interaction(
+        vc_api::router(state(pool, fake())),
+        execute_from_dm(
+            json!({"name":"application","options":[{"name":"list","type":1}]}),
+            USER,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 200);
+    assert_eq!(options(&response.body)[0]["label"], "（名前なし）");
 }
 
 #[test]

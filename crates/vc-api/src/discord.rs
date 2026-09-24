@@ -124,6 +124,14 @@ pub trait DiscordApi: Send + Sync {
         body: &Value,
     ) -> Result<(), DiscordError>;
 
+    /// Replace the loading response after a deferred interaction has been acknowledged.
+    async fn edit_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError>;
+
     /// `post_webhook_message/3`: the follow-up a component answers with, which
     /// is where a button's result is shown. The Elixir tests swap the service
     /// for one that records the body instead of sending it.
@@ -374,6 +382,17 @@ impl DiscordApi for CachedDiscord {
     ) -> Result<(), DiscordError> {
         self.inner
             .create_interaction_response(interaction_id, token, body)
+            .await
+    }
+
+    async fn edit_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.inner
+            .edit_original_interaction_response(application_id, token, body)
             .await
     }
 
@@ -740,6 +759,33 @@ impl DiscordApi for HttpDiscordApi {
         if !response.status().is_success() {
             return Err(DiscordError::Request(format!(
                 "the interaction callback answered {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn edit_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        let response = self
+            .http
+            .patch(self.endpoint(&format!(
+                "/webhooks/{application_id}/{token}/messages/@original"
+            )))
+            .json(body)
+            .send()
+            .await
+            // Never include a request URL containing the interaction token in errors.
+            .map_err(|_| {
+                DiscordError::Request("the interaction response could not be edited".into())
+            })?;
+        if !response.status().is_success() {
+            return Err(DiscordError::Request(format!(
+                "the interaction response edit answered {}",
                 response.status()
             )));
         }

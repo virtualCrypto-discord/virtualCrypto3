@@ -227,16 +227,17 @@ async fn claims(
         let claimant = party(state, &claim.claimant).await?;
         let payer = party(state, &claim.payer).await?;
 
+        let label = format!(
+            "{}  請求id: {}  金額: {}{}  請求元: {}  請求先: {}",
+            status_emoji(claim.status.as_deref()),
+            claim.id,
+            claim.amount.unwrap_or_default(),
+            claim.currency.unit.clone().unwrap_or_default(),
+            claimant,
+            payer,
+        );
         choices.push(json!({
-            "name": format!(
-                "{}  請求id: {}  金額: {}{}  請求元: {}  請求先: {}",
-                status_emoji(claim.status.as_deref()),
-                claim.id,
-                claim.amount.unwrap_or_default(),
-                claim.currency.unit.clone().unwrap_or_default(),
-                claimant,
-                payer,
-            ),
+            "name": truncate(&label, 100),
             "value": claim.id.to_string(),
         }));
     }
@@ -250,13 +251,10 @@ async fn claims(
 /// An application account is named by its registered client name, as in Elixir.
 async fn party(state: &AppState, user: &ClaimUser) -> Result<String, CommandError> {
     let Some(discord_id) = user.discord_id else {
-        if let Some(application_id) = vc_core::user::application_id(state.pool(), user.id).await?
-            && let Some(application) =
-                crate::routes::oauth2_clients::details(state.pool(), application_id).await?
-        {
+        if user.client_id.is_some() {
             return Ok(format!(
                 "{}(app)",
-                application.client_name.unwrap_or_default()
+                user.client_name.as_deref().unwrap_or_default()
             ));
         }
         return Ok("deleted".to_string());

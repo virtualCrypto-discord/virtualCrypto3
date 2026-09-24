@@ -281,6 +281,10 @@ caller's part of it is, how far the rest has come and how long it lasts, and
 offers only the answers that contract takes: 承認する and 拒否する while it is
 waiting, 取り消す once it is theirs to take back.
 
+The application is shown as a mention of its bound Discord Bot. An application
+without a binding is marked `Bot未連携`, with its self-chosen name and public
+`client_id`; identical names alone must not make two applications look alike.
+
 **Five of them, and arrows to the rest** — the count and one page are two bounded
 reads, and the arrows carry page numbers. That is where this screen and the API
 differ about pagination on purpose: the API pages this family with a cursor

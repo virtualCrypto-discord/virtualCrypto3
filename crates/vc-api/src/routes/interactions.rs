@@ -118,6 +118,19 @@ async fn modal(state: &AppState, payload: &Value) -> Response {
     if let Ok((screen, client_id)) =
         crate::custom_id::ui::developer::parse(&crate::custom_id::parse(custom_id))
     {
+        if matches!(screen, crate::custom_id::ui::developer::Screen::Edit)
+            && crate::command::application::verifies_webhook(payload)
+        {
+            return match crate::command::application::deferred_webhook_edit(
+                state, &client_id, payload,
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+                Err(CommandError::Internal(error)) => error.into_response(),
+            };
+        }
         return match crate::command::application::modal(state, screen, &client_id, payload).await {
             Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),

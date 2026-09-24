@@ -100,6 +100,26 @@ pub fn mention(id: impl std::fmt::Display) -> String {
     format!("<@{id}>")
 }
 
+/// The identity shown before approving a contract or paying an application's claim.
+pub(super) fn application_identity(
+    bot_discord_id: Option<i64>,
+    client_id: &str,
+    client_name: Option<&str>,
+) -> String {
+    match bot_discord_id {
+        Some(bot) => mention(bot),
+        None => {
+            // A self-chosen name must not render a Bot mention or another identity line.
+            let name = client_name
+                .filter(|name| !name.is_empty())
+                .unwrap_or("（名前なし）")
+                .replace('`', "｀")
+                .replace(['\r', '\n'], " ");
+            format!("Bot未連携: `{name}`\nclient_id: `{client_id}`")
+        }
+    }
+}
+
 /// `Command.continue_management_command?/2`, with the branch it used to take
 /// removed.
 ///

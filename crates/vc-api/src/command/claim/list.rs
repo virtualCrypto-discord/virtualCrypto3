@@ -2,11 +2,10 @@ use serde_json::{Value, json};
 use vc_core::balance::Balance;
 use vc_core::claim::{ClaimPage, ClaimView, PageTarget, SrFilter};
 
-use super::format_date_time;
+use super::{format_date_time, user_identity};
 use crate::claim_list::{ListOptions, Page, Position, encode_claim_ids};
 use crate::command::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, get_user,
-    mention,
 };
 use crate::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
 use crate::state::AppState;
@@ -356,8 +355,8 @@ fn render_status(status: Option<&str>) -> &'static str {
 
 /// `Listing.render_user/3`: which side of the claim the position shows.
 fn users(position: Position, claim: &ClaimView) -> Vec<String> {
-    let claimant = mention(claim.claimant.discord_id.unwrap_or_default());
-    let payer = mention(claim.payer.discord_id.unwrap_or_default());
+    let claimant = user_identity(&claim.claimant);
+    let payer = user_identity(&claim.payer);
 
     match position {
         Position::All => vec![format!("請求元: {claimant}"), format!("請求先: {payer}")],

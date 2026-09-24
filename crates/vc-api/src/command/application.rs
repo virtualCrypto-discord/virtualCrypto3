@@ -8,7 +8,12 @@
 //! autocomplete for a `client_id`, which [`crate::command::autocomplete`] fills from the
 //! caller's own applications. Nothing here parses a snowflake or a uuid out of a string.
 
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::{Map, Value, json};
+use std::time::Duration;
 
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, UPDATE_MESSAGE, get_user};
 use crate::components::ephemeral;
@@ -318,6 +323,87 @@ pub async fn modal(
         // A screen with no form: reaching here means the id was built wrong.
         _ => Err(CommandError::Unknown),
     }
+}
+
+/// Clearing a webhook makes no external call. Inspect the submitted fields so legacy
+/// forms containing several settings take the same deferred path as the current field form.
+pub(crate) fn verifies_webhook(payload: &Value) -> bool {
+    submitted(payload)
+        .iter()
+        .any(|(field, value)| field == "webhook_url" && !value.is_empty())
+}
+
+/// A webhook handshake makes two external requests. Acknowledge before starting it,
+/// then replace the private loading response with the usual success or refusal screen.
+pub async fn deferred_webhook_edit(
+    state: &AppState,
+    client_id: &str,
+    payload: &Value,
+) -> Result<Response, CommandError> {
+    let field = |name| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| CommandError::missing(&format!("interaction has no {name}")))
+    };
+    let interaction_id = field("id")?;
+    let application_id = field("application_id")?.to_owned();
+    let token = field("token")?.to_owned();
+
+    // A deferred callback accepts only EPHEMERAL; components are supplied by the later edit.
+    let acknowledgement = json!({"type": 5, "data": {"flags": crate::components::EPHEMERAL}});
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        state
+            .discord()
+            .create_interaction_response(interaction_id, &token, &acknowledgement),
+    )
+    .await
+    .map_err(|_| CommandError::missing("the deferred response timed out"))??;
+
+    // An explicit callback avoids racing an inline acknowledgement against the result edit.
+    // No verification or database mutation starts if Discord did not acknowledge it.
+    let state = state.clone();
+    let client_id = client_id.to_owned();
+    let payload = payload.clone();
+    tokio::spawn(async move {
+        let mut body = match modal(
+            &state,
+            crate::custom_id::ui::developer::Screen::Edit,
+            &client_id,
+            &payload,
+        )
+        .await
+        {
+            Ok(response) => response["data"].clone(),
+            Err(error) => {
+                tracing::warn!(?error, "application settings update failed");
+                ephemeral(vec![developer::refusal(
+                    "変更",
+                    Some(
+                        "設定変更の結果を確認できませんでした。もう一度設定を表示して確認してください。",
+                    ),
+                )])
+            }
+        };
+        // Privacy is fixed by the acknowledgement; the edit only enables components.
+        body["flags"] = json!(crate::components::IS_COMPONENTS_V2);
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            state
+                .discord()
+                .edit_original_interaction_response(&application_id, &token, &body),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "application settings response edit failed"),
+            Err(_) => tracing::warn!("application settings response edit timed out"),
+        }
+    });
+
+    Ok(StatusCode::ACCEPTED.into_response())
 }
 
 /// A change submitted from a form.

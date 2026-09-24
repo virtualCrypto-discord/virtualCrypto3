@@ -219,14 +219,14 @@ fn pagination_row(open: &vc_core::contract::OpenContracts) -> Value {
     ])
 }
 
-/// One contract, in four lines: who is asking, what the caller's part is, how far
+/// One contract: who is asking, what the caller's part is, how far
 /// the rest has come, and how long it lasts.
 fn describe(contract: &Contract, me: i64) -> String {
-    let name = contract
-        .client_name
-        .as_deref()
-        .filter(|name| !name.is_empty())
-        .unwrap_or("（名前なし）");
+    let application = super::application_identity(
+        contract.bot_discord_id,
+        &contract.client_id,
+        contract.client_name.as_deref(),
+    );
     let unit = contract.unit.as_deref().unwrap_or("（単位なし）");
 
     let mine = contract.parties.iter().find(|party| party.discord_id == me);
@@ -245,7 +245,7 @@ fn describe(contract: &Contract, me: i64) -> String {
     };
 
     format!(
-        "**{name}**（{unit}） — {}\nあなたの分: {amount}／{mine} ・ 承認 {approved}/{} ・ 残り {}\n{deadline}",
+        "{application}\n（{unit}） — {}\nあなたの分: {amount}／{mine} ・ 承認 {approved}/{} ・ 残り {}\n{deadline}",
         contract_status(&contract.status),
         contract.parties.len(),
         contract.remaining,

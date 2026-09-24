@@ -2,10 +2,9 @@ use serde_json::{Value, json};
 use vc_core::balance::Balance;
 use vc_core::claim::{ClaimCurrency, ClaimView, Transition, TransitionError};
 
-use super::{format_date_time, render_error, sub_option};
+use super::{format_date_time, render_error, sub_option, user_identity};
 use crate::command::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, get_user,
-    mention,
 };
 use crate::state::AppState;
 
@@ -119,8 +118,8 @@ fn render(
     let field = format!(
         "状態　: {}\n請求額: **{amount}** `{unit}`\n請求元: {}\n請求先: {}\n請求日: {}",
         render_status(claim.status.as_deref()),
-        mention(claimant.unwrap_or_default()),
-        mention(payer.unwrap_or_default()),
+        user_identity(&claim.claimant),
+        user_identity(&claim.payer),
         format_date_time(claim.inserted_at),
     );
 

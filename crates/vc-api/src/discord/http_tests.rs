@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 struct Wire {
     answers: Mutex<VecDeque<(u16, Value)>>,
-    requests: Mutex<Vec<(String, String)>>,
+    requests: Mutex<Vec<(String, String, axum::http::Method)>>,
 }
 
 struct Server {
@@ -26,13 +26,14 @@ impl Drop for Server {
 
 async fn answer(State(wire): State<Arc<Wire>>, request: Request) -> impl IntoResponse {
     let path = request.uri().path().to_owned();
+    let method = request.method().clone();
     let body = axum::body::to_bytes(request.into_body(), 16_384)
         .await
         .unwrap();
     wire.requests
         .lock()
         .unwrap()
-        .push((path, String::from_utf8(body.to_vec()).unwrap()));
+        .push((path, String::from_utf8(body.to_vec()).unwrap(), method));
     let (status, body) = wire
         .answers
         .lock()
@@ -210,6 +211,34 @@ async fn interaction_callback_accepts_empty_204_and_rejects_errors() {
     let requests = server.wire.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].0, "/api/interactions/123/test-token/callback");
+    assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);
+}
+
+#[tokio::test]
+async fn original_interaction_response_is_patched_and_errors_are_sanitized() {
+    let (client, server) = server(vec![
+        (200, json!({"id":"789"})),
+        (404, json!({"code":10015})),
+    ])
+    .await;
+    let cached = CachedDiscord::new(Arc::new(client));
+    let body = crate::components::ephemeral(vec![crate::components::text("done")]);
+    cached
+        .edit_original_interaction_response("123", "test-token", &body)
+        .await
+        .unwrap();
+    let error = cached
+        .edit_original_interaction_response("123", "test-token", &body)
+        .await
+        .unwrap_err();
+    assert!(!error.to_string().contains("test-token"));
+    let requests = server.wire.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].0,
+        "/api/webhooks/123/test-token/messages/@original"
+    );
+    assert_eq!(requests[0].2, axum::http::Method::PATCH);
     assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);
 }
 

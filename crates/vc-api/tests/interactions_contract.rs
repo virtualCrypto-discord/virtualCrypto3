@@ -12,8 +12,9 @@ mod support;
 use serde_json::json;
 use sqlx::PgPool;
 use support::{
-    Recorded, Response, button_from_guild, execute_from_guild, fake, insert_application,
-    insert_asset, insert_currency, insert_user, interaction, state_with_notifier,
+    Recorded, Response, button_from_guild, client_id_of, execute_from_guild, fake,
+    insert_application, insert_asset, insert_currency, insert_user, interaction,
+    state_with_notifier,
 };
 use vc_api::custom_id::ui::contract::{Action, Page, custom_id, page_custom_id};
 
@@ -104,6 +105,7 @@ async fn balance(pool: &PgPool, account: i32) -> i64 {
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
     let application = fixture(&pool).await;
+    let client_id = client_id_of(&pool, application).await;
     let id = asking(&pool, application, None).await;
 
     let response = interaction(
@@ -124,9 +126,12 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
     );
     assert_eq!(
         said[1],
-        "**an application**（nyan） — 承認待ち\n\
+        format!(
+            "Bot未連携: `an application`\nclient_id: `{client_id}`\n\
+         （nyan） — 承認待ち\n\
          あなたの分: 100／未回答 ・ 承認 0/1 ・ 残り 0\n\
          期限: なし（いつでも取り消せます）"
+        )
     );
 
     assert_eq!(
@@ -135,6 +140,80 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
             custom_id(Action::Approve, id),
             custom_id(Action::Refuse, id),
         ]
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn same_named_applications_use_their_own_client_id_or_bound_bot(pool: PgPool) {
+    let application = fixture(&pool).await;
+    let other = insert_application(&pool, STRANGER_DISCORD_ID, "an application").await;
+    asking(&pool, application, None).await;
+    asking(&pool, other, None).await;
+    let client_id = client_id_of(&pool, application).await;
+    let other_client_id = client_id_of(&pool, other).await;
+    let recorded = std::sync::Arc::new(Recorded::default());
+    let command = execute_from_guild(
+        json!({ "name": "contract", "options": [{ "name": "list", "type": 1 }] }),
+        PARTY_DISCORD_ID,
+    );
+    let response = interaction(router(&pool, recorded.clone()), command.clone()).await;
+    let said = texts(&response);
+    assert!(said[1].contains(&format!("client_id: `{other_client_id}`")));
+    assert!(said[2].contains(&format!("client_id: `{client_id}`")));
+    assert_ne!(said[1], said[2]);
+
+    let bot = 700_000_000_000_000_001_i64;
+    sqlx::query("UPDATE users SET discord_id = $1 WHERE application_id = $2")
+        .bind(bot)
+        .bind(application)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = interaction(router(&pool, recorded.clone()), command.clone()).await;
+    let said = texts(&response);
+    assert!(said[1].starts_with("Bot未連携: `an application`\n"));
+    assert!(said[2].starts_with(&format!("<@{bot}>\n")));
+    assert!(!said[2].contains("an application"));
+    assert!(!said[2].contains(&client_id));
+    assert!(!said[2].contains(&OWNER_DISCORD_ID.to_string()));
+    assert_eq!(
+        response.body["data"]["allowed_mentions"]["parse"],
+        json!([])
+    );
+
+    // A previous binding must not remain on the consent screen after removal.
+    sqlx::query("UPDATE users SET discord_id = NULL WHERE application_id = $1")
+        .bind(application)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = interaction(router(&pool, recorded), command).await;
+    assert!(texts(&response)[2].starts_with(&format!(
+        "Bot未連携: `an application`\nclient_id: `{client_id}`\n"
+    )));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn an_unbound_name_cannot_render_a_bot_mention_or_another_heading(pool: PgPool) {
+    let application = fixture(&pool).await;
+    sqlx::query("UPDATE applications SET client_name = $1 WHERE id = $2")
+        .bind("`\n<@700000000000000001>\r\n**bound bot**")
+        .bind(application)
+        .execute(&pool)
+        .await
+        .unwrap();
+    asking(&pool, application, None).await;
+    let response = interaction(
+        router(&pool, std::sync::Arc::new(Recorded::default())),
+        execute_from_guild(
+            json!({ "name": "contract", "options": [{ "name": "list", "type": 1 }] }),
+            PARTY_DISCORD_ID,
+        ),
+    )
+    .await;
+    assert!(
+        texts(&response)[1]
+            .starts_with("Bot未連携: `｀ <@700000000000000001>  **bound bot**`\nclient_id: `")
     );
 }
 
@@ -170,6 +249,7 @@ async fn a_user_who_is_named_in_nothing_says_so(pool: PgPool) {
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn approving_from_the_button_locks_it(pool: PgPool) {
     let application = fixture(&pool).await;
+    let client_id = client_id_of(&pool, application).await;
     let id = asking(&pool, application, None).await;
     let recorded = std::sync::Arc::new(Recorded::default());
 
@@ -197,9 +277,12 @@ async fn approving_from_the_button_locks_it(pool: PgPool) {
     let said = texts(&response);
     assert_eq!(
         said[1],
-        "**an application**（nyan） — 全員承認済み\n\
+        format!(
+            "Bot未連携: `an application`\nclient_id: `{client_id}`\n\
+         （nyan） — 全員承認済み\n\
          あなたの分: 100／承認済み ・ 承認 1/1 ・ 残り 100\n\
          期限: なし（いつでも取り消せます）"
+        )
     );
     assert_eq!(
         buttons(&response),

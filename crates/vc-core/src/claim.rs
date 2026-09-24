@@ -14,6 +14,9 @@ use crate::transfer::TransferError;
 pub struct ClaimUser {
     pub id: i32,
     pub discord_id: Option<i64>,
+    /// The application's public identity when this account has no bound Bot.
+    pub client_id: Option<String>,
+    pub client_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,8 +54,12 @@ struct Row {
     currency_pool_amount: Option<i64>,
     claimant_id: i32,
     claimant_discord_id: Option<i64>,
+    claimant_client_id: Option<String>,
+    claimant_client_name: Option<String>,
     payer_id: i32,
     payer_discord_id: Option<i64>,
+    payer_client_id: Option<String>,
+    payer_client_name: Option<String>,
     metadata: Json<Value>,
 }
 
@@ -73,10 +80,14 @@ impl Row {
             claimant: ClaimUser {
                 id: self.claimant_id,
                 discord_id: self.claimant_discord_id,
+                client_id: self.claimant_client_id,
+                client_name: self.claimant_client_name,
             },
             payer: ClaimUser {
                 id: self.payer_id,
                 discord_id: self.payer_discord_id,
+                client_id: self.payer_client_id,
+                client_name: self.payer_client_name,
             },
             metadata: self.metadata.0,
         }
@@ -103,13 +114,19 @@ pub async fn view(pool: &PgPool, operator_id: i32, claim_id: i64) -> Result<Opti
                 cur.pool_amount AS currency_pool_amount,
                 cl.id AS \"claimant_id!\",
                 cl.discord_id AS claimant_discord_id,
+                claimant_app.client_id::text AS claimant_client_id,
+                claimant_app.client_name AS claimant_client_name,
                 py.id AS \"payer_id!\",
                 py.discord_id AS payer_discord_id,
+                payer_app.client_id::text AS payer_client_id,
+                payer_app.client_name AS payer_client_name,
                 COALESCE(m.metadata, '{}'::jsonb) AS \"metadata!\"
            FROM claims c
            JOIN currencies cur ON c.currency_id = cur.id
            JOIN users cl ON c.claimant_user_id = cl.id
            JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN applications claimant_app ON claimant_app.id = cl.application_id
+           LEFT JOIN applications payer_app ON payer_app.id = py.application_id
            LEFT JOIN claim_metadata m
                   ON c.id = m.claim_id AND m.owner_user_id = $1
           WHERE c.id = $2",
@@ -139,13 +156,19 @@ pub async fn views_by_ids(pool: &PgPool, operator_id: i32, ids: &[i64]) -> Resul
                 cur.pool_amount AS currency_pool_amount,
                 cl.id AS \"claimant_id!\",
                 cl.discord_id AS claimant_discord_id,
+                claimant_app.client_id::text AS claimant_client_id,
+                claimant_app.client_name AS claimant_client_name,
                 py.id AS \"payer_id!\",
                 py.discord_id AS payer_discord_id,
+                payer_app.client_id::text AS payer_client_id,
+                payer_app.client_name AS payer_client_name,
                 COALESCE(m.metadata, '{}'::jsonb) AS \"metadata!\"
            FROM claims c
            JOIN currencies cur ON c.currency_id = cur.id
            JOIN users cl ON c.claimant_user_id = cl.id
            JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN applications claimant_app ON claimant_app.id = cl.application_id
+           LEFT JOIN applications payer_app ON payer_app.id = py.application_id
            LEFT JOIN claim_metadata m
                   ON c.id = m.claim_id AND m.owner_user_id = $1
           WHERE c.id = ANY($2)",
@@ -233,13 +256,19 @@ pub async fn list(pool: &PgPool, filter: ClaimFilter<'_>) -> Result<Vec<ClaimVie
                 cur.pool_amount AS currency_pool_amount,
                 cl.id AS \"claimant_id!\",
                 cl.discord_id AS claimant_discord_id,
+                claimant_app.client_id::text AS claimant_client_id,
+                claimant_app.client_name AS claimant_client_name,
                 py.id AS \"payer_id!\",
                 py.discord_id AS payer_discord_id,
+                payer_app.client_id::text AS payer_client_id,
+                payer_app.client_name AS payer_client_name,
                 COALESCE(m.metadata, '{}'::jsonb) AS \"metadata!\"
            FROM claims c
            JOIN currencies cur ON c.currency_id = cur.id
            JOIN users cl ON c.claimant_user_id = cl.id
            JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN applications claimant_app ON claimant_app.id = cl.application_id
+           LEFT JOIN applications payer_app ON payer_app.id = py.application_id
            LEFT JOIN claim_metadata m
                   ON c.id = m.claim_id AND m.owner_user_id = $4
           WHERE c.status::text = ANY($1)
@@ -361,13 +390,19 @@ pub async fn list_page(
                 cur.pool_amount AS currency_pool_amount,
                 cl.id AS \"claimant_id!\",
                 cl.discord_id AS claimant_discord_id,
+                claimant_app.client_id::text AS claimant_client_id,
+                claimant_app.client_name AS claimant_client_name,
                 py.id AS \"payer_id!\",
                 py.discord_id AS payer_discord_id,
+                payer_app.client_id::text AS payer_client_id,
+                payer_app.client_name AS payer_client_name,
                 COALESCE(m.metadata, '{}'::jsonb) AS \"metadata!\"
            FROM claims c
            JOIN currencies cur ON c.currency_id = cur.id
            JOIN users cl ON c.claimant_user_id = cl.id
            JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN applications claimant_app ON claimant_app.id = cl.application_id
+           LEFT JOIN applications payer_app ON payer_app.id = py.application_id
            LEFT JOIN claim_metadata m
                   ON c.id = m.claim_id AND m.owner_user_id = $4
           WHERE c.status::text = ANY($1)
@@ -1276,13 +1311,19 @@ pub async fn search_candidates(
                 cur.pool_amount AS currency_pool_amount,
                 cl.id AS \"claimant_id!\",
                 cl.discord_id AS claimant_discord_id,
+                claimant_app.client_id::text AS claimant_client_id,
+                claimant_app.client_name AS claimant_client_name,
                 py.id AS \"payer_id!\",
                 py.discord_id AS payer_discord_id,
+                payer_app.client_id::text AS payer_client_id,
+                payer_app.client_name AS payer_client_name,
                 '{}'::jsonb AS \"metadata!\"
            FROM claims c
            JOIN currencies cur ON c.currency_id = cur.id
            JOIN users cl ON c.claimant_user_id = cl.id
            JOIN users py ON c.payer_user_id = py.id
+           LEFT JOIN applications claimant_app ON claimant_app.id = cl.application_id
+           LEFT JOIN applications payer_app ON payer_app.id = py.application_id
           WHERE c.status::text = ANY($1)
             AND ($2 = 'all'
                  AND (cl.discord_id = $3 OR py.discord_id = $3)

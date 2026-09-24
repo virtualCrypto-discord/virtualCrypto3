@@ -6,13 +6,24 @@ pub mod show;
 
 use serde_json::{Map, Value, json};
 use time::PrimitiveDateTime;
-use vc_core::claim::{Transition, TransitionError};
+use vc_core::claim::{ClaimUser, Transition, TransitionError};
 
 use crate::claim_list::Position;
 
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError};
 use crate::error::ApiError;
 use crate::state::AppState;
+
+/// A Discord user or Bot is mentioned; an unbound application needs its public identity.
+fn user_identity(user: &ClaimUser) -> String {
+    if let Some(discord_id) = user.discord_id {
+        super::mention(discord_id)
+    } else if let Some(client_id) = user.client_id.as_deref() {
+        super::application_identity(None, client_id, user.client_name.as_deref())
+    } else {
+        format!("不明なアカウント（ID: {}）", user.id)
+    }
+}
 
 /// `Command.handle/4`'s `"claim"` clauses: the subcommand picks a handler.
 pub async fn handle(

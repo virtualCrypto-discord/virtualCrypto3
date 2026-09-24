@@ -10,8 +10,8 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    client_id_of, execute_from_guild, fake, insert_application, insert_user, interaction,
-    setup_claim, state,
+    account_of, client_id_of, execute_from_guild, fake, insert_application, insert_claim,
+    insert_user, interaction, setup_claim, state,
 };
 
 fn router(pool: PgPool) -> Router {
@@ -146,6 +146,33 @@ async fn the_id_option_under_show_offers_every_status(pool: PgPool) {
     expected.reverse();
 
     assert_eq!(values(&response), expected);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn long_application_names_fit_claim_choices_without_changing_the_ids(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let payer = claims.money.user1;
+    for (id, name) in [(100, "a".repeat(100)), (101, "猫".repeat(100))] {
+        let app = insert_application(&pool, payer, &name).await;
+        let account = account_of(&pool, app).await;
+        insert_claim(&pool, id, 100, "pending", account, 1, claims.money.currency).await;
+    }
+
+    for command in ["approve", "deny", "show"] {
+        // The interaction helper validates every choice against Discord's schema.
+        let response = interaction(
+            router(pool.clone()),
+            autocomplete_payload("claim", focused_subcommand(command, "id", "10"), payer),
+        )
+        .await;
+        assert_eq!(response.status, 200);
+        assert_eq!(values(&response), ["101", "100"]);
+        for choice in choices(&response) {
+            let name = choice["name"].as_str().unwrap();
+            assert_eq!(name.chars().count(), 100);
+            assert!(name.contains(&format!("請求id: {}", choice["value"].as_str().unwrap())));
+        }
+    }
 }
 
 /// `/application show <client_id>`, and every other subcommand that names one: the uuid

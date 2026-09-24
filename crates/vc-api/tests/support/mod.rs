@@ -70,6 +70,8 @@ pub struct FakeDiscord {
     user_profile: Option<Map<String, Value>>,
     webhooks: Mutex<Vec<Value>>,
     callbacks: Mutex<Vec<Value>>,
+    response_edits: Mutex<Vec<Value>>,
+    response_edit_finished: tokio::sync::Notify,
     followup_gate: Option<Arc<tokio::sync::Semaphore>>,
     followup_error: bool,
     callback_error: bool,
@@ -135,6 +137,8 @@ impl FakeDiscord {
             user_profile: None,
             webhooks: Mutex::new(Vec::new()),
             callbacks: Mutex::new(Vec::new()),
+            response_edits: Mutex::new(Vec::new()),
+            response_edit_finished: tokio::sync::Notify::new(),
             followup_gate: None,
             followup_error: false,
             callback_error: false,
@@ -247,6 +251,14 @@ impl FakeDiscord {
         self.callbacks.lock().unwrap().clone()
     }
 
+    pub fn response_edits(&self) -> Vec<Value> {
+        self.response_edits.lock().unwrap().clone()
+    }
+
+    pub async fn response_edit_finished(&self) {
+        self.response_edit_finished.notified().await;
+    }
+
     pub async fn followup_started(&self) {
         self.followup_started.notified().await;
     }
@@ -356,6 +368,24 @@ impl DiscordApi for FakeDiscord {
             return Err(DiscordError::Request("simulated callback failure".into()));
         }
         self.callbacks.lock().unwrap().push(body.clone());
+        Ok(())
+    }
+
+    async fn edit_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        assert!(!application_id.is_empty());
+        assert!(!token.is_empty());
+        assert!(
+            !self.callbacks().is_empty(),
+            "edit sent before initial response"
+        );
+        discord_schema::Payload::OriginalResponse.assert_valid(body);
+        self.response_edits.lock().unwrap().push(body.clone());
+        self.response_edit_finished.notify_one();
         Ok(())
     }
 

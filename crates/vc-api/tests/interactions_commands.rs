@@ -612,7 +612,7 @@ async fn application_show_renders_the_callers_own(pool: PgPool) {
     assert!(rendered.contains("テスト"), "{rendered}");
 }
 
-/// The screen carries the subscription menu: the two events as choices, and the
+/// The screen carries the subscription menu: the three events as choices, and the
 /// menu's id names the application and the field, the way the other menus do.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_show_offers_the_event_menu(pool: PgPool) {
@@ -635,6 +635,68 @@ async fn application_show_offers_the_event_menu(pool: PgPool) {
 
     assert!(rendered.contains("通知イベント"), "{rendered}");
     assert!(rendered.contains("subscribed_events"), "{rendered}");
+    assert!(rendered.contains("契約の決定"), "{rendered}");
+
+    let options = field_menu_component(&response.body["data"], "subscribed_events")["options"]
+        .as_array()
+        .expect("event options");
+    let contract = options
+        .iter()
+        .find(|option| option["value"] == "4")
+        .unwrap();
+    assert_eq!(contract["label"], "契約の決定");
+}
+
+/// All four menus reflect persisted values on first display and after edits, including empty sets.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_menus_show_saved_selections(pool: PgPool) {
+    const DISCORD: i64 = 100_000_000_000_000_001;
+    support::insert_user(&pool, 1, DISCORD).await;
+    let application = support::insert_application(&pool, DISCORD, "テスト").await;
+    let client_id = support::client_id_of(&pool, application).await;
+    let mut shown = interaction(
+        router(pool.clone()),
+        application_payload("show", &client_id, DISCORD),
+    )
+    .await;
+    assert_eq!(shown.status, 200, "{}", shown.body);
+
+    let changes: &[(&str, &[&str], &[&str])] = &[
+        ("application_type", &["web"], &["native"]),
+        (
+            "grant_types",
+            &["authorization_code"],
+            &["authorization_code", "refresh_token"],
+        ),
+        ("response_types", &["code"], &[]),
+        ("subscribed_events", &["2", "3", "4"], &["2", "3"]),
+        ("grant_types", &["authorization_code", "refresh_token"], &[]),
+        ("subscribed_events", &["2", "3"], &[]),
+    ];
+    for &(field, before, after) in changes {
+        assert_eq!(
+            selected_values(&shown.body["data"], field),
+            before,
+            "{field}"
+        );
+        let menu = field_menu(&shown.body["data"], field);
+        shown = interaction(router(pool.clone()), chose_multi(&menu, after, DISCORD)).await;
+        assert_eq!(shown.status, 200, "{}", shown.body);
+        assert_eq!(
+            selected_values(&shown.body["data"], field),
+            after,
+            "{field}"
+        );
+    }
+
+    let now = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(now.application_type, "native");
+    assert!(now.grant_types.is_empty());
+    assert!(now.response_types.is_empty());
+    assert!(now.subscribed_events.is_empty());
 }
 
 /// Choosing the events writes the set and shows the screen again, so the person
@@ -672,12 +734,38 @@ async fn choosing_events_writes_the_set(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(rendered.contains("発行許可の決定"), "{rendered}");
+    assert_eq!(
+        selected_values(&response.body["data"], "subscribed_events"),
+        ["3"]
+    );
+
+    // Add an event to what Discord already has checked; the saved subscription must survive.
+    let mut selected = selected_values(&response.body["data"], "subscribed_events");
+    selected.push("4");
+    let added = interaction(router(pool.clone()), chose_multi(&menu, &selected, DISCORD)).await;
+    assert_eq!(added.status, 200, "{}", added.body);
+    let now = vc_api::routes::oauth2_clients::details(&pool, application)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(now.subscribed_events, [3, 4]);
+    assert_eq!(
+        selected_values(&added.body["data"], "subscribed_events"),
+        ["3", "4"]
+    );
 }
 
 /// The menu for one set field, out of the screen the bot rendered: the id whose
 /// field half names it.
 fn field_menu(screen: &Value, field: &str) -> String {
-    fn walk(value: &Value, field: &str, found: &mut Option<String>) {
+    field_menu_component(screen, field)["custom_id"]
+        .as_str()
+        .expect("menu id")
+        .to_owned()
+}
+
+fn field_menu_component<'a>(screen: &'a Value, field: &str) -> &'a Value {
+    fn walk<'a>(value: &'a Value, field: &str) -> Option<&'a Value> {
         match value {
             Value::Object(map) => {
                 if let Some(id) = map.get("custom_id").and_then(Value::as_str)
@@ -685,26 +773,27 @@ fn field_menu(screen: &Value, field: &str) -> String {
                         vc_api::custom_id::ui::developer::parse(&vc_api::custom_id::parse(id))
                     && vc_api::custom_id::ui::developer::field_of(&data).1 == field
                 {
-                    *found = Some(id.to_owned());
+                    return Some(value);
                 }
 
-                for nested in map.values() {
-                    walk(nested, field, found);
-                }
+                map.values().find_map(|nested| walk(nested, field))
             }
-            Value::Array(items) => {
-                for item in items {
-                    walk(item, field, found);
-                }
-            }
-            _ => {}
+            Value::Array(items) => items.iter().find_map(|item| walk(item, field)),
+            _ => None,
         }
     }
 
-    let mut found = None;
-    walk(screen, field, &mut found);
+    walk(screen, field).unwrap_or_else(|| panic!("no menu for {field} in {screen}"))
+}
 
-    found.unwrap_or_else(|| panic!("no menu for {field} in {screen}"))
+fn selected_values<'a>(screen: &'a Value, field: &str) -> Vec<&'a str> {
+    field_menu_component(screen, field)["options"]
+        .as_array()
+        .expect("menu options")
+        .iter()
+        .filter(|option| option["default"] == true)
+        .map(|option| option["value"].as_str().expect("option value"))
+        .collect()
 }
 
 /// Somebody else's uuid and a uuid that is not there are the same answer, which is the
