@@ -751,6 +751,7 @@ pub struct AuthorizedApplication {
     pub grant_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
+    pub bot_discord_id: Option<i64>,
     /// The currencies the grant covers, as `grant_resources` ids. Empty is every
     /// currency of the guild, which is what the screen names 「すべての通貨」, so
     /// that a narrowed grant and one that named nothing can be told apart.
@@ -805,10 +806,12 @@ pub async fn authorized_in_guild(
 
     let rows = sqlx::query!(
         r#"SELECT g.id AS grant_id, a.client_id::text AS "client_id!", a.client_name,
+                  bot.discord_id AS bot_discord_id,
                   COALESCE((SELECT array_agg(r.currency_id) FROM grant_resources r
                              WHERE r.grant_id = g.id), ARRAY[]::bigint[]) AS "resources!"
              FROM grants g
              JOIN applications a ON a.id = g.application_id
+             LEFT JOIN users bot ON bot.application_id = a.id
             WHERE g.guild_id = $1
               AND EXISTS (SELECT 1 FROM grant_scopes s
                            WHERE s.grant_id = g.id
@@ -832,6 +835,7 @@ pub async fn authorized_in_guild(
                 grant_id: row.grant_id,
                 client_id: row.client_id,
                 client_name: row.client_name,
+                bot_discord_id: row.bot_discord_id,
                 resources: row.resources,
             })
             .collect(),
@@ -1285,6 +1289,7 @@ pub struct Review {
     pub application_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
+    pub bot_discord_id: Option<i64>,
     pub target: Target,
     pub scopes: Vec<String>,
     pub resources: Vec<i64>,
@@ -1304,8 +1309,10 @@ pub async fn review_requests(
     let rows = sqlx::query!(
         r#"SELECT r.id AS request_id, r.application_id,
                   a.client_id::text AS "client_id!", a.client_name, r.guild_id, r.discord_id,
+                  bot.discord_id AS bot_discord_id,
                   r.scopes AS "scopes!", r.resources AS "resources!"
              FROM grant_requests r JOIN applications a ON a.id = r.application_id
+             LEFT JOIN users bot ON bot.application_id = a.id
             WHERE ((r.user_code = $1 AND $2::bigint IS NULL) OR r.id = $2)
               AND (r.discord_id = $3 OR r.guild_id = $4)
               AND r.status = 'pending'
@@ -1326,6 +1333,7 @@ pub async fn review_requests(
                 application_id: row.application_id,
                 client_id: row.client_id,
                 client_name: row.client_name,
+                bot_discord_id: row.bot_discord_id,
                 target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
                 scopes: row.scopes,
                 resources: row.resources,
@@ -1389,6 +1397,7 @@ pub struct PersonalApplication {
     pub grant_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
+    pub bot_discord_id: Option<i64>,
     pub scopes: Vec<String>,
     pub resources: Vec<i64>,
 }
@@ -1410,9 +1419,11 @@ pub async fn personal_applications(
     let page = page.clamp(1, last);
     let rows = sqlx::query!(
         r#"SELECT g.id AS grant_id, a.client_id::text AS "client_id!", a.client_name,
+                  bot.discord_id AS bot_discord_id,
                   ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS "scopes!",
                   ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS "resources!"
              FROM grants g JOIN applications a ON a.id = g.application_id
+             LEFT JOIN users bot ON bot.application_id = a.id
             WHERE g.discord_id = $1 ORDER BY g.inserted_at DESC, g.id DESC LIMIT $2 OFFSET $3"#,
         user, limit, (page - 1) * limit
     ).fetch_all(pool).await?;
@@ -1422,6 +1433,7 @@ pub async fn personal_applications(
                 grant_id: row.grant_id,
                 client_id: row.client_id,
                 client_name: row.client_name,
+                bot_discord_id: row.bot_discord_id,
                 scopes: row.scopes,
                 resources: row.resources,
             })
@@ -1438,6 +1450,7 @@ pub struct GrantDetails {
     pub application_id: i64,
     pub client_id: String,
     pub client_name: Option<String>,
+    pub bot_discord_id: Option<i64>,
     pub target: Target,
     pub scopes: Vec<String>,
     pub resources: Vec<i64>,
@@ -1451,10 +1464,11 @@ pub async fn grant_details(
     guild: Option<i64>,
 ) -> Result<Option<GrantDetails>> {
     let row = sqlx::query!(r#"SELECT g.id, g.application_id AS "application_id!", g.guild_id, g.discord_id,
-        a.client_id::text AS "client_id!", a.client_name,
+        a.client_id::text AS "client_id!", a.client_name, bot.discord_id AS bot_discord_id,
         ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS "scopes!",
         ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS "resources!"
         FROM grants g JOIN applications a ON a.id = g.application_id
+        LEFT JOIN users bot ON bot.application_id = a.id
         WHERE g.id = $1 AND (g.discord_id = $2 OR g.guild_id = $3)"#, id, user, guild).fetch_optional(pool).await?;
     row.map(|r| {
         Ok(GrantDetails {
@@ -1462,6 +1476,7 @@ pub async fn grant_details(
             application_id: r.application_id,
             client_id: r.client_id,
             client_name: r.client_name,
+            bot_discord_id: r.bot_discord_id,
             target: Target::of(r.guild_id, r.discord_id).ok_or(sqlx::Error::RowNotFound)?,
             scopes: r.scopes,
             resources: r.resources,

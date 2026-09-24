@@ -100,7 +100,7 @@ pub fn mention(id: impl std::fmt::Display) -> String {
     format!("<@{id}>")
 }
 
-/// The identity shown before approving a contract or paying an application's claim.
+/// The identity shown for grants, contracts, and an application's claims.
 pub(super) fn application_identity(
     bot_discord_id: Option<i64>,
     client_id: &str,
@@ -140,7 +140,7 @@ pub fn is_administrator(permissions: u64) -> bool {
 pub fn as_int(value: &Value) -> Option<i64> {
     match value {
         Value::String(text) => text.parse().ok(),
-        Value::Number(number) => number.as_i64(),
+        Value::Number(_) => crate::json_number::as_i64(value),
         _ => None,
     }
 }
@@ -150,7 +150,7 @@ pub fn as_int(value: &Value) -> Option<i64> {
 pub fn as_permissions(value: &Value) -> Option<u64> {
     match value {
         Value::String(text) => text.parse().ok(),
-        Value::Number(number) => number.as_u64(),
+        Value::Number(_) => crate::json_number::as_u64(value),
         _ => None,
     }
 }

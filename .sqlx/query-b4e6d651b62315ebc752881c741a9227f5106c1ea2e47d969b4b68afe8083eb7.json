@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT g.id AS grant_id, a.client_id::text AS \"client_id!\", a.client_name,\n                  ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS \"scopes!\",\n                  ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS \"resources!\"\n             FROM grants g JOIN applications a ON a.id = g.application_id\n            WHERE g.discord_id = $1 ORDER BY g.inserted_at DESC, g.id DESC LIMIT $2 OFFSET $3",
+  "query": "SELECT g.id AS grant_id, a.client_id::text AS \"client_id!\", a.client_name,\n                  bot.discord_id AS bot_discord_id,\n                  ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS \"scopes!\",\n                  ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS \"resources!\"\n             FROM grants g JOIN applications a ON a.id = g.application_id\n             LEFT JOIN users bot ON bot.application_id = a.id\n            WHERE g.discord_id = $1 ORDER BY g.inserted_at DESC, g.id DESC LIMIT $2 OFFSET $3",
   "describe": {
     "columns": [
       {
@@ -33,12 +33,23 @@
       },
       {
         "ordinal": 3,
+        "name": "bot_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "scopes!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "resources!",
         "type_info": "Int8Array",
         "origin": "Expression"
@@ -55,9 +66,10 @@
       false,
       null,
       true,
+      true,
       null,
       null
     ]
   },
-  "hash": "180aa4abc78f7ea8cc800a0dae32761cc20f44135be7be5cb0aefd8471004a66"
+  "hash": "b4e6d651b62315ebc752881c741a9227f5106c1ea2e47d969b4b68afe8083eb7"
 }

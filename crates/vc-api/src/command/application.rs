@@ -503,7 +503,7 @@ pub async fn component(
     let data = payload.get("data");
     let component_type = data
         .and_then(|data| data.get("component_type"))
-        .and_then(Value::as_i64);
+        .and_then(crate::json_number::as_i64);
 
     match (component_type, screen) {
         // The list's menu. Its id says which screen the menu is on rather than what choosing

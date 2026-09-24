@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT r.id AS request_id, r.application_id,\n                  a.client_id::text AS \"client_id!\", a.client_name, r.guild_id, r.discord_id,\n                  r.scopes AS \"scopes!\", r.resources AS \"resources!\"\n             FROM grant_requests r JOIN applications a ON a.id = r.application_id\n            WHERE ((r.user_code = $1 AND $2::bigint IS NULL) OR r.id = $2)\n              AND (r.discord_id = $3 OR r.guild_id = $4)\n              AND r.status = 'pending'\n              AND r.inserted_at + make_interval(secs => r.expires_in) > $5\n            ORDER BY r.id",
+  "query": "SELECT r.id AS request_id, r.application_id,\n                  a.client_id::text AS \"client_id!\", a.client_name, r.guild_id, r.discord_id,\n                  bot.discord_id AS bot_discord_id,\n                  r.scopes AS \"scopes!\", r.resources AS \"resources!\"\n             FROM grant_requests r JOIN applications a ON a.id = r.application_id\n             LEFT JOIN users bot ON bot.application_id = a.id\n            WHERE ((r.user_code = $1 AND $2::bigint IS NULL) OR r.id = $2)\n              AND (r.discord_id = $3 OR r.guild_id = $4)\n              AND r.status = 'pending'\n              AND r.inserted_at + make_interval(secs => r.expires_in) > $5\n            ORDER BY r.id",
   "describe": {
     "columns": [
       {
@@ -66,6 +66,17 @@
       },
       {
         "ordinal": 6,
+        "name": "bot_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "scopes!",
         "type_info": "TextArray",
         "origin": {
@@ -76,7 +87,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "resources!",
         "type_info": "Int8Array",
         "origin": {
@@ -103,9 +114,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "d5d6222d12a341105d63298521d514cc6216ac79409a3d664e2a14acf4917248"
+  "hash": "2f55592a27a60323279b1d93b0176ff2e6f43b0fa598b5f3303cbdfe5fcc0140"
 }

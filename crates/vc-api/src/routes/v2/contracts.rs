@@ -435,7 +435,10 @@ fn asked(body: &Value) -> Result<Asked, ApiError> {
 
     let expires_in = match object.get("expires_in") {
         None | Some(Value::Null) => None,
-        Some(Value::Number(seconds)) => seconds.as_i64(),
+        Some(value @ Value::Number(_)) => Some(
+            crate::json_number::as_i64(value)
+                .ok_or(ApiError::InvalidRequest("invalid_expires_in"))?,
+        ),
         Some(_) => return Err(ApiError::InvalidRequest("invalid_type_of_variable")),
     };
 

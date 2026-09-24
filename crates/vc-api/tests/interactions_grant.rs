@@ -187,6 +187,116 @@ async fn an_ask_is_not_on_the_list(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
+async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
+    use vc_api::custom_id::ui::grant as ids;
+    use vc_core::grant::Target;
+
+    const BOT: i64 = 700_000_000_000_000_001;
+    const NAME: &str = "`\n<@987654321987654321>\r\n**trusted** @everyone <@&123>";
+    let application = insert_application(&pool, FIRST_OWNER, "normal").await;
+    let account = support::account_of(&pool, application).await;
+    let client_id = client_id_of(&pool, application).await;
+    let token = support::mint_app(&pool, account, &["oauth2.register"]).await;
+    let http = router(pool.clone());
+    // This name is accepted through the real API. Only its presentation changes.
+    let patch = axum::http::Request::builder()
+        .method("PATCH")
+        .uri("/oauth2/clients/@me")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::from(
+            json!({"client_name": NAME}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(http.clone().oneshot(patch).await.unwrap().status(), 204);
+
+    for bound in [false, true] {
+        let expected = if bound {
+            vc_core::user::bind_bot(&pool, account, BOT).await.unwrap();
+            format!("<@{BOT}>")
+        } else {
+            format!(
+                "Bot未連携: `｀ <@987654321987654321>  **trusted** @everyone <@&123>`\nclient_id: `{client_id}`"
+            )
+        };
+        let check = |response: &Response| {
+            assert_eq!(response.status, 200, "{}", response.body);
+            let text = texts(response).join("\n");
+            assert!(text.contains(&expected), "{text}");
+            // Mentions in code are literal text; outside code only the verified
+            // binding may be rendered. Name-supplied backticks cannot escape it.
+            let outside_code = text.split('`').step_by(2).collect::<String>();
+            let outside_code = if bound {
+                assert!(!text.contains(NAME));
+                assert!(!text.contains(&client_id));
+                outside_code.replace(&expected, "")
+            } else {
+                outside_code
+            };
+            assert!(!outside_code.contains("<@"), "{text}");
+            assert!(!outside_code.contains("@everyone"), "{text}");
+            assert!(!outside_code.contains("**trusted**"), "{text}");
+            assert_eq!(
+                response.body["data"]["allowed_mentions"]["parse"],
+                json!([])
+            );
+        };
+        for target in [Target::User(ADMIN), Target::Guild(DEFAULT_GUILD)] {
+            let scope = match target {
+                Target::User(_) => "vc.delegate.payments.create",
+                Target::Guild(_) => "vc.issue",
+            };
+            let asked = vc_core::grant::request_grant(
+                &pool,
+                application,
+                target,
+                &[scope.into()],
+                &[],
+                600,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            .unwrap();
+            let command = |options| match target {
+                Target::User(_) => from_dm(ADMIN, options),
+                Target::Guild(_) => grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, options),
+            };
+            let review =
+                interaction(http.clone(), command(approve_options(&asked.user_code))).await;
+            check(&review);
+            let page = interaction(
+                http.clone(),
+                press_as(command(json!([])), &ids::review_page_custom_id(asked.id, 1)),
+            )
+            .await;
+            check(&page);
+            interaction(
+                http.clone(),
+                press_as(command(json!([])), &buttons(&review)[0]),
+            )
+            .await;
+            let grant_id: i64 =
+                sqlx::query_scalar("SELECT grant_id FROM grant_requests WHERE id=$1")
+                    .bind(asked.id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let list = interaction(
+                http.clone(),
+                command(json!([{"name": if matches!(target, Target::User(_)) { "user" } else { "server" }, "type":1}])),
+            ).await;
+            check(&list);
+            let details = interaction(
+                http.clone(),
+                press_as(command(json!([])), &ids::details_custom_id(grant_id, 1)),
+            )
+            .await;
+            check(&details);
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_shows_who_may_issue(pool: PgPool) {
     let (app, client_id) = authorized(&pool, FIRST_OWNER, "an application").await;
     let grant_id = vc_core::grant::grant_for(&pool, app, DEFAULT_GUILD)
@@ -207,7 +317,9 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
             "**発行を許可しているアプリケーション** (1件)\n\
              取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
-            format!("**an application**\n`{client_id}`\nこの申請は、すべての通貨を操作できます。"),
+            format!(
+                "Bot未連携: `an application`\nclient_id: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
+            ),
         ]
     );
     assert_eq!(
@@ -248,7 +360,9 @@ async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
         texts(&response)[1],
-        format!("**an application**\n`{client_id}`\nこの申請は、通貨 nyan だけを操作できます。")
+        format!(
+            "Bot未連携: `an application`\nclient_id: `{client_id}`\nこの申請は、通貨 nyan だけを操作できます。"
+        )
     );
 }
 
@@ -339,7 +453,9 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
 
     assert_eq!(
         texts(&response)[1],
-        format!("**an application**\n`{client_id}`\nこの申請は、すべての通貨を操作できます。")
+        format!(
+            "Bot未連携: `an application`\nclient_id: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
+        )
     );
     assert_eq!(
         buttons(&response),
@@ -500,7 +616,7 @@ async fn the_list_pages(pool: PgPool) {
              取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
-                "**an application 0**\n`{}`\nこの申請は、すべての通貨を操作できます。",
+                "Bot未連携: `an application 0`\nclient_id: `{}`\nこの申請は、すべての通貨を操作できます。",
                 client_ids[0]
             ),
         ]
@@ -562,7 +678,7 @@ async fn the_list_pages(pool: PgPool) {
              取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
-                "**an application 0**\n`{}`\nこの申請は、すべての通貨を操作できます。",
+                "Bot未連携: `an application 0`\nclient_id: `{}`\nこの申請は、すべての通貨を操作できます。",
                 client_ids[0]
             ),
         ]

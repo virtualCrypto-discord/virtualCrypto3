@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT g.id, g.application_id AS \"application_id!\", g.guild_id, g.discord_id,\n        a.client_id::text AS \"client_id!\", a.client_name,\n        ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS \"scopes!\",\n        ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS \"resources!\"\n        FROM grants g JOIN applications a ON a.id = g.application_id\n        WHERE g.id = $1 AND (g.discord_id = $2 OR g.guild_id = $3)",
+  "query": "SELECT g.id, g.application_id AS \"application_id!\", g.guild_id, g.discord_id,\n        a.client_id::text AS \"client_id!\", a.client_name, bot.discord_id AS bot_discord_id,\n        ARRAY(SELECT scope::text FROM grant_scopes WHERE grant_id = g.id ORDER BY scope::text) AS \"scopes!\",\n        ARRAY(SELECT currency_id FROM grant_resources WHERE grant_id = g.id ORDER BY currency_id) AS \"resources!\"\n        FROM grants g JOIN applications a ON a.id = g.application_id\n        LEFT JOIN users bot ON bot.application_id = a.id\n        WHERE g.id = $1 AND (g.discord_id = $2 OR g.guild_id = $3)",
   "describe": {
     "columns": [
       {
@@ -66,12 +66,23 @@
       },
       {
         "ordinal": 6,
+        "name": "bot_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "scopes!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "resources!",
         "type_info": "Int8Array",
         "origin": "Expression"
@@ -91,9 +102,10 @@
       true,
       null,
       true,
+      true,
       null,
       null
     ]
   },
-  "hash": "cf7ac6d696edb9800ebbdece361826438a2203c78ba345ea0108633460a78c42"
+  "hash": "1f8270a7a7f4a1d802f69fd45426603f241e666252954ec17036615cea707b03"
 }

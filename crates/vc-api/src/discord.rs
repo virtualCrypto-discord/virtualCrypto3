@@ -29,6 +29,7 @@ pub enum DiscordError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshedToken {
     pub token: String,
+    #[serde(deserialize_with = "crate::json_number::deserialize_i64")]
     pub expires_in: i64,
     pub refresh_token: Option<String>,
 }
@@ -473,6 +474,7 @@ async fn token_response(response: reqwest::Response) -> Result<RefreshedToken, D
     #[derive(serde::Deserialize)]
     struct TokenResponse {
         access_token: String,
+        #[serde(deserialize_with = "crate::json_number::deserialize_i64")]
         expires_in: i64,
         refresh_token: Option<String>,
     }

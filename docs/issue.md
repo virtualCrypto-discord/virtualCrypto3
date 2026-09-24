@@ -117,6 +117,11 @@ The common `/grant approve` command reviews personal and server requests. Server
 requests require administrator permission in the requested server; personal requests
 require the requested user and also work in DMs.
 
+Approval screens, grant lists and details identify applications by their bound
+Discord Bot. Unbound applications show `Bot未連携`, their name as literal code
+and their `client_id`; backticks and line breaks in the name cannot escape the
+code span to render mentions or Markdown.
+
 - `/grant server` shows the applications this guild has allowed to issue, five to a
   page, each with the button that takes the permission back. It names the
   currency each one may issue — the guild's own, by unit rather than by id — so

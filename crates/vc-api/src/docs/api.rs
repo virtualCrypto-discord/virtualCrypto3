@@ -612,7 +612,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "`parties[].discord_id`（文字列・必須） 対象者のDiscord IDです。",
             "`parties[].amount`（文字列・必須） その人がロックする枚数です。1以上。",
             "`receiver_discord_id`（文字列か `null`・任意） 支払いを受け取る相手です。省略すると契約ごとに決められます。",
-            "`expires_in`（数値か `null`・任意） 期限までの秒数です。**契約を作った時点**から数えるので、承認が遅れても期限は延びません。1秒以上、365日（31536000秒）以下です。省略すると期限なしになり、そのときはいつでも取り消せます。",
+            "`expires_in`（数値か `null`・任意） 期限までの秒数を整数値で指定します。**契約を作った時点**から数えるので、承認が遅れても期限は延びません。1秒以上、365日（31536000秒）以下です。省略か `null` で期限なしになり、そのときはいつでも取り消せます。",
         ],
         example: Some(Example {
             request: &[
@@ -663,7 +663,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"not_found_currency\"}` `unit` の通貨が無いとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_amount\"}` 対象者の `amount` が1以上でないとき。",
             "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_parties\"}` 対象者が1人もいない、50人を超える、または同じ人が2回書かれているとき。",
-            "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_expires_in\"}` `expires_in` が0以下、または365日を超えるとき。",
+            "400 `{\"error\": \"invalid_request\", \"error_description\": \"invalid_expires_in\"}` `expires_in` が整数値でない、0以下、または365日を超えるとき。",
         ],
     },
     Endpoint {
@@ -1313,7 +1313,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "Spending: `vc.delegate.payments.create` permits single/bulk payments; `vc.delegate.claims.approve` permits approving and paying a claim.",
             "Claims: `vc.delegate.claims.create`, `vc.delegate.claims.deny`, `vc.delegate.claims.cancel`, `vc.delegate.claims.metadata.write`. A status change with explicit metadata requires both permissions.",
             "`resource`（配列・任意） このグラントで操作する通貨を、絶対URIで並べます。1つの通貨は `https://{site}/api/v2/currencies/{id}`、対象のすべての通貨は `https://{site}/api/v2/currencies` です。何も置かない場合と、すべての通貨の形を置く場合は、同じ意味になります。どの通貨を扱うか前もって分からないアプリケーション（口座に合わせてから決まるもの）は、すべての通貨の形を置いてください。",
-            "`expires_in`（数値・任意） 申請が生きる秒数です。既定600、上限3600。",
+            "`expires_in`（数値・任意） 申請が生きる秒数を整数値で指定します。既定600、上限3600。",
         ],
         // `tests/grant_requests.rs`'s `an_application_may_ask_a_guild`.
         example: Some(Example {

@@ -253,6 +253,10 @@ pub struct Registration {
     /// The event types the application wants delivered, as the `type` values
     /// the delivery bodies carry. Absent is everything — the default, which is
     /// what an application that never names a subscription gets.
+    #[serde(
+        default,
+        deserialize_with = "crate::json_number::deserialize_optional_i64_vec"
+    )]
     pub subscribed_events: Option<Vec<i64>>,
     /// The caller's Discord id, which the handler obtained by asking Discord about
     /// them — it is not taken from the request, and this is here to say so.
@@ -815,8 +819,7 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
             values
                 .iter()
                 .map(|value| {
-                    value
-                        .as_i64()
+                    crate::json_number::as_i64(value)
                         .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
                 })
                 .collect::<Option<Vec<_>>>()

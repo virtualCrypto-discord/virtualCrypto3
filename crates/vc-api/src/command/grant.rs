@@ -267,9 +267,12 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
     for app in apps {
         let (label, needs_details) = currency_label(state, &app.resources).await?;
         children.push(text(format!(
-            "**{}**\n`{}`\n{}\nCurrencies: {}",
-            name_of(app.client_name.as_deref()),
-            app.client_id,
+            "{}\n{}\nCurrencies: {}",
+            super::application_identity(
+                app.bot_discord_id,
+                &app.client_id,
+                app.client_name.as_deref()
+            ),
             permissions(&app.scopes),
             label
         )));
@@ -363,9 +366,12 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
             // read differently.
 
             children.push(text(format!(
-                "**{}**\n`{}`\nこの申請は、{}を操作できます。",
-                name_of(application.client_name.as_deref()),
-                application.client_id,
+                "{}\nこの申請は、{}を操作できます。",
+                super::application_identity(
+                    application.bot_discord_id,
+                    &application.client_id,
+                    application.client_name.as_deref()
+                ),
                 label,
             )));
             let mut actions = vec![button(
@@ -412,13 +418,6 @@ fn pagination_row(authorized: &vc_core::grant::AuthorizedApplications) -> Value 
     ])
 }
 
-fn name_of(client_name: Option<&str>) -> String {
-    client_name
-        .filter(|name| !name.is_empty())
-        .unwrap_or("(名前なし)")
-        .to_string()
-}
-
 async fn currency_label(
     state: &AppState,
     resources: &[i64],
@@ -455,26 +454,29 @@ async fn review_screen(
     requested: i64,
     kind: i64,
 ) -> Result<Value, CommandError> {
-    let (key, target, client_name, client_id, scopes, resources, pending) = match display {
-        ReviewDisplay::Pending(r) => (
-            r.request_id,
-            r.target,
-            &r.client_name,
-            &r.client_id,
-            &r.scopes,
-            &r.resources,
-            true,
-        ),
-        ReviewDisplay::Granted(g) => (
-            g.grant_id,
-            g.target,
-            &g.client_name,
-            &g.client_id,
-            &g.scopes,
-            &g.resources,
-            false,
-        ),
-    };
+    let (key, target, client_name, client_id, bot_discord_id, scopes, resources, pending) =
+        match display {
+            ReviewDisplay::Pending(r) => (
+                r.request_id,
+                r.target,
+                &r.client_name,
+                &r.client_id,
+                r.bot_discord_id,
+                &r.scopes,
+                &r.resources,
+                true,
+            ),
+            ReviewDisplay::Granted(g) => (
+                g.grant_id,
+                g.target,
+                &g.client_name,
+                &g.client_id,
+                g.bot_discord_id,
+                &g.scopes,
+                &g.resources,
+                false,
+            ),
+        };
     let units = crate::resource::units(state.pool(), resources).await?;
     let mut pages = vec![String::new()];
     if units.is_empty() {
@@ -499,9 +501,8 @@ async fn review_screen(
         "Granted access"
     };
     let mut children = vec![text(format!(
-        "**{heading}**\nApplication: {}\nClient: `{}`\nTarget: {target_label}\n\n{}\nCurrencies ({} selected; page {page}/{last}):\n{}",
-        name_of(client_name.as_deref()),
-        client_id,
+        "**{heading}**\nApplication: {}\nTarget: {target_label}\n\n{}\nCurrencies ({} selected; page {page}/{last}):\n{}",
+        super::application_identity(bot_discord_id, client_id, client_name.as_deref()),
         permissions(scopes),
         if units.is_empty() {
             "all".to_owned()

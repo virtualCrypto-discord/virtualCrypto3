@@ -92,6 +92,17 @@ async fn refresh_and_code_exchange_read_discords_wire_format() {
 }
 
 #[tokio::test]
+async fn token_lifetimes_accept_integral_decimals_but_not_fractions() {
+    let (client, _server) = server(vec![
+        (200, json!({"access_token":"opaque", "expires_in":3600.0})),
+        (200, json!({"access_token":"opaque", "expires_in":3600.5})),
+    ])
+    .await;
+    assert_eq!(client.exchange_code("code").await.unwrap().expires_in, 3600);
+    assert!(client.refresh_token("refresh").await.is_err());
+}
+
+#[tokio::test]
 async fn token_responses_require_success_and_a_lifetime() {
     let (client, _server) = server(vec![
         (401, token()),

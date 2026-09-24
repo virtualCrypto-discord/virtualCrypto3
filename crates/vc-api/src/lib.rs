@@ -10,6 +10,7 @@ pub mod discord_auth;
 pub mod discord_commands;
 pub mod docs;
 pub mod error;
+mod json_number;
 pub mod notification;
 pub mod permissions;
 pub mod rate_limit;

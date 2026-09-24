@@ -50,14 +50,17 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         return text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
     }
 
-    if matches!(payload.get("type").and_then(Value::as_i64), Some(2 | 3 | 5)) {
+    if matches!(
+        payload.get("type").and_then(crate::json_number::as_i64),
+        Some(2 | 3 | 5)
+    ) {
         return super::interaction_receipts::run(state, payload).await;
     }
     dispatch(&state, &payload).await
 }
 
 pub(super) async fn dispatch(state: &AppState, payload: &Value) -> Response {
-    match payload.get("type").and_then(Value::as_i64) {
+    match payload.get("type").and_then(crate::json_number::as_i64) {
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
         Some(2) => command(state, payload).await,
@@ -87,7 +90,7 @@ async fn autocomplete(state: &AppState, payload: &Value) -> Response {
     // A subcommand's options sit one level down, and the focused one is the
     // option Discord says the user is typing in.
     let (path, focused) = match options.and_then(|options| options.first()) {
-        Some(option) if option.get("type").and_then(Value::as_i64) == Some(1) => {
+        Some(option) if option.get("type").and_then(crate::json_number::as_i64) == Some(1) => {
             let subcommand = option
                 .get("name")
                 .and_then(Value::as_str)
@@ -178,7 +181,7 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         .and_then(Value::as_str);
     let component_type = data
         .and_then(|data| data.get("component_type"))
-        .and_then(Value::as_i64);
+        .and_then(crate::json_number::as_i64);
 
     // The developer screens have a head byte of their own, so trying them first cannot read a
     // button that belongs to another screen — which is what their ids are for.

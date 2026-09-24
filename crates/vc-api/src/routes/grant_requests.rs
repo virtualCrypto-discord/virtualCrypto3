@@ -59,6 +59,10 @@ pub struct GrantRequest {
     pub discord_id: Option<String>,
     pub scopes: Option<Vec<String>>,
     pub resource: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "crate::json_number::deserialize_optional_i64"
+    )]
     pub expires_in: Option<i64>,
 }
 

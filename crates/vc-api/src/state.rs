@@ -252,7 +252,7 @@ fn command_ids(
         .flatten()
     {
         if matches!(
-            option.get("type").and_then(serde_json::Value::as_i64),
+            option.get("type").and_then(crate::json_number::as_i64),
             Some(1 | 2)
         ) && let Some(option) = option.as_object()
         {
