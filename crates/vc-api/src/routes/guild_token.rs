@@ -17,6 +17,7 @@ use axum::Json;
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
+use axum::http::header::RETRY_AFTER;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
@@ -85,15 +86,19 @@ impl FromRequestParts<AppState> for GuildToken {
 
         // Counted per application, which is the identity a guild token has: one
         // application's tokens cannot spend another's allowance.
-        if !state
+        if let Err(remaining) = state
             .limiter()
             .allow(&format!("guild:{}", resolved.application_id))
         {
-            return Err((
+            let mut response = (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({ "error": "rate_limited" })),
             )
-                .into_response());
+                .into_response();
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, crate::rate_limit::retry_after(remaining));
+            return Err(response);
         }
 
         Ok(GuildToken {

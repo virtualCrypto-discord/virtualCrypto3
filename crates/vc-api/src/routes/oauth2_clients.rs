@@ -10,11 +10,13 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::header;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::borrow::Cow;
+use std::time::Duration;
 use time::OffsetDateTime;
 use vc_auth::AuthUser;
 
@@ -269,11 +271,15 @@ pub struct Registration {
 /// The endpoint says it as JSON and the command surface reads the description out, so the
 /// flows stop here and each surface talks. `description` is absent for an error that is
 /// this service's fault: the reason goes to the log, and the caller is told it was ours.
+///
+/// `retry_after` is only for a refusal that is about time — a rate limit — where the
+/// body says which window was hit and the header says when it is over.
 #[derive(Debug, Clone)]
 pub struct Refusal {
     pub status: StatusCode,
     pub error: Cow<'static, str>,
     pub description: Option<Cow<'static, str>>,
+    pub retry_after: Option<HeaderValue>,
 }
 
 impl Refusal {
@@ -285,7 +291,15 @@ impl Refusal {
             body["error_description"] = json!(description.as_ref());
         }
 
-        (self.status, Json(body)).into_response()
+        let mut response = (self.status, Json(body)).into_response();
+
+        if let Some(retry_after) = &self.retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, retry_after.clone());
+        }
+
+        response
     }
 }
 
@@ -302,6 +316,7 @@ pub fn refusal(
         status,
         error: error.into(),
         description: Some(description.into()),
+        retry_after: None,
     })
 }
 
@@ -676,8 +691,9 @@ pub async fn create(
     if let Some(webhook_url) = new.webhook_url.as_deref() {
         // The handshake is the expensive thing here, and this is what stops one
         // requester spending all of it.
-        if let Some(too_soon) = state.handshake_limiter().refuse(&subject.to_string()) {
-            return Err(Box::new(rate_limited(too_soon)));
+        if let Some((too_soon, remaining)) = state.handshake_limiter().refuse(&subject.to_string())
+        {
+            return Err(Box::new(rate_limited(too_soon, remaining)));
         }
 
         let (handshake, through_proxy) =
@@ -722,8 +738,10 @@ pub async fn create(
 ///
 /// The three windows answer different questions — a retry storm, somebody
 /// hammering, a day's worth of this service's time — so a client is told which one
-/// it hit rather than only that it hit one.
-fn rate_limited(too_soon: TooSoon) -> Refusal {
+/// it hit rather than only that it hit one. The body says which; the `Retry-After`
+/// says how much of it is left, which is what a client waiting rather than giving
+/// up actually needs.
+fn rate_limited(too_soon: TooSoon, remaining: Duration) -> Refusal {
     let description = match too_soon {
         TooSoon::Seconds3 => "retry_after_3_seconds",
         TooSoon::Hour => "retry_after_1_hour",
@@ -734,6 +752,7 @@ fn rate_limited(too_soon: TooSoon) -> Refusal {
         status: StatusCode::TOO_MANY_REQUESTS,
         error: "rate_limit_exceeded".into(),
         description: Some(description.into()),
+        retry_after: Some(crate::rate_limit::retry_after(remaining)),
     }
 }
 
@@ -773,6 +792,7 @@ pub fn internal(why: &'static str) -> Refusal {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         error: "server_error".into(),
         description: None,
+        retry_after: None,
     }
 }
 
@@ -1046,8 +1066,8 @@ pub async fn apply(
 
             // The handshake is the expensive thing here, and this is what stops one
             // requester spending all of it.
-            if let Some(too_soon) = state.handshake_limiter().refuse(key) {
-                return Err(Box::new(rate_limited(too_soon)));
+            if let Some((too_soon, remaining)) = state.handshake_limiter().refuse(key) {
+                return Err(Box::new(rate_limited(too_soon, remaining)));
             }
 
             let (handshake, through_proxy) =

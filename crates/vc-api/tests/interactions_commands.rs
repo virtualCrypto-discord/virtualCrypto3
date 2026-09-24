@@ -548,6 +548,20 @@ async fn a_user_is_held_to_their_allowance(pool: PgPool) {
     let second = interaction(app(), execute_from_guild(json!({ "name": "help" }), 12)).await;
     assert_eq!(second.status, 429, "body: {}", second.body);
 
+    // The refusal says how long the window it hit has left, which is the whole
+    // point of waiting rather than giving up.
+    let retry_after = second
+        .headers
+        .get("retry-after")
+        .expect("a refusal says how long to wait for")
+        .to_str()
+        .expect("a count of seconds");
+    let seconds: u64 = retry_after.parse().expect("a whole number of seconds");
+    assert!(
+        (1..=60).contains(&seconds),
+        "Retry-After was {seconds}, outside the window"
+    );
+
     // Another user brings their own allowance.
     let other = interaction(app(), execute_from_guild(json!({ "name": "help" }), 13)).await;
     assert_eq!(other.status, 200, "body: {}", other.body);

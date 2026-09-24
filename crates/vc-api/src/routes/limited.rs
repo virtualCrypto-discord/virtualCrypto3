@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 
 use axum::Json;
 use axum::extract::{FromRequest, FromRequestParts, Request};
-use axum::http::{StatusCode, header::AUTHORIZATION, request::Parts};
+use axum::http::{StatusCode, header::AUTHORIZATION, header::RETRY_AFTER, request::Parts};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -206,12 +206,16 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                 .map_err(|_| ApiError::Internal("subject out of range".into()).into_response())?,
             Principal::Delegated { account_id, .. } => *account_id,
         };
-        if !state.limiter().allow(&format!("v2:{account_id}")) {
-            return Err((
+        if let Err(remaining) = state.limiter().allow(&format!("v2:{account_id}")) {
+            let mut response = (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({"error":"rate_limited"})),
             )
-                .into_response());
+                .into_response();
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, crate::rate_limit::retry_after(remaining));
+            return Err(response);
         }
         principal
             .authorize(P::OPERATION)

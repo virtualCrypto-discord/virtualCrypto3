@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
@@ -45,9 +45,13 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
 
     // A loose per-user allowance, held against the authenticated Discord user.
     if let Some(user) = crate::command::get_user(&payload)
-        && !state.limiter().allow(&format!("discord:{user}"))
+        && let Err(remaining) = state.limiter().allow(&format!("discord:{user}"))
     {
-        return text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
+        let mut response = text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, crate::rate_limit::retry_after(remaining));
+        return response;
     }
 
     if matches!(

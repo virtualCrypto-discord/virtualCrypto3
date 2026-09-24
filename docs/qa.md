@@ -376,8 +376,8 @@ belief into a fact, and each of these was run while the code was written:
 | a currency read outside the grant | `GET /api/v2/currencies/{id}`, with a grant's token | 403 `insufficient_scope` |
 | the balances and claims lists | with a grant narrowed to one currency | 200, the rows of that currency only — filtered, not refused |
 | `Accept` of `text/html` alone | any `/api` route | 406, before any handler |
-| three handshakes within three seconds | a webhook | the third is `retry_after_3_seconds` |
-| `RATE_LIMIT_PER_MINUTE=1`, two requests | any v2 route | 429 on the second |
+| three handshakes within three seconds | a webhook | the third is `retry_after_3_seconds`, with `Retry-After` naming the rest of the three seconds |
+| `RATE_LIMIT_PER_MINUTE=1`, two requests | any v2 route | 429 on the second, with `Retry-After` naming the rest of the minute |
 
 ### 2.5 Runtime shapes
 
