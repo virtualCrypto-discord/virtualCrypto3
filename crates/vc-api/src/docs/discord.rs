@@ -79,31 +79,23 @@ fn mention(name: &str, id: u64) -> String {
 /// The command a piece of prose opens with, the id it is filed under, and what follows it —
 /// the space between them included.
 ///
-/// A command may be followed by one subcommand, which is the longest path Discord has an id
-/// for: `/claim make`, and never `/claim make user:<送信先>`, whose arguments are what the
-/// person reads rather than what they press.
-///
-/// What tells a subcommand from the first argument is the command itself: one that has
-/// subcommands is followed by one — so `/claim show`, of an application whose registry has no
-/// `/claim show`, is left unlinked rather than half-linked to `/claim`, which would send the
-/// person somewhere else — and one that has none, like `/pay`, is followed by its arguments.
+/// Follow registered subcommands and groups before treating the remainder as
+/// arguments. An unknown child is left unlinked, rather than linking its parent.
 fn command_head<'a>(text: &'a str, ids: &BTreeMap<String, u64>) -> Option<(String, u64, &'a str)> {
     let rest = text.strip_prefix('/')?;
-    let (first, after) = split_word(rest);
-
-    if let Some(word) = after.strip_prefix(' ') {
-        let (second, after_second) = split_word(word);
-
-        if let Some(id) = ids.get(&format!("{first} {second}")) {
-            return Some((format!("{first} {second}"), *id, after_second));
-        }
-
-        if subcommands_of(first, ids) {
-            return None;
-        }
+    let (first, mut after) = split_word(rest);
+    let mut path = first.to_owned();
+    let mut id = ids.get(&path).copied();
+    while subcommands_of(&path, ids) {
+        let Some(word) = after.strip_prefix(' ') else {
+            break;
+        };
+        let (child, remaining) = split_word(word);
+        path = format!("{path} {child}");
+        id = ids.get(&path).copied();
+        after = remaining;
     }
-
-    Some((first.to_owned(), *ids.get(first)?, after))
+    Some((path, id?, after))
 }
 
 /// Whether a command has subcommands, which is what tells the word after it apart from the
@@ -454,7 +446,7 @@ mod tests {
         BTreeMap::from([
             ("pay".to_owned(), 1),
             ("claim".to_owned(), 2),
-            ("claim make".to_owned(), 3),
+            ("claim make".to_owned(), 2),
         ])
     }
 
@@ -485,7 +477,7 @@ mod tests {
         assert_eq!(
             mentions("`/claim show` は1件を表示します。", &ids),
             "`/claim show` は1件を表示します。",
-            "a subcommand with no id of its own cannot be named by a mention"
+            "an unregistered subcommand cannot be named by a mention"
         );
         assert_eq!(
             mentions("真ん中に `/pay` がある文。", &ids),
@@ -514,12 +506,12 @@ mod tests {
         );
         assert_eq!(
             mentions("`/claim make` で請求を作ります。", &ids),
-            "</claim make:3> で請求を作ります。",
+            "</claim make:2> で請求を作ります。",
             "a subcommand is a mention of its own"
         );
         assert_eq!(
             mentions("`/claim make user:<請求先>` と入力します。", &ids),
-            "</claim make:3> `user:<請求先>` と入力します。",
+            "</claim make:2> `user:<請求先>` と入力します。",
             "the command is as long as its path, and no longer"
         );
     }
@@ -536,7 +528,7 @@ mod tests {
 
     /// A fence is what somebody types, so every line stays exactly as it was written — a mention
     /// goes in prose, because Discord does not resolve one inside a code block and would show
-    /// the raw `</claim make:3>`. The ids are in hand and unused: a fence has no place for one.
+    /// the raw `</claim make:2>`. The ids are in hand and unused: a fence has no place for one.
     #[test]
     fn a_fence_keeps_the_command_as_it_was_written() {
         assert!(ids().contains_key("claim make"), "an id to put somewhere");

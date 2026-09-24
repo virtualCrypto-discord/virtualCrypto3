@@ -292,8 +292,8 @@ async fn a_usage_line_stays_as_it_was_written(pool: PgPool) {
                 "name": "claim",
                 "id": "21",
                 "options": [
-                    { "name": "make", "id": "22", "type": 1 },
-                    { "name": "show", "id": "23", "type": 1 },
+                    { "name": "make", "type": 1 },
+                    { "name": "show", "type": 1 },
                 ],
             })]),
         )),
@@ -396,40 +396,14 @@ async fn no_command_puts_a_mention_in_a_code_block(pool: PgPool) {
     );
 }
 
-/// Every registered command with an id, and an id for each of its subcommands — what Discord
-/// answers `get_application_commands` with once the commands are registered.
+/// Discord returns an id only on the top-level command.
 fn commands_with_ids() -> Vec<Value> {
     vc_api::discord_commands::commands()
         .iter()
         .enumerate()
         .map(|(index, command)| {
-            let base = 1_000_000_000 + index as u64 * 100;
-
-            let subcommands: Vec<Value> = command["options"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                // 1 is a subcommand and 2 a group of them; both take a place in the path.
-                .filter(|option| option["type"] == 1 || option["type"] == 2)
-                .enumerate()
-                .map(|(sub, option)| {
-                    json!({
-                        "name": option["name"].clone(),
-                        "id": (base + sub as u64 + 1).to_string(),
-                        "type": 1,
-                    })
-                })
-                .collect();
-
-            let mut payload = json!({
-                "name": command["name"].clone(),
-                "id": base.to_string(),
-            });
-
-            if !subcommands.is_empty() {
-                payload["options"] = Value::Array(subcommands);
-            }
-
+            let mut payload = command.clone();
+            payload["id"] = json!((1_000_000_000 + index as u64).to_string());
             payload
         })
         .collect()

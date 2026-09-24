@@ -32,13 +32,16 @@ use time::PrimitiveDateTime;
 /// The ask is the one whose expiry is not a column: it is the moment it was made
 /// plus the `expires_in` it asked for, which is the same sum its two readers
 /// compute.
-const EXPIRING: [&str; 6] = [
+const EXPIRING: [&str; 7] = [
     "DELETE FROM user_access_tokens WHERE expires < $1",
     "DELETE FROM payments_idempotency WHERE expires < $1",
     "DELETE FROM authorization_codes WHERE expires < $1",
     "DELETE FROM access_tokens WHERE expires < $1",
     "DELETE FROM refresh_tokens WHERE expires < $1",
     "DELETE FROM grant_requests WHERE inserted_at + make_interval(secs => expires_in) < $1",
+    // The endpoint rejects signatures older than five minutes, so a deleted
+    // receipt cannot allow its original signed request to execute again.
+    "DELETE FROM discord_interactions WHERE inserted_at < $1 - interval '24 hours'",
 ];
 
 /// How many rows went, which is what a caller logs: zero is the common answer and

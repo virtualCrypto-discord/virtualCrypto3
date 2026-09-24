@@ -58,6 +58,9 @@ pub struct FakeDiscord {
     /// Empty unless a test sets it, and an empty list is a deployment whose links are
     /// missing rather than a failure.
     commands: Vec<Map<String, Value>>,
+    command_gate: Option<Arc<tokio::sync::Semaphore>>,
+    command_calls: AtomicUsize,
+    command_failures: AtomicUsize,
     /// What the integrations call and the guild call after it answer. Both 200 unless a
     /// test says otherwise, which is how the two 403s are told apart: the integrations
     /// call refuses either way, and the guild call is what says whether the service is
@@ -129,6 +132,9 @@ impl FakeDiscord {
             roles: Vec::new(),
             integrations: Vec::new(),
             commands: Vec::new(),
+            command_gate: None,
+            command_calls: AtomicUsize::new(0),
+            command_failures: AtomicUsize::new(0),
             integrations_status: 200,
             guild_status: 200,
             refresh_calls: AtomicUsize::new(0),
@@ -158,9 +164,7 @@ impl FakeDiscord {
         )
     }
 
-    /// The same, in the endpoint's own shape: a subcommand is an option with an id of its own,
-    /// and `</claim make:id>` is written with that id, so a test that reads a subcommand's
-    /// mention has to write one.
+    /// Subcommands are options without an id, as in Discord's response.
     pub fn with_command_payloads(commands: Vec<Value>) -> Arc<Self> {
         let mut fake = Self::new();
 
@@ -170,6 +174,34 @@ impl FakeDiscord {
             .collect();
 
         Arc::new(fake)
+    }
+
+    pub fn gated_commands(gate: Arc<tokio::sync::Semaphore>) -> Arc<Self> {
+        let mut fake = Self::new();
+        fake.commands = vec![
+            json!({"name": "info", "id": "123"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ];
+        fake.command_gate = Some(gate);
+        Arc::new(fake)
+    }
+
+    pub fn failing_commands_once() -> Arc<Self> {
+        let mut fake = Self::new();
+        fake.commands = vec![
+            json!({"name": "info", "id": "123"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ];
+        fake.command_failures = AtomicUsize::new(1);
+        Arc::new(fake)
+    }
+
+    pub fn command_calls(&self) -> usize {
+        self.command_calls.load(Ordering::SeqCst)
     }
 
     /// The integrations `get_guild_integrations_with_status` reports, which is where
@@ -316,6 +348,20 @@ impl DiscordApi for FakeDiscord {
     }
 
     async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
+        self.command_calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.command_gate {
+            let permit = gate.acquire().await.expect("command gate open");
+            permit.forget();
+        }
+        if self
+            .command_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(DiscordError::Request(
+                "temporary command discovery failure".into(),
+            ));
+        }
         Ok(self.commands.clone())
     }
 
@@ -653,14 +699,18 @@ pub fn discord_public_key() -> [u8; 32] {
 /// `timestamp <> body`, with the signature hex-encoded.
 pub fn sign_interaction(body: &[u8]) -> (String, String) {
     let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
+    let signature = sign_interaction_at(body, &timestamp);
+    (timestamp, signature)
+}
 
+pub fn sign_interaction_at(body: &[u8], timestamp: &str) -> String {
     let mut message = Vec::with_capacity(timestamp.len() + body.len());
     message.extend_from_slice(timestamp.as_bytes());
     message.extend_from_slice(body);
 
     let signature = ed25519_dalek::Signer::sign(&discord_signing_key(), &message);
 
-    (timestamp, hex::encode(signature.to_bytes()))
+    hex::encode(signature.to_bytes())
 }
 
 pub async fn insert_user(pool: &PgPool, id: i32, discord_id: i64) {
@@ -1212,7 +1262,11 @@ pub fn modal_submit_from_guild(data: Value, user: i64) -> Value {
 }
 
 /// `InteractionsCase.execute_interaction/2`: sign the body and POST it.
-pub async fn interaction(app: Router, payload: Value) -> Response {
+pub async fn interaction(app: Router, mut payload: Value) -> Response {
+    static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
+    if payload.get("id").is_none() {
+        payload["id"] = json!(NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string());
+    }
     let body = serde_json::to_vec(&payload).expect("encode body");
     let (timestamp, signature) = sign_interaction(&body);
 

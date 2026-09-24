@@ -90,6 +90,23 @@ sqlx migrate run --source crates/vc-core/migrations
 The baseline is a single migration and `just migrate` runs exactly this, so a
 deployment has one command to run and one directory to ship.
 
+Migration `0021_discord_interactions.sql` adds durable receipts for Discord
+commands, components and modal submissions. The first request claims its
+interaction ID before dispatch; duplicates replay the recorded HTTP response.
+An in-progress or interrupted request returns 409 on duplicate delivery.
+
+The existing purge job deletes receipts and response bodies after 24 hours
+(normally on its next one-minute tick). Requests with a signature timestamp older
+than five minutes or more than 30 seconds in the future are refused, so replaying
+an old signed request remains ineffective after its receipt is deleted. Keep the
+server clock synchronized, and keep the scheduler enabled for automatic cleanup.
+
+Do not delete an unfinished receipt to retry a command: its payment may already
+have committed before the process stopped. Check the payment history before
+deciding whether another payment is needed. The receipt temporarily stores the
+response (including ephemeral response content), but not the incoming
+interaction token or request body.
+
 ## The frontend
 
 `web/dist` is not committed; CI builds it (`web` job) and a deployment packages the

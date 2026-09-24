@@ -26,28 +26,44 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         return text(StatusCode::UNAUTHORIZED, "invalid request signature");
     }
 
+    // Receipts are purged after 24 hours. Accept signed requests for only five
+    // minutes, with 30 seconds of forward clock skew, so deleting a receipt
+    // cannot make its old signed request executable again.
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    if !timestamp
+        .parse::<i64>()
+        .is_ok_and(|signed_at| (now - 300..=now + 30).contains(&signed_at))
+    {
+        return text(StatusCode::UNAUTHORIZED, "expired request signature");
+    }
+
     // An unparsable body is a `Type Not Found` rather than a signature failure:
     // the signature already passed, so the request is genuinely ours.
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
         return text(StatusCode::BAD_REQUEST, "Type Not Found");
     };
 
-    // A loose per-user allowance, held against the Discord user the signature
-    // has just established. Discord retries an interaction it thinks failed, so
-    // this is what keeps a retry storm from becoming one of ours.
+    // A loose per-user allowance, held against the authenticated Discord user.
     if let Some(user) = crate::command::get_user(&payload)
         && !state.limiter().allow(&format!("discord:{user}"))
     {
         return text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
     }
 
+    if matches!(payload.get("type").and_then(Value::as_i64), Some(2 | 3 | 5)) {
+        return super::interaction_receipts::run(state, payload).await;
+    }
+    dispatch(&state, &payload).await
+}
+
+pub(super) async fn dispatch(state: &AppState, payload: &Value) -> Response {
     match payload.get("type").and_then(Value::as_i64) {
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
-        Some(2) => command(&state, &payload).await,
-        Some(3) => component(&state, &payload).await,
-        Some(4) => autocomplete(&state, &payload).await,
-        Some(5) => modal(&state, &payload).await,
+        Some(2) => command(state, payload).await,
+        Some(3) => component(state, payload).await,
+        Some(4) => autocomplete(state, payload).await,
+        Some(5) => modal(state, payload).await,
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }
 }

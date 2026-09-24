@@ -13,6 +13,17 @@ use tower::ServiceExt;
 
 const URI: &str = "/api/integrations/discord/interactions";
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_command_without_an_interaction_id_is_refused(pool: PgPool) {
+    let response = interaction(
+        router(pool),
+        serde_json::json!({"type":2, "data":{"name":"help"}, "user":{"id":"12"}}),
+    )
+    .await;
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body, "Missing or invalid interaction ID");
+}
+
 async fn send(app: Router, body: &[u8], signed: bool) -> Response {
     let mut builder = Request::builder()
         .method("POST")

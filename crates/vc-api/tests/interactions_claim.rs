@@ -1075,7 +1075,6 @@ const BUTTON_NOT_FOUND: &str = "エラー: そのidの請求は見つかりま�
 /// button press, carrying the token the follow-up is posted to.
 fn action_data(custom_id: String, user: i64) -> Value {
     json!({
-        "id": "123456789012345678",
         "type": 3,
         "data": { "custom_id": custom_id, "component_type": 2 },
         "member": {
@@ -1962,6 +1961,34 @@ async fn pressing_the_show_screens_approve_as_the_claimant_is_refused(pool: PgPo
         .expect("a lookup")
         .expect("the claim exists");
     assert_eq!(claim.status.as_deref(), Some("pending"));
+}
+
+/// A repeated delivery must not post another callback or follow-up.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn duplicate_button_replays_the_ack_without_another_callback(pool: PgPool) {
+    let claims = setup_claim(&pool).await;
+    let id = claims.id(0);
+    let api = fake();
+    let mut payload = action_data(action_custom_id(Action::Approve, &[id]), claims.money.user2);
+    payload["id"] = json!("900000000000000005");
+    let first = interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        payload.clone(),
+    )
+    .await;
+    assert_eq!(first.status, 202);
+    tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_finished())
+        .await
+        .unwrap();
+    let duplicate = interaction(vc_api::router(state(pool, api.clone())), payload).await;
+    assert_eq!(duplicate.status, 202);
+    assert_eq!(duplicate.body, first.body);
+    assert_eq!(
+        duplicate.headers.get("content-type"),
+        first.headers.get("content-type")
+    );
+    assert_eq!(api.callbacks().len(), 1);
+    assert_eq!(api.webhooks().len(), 1);
 }
 
 /// A notification outage cannot turn an already-paid claim into a failed interaction.

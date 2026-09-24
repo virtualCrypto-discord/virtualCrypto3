@@ -5,6 +5,7 @@ pub mod grant_requests;
 pub mod grants;
 pub mod guild_token;
 pub mod idempotency;
+mod interaction_receipts;
 pub mod interactions;
 pub mod limited;
 pub mod oauth2;

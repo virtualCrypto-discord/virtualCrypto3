@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use sqlx::PgPool;
 use vc_auth::AuthState;
@@ -74,7 +76,7 @@ pub struct AppState {
     limiter: Arc<RateLimiter>,
     /// This application's commands and their ids, which a command mention is written with.
     /// Read from Discord once and remembered; see [`AppState::command_ids`].
-    command_ids: Arc<tokio::sync::OnceCell<std::collections::BTreeMap<String, u64>>>,
+    command_ids: Arc<CommandIds>,
 }
 
 impl AppState {
@@ -95,36 +97,48 @@ impl AppState {
             discord,
             outbound,
             limiter,
-            command_ids: Arc::new(tokio::sync::OnceCell::new()),
+            command_ids: Arc::new(CommandIds::default()),
         }
     }
 
-    /// The ids of this application's commands, keyed by name — what `</name:id>` needs.
-    ///
-    /// Read once per process and remembered, because the ids change when the commands are
-    /// re-registered, which is a deploy-time act, and every `/help` asking Discord would be
-    /// a call per help. A deployment that cannot answer — no bot token, no network — gets
-    /// an empty map, which is not a failure: the screens then name a command without
-    /// linking it.
-    ///
-    /// A subcommand has an id of its own, which is what `</claim make:id>` is written with,
-    /// so its key is the path: `claim make`.
-    pub async fn command_ids(&self) -> &std::collections::BTreeMap<String, u64> {
-        self.command_ids
-            .get_or_init(|| async {
-                let Ok(commands) = self.discord.get_application_commands().await else {
-                    return std::collections::BTreeMap::new();
-                };
+    /// Command discovery gets at most 100ms of the response budget. A slow
+    /// request continues in the background, and later responses use its result.
+    /// Failed discovery is retried by a later call instead of caching an outage.
+    pub async fn command_ids(&self) -> &BTreeMap<String, u64> {
+        static EMPTY: BTreeMap<String, u64> = BTreeMap::new();
+        let cache = &self.command_ids;
+        if let Some(ids) = cache.ids.get() {
+            return ids;
+        }
 
-                let mut ids = std::collections::BTreeMap::new();
-
-                for command in &commands {
-                    command_ids(command, "", &mut ids);
+        let ready = cache.ready.notified();
+        tokio::pin!(ready);
+        ready.as_mut().enable();
+        if let Ok(guard) = cache.fetch.clone().try_lock_owned() {
+            let cache = cache.clone();
+            let discord = self.discord.clone();
+            tokio::spawn(async move {
+                let _guard = guard;
+                if cache.ids.get().is_none()
+                    && let Ok(Ok(commands)) = tokio::time::timeout(
+                        Duration::from_secs(10),
+                        discord.get_application_commands(),
+                    )
+                    .await
+                {
+                    let mut ids = BTreeMap::new();
+                    for command in &commands {
+                        command_ids(command, "", None, &mut ids);
+                    }
+                    let _ = cache.ids.set(ids);
                 }
-
-                ids
-            })
-            .await
+                cache.ready.notify_waiters();
+            });
+        }
+        if cache.ids.get().is_none() {
+            let _ = tokio::time::timeout(Duration::from_millis(100), ready).await;
+        }
+        cache.ids.get().unwrap_or(&EMPTY)
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -195,15 +209,18 @@ impl AuthState for AppState {
     }
 }
 
-/// One command of the registration payload, and every subcommand under it, keyed by the path
-/// a mention is written with.
-///
-/// Discord gives each subcommand an id of its own, and an id it did not give — a command whose
-/// payload has none yet, which is a registration that has not happened — is one no mention can
-/// name, so it is left out rather than filed as zero.
+#[derive(Default)]
+struct CommandIds {
+    ids: OnceLock<BTreeMap<String, u64>>,
+    fetch: Arc<tokio::sync::Mutex<()>>,
+    ready: tokio::sync::Notify,
+}
+
+/// Subcommands and groups use their top-level command's id in every mention.
 fn command_ids(
     command: &serde_json::Map<String, serde_json::Value>,
     prefix: &str,
+    parent_id: Option<u64>,
     into: &mut std::collections::BTreeMap<String, u64>,
 ) {
     let Some(name) = command.get("name").and_then(serde_json::Value::as_str) else {
@@ -216,14 +233,15 @@ fn command_ids(
         format!("{prefix} {name}")
     };
 
-    let id = command
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|id| id.parse().ok());
+    let id = parent_id.or_else(|| {
+        command
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| id.parse().ok())
+    });
+    let Some(id) = id else { return };
 
-    if let Some(id) = id {
-        into.insert(path.clone(), id);
-    }
+    into.insert(path.clone(), id);
 
     // 1 is a subcommand and 2 a group of them; both take a place in the path, which is why
     // the walk does not care which it found.
@@ -238,7 +256,7 @@ fn command_ids(
             Some(1 | 2)
         ) && let Some(option) = option.as_object()
         {
-            command_ids(option, &path, into);
+            command_ids(option, &path, Some(id), into);
         }
     }
 }
