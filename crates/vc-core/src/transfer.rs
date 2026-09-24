@@ -7,15 +7,17 @@ use crate::model::utc_now;
 /// Lock participants in account-id order before touching any balances. Account
 /// rows exist even when an asset row is absent or is deleted at zero. NO KEY
 /// UPDATE also permits the foreign-key checks of concurrent account resolution.
-/// Single and bulk transfers use the same order, including their receivers.
-async fn lock_participants(conn: &mut PgConnection, ids: &[i32]) -> Result<(), TransferError> {
+/// Single and bulk transfers, and contract refunds, use the same order.
+pub(crate) async fn lock_participants(
+    conn: &mut PgConnection,
+    ids: &[i32],
+) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE",
         ids
     )
     .fetch_all(conn)
-    .await
-    .map_err(TransferError::Database)?;
+    .await?;
     Ok(())
 }
 
@@ -51,7 +53,9 @@ pub async fn transfer(
         .map_err(TransferError::Database)?
         .ok_or(TransferError::NotFoundCurrency)?;
 
-    lock_participants(conn, &[sender_id, receiver_id]).await?;
+    lock_participants(conn, &[sender_id, receiver_id])
+        .await
+        .map_err(TransferError::Database)?;
 
     let sender = sqlx::query!(
         "SELECT amount FROM assets
@@ -188,7 +192,9 @@ pub async fn transfer_bulk(
     let participants: Vec<i32> = std::iter::once(sender_id)
         .chain(totals.keys().map(|(_, receiver)| *receiver))
         .collect();
-    lock_participants(conn, &participants).await?;
+    lock_participants(conn, &participants)
+        .await
+        .map_err(TransferError::Database)?;
 
     let currency_ids: Vec<i64> = per_currency.keys().copied().collect();
 

@@ -220,7 +220,7 @@ fn pagination_row(open: &vc_core::contract::OpenContracts) -> Value {
 }
 
 /// One contract: who is asking, what the caller's part is, how far
-/// the rest has come, and how long it lasts.
+/// the rest has come, where money may go, and how long it lasts.
 fn describe(contract: &Contract, me: i64) -> String {
     let application = super::application_identity(
         contract.bot_discord_id,
@@ -243,9 +243,13 @@ fn describe(contract: &Contract, me: i64) -> String {
         Some(at) => format!("期限: {}", format_date_time(at)),
         None => "期限: なし（いつでも取り消せます）".to_string(),
     };
+    let receiver = match contract.receiver_discord_id {
+        Some(id) => format!("送金先: <@{id}> に限定"),
+        None => "送金先: 制限なし".to_string(),
+    };
 
     format!(
-        "{application}\n（{unit}） — {}\nあなたの分: {amount}／{mine} ・ 承認 {approved}/{} ・ 残り {}\n{deadline}",
+        "{application}\n（{unit}） — {}\nあなたの分: {amount}／{mine} ・ 承認 {approved}/{} ・ 残り {}\n{receiver}\n{deadline}",
         contract_status(&contract.status),
         contract.parties.len(),
         contract.remaining,

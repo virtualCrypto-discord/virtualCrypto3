@@ -193,6 +193,142 @@ async fn opposite_single_and_bulk_payments_both_commit(pool: PgPool) {
     assert_eq!(count, 6);
 }
 
+#[derive(Clone, Copy)]
+enum Refund {
+    Withdraw,
+    Refuse,
+    Expire,
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn contract_refunds_and_single_or_bulk_payments_both_commit(pool: PgPool) {
+    use vc_core::contract::{self, NewParty};
+
+    let money = setup_money(&pool).await;
+    let pending_party = money.user2 + 1;
+    insert_user(&pool, 3, pending_party).await;
+    let application = insert_application(&pool, money.user1, "refund test").await;
+    // Hold B -> A after locking B's balance but before writing A's. Before
+    // refunds shared the participant locks, a refund could write A and wait
+    // for B, leaving both operations waiting for the other's balance lock.
+    sqlx::raw_sql(
+        "CREATE FUNCTION payment_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+             IF NEW.user_id = 1 AND NEW.amount = 10 THEN
+                 PERFORM pg_advisory_xact_lock_shared(919293);
+             END IF;
+             RETURN NEW;
+         END $$;
+         CREATE TRIGGER payment_gate BEFORE INSERT ON assets
+         FOR EACH ROW EXECUTE FUNCTION payment_gate();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for (ending, expires_in, status) in [
+        (Refund::Withdraw, None, "canceled"),
+        (Refund::Refuse, None, "canceled"),
+        (Refund::Expire, Some(60), "expired"),
+    ] {
+        for bulk in [false, true] {
+            for empty_wallet in [false, true] {
+                let before_a = if empty_wallet { 100_i64 } else { 1_000 };
+                sqlx::query("UPDATE assets SET amount=$1 WHERE user_id=1 AND currency_id=$2")
+                    .bind(before_a)
+                    .bind(money.currency)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                let before_b = get_amount(&pool, money.user2, money.currency).await;
+                let now = time::OffsetDateTime::now_utc();
+                let id = contract::create(
+                    &pool,
+                    application,
+                    &money.unit,
+                    &[
+                        NewParty {
+                            discord_id: money.user1,
+                            amount: 100,
+                        },
+                        NewParty {
+                            discord_id: money.user2,
+                            amount: 100,
+                        },
+                        NewParty {
+                            discord_id: pending_party,
+                            amount: 100,
+                        },
+                    ],
+                    None,
+                    expires_in,
+                    now,
+                )
+                .await
+                .unwrap();
+                contract::approve(&pool, id, 1, now).await.unwrap();
+                contract::approve(&pool, id, 2, now).await.unwrap();
+                assert_eq!(
+                    get_amount(&pool, money.user1, money.currency).await,
+                    before_a - 100
+                );
+
+                let mut gate = pool.begin().await.unwrap();
+                sqlx::query("SELECT pg_advisory_xact_lock(919293)")
+                    .execute(&mut *gate)
+                    .await
+                    .unwrap();
+                let payment = tokio::spawn(pay(pool.clone(), 2, money.user1, bulk));
+                wait_for_blocked(&pool, 1).await;
+                let refund_pool = pool.clone();
+                let refund = tokio::spawn(async move {
+                    match ending {
+                        Refund::Withdraw => contract::withdraw(&refund_pool, id, 1, now).await,
+                        Refund::Refuse => contract::refuse(&refund_pool, id, 3, now).await,
+                        Refund::Expire => {
+                            contract::settle(&refund_pool, id, now + time::Duration::seconds(60))
+                                .await
+                        }
+                    }
+                });
+                wait_for_blocked(&pool, 2).await;
+                gate.rollback().await.unwrap();
+                let (payment, refund) = tokio::time::timeout(Duration::from_secs(5), async {
+                    tokio::join!(payment, refund)
+                })
+                .await
+                .unwrap();
+                payment.unwrap().unwrap();
+                assert!(refund.unwrap().unwrap());
+
+                assert_eq!(
+                    get_amount(&pool, money.user1, money.currency).await,
+                    before_a + 10
+                );
+                assert_eq!(
+                    get_amount(&pool, money.user2, money.currency).await,
+                    before_b - 10
+                );
+                let contract = contract::find(&pool, id).await.unwrap().unwrap();
+                assert_eq!(contract.status, status);
+                assert_eq!(contract.remaining, 0);
+                assert!(contract.parties.iter().all(|party| party.remaining == 0));
+                let records: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM currency_payment_histories WHERE contract_id=$1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(records, 4, "two locks and two refunds");
+                let escrow: i64 = sqlx::query_scalar("SELECT COALESCE(sum(a.amount), 0)::bigint FROM assets a JOIN users u ON u.id=a.user_id WHERE u.contract_id=$1")
+                    .bind(id).fetch_one(&pool).await.unwrap();
+                assert_eq!(escrow, 0);
+            }
+        }
+    }
+}
+
 async fn pay(
     pool: PgPool,
     sender: i32,

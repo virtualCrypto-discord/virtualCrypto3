@@ -130,6 +130,7 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
             "Bot未連携: `an application`\nclient_id: `{client_id}`\n\
          （nyan） — 承認待ち\n\
          あなたの分: 100／未回答 ・ 承認 0/1 ・ 残り 0\n\
+         送金先: 制限なし\n\
          期限: なし（いつでも取り消せます）"
         )
     );
@@ -141,6 +142,59 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
             custom_id(Action::Refuse, id),
         ]
     );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn fixed_receivers_and_unrestricted_contracts_are_distinguishable(pool: PgPool) {
+    let application = fixture(&pool).await;
+    let mut contracts = Vec::new();
+    for receiver in [Some(PARTY_DISCORD_ID), Some(STRANGER_DISCORD_ID), None] {
+        let id = vc_core::contract::create(
+            &pool,
+            application,
+            "nyan",
+            &[vc_core::contract::NewParty {
+                discord_id: PARTY_DISCORD_ID,
+                amount: 100,
+            }],
+            receiver,
+            None,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .unwrap();
+        contracts.push((id, receiver));
+    }
+    let response = interaction(
+        router(&pool, std::sync::Arc::new(Recorded::default())),
+        execute_from_guild(
+            json!({ "name": "contract", "options": [{ "name": "list", "type": 1 }] }),
+            PARTY_DISCORD_ID,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 200);
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap();
+    for (id, receiver) in contracts {
+        let approve = custom_id(Action::Approve, id);
+        let row = children
+            .iter()
+            .position(|child| child["components"][0]["custom_id"].as_str() == Some(&approve))
+            .expect("approval button");
+        let text = children[row - 1]["content"].as_str().unwrap();
+        match receiver {
+            Some(receiver) => {
+                assert!(text.contains(&format!("送金先: <@{receiver}> に限定")));
+                assert!(!text.contains("制限なし"));
+            }
+            None => {
+                assert!(text.contains("送金先: 制限なし"));
+                assert!(!text.contains("に限定"));
+            }
+        }
+    }
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -281,6 +335,7 @@ async fn approving_from_the_button_locks_it(pool: PgPool) {
             "Bot未連携: `an application`\nclient_id: `{client_id}`\n\
          （nyan） — 全員承認済み\n\
          あなたの分: 100／承認済み ・ 承認 1/1 ・ 残り 100\n\
+         送金先: 制限なし\n\
          期限: なし（いつでも取り消せます）"
         )
     );

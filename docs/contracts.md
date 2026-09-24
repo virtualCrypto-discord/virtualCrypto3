@@ -277,9 +277,12 @@ everything, which is the one thing an explicit set must not mean.
 **`/contract list` in Discord**, and only there. A contract is between an
 application and a user, so no guild is being asked anything — which is why the
 command runs in a DM as well as in a guild. It shows who is asking, what the
-caller's part of it is, how far the rest has come and how long it lasts, and
-offers only the answers that contract takes: 承認する and 拒否する while it is
-waiting, 取り消す once it is theirs to take back.
+caller's part of it is, how far the rest has come, where money may go and how long
+it lasts, and offers only the answers that contract takes: 承認する and 拒否する
+while it is waiting, 取り消す once it is theirs to take back.
+
+A fixed receiver is shown as a Discord mention. Without a fixed receiver, the
+screen says `制限なし`.
 
 The application is shown as a mention of its bound Discord Bot. An application
 without a binding is marked `Bot未連携`, with its self-chosen name and public

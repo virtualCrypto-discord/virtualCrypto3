@@ -1338,6 +1338,20 @@ async fn end(
     ended: Ended,
     now: PrimitiveDateTime,
 ) -> std::result::Result<(), sqlx::Error> {
+    // The contract row already serializes access to its escrow. Refunds also
+    // touch several public wallets, so lock those accounts in the same order as
+    // ordinary transfers before writing balances, including absent asset rows.
+    let recipients = sqlx::query_scalar!(
+        "SELECT u.id
+           FROM contract_parties p
+           JOIN users u ON u.discord_id = p.discord_id
+          WHERE p.contract_id = $1 AND p.remaining > 0",
+        contract_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    crate::transfer::lock_participants(&mut *tx, &recipients).await?;
+
     sqlx::query!(
         "UPDATE assets
             SET amount = amount - (SELECT COALESCE(SUM(p.remaining), 0)

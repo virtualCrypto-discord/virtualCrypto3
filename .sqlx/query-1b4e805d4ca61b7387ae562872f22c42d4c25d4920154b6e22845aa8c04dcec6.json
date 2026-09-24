@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id\n           FROM contract_parties p\n           JOIN users u ON u.discord_id = p.discord_id\n          WHERE p.contract_id = $1 AND p.remaining > 0",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1b4e805d4ca61b7387ae562872f22c42d4c25d4920154b6e22845aa8c04dcec6"
+}
