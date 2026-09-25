@@ -54,8 +54,16 @@ sqlx-prepare:
 # check reads only the library and the binaries, and every query that lives in a
 # test — the fixtures, the pool refill's, most of `tests/` — is reported as data
 # nobody uses, with the advice to re-run the command that put it there.
+#
+# `MBX_DISABLE`, for the same symptom and the opposite reason. The check learns
+# queries from the compiler, and mbx restores artifacts by content instead of
+# running it: the sqlx macros never expand, no query is discovered, and every
+# committed file is reported as potentially unused — while the check passes,
+# having compared nothing. Corrupting one query in `.sqlx` leaves the mbx-on
+# check green and fails this one. `scripts/sqlx-prepare.sh` switches the same
+# variable for the same reason.
 sqlx-check:
-	cargo sqlx prepare --workspace --check -- --all-targets
+	MBX_DISABLE=1 cargo sqlx prepare --workspace --check -- --all-targets
 
 # Verify the sqlx baseline reproduces the Ecto schema and is idempotent.
 baseline-check:
