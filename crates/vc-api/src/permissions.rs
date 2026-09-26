@@ -121,7 +121,8 @@ pub enum GuildAccess {
 /// guild that could not be read and one that is not there are the same nothing to
 /// act for.
 pub async fn guild_access(state: &AppState, guild_id: i64, account_id: i32) -> GuildAccess {
-    let Some(guild) = state.discord().get_guild(guild_id).await.ok().flatten() else {
+    // Ownership is authority, so never use the display cache here.
+    let Ok((200, guild)) = state.discord().get_guild_with_status(guild_id).await else {
         return GuildAccess::Unknown;
     };
 

@@ -358,3 +358,78 @@ async fn cancelled_lookup_releases_flight_lock() {
     );
     assert!(entries.flights.lock().unwrap().is_empty());
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn guild_authority_uses_live_ownership_even_when_display_data_is_cached(pool: sqlx::PgPool) {
+    use crate::permissions::{GuildAccess, guild_access};
+    use crate::state::{AppState, Links, Outbound, Signing};
+
+    let old_owner = vc_core::user::resolve_discord_id(&pool, 111).await.unwrap();
+    let new_owner = vc_core::user::resolve_discord_id(&pool, 222).await.unwrap();
+    let old_guild = json!({"id":"333", "owner_id":"111"});
+    let new_guild = json!({"id":"333", "owner_id":"222"});
+    let mut answers = vec![(200, old_guild.clone())];
+    // Before transfer, after transfer for the old owner, then for the new owner.
+    for guild in [old_guild.clone(), new_guild.clone(), new_guild] {
+        answers.extend([
+            (200, guild),
+            (200, json!({"roles":[]})), // Bot is still a member.
+            (200, json!({"roles":[]})), // Neither user has an administrator role.
+            (200, json!([])),
+        ]);
+    }
+    // A failed fresh lookup must not fall back to the cached owner.
+    for status in [403, 404, 429, 500] {
+        answers.push((status, old_guild.clone()));
+    }
+    let (client, server) = server(answers).await;
+    let cached = Arc::new(CachedDiscord::new(Arc::new(client)));
+    assert_eq!(
+        cached.get_guild(333).await.unwrap().unwrap()["owner_id"],
+        "111"
+    );
+    let state = AppState::new(
+        pool,
+        Signing::new(b"test-secret".to_vec(), false),
+        [0; 32],
+        Links {
+            site_url: "https://vc.example".into(),
+            invite_url: "https://vc.example/invite".into(),
+            support_guild_invite_url: "https://vc.example/support".into(),
+        },
+        cached.clone(),
+        Outbound {
+            transport: Arc::new(crate::notification::Direct::default()),
+            notifier: Arc::new(vc_core::notification::NoopNotifier),
+            handshake: Arc::new(crate::rate_limit::VerificationLimiter::new()),
+        },
+        Arc::new(crate::rate_limit::RateLimiter::new(
+            100,
+            std::time::Duration::from_secs(60),
+        )),
+        Arc::new(crate::security::BehaviorMonitor::for_test()),
+    );
+    assert_eq!(
+        guild_access(&state, 333, old_owner).await,
+        GuildAccess::Permitted
+    );
+    assert_eq!(
+        guild_access(&state, 333, old_owner).await,
+        GuildAccess::Denied
+    );
+    assert_eq!(
+        guild_access(&state, 333, new_owner).await,
+        GuildAccess::Permitted
+    );
+    for _ in 0..4 {
+        assert_eq!(
+            guild_access(&state, 333, old_owner).await,
+            GuildAccess::Unknown
+        );
+    }
+    assert_eq!(
+        cached.get_guild(333).await.unwrap().unwrap()["owner_id"],
+        "111"
+    );
+    assert!(server.wire.answers.lock().unwrap().is_empty());
+}
