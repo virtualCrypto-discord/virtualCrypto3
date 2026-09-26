@@ -391,6 +391,11 @@ belief into a fact, and each of these was run while the code was written:
       an unknown client route answers the index, and `/api/…` keeps its own routes.
 - [ ] **The demo without Discord**: `demo-billing` with a missing argument exits 2;
       with no server it fails with a message and exits 1.
+- [ ] **Billing retries and receipts**: `demo-billing --uses 120` with sufficient
+      quota waits for `Retry-After` under the default rate limit and completes
+      each charge once. With more than 200 charges, the receipt reads every page
+      and totals only charges, excluding locks and refunds. Quota exhaustion
+      still prints the receipt for the charges that succeeded.
 - [ ] **`demo-issue` to a role**: neither `--receiver-id` nor `--role-id` exits 2, and
       `--role-id` without `--bot-token` exits 2; a guild Discord reports as past
       75,000 members (`approximate_member_count` from `GET /guilds/{id}?with_counts=true`)
