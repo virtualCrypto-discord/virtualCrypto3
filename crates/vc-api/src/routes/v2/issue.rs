@@ -51,7 +51,9 @@ pub async fn post(
         &state,
         &headers,
         guild.account_id,
-        guild.scopes.vc_issue,
+        idempotency::ReplayContext::Issue {
+            grant_id: guild.grant_id,
+        },
         |tx| Box::pin(async move { issued(tx, guild.guild_id, asked, &guild.resources).await }),
     )
     .await

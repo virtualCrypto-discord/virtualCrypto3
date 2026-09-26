@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO payments_idempotency\n             (user_id, idempotency_key, expires, inserted_at, updated_at)\n         VALUES ($1, $2, $3, $4, $4)\n         ON CONFLICT (idempotency_key, user_id) DO NOTHING\n         RETURNING id",
+  "query": "INSERT INTO payments_idempotency\n             (user_id, idempotency_key, expires, inserted_at, updated_at, replay_context)\n         VALUES ($1, $2, $3, $4, $4, $5)\n         ON CONFLICT (idempotency_key, user_id) DO NOTHING\n         RETURNING id",
   "describe": {
     "columns": [
       {
@@ -20,12 +20,13 @@
         "Int8",
         "Bytea",
         "Timestamp",
-        "Timestamp"
+        "Timestamp",
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "87f953d58710fa249daec559c8a107972ee7f82e29bf3ed3cd129a2e2c2a5720"
+  "hash": "bff57af3c3803b7dea3e49bcfdf7214e79b4ea01aaf9c4f2fb52786c32614959"
 }

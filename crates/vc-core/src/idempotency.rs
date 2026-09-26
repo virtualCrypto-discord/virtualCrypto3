@@ -26,7 +26,8 @@
 //! honest retries (a bulk list in another order, a field this API ignores) as
 //! readily as it caught a caller reusing a key for another charge. The caller's key
 //! is its own word for one request; `docs/known-gaps.md` carries the decision and
-//! what it costs.
+//! what it costs. The API layer must still authorize replay against the stored
+//! operation and delegation before exposing a cached answer.
 
 use serde_json::{Value, json};
 use sqlx::PgConnection;
@@ -39,7 +40,7 @@ const LIFETIME: time::Duration = time::Duration::days(7);
 #[derive(Debug)]
 pub enum Slot {
     /// A row was already there, so its stored response — if it has one yet — is
-    /// what the client must see. `http_status` is `None` for a row whose claim is
+    /// what an authorized retry sees. `http_status` is `None` for a row whose claim is
     /// still being held by another transaction (which cannot happen at the
     /// isolation level this service runs at, because the insert would have waited
     /// for it) or for one left by a version of this service that claimed outside
@@ -47,6 +48,9 @@ pub enum Slot {
     Existing {
         http_status: Option<i32>,
         body: Option<Value>,
+        /// The operation and authority that may replay this answer. Legacy
+        /// rows have no context and must not be trusted as a different grant's.
+        replay_context: Option<String>,
     },
     /// This request owns the key, and the transaction it is in owns the claim.
     Created,
@@ -58,7 +62,7 @@ async fn find(
     user_id: i32,
 ) -> std::result::Result<Option<Slot>, sqlx::Error> {
     let row = sqlx::query!(
-        "SELECT http_status, body FROM payments_idempotency
+        "SELECT http_status, body, replay_context FROM payments_idempotency
           WHERE idempotency_key = $1 AND user_id = $2",
         key,
         i64::from(user_id)
@@ -69,6 +73,7 @@ async fn find(
     Ok(row.map(|row| Slot::Existing {
         http_status: row.http_status,
         body: row.body,
+        replay_context: row.replay_context,
     }))
 }
 
@@ -79,19 +84,21 @@ pub async fn claim_in(
     tx: &mut PgConnection,
     key: &[u8],
     user_id: i32,
+    replay_context: &str,
 ) -> std::result::Result<Slot, sqlx::Error> {
     let now = utc_now();
 
     let inserted = sqlx::query_scalar!(
         "INSERT INTO payments_idempotency
-             (user_id, idempotency_key, expires, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $4)
+             (user_id, idempotency_key, expires, inserted_at, updated_at, replay_context)
+         VALUES ($1, $2, $3, $4, $4, $5)
          ON CONFLICT (idempotency_key, user_id) DO NOTHING
          RETURNING id",
         i64::from(user_id),
         key,
         now + LIFETIME,
-        now
+        now,
+        replay_context
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -107,6 +114,7 @@ pub async fn claim_in(
         .unwrap_or(Slot::Existing {
             http_status: None,
             body: None,
+            replay_context: None,
         }))
 }
 

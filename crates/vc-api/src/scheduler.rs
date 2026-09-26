@@ -84,6 +84,15 @@ pub async fn settle_expired(state: &AppState) {
                 }
             },
             Ok(false) => {}
+            Err(vc_core::contract::ContractError::Database(error))
+                if error
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .as_deref()
+                    == Some("55P03") =>
+            {
+                tracing::debug!(contract_id, "a busy contract will be settled next tick");
+            }
             Err(error) => {
                 tracing::warn!(contract_id, ?error, "a contract could not be settled");
             }

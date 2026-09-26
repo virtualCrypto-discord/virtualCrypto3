@@ -59,14 +59,45 @@ pub type Writing<'a> =
 /// far shorter than a client's patience.
 const CLAIM_WAIT: &str = "1s";
 
+/// The authority needed to replay a result, in addition to the account owning
+/// the key. These persisted strings must remain stable across deployments.
+pub enum ReplayContext {
+    Payments { grant_id: Option<i64> },
+    Issue { grant_id: i64 },
+    ContractPayments,
+}
+
+impl ReplayContext {
+    fn stored(&self) -> String {
+        match self {
+            Self::Payments { grant_id: None } => "payments:account".to_owned(),
+            Self::Payments { grant_id: Some(id) } => format!("payments:grant:{id}"),
+            Self::Issue { grant_id } => format!("issue:grant:{grant_id}"),
+            Self::ContractPayments => "contracts:account".to_owned(),
+        }
+    }
+
+    fn permits_legacy(&self, status: i32, body: Option<&Value>) -> bool {
+        // v2 recorded successful wallet payments as 201 {}. Only that empty
+        // answer is safe to replay without knowing its original authority, and
+        // only to the account's own payment credential. Never discard a legacy
+        // key and run the operation again: it may already have moved money.
+        matches!(self, Self::Payments { grant_id: None })
+            && status == 201
+            && body
+                .and_then(Value::as_object)
+                .is_some_and(|body| body.is_empty())
+    }
+}
+
 /// Run a write under its key: claim the key, run the write, store the answer, and
 /// commit all three together.
 /// Only a successful HTTP answer commits the write; other answers are cached
 /// after rolling the write back to a savepoint. An `Err` frees the key too.
 ///
-/// `allowed` is whether the caller's token may do the thing at all — the payment
-/// endpoint's scope for paying, the issuing endpoint's for issuing, the contract
-/// endpoint's for charging. A key from a token that may not is refused here.
+/// The handler must authorize its caller before entering the guard. `context`
+/// additionally prevents a key from replaying another operation's or approval's
+/// result. A mismatch keeps the key reserved and answers 409 without its body.
 ///
 /// What the caller has already settled — who they are, what they are asking for,
 /// anything the answer needs — it settles *before* this, because a request that
@@ -80,7 +111,7 @@ pub async fn guard<F>(
     state: &AppState,
     headers: &HeaderMap,
     identity: i32,
-    allowed: bool,
+    context: ReplayContext,
     write: F,
 ) -> Result<Response, ApiError>
 where
@@ -99,7 +130,7 @@ where
         .await
         .map_err(db)?;
 
-    let claimed = match claim_in(&mut tx, headers, identity, allowed).await? {
+    let claimed = match claim_in(&mut tx, headers, identity, &context).await? {
         Idempotency::None => None,
         Idempotency::Claimed(key) => Some(key),
         Idempotency::Answered(response) => {
@@ -169,7 +200,7 @@ async fn claim_in(
     tx: &mut PgConnection,
     headers: &HeaderMap,
     identity: i32,
-    allowed: bool,
+    context: &ReplayContext,
 ) -> Result<Idempotency, ApiError> {
     // Raw bytes, not `&str`: a permitted key may contain `obs-text`.
     let keys: Vec<&[u8]> = headers
@@ -183,10 +214,6 @@ async fn claim_in(
         1 => {
             let key = vc_core::idempotency::extract_key(keys[0])
                 .ok_or(ApiError::InvalidRequest("invalid_idempotency_key"))?;
-
-            if !allowed {
-                return Err(ApiError::InsufficientScope);
-            }
 
             // The wait for another request's claim is bounded, for this statement
             // only: the insert is what blocks, and everything after it wants the
@@ -202,7 +229,8 @@ async fn claim_in(
                 .await
                 .map_err(db)?;
 
-            let claimed = vc_core::idempotency::claim_in(tx, &key, identity).await;
+            let stored_context = context.stored();
+            let claimed = vc_core::idempotency::claim_in(tx, &key, identity, &stored_context).await;
 
             // Whether or not the claim succeeded, everything after it wants the
             // ordinary timeout back. The reset is allowed to fail: an aborted
@@ -214,13 +242,24 @@ async fn claim_in(
             match claimed {
                 Ok(Slot::Created) => Ok(Idempotency::Claimed(key)),
                 Ok(Slot::Existing {
+                    replay_context: Some(saved),
+                    ..
+                }) if saved != stored_context => Ok(Idempotency::Answered(context_conflict())),
+                Ok(Slot::Existing {
                     http_status: Some(status),
                     body,
-                }) => Ok(Idempotency::Answered(with_idempotency(
-                    StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK),
-                    body.unwrap_or(Value::Null),
-                    "Duplicate",
-                ))),
+                    replay_context,
+                }) if replay_context.is_some() || context.permits_legacy(status, body.as_ref()) => {
+                    Ok(Idempotency::Answered(with_idempotency(
+                        StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK),
+                        body.unwrap_or(Value::Null),
+                        "Duplicate",
+                    )))
+                }
+                Ok(Slot::Existing {
+                    http_status: Some(_),
+                    ..
+                }) => Ok(Idempotency::Answered(context_conflict())),
                 // A row with nothing under it: a claim from a version of this
                 // service that claimed outside the transaction, and nobody is
                 // writing for it. Not a write — "come back".
@@ -245,6 +284,14 @@ async fn claim_in(
             "",
         ))),
     }
+}
+
+fn context_conflict() -> Response {
+    with_idempotency(
+        StatusCode::CONFLICT,
+        json!({ "error": "conflict", "error_description": "idempotency_context_mismatch" }),
+        "Duplicate",
+    )
 }
 
 /// The answer for a request whose key another one is using: `409` with the body

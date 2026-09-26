@@ -101,6 +101,7 @@ pub struct Authorized<P: Permission> {
 enum Principal {
     Own(AuthUser),
     Delegated {
+        grant_id: i64,
         account_id: i32,
         scopes: Vec<Scope>,
         resources: Vec<i64>,
@@ -167,6 +168,15 @@ impl<P: Permission> Authorized<P> {
         self.account_id
     }
 
+    /// The approval behind a delegated credential, preserved when its token is
+    /// refreshed. Own credentials have no delegation.
+    pub fn grant_id(&self) -> Option<i64> {
+        match &self.principal {
+            Principal::Own(_) => None,
+            Principal::Delegated { grant_id, .. } => Some(*grant_id),
+        }
+    }
+
     pub fn is_application(&self) -> bool {
         matches!(&self.principal, Principal::Own(user) if user.kind == Kind::App)
     }
@@ -215,6 +225,7 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                         .into_response());
                 };
                 Principal::Delegated {
+                    grant_id: resolved.grant_id,
                     account_id: resolved.account_id,
                     scopes: resolved
                         .scopes

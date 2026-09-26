@@ -239,9 +239,13 @@ pub async fn pay(
     // the layer's transaction takes the claim with it, leaving the key free.
     let unit = find(&state, id).await?.unit;
 
-    idempotency::guard(&state, &headers, account, true, |tx| {
-        Box::pin(async move { charge(tx, application, id, payment, unit).await })
-    })
+    idempotency::guard(
+        &state,
+        &headers,
+        account,
+        idempotency::ReplayContext::ContractPayments,
+        |tx| Box::pin(async move { charge(tx, application, id, payment, unit).await }),
+    )
     .await
 }
 

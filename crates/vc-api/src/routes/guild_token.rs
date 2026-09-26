@@ -34,6 +34,7 @@ use crate::state::AppState;
 /// The authenticated guild: the application a guild allowed, and that guild.
 #[derive(Debug, Clone)]
 pub struct GuildToken {
+    pub grant_id: i64,
     pub application_id: i64,
     /// The application's own account, which an idempotent request is filed under.
     pub account_id: i32,
@@ -115,6 +116,7 @@ impl FromRequestParts<AppState> for GuildToken {
         }
 
         Ok(GuildToken {
+            grant_id: resolved.grant_id,
             application_id: resolved.application_id,
             account_id: resolved.account_id,
             guild_id,

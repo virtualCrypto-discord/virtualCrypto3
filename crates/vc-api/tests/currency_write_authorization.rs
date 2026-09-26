@@ -64,9 +64,14 @@ async fn issue_checks_the_currency_it_actually_spends(pool: PgPool) {
     let account = account_of(&pool, application).await;
     let app = vc_api::router(state(pool.clone(), fake()));
     let mut blocker = pool.begin().await.unwrap();
-    vc_core::idempotency::claim_in(&mut blocker, b"currency-replacement", account)
-        .await
-        .unwrap();
+    vc_core::idempotency::claim_in(
+        &mut blocker,
+        b"currency-replacement",
+        account,
+        "test:blocker",
+    )
+    .await
+    .unwrap();
     let pending = tokio::spawn(app.oneshot(request(
         "/api/v2/currencies/issue",
         &token,
@@ -115,7 +120,7 @@ async fn payment_replacement(pool: PgPool, bulk: bool, initially_missing: bool) 
     }
     let app = vc_api::router(state(pool.clone(), fake()));
     let mut blocker = pool.begin().await.unwrap();
-    vc_core::idempotency::claim_in(&mut blocker, b"currency-replacement", 1)
+    vc_core::idempotency::claim_in(&mut blocker, b"currency-replacement", 1, "test:blocker")
         .await
         .unwrap();
     let payment = json!({"receiver_discord_id":MONEY_USER2.to_string(),"unit":"n","amount":"100"});

@@ -36,7 +36,10 @@ pub async fn post(
     // itself to refuse as `not_found_currency`.
     ensure_currency(&state, &user, &asked).await?;
 
-    idempotency::guard(&state, &headers, operator_id, true, |tx| {
+    let context = idempotency::ReplayContext::Payments {
+        grant_id: user.grant_id(),
+    };
+    idempotency::guard(&state, &headers, operator_id, context, |tx| {
         Box::pin(async move { paid(tx, operator_id, asked, user.resources()).await })
     })
     .await

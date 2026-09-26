@@ -866,6 +866,8 @@ pub async fn authorized_in_guild(
 /// what that grant carries, and which currencies it is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenGrant {
+    /// Stable across access-token refreshes, distinct for independent approvals.
+    pub grant_id: i64,
     pub application_id: i64,
     /// Whose account the token acts as. For a guild grant it is the application's
     /// own — `users.id`, which is an `integer` here and not the `bigint` its
@@ -900,7 +902,7 @@ pub async fn resolve_token(
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     let found = sqlx::query!(
-        r#"SELECT g.application_id AS "application_id!",
+        r#"SELECT g.id AS grant_id, g.application_id AS "application_id!",
                   CASE WHEN g.guild_id IS NOT NULL AND g.guild_id <> 0
                        THEN a.id ELSE p.id END AS "account_id!",
                   g.guild_id,
@@ -934,6 +936,7 @@ pub async fn resolve_token(
     };
 
     Ok(Some(TokenGrant {
+        grant_id: row.grant_id,
         application_id: row.application_id,
         account_id: row.account_id,
         target,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT http_status, body FROM payments_idempotency\n          WHERE idempotency_key = $1 AND user_id = $2",
+  "query": "SELECT http_status, body, replay_context FROM payments_idempotency\n          WHERE idempotency_key = $1 AND user_id = $2",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "body"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "replay_context",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payments_idempotency",
+            "name": "replay_context"
+          }
+        }
       }
     ],
     "parameters": {
@@ -34,8 +45,9 @@
     },
     "nullable": [
       true,
+      true,
       true
     ]
   },
-  "hash": "24fb2032ed7236c17cb9748621fbd3ffba088f5243430bd55ada036660ffa0f7"
+  "hash": "5629659fa998ccc080709758127ea72133dce66d6b144f2c59adc3339969ec96"
 }

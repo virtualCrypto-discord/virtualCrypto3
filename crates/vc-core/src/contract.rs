@@ -1481,6 +1481,8 @@ pub async fn expired(
 /// Idempotent and safe against a race with a party: the contract row is locked
 /// first, so a withdrawal and a settlement cannot both move the same remainder,
 /// and the second of the two finds a contract that is already over.
+/// Lock waits are bounded for this background operation, including locks on
+/// refund recipients. A busy contract rolls back and is retried on a later tick.
 pub async fn settle(
     pool: &PgPool,
     contract_id: i64,
@@ -1488,6 +1490,11 @@ pub async fn settle(
 ) -> std::result::Result<bool, ContractError> {
     let now = at(now);
     let mut tx = pool.begin().await.map_err(ContractError::Database)?;
+
+    sqlx::query("SET LOCAL lock_timeout = '100ms'")
+        .execute(&mut *tx)
+        .await
+        .map_err(ContractError::Database)?;
 
     let contract = lock_contract(&mut tx, contract_id).await?;
 

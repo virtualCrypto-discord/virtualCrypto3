@@ -104,6 +104,10 @@ chunk of them — the ones that ran out longest ago, first — so a backlog cann
 hold the tick: what a tick does not reach is still expired and still the next
 tick's work.
 
+Each settlement limits database lock waits to 100 ms, including locks on refund
+recipients and their balances. A busy settlement rolls back in full, the tick
+continues to the next contract, and a later tick retries the skipped one.
+
 Settling is what a party's own withdrawal would have done, so the two race safely:
 the contract row is locked first, and whichever runs second finds a contract that
 is already over and does nothing. Spending is refused from the deadline onwards
@@ -208,6 +212,14 @@ the number it does not carry; a key that is not the quoted string the specificat
 asks for is a `400` before anything is claimed. (One second is the wait that ran
 out, and asking again is what the caller should do: a retry that lands after the
 holder commits reads the stored answer.)
+
+Keys are unique per account, but a cached answer can only be replayed by the same
+operation and delegation. A key previously used for a wallet payment or guild
+issuance returns `409` with `error_description: idempotency_context_mismatch` and
+`Idempotency-Status: Duplicate`, without charging or exposing the earlier answer.
+Legacy completed contract-payment caches lack this authorization context and also
+return that conflict, retaining the key to prevent a second charge. Check the
+original payment's outcome before using a new key.
 
 ## Reading what it paid
 

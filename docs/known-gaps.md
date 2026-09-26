@@ -536,6 +536,21 @@ The specification for this header suggests answering a key that is reused for a
 is answered from the key, and the body arriving under it is never compared with the
 body that spent it.
 
+Replay still requires the same operation (wallet payment, guild issuance, or
+contract payment) and, for a delegated credential, the same grant. Reusing an
+account's key across those boundaries returns `409 idempotency_context_mismatch`
+with `Idempotency-Status: Duplicate`, without disclosing the cached body or
+executing the new request. Access-token refresh preserves the grant and therefore
+preserves retries. This authorization check does not compare request bodies.
+
+Migration `0023` adds that replay context while keeping the existing account/key
+uniqueness rule. Old completed rows have no recorded context: only `201 {}` may
+be replayed to the account's own wallet-payment credential. Other completed legacy
+rows return the same context conflict and retain their key until normal expiry;
+discarding them could execute a completed payment twice. Legacy pending rows keep
+their existing `409 processing` response. A context conflict is not an instruction
+to retry with a fresh key: clients must check the original operation's outcome.
+
 The reason is that the specification does not say what makes two requests the same,
 so the comparison would be invented here — and every version of it is wrong in both
 directions. Compare too much and an honest retry is refused: a bulk list sent in
@@ -545,7 +560,7 @@ too little and the case the check exists for slips through anyway. The one thing
 server cannot know is the caller's intent, and that is the whole of what the
 question asks, so the rule is left where the specification left it: the key is the
 caller's own word for one request, and a caller that reuses it for another request
-is shown the first request's answer rather than a new error invented here.
+is shown the first request's answer when the replay authority matches.
 
 The cost, stated rather than hidden: a client that reuses a key for a genuinely
 different charge is answered with the *first* charge's answer, and its second charge
