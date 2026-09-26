@@ -102,9 +102,10 @@ fn asked(body: &Value) -> Result<Asked, ApiError> {
 
         return Ok(Asked::Single {
             unit: unit.as_str().unwrap_or_default().to_owned(),
-            receiver_discord_id: parse_number(receiver.as_str().unwrap_or_default()).ok_or(
-                ApiError::InvalidRequest("invalid_format_of_receiver_discord_id"),
-            )?,
+            receiver_discord_id: crate::discord_id::parse(receiver.as_str().unwrap_or_default())
+                .ok_or(ApiError::InvalidRequest(
+                    "invalid_format_of_receiver_discord_id",
+                ))?,
             // The name is the *list* clause's, which is where the port carried it
             // from, and it points at a field this request does not have: the
             // mistake is the amount's, so it is named after the amount, as the
@@ -150,7 +151,7 @@ fn bulk_asked(body: &Value) -> Result<Vec<vc_core::payment::BulkPayment>, ApiErr
         let receiver_discord_id = object
             .get("receiver_discord_id")
             .and_then(Value::as_str)
-            .and_then(parse_number)
+            .and_then(crate::discord_id::parse)
             .ok_or(ApiError::BulkInvalid {
                 tag: "receiver_discord_id",
                 index,

@@ -9,6 +9,9 @@ use axum::http::HeaderMap;
 use axum::http::header::HeaderValue;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// The cookie the session travels in, and how it is marked. `HttpOnly` because
 /// only the server reads it: an SPA uses the API, not the cookie. `SameSite=Lax`
@@ -25,12 +28,14 @@ pub struct LoginAttempt {
 }
 
 /// What the browser carries.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     /// Not decoration. The session cookie and the API's bearer tokens are both
     /// JWTs, and different secrets are only half a defence if one can be
     /// replayed as the other.
     typ: Type,
+    id: Uuid,
+    exp: i64,
     /// Who is logged in, once someone is.
     #[serde(default)]
     pub user_id: Option<i64>,
@@ -44,6 +49,22 @@ enum Type {
     #[serde(rename = "session")]
     #[default]
     Session,
+}
+
+/// Browser sessions last one day; a pending Discord login lasts ten minutes.
+pub const SESSION_LIFETIME: i64 = 24 * 60 * 60;
+const LOGIN_LIFETIME: i64 = 10 * 60;
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            typ: Type::Session,
+            id: Uuid::new_v4(),
+            exp: OffsetDateTime::now_utc().unix_timestamp() + SESSION_LIFETIME,
+            user_id: None,
+            discord_oauth2: None,
+        }
+    }
 }
 
 impl Session {
@@ -68,8 +89,34 @@ impl Session {
     pub fn awaiting_discord(attempt: LoginAttempt) -> Self {
         Self {
             discord_oauth2: Some(attempt),
+            exp: OffsetDateTime::now_utc().unix_timestamp() + LOGIN_LIFETIME,
             ..Self::default()
         }
+    }
+
+    /// Register a new authenticated session before sending its cookie.
+    pub async fn register(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+        let user_id = self
+            .user_id
+            .ok_or(sqlx::Error::Protocol("session has no user".into()))?;
+        let expires = OffsetDateTime::from_unix_timestamp(self.exp)
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        sqlx::query("INSERT INTO browser_sessions (id, user_id, expires) VALUES ($1, $2, $3)")
+            .bind(self.id)
+            .bind(user_id)
+            .bind(expires)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Removing this row invalidates every copy of this session's cookie.
+    pub async fn revoke(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM browser_sessions WHERE id = $1")
+            .bind(self.id)
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 
     pub fn sign(&self, secret: &[u8]) -> Result<String, jsonwebtoken::errors::Error> {
@@ -87,10 +134,8 @@ impl Session {
     /// distinguish "logged out" from "logged out badly".
     pub fn parse(value: &str, secret: &[u8]) -> Option<Self> {
         let mut validation = Validation::new(Algorithm::HS256);
-        // The old session expires by its Discord authorization going stale, not
-        // by a claim of its own, so there is nothing here for jsonwebtoken to
-        // require or validate.
-        validation.required_spec_claims.clear();
+        // Old cookies without an expiry are deliberately refused on upgrade.
+        validation.leeway = 0;
 
         decode::<Self>(value, &DecodingKey::from_secret(secret), &validation)
             .ok()
@@ -102,6 +147,24 @@ impl Session {
 pub fn from_headers(headers: &HeaderMap, secret: &[u8]) -> Option<Session> {
     let cookie = headers.get(axum::http::header::COOKIE)?;
     Session::parse(cookie_value(cookie, COOKIE_NAME)?, secret)
+}
+
+/// Authenticate a browser against the live session row, failing closed on DB errors.
+/// The stateless parser is only sufficient for the short-lived Discord login state.
+pub async fn authenticated(headers: &HeaderMap, secret: &[u8], pool: &PgPool) -> Option<Session> {
+    let session = from_headers(headers, secret)?;
+    let user_id = session.user_id?;
+    let active = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM browser_sessions WHERE id = $1 AND user_id = $2 AND expires > now())"
+    ).bind(session.id).bind(user_id).fetch_one(pool).await;
+    match active {
+        Ok(true) => Some(session),
+        Ok(false) => None,
+        Err(error) => {
+            tracing::warn!(%error, "browser session lookup failed");
+            None
+        }
+    }
 }
 
 /// The value of one cookie in a `Cookie` header.
@@ -151,6 +214,28 @@ mod tests {
     use super::*;
 
     const SECRET: &[u8] = b"a session secret";
+
+    #[test]
+    fn expired_and_legacy_cookies_are_refused() {
+        let expired = Session {
+            exp: OffsetDateTime::now_utc().unix_timestamp() - 1,
+            ..Session::logged_in(42)
+        };
+        assert!(Session::parse(&expired.sign(SECRET).unwrap(), SECRET).is_none());
+        // A valid signature alone must not restore the old, unbounded session format.
+        let legacy = encode(
+            &Header::new(Algorithm::HS256),
+            &serde_json::json!({"typ": "session", "user_id": 42}),
+            &EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        assert!(Session::parse(&legacy, SECRET).is_none());
+        let login = Session::awaiting_discord(LoginAttempt {
+            state: "state".into(),
+            continue_to: "/".into(),
+        });
+        assert!(login.exp <= OffsetDateTime::now_utc().unix_timestamp() + LOGIN_LIFETIME);
+    }
 
     #[test]
     fn a_session_survives_the_round_trip() {

@@ -210,7 +210,7 @@ pub async fn create(
     {
         let operator_id = user.account_id();
 
-        let payer_discord_id = parse_number(payer.as_str().unwrap_or_default())
+        let payer_discord_id = crate::discord_id::parse(payer.as_str().unwrap_or_default())
             .ok_or(ApiError::InvalidRequest("invalid_payer_discord_id_value"))?;
         let amount_value = parse_number(amount.as_str().unwrap_or_default())
             .ok_or(ApiError::InvalidRequest("invalid_amount_value"))?;

@@ -66,11 +66,6 @@ pub async fn login(State(state): State<AppState>, Query(query): Query<LoginQuery
     }
 }
 
-/// End the session.
-///
-/// A signed cookie cannot be un-signed, only replaced by one that has already
-/// expired. The attributes have to match the cookie being replaced, or the
-/// browser keeps the original.
 /// `/invite` and `/support`: where a browser that asks for the bot, or for the guild,
 /// ends up.
 ///
@@ -88,7 +83,14 @@ pub async fn support(State(state): State<AppState>) -> Response {
     Redirect::temporary(&state.links().support_guild_invite_url).into_response()
 }
 
-pub async fn logout(State(state): State<AppState>) -> Response {
+/// Revoke the server-side session before removing the browser's cookie.
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(session) = session::from_headers(&headers, state.session_secret())
+        && let Err(error) = session.revoke(state.pool()).await
+    {
+        tracing::warn!(%error, "browser logout failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
     (
         [(SET_COOKIE, clear_cookie(state.secure_cookies()))],
         Redirect::to("/"),
@@ -183,11 +185,11 @@ pub async fn discord_callback(
         return refuse(&state, "the authorization could not be recorded").await;
     };
 
-    match set_cookie(
-        &Session::logged_in(i64::from(user.id)),
-        state.session_secret(),
-        state.secure_cookies(),
-    ) {
+    let session = Session::logged_in(i64::from(user.id));
+    if session.register(state.pool()).await.is_err() {
+        return refuse(&state, "the session could not be recorded").await;
+    }
+    match set_cookie(&session, state.session_secret(), state.secure_cookies()) {
         Ok(cookie) => (
             [(SET_COOKIE, cookie)],
             Redirect::to(login_return_path(&attempt.continue_to)),
@@ -206,7 +208,9 @@ pub async fn discord_callback(
 /// The scopes are [`vc_auth::issue::BROWSER_SCOPES`], which a personal access token also carries:
 /// one list, in the auth crate, rather than the same three names written down twice.
 pub async fn token(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(session) = session::from_headers(&headers, state.session_secret()) else {
+    let Some(session) =
+        session::authenticated(&headers, state.session_secret(), state.pool()).await
+    else {
         return unauthorized();
     };
 

@@ -169,3 +169,21 @@ async fn purging_twice_deletes_nothing_more(pool: PgPool) {
         assert_eq!(counted(&pool, statement).await, expected, "{statement}");
     }
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn expired_browser_sessions_are_purged_without_ending_live_sessions(pool: PgPool) {
+    insert_user(&pool, USER, USER_DISCORD_ID).await;
+    sqlx::query("INSERT INTO browser_sessions (id, user_id, expires) VALUES (gen_random_uuid(), $1, now() - interval '1 second'), (gen_random_uuid(), $1, now() + interval '1 hour')")
+        .bind(i64::from(USER)).execute(&pool).await.unwrap();
+    assert_eq!(
+        vc_core::purge::expired(&pool, support::utc_now())
+            .await
+            .unwrap(),
+        1
+    );
+    let live: bool = sqlx::query_scalar("SELECT expires > now() FROM browser_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(live);
+}

@@ -431,7 +431,7 @@ fn asked(body: &Value) -> Result<Asked, ApiError> {
 
     let receiver_discord_id = match object.get("receiver_discord_id") {
         None | Some(Value::Null) => None,
-        Some(Value::String(discord_id)) => Some(parse_number(discord_id).ok_or(
+        Some(Value::String(discord_id)) => Some(crate::discord_id::parse(discord_id).ok_or(
             ApiError::InvalidRequest("invalid_format_of_receiver_discord_id"),
         )?),
         Some(_) => return Err(ApiError::InvalidRequest("invalid_type_of_variable")),
@@ -456,7 +456,7 @@ fn asked(body: &Value) -> Result<Asked, ApiError> {
         let discord_id = party
             .get("discord_id")
             .and_then(Value::as_str)
-            .and_then(parse_number)
+            .and_then(crate::discord_id::parse)
             .ok_or(ApiError::BulkInvalid {
                 tag: "discord_id",
                 index,
@@ -508,14 +508,14 @@ fn payment(body: &Value) -> Result<Payment, ApiError> {
     // this field existed.
     let party_discord_id = match object.get("party_discord_id") {
         None | Some(Value::Null) => None,
-        Some(Value::String(party)) => Some(parse_number(party).ok_or(ApiError::InvalidRequest(
-            "invalid_format_of_party_discord_id",
-        ))?),
+        Some(Value::String(party)) => Some(crate::discord_id::parse(party).ok_or(
+            ApiError::InvalidRequest("invalid_format_of_party_discord_id"),
+        )?),
         Some(_) => return Err(ApiError::InvalidRequest("invalid_type_of_variable")),
     };
 
     Ok(Payment {
-        receiver_discord_id: parse_number(receiver).ok_or(ApiError::InvalidRequest(
+        receiver_discord_id: crate::discord_id::parse(receiver).ok_or(ApiError::InvalidRequest(
             "invalid_format_of_receiver_discord_id",
         ))?,
         amount: parse_number(amount).ok_or(ApiError::InvalidRequest("invalid_format_of_amount"))?,

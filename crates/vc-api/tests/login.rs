@@ -427,3 +427,116 @@ fn real_discord_authorization_url_preserves_the_endpoint_and_parameters() {
     assert_eq!(parameters["scope"], "identify");
     assert_eq!(parameters["prompt"], "none");
 }
+
+/// A copied cookie must not renew access after logout, while another login stays valid.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn logout_revokes_the_cookie_on_every_authenticated_browser_route(pool: PgPool) {
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let first = logged_in(app.clone(), &pool).await;
+    let second = logged_in(app.clone(), &pool).await;
+    assert_ne!(first, second);
+    let logout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/logout")
+                .header(COOKIE, &first)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(logout.status().as_u16(), 303);
+    assert!(
+        logout.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+
+    for (cookie, status) in [(&first, 401), (&second, 200)] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status);
+    }
+
+    let query = "response_type=code&client_id=00000000-0000-4000-8000-000000000001&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=vc.issue&guild_id=1";
+    let consent = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/oauth2/authorize?{query}"))
+                .header(COOKIE, &first)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(consent.status().as_u16(), 303);
+    assert!(
+        consent.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .starts_with("/login")
+    );
+    let approval = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/oauth2/authorize")
+                .header(COOKIE, &first)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("origin", links().site_url)
+                .body(Body::from(format!("action=approve&{query}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approval.status().as_u16(), 401);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn expired_or_unregistered_sessions_cannot_issue_tokens(pool: PgPool) {
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let cookie = logged_in(app.clone(), &pool).await;
+    sqlx::query("UPDATE browser_sessions SET expires = now() - interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let unregistered = format!(
+        "{COOKIE_NAME}={}",
+        Session::logged_in(1)
+            .sign(SESSION_SECRET.as_bytes())
+            .unwrap()
+    );
+    for cookie in [cookie, unregistered] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header(COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 401);
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_access_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

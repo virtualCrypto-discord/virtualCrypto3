@@ -78,9 +78,10 @@ fn asked(body: &Value) -> Result<(i64, i64), ApiError> {
         return Err(ApiError::InvalidRequest("invalid_type_of_variable"));
     }
 
-    let receiver_discord_id = parse_number(receiver.as_str().unwrap_or_default()).ok_or(
-        ApiError::InvalidRequest("invalid_format_of_receiver_discord_id"),
-    )?;
+    let receiver_discord_id = crate::discord_id::parse(receiver.as_str().unwrap_or_default())
+        .ok_or(ApiError::InvalidRequest(
+            "invalid_format_of_receiver_discord_id",
+        ))?;
     let amount = parse_number(amount.as_str().unwrap_or_default())
         .ok_or(ApiError::InvalidRequest("invalid_format_of_amount"))?;
 

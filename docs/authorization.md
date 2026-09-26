@@ -18,6 +18,22 @@ checks still apply. An application's JWT does not grant access to its owner's
 personal assets. A personal grant never becomes an own credential, and personal
 and guild grants are not interchangeable merely because both tokens are UUIDs.
 
+## Browser sessions
+
+Authenticated browser cookies have a 24-hour expiry and a random session ID backed by
+`browser_sessions`. `/token` and both OAuth consent routes require an unexpired live
+row; a valid cookie signature alone is insufficient. Logout deletes the session row
+before clearing the cookie, invalidating saved copies across workers and restarts.
+Separate browser logins have separate rows, so logging out one does not end another.
+The expiry purge removes expired rows. Operators can revoke a user's browser sessions
+by deleting that user's rows from `browser_sessions`.
+
+Discord login state expires after ten minutes. Migration `0024` introduces the
+session table; older cookies without an expiry and registered session ID are refused,
+so existing browsers must log in again after deployment. Already-issued API JWTs
+retain their normal expiry and token revocation behavior; logout prevents further
+issuance from that browser session.
+
 ## Personal scope catalogue
 
 The `vc.delegate.` namespace is exclusively for personal delegations. Names are

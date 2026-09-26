@@ -8,6 +8,7 @@ pub mod developer;
 pub mod discord;
 pub mod discord_auth;
 pub mod discord_commands;
+mod discord_id;
 pub mod docs;
 pub mod error;
 mod json_number;

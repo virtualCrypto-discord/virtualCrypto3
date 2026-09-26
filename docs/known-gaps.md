@@ -819,3 +819,12 @@ URI lists longer than 2000 characters including the newline between entries. Bot
 400 `invalid_redirect_uri` before writing. These limits also apply to Discord edits and
 prevent the modal from silently truncating an existing list. The individual limit matches
 the database column; the aggregate limit is new.
+
+## Discord IDs on money-writing endpoints
+
+Single and bulk payments, issuing, claim creation, and contract creation/payments
+require positive ASCII decimal Discord IDs within the supported bigint range.
+Zero, negative IDs, explicit signs, whitespace, and overflow are rejected with HTTP
+400 before any accounts, balances, claims, contracts, or idempotency keys change.
+This intentionally tightens v2's signed-integer parsing; amount parsing is unchanged.
+The check validates the ID representation, not the existence of a Discord account.

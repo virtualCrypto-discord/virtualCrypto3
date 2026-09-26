@@ -32,8 +32,9 @@ use time::PrimitiveDateTime;
 /// The ask is the one whose expiry is not a column: it is the moment it was made
 /// plus the `expires_in` it asked for, which is the same sum its two readers
 /// compute.
-const EXPIRING: [&str; 8] = [
+const EXPIRING: [&str; 9] = [
     "DELETE FROM user_access_tokens WHERE expires < $1",
+    "DELETE FROM browser_sessions WHERE expires < ($1::timestamp AT TIME ZONE 'utc')",
     "DELETE FROM payments_idempotency WHERE expires < $1",
     "DELETE FROM authorization_codes WHERE expires < $1",
     "DELETE FROM access_tokens WHERE expires < $1",

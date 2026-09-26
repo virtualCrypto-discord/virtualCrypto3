@@ -259,7 +259,9 @@ pub async fn approve(
         return page();
     };
 
-    let Some(session) = session::from_headers(&headers, state.session_secret()) else {
+    let Some(session) =
+        session::authenticated(&headers, state.session_secret(), state.pool()).await
+    else {
         return unauthorized();
     };
     let Some(account_id) = session.user_id else {
@@ -467,7 +469,9 @@ pub async fn authorize(
         Err(_) => return page(),
     };
 
-    let Some(session) = session::from_headers(&headers, state.session_secret()) else {
+    let Some(session) =
+        session::authenticated(&headers, state.session_secret(), state.pool()).await
+    else {
         return to_login(&uri);
     };
     let Some(account_id) = session.user_id else {

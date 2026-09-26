@@ -178,9 +178,9 @@ async fn approval_requires_same_origin_browser_headers(pool: PgPool) {
         pool.clone(),
         support::FakeDiscord::with_member(MONEY_USER1, &[], &[]),
     ));
-    let session = vc_api::session::Session::logged_in(1)
-        .sign(support::SESSION_SECRET.as_bytes())
-        .unwrap();
+    let session = vc_api::session::Session::logged_in(1);
+    session.register(&pool).await.unwrap();
+    let session = session.sign(support::SESSION_SECRET.as_bytes()).unwrap();
     let mut form = reqwest::Url::parse("https://vcrypto.sumidora.com/").unwrap();
     form.query_pairs_mut().extend_pairs([
         ("action", "approve"),
@@ -304,9 +304,9 @@ async fn browser_consent_preserves_the_request_through_approval_and_token_exchan
         pool.clone(),
         support::FakeDiscord::with_member(MONEY_USER1, &[], &[]),
     ));
-    let session = vc_api::session::Session::logged_in(1)
-        .sign(support::SESSION_SECRET.as_bytes())
-        .unwrap();
+    let session = vc_api::session::Session::logged_in(1);
+    session.register(&pool).await.unwrap();
+    let session = session.sign(support::SESSION_SECRET.as_bytes()).unwrap();
     let cookie = format!("{}={session}", vc_api::session::COOKIE_NAME);
     let client_state = "\"><script>alert('state')</script>&literal=&quot;";
     let collection = format!("{}/api/v2/currencies", support::links().site_url);
