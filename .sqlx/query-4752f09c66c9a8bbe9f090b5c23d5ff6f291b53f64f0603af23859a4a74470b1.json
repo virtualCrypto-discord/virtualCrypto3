@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT discord_user_id AS \"discord_user_id!\", token, refresh_token, updated_at\n         FROM discord_users WHERE discord_user_id = $1",
+  "query": "SELECT discord_user_id AS \"discord_user_id!\", token, refresh_token, expires, updated_at\n         FROM discord_users WHERE discord_user_id = $1",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "expires",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "discord_users",
+            "name": "expires"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "updated_at",
         "type_info": "Timestamp",
         "origin": {
@@ -57,8 +68,9 @@
       true,
       true,
       true,
+      true,
       false
     ]
   },
-  "hash": "1b9213dffcd58074594d1a2a5c6267033fadf8f9e6fdaab0e9f0cb45148103dd"
+  "hash": "4752f09c66c9a8bbe9f090b5c23d5ff6f291b53f64f0603af23859a4a74470b1"
 }

@@ -1,6 +1,6 @@
 use time::{Duration, PrimitiveDateTime};
 
-/// How long a stored Discord authorization is considered valid.
+/// Legacy lifetime used only when a Discord authorization has no stored expiry.
 pub const DISCORD_AUTH_LIFETIME: Duration = Duration::days(7);
 /// Refresh once the authorization is this close to expiring.
 pub const DISCORD_REFRESH_MARGIN: Duration = Duration::minutes(15);
@@ -29,15 +29,53 @@ pub struct DiscordAuth {
     pub discord_user_id: i64,
     pub token: Option<String>,
     pub refresh_token: Option<String>,
+    pub expires: Option<PrimitiveDateTime>,
     pub updated_at: PrimitiveDateTime,
 }
 
 impl DiscordAuth {
-    /// Mirrors `VirtualCrypto.DiscordAuth.refresh_user/1`: refresh when the
-    /// stored authorization is within 15 minutes of its seven-day lifetime.
-    /// The difference is negative once it is overdue, which also refreshes.
+    /// Refresh within 15 minutes of the expiry Discord supplied, or once overdue.
+    /// Rows without an expiry retain the Elixir's seven-day lifetime estimate.
     pub fn needs_refresh(&self, now: PrimitiveDateTime) -> bool {
-        let expires_at = self.updated_at + DISCORD_AUTH_LIFETIME;
+        let expires_at = self
+            .expires
+            .unwrap_or_else(|| self.updated_at + DISCORD_AUTH_LIFETIME);
         (expires_at - now) <= DISCORD_REFRESH_MARGIN
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_refresh_respects_the_expiry_margin_and_legacy_fallback() {
+        let now = utc_now();
+        let margin = Duration::minutes(15);
+        let second = Duration::seconds(1);
+        let week = Duration::days(7);
+        for (expires_in, updated_ago, expected) in [
+            (Some(margin + second), week, false),
+            (Some(margin), Duration::ZERO, true),
+            (Some(Duration::ZERO), Duration::ZERO, true),
+            (Some(-second), Duration::ZERO, true),
+            (None, Duration::ZERO, false),
+            (None, week - margin - second, false),
+            (None, week - margin, true),
+            (None, week + second, true),
+        ] {
+            let authorization = DiscordAuth {
+                discord_user_id: 1,
+                token: None,
+                refresh_token: None,
+                expires: expires_in.map(|remaining| now + remaining),
+                updated_at: now - updated_ago,
+            };
+            assert_eq!(
+                authorization.needs_refresh(now),
+                expected,
+                "expires_in={expires_in:?}, updated_ago={updated_ago:?}"
+            );
+        }
     }
 }

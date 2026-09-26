@@ -175,12 +175,8 @@ async fn users_me_refreshes_an_expiring_authorization(pool: PgPool) {
     set_discord_updated_at(&pool, DISCORD_ID, stale).await;
 
     let discord = fake();
-    let response = get(
-        vc_api::router(state(pool.clone(), discord.clone())),
-        URI,
-        Some(&token),
-    )
-    .await;
+    let app = vc_api::router(state(pool.clone(), discord.clone()));
+    let response = get(app.clone(), URI, Some(&token)).await;
 
     assert_matches_golden(
         &response,
@@ -197,10 +193,57 @@ async fn users_me_refreshes_an_expiring_authorization(pool: PgPool) {
 
     assert_eq!(stored_token.as_deref(), Some(REFRESHED_TOKEN));
     assert_eq!(stored_refresh.as_deref(), Some(REFRESHED_REFRESH_TOKEN));
-    assert!(expires.is_some(), "expires is stored");
+    assert!(expires.unwrap() > utc_now() + Duration::minutes(15));
     // The Elixir code updates this row with update_all/2, which does not touch
     // updated_at, so the original value must survive the refresh.
     assert_eq!(updated_at, stale, "updated_at is not modified by a refresh");
+
+    let second = get(app, URI, Some(&token)).await;
+    assert_matches_golden(
+        &second,
+        &golden(include_str!("golden/v2_users_me_refresh.json")),
+    );
+    assert_eq!(
+        discord.refresh_calls(),
+        1,
+        "the next request reuses the refreshed token despite the old updated_at"
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn users_me_refreshes_before_the_stored_expiry_even_after_a_recent_login(pool: PgPool) {
+    fixture(&pool).await;
+    vc_core::user::insert_user(
+        &pool,
+        DISCORD_ID,
+        "stub-token",
+        Some("stub-refresh-token"),
+        utc_now() + Duration::minutes(10),
+    )
+    .await
+    .expect("record a login with a shorter token lifetime");
+    let token = mint(&pool, USER_ID, &SCOPES).await;
+    let discord = fake();
+
+    let response = get(
+        vc_api::router(state(pool.clone(), discord.clone())),
+        URI,
+        Some(&token),
+    )
+    .await;
+
+    assert_matches_golden(
+        &response,
+        &golden(include_str!("golden/v2_users_me_refresh.json")),
+    );
+    assert_eq!(
+        discord.refresh_calls(),
+        1,
+        "the stored expiry takes precedence"
+    );
+    let (stored_token, _, expires, _) = discord_auth_row(&pool, DISCORD_ID).await;
+    assert_eq!(stored_token.as_deref(), Some(REFRESHED_TOKEN));
+    assert!(expires.unwrap() > utc_now() + Duration::minutes(15));
 }
 
 /// `@me` is whoever holds the token, and an application holds one: its own account has no

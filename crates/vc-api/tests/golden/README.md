@@ -79,6 +79,12 @@ bookkeeping given controlled Discord responses — not Discord itself.
 
 ## Intentional deviations from the captured Elixir behaviour
 
+Discord token refresh uses the stored `expires` when present. Elixir always used
+`updated_at + 7 days` while leaving `updated_at` unchanged during refresh, so
+every subsequent request refreshed again. The Rust service preserves that timestamp
+but reuses the refreshed token until its new expiry is within fifteen minutes.
+Rows with a null expiry retain the legacy seven-day estimate.
+
 Phoenix-only response headers are **not** replicated. The Rust service does not
 reproduce the `; charset=utf-8` parameter, `cache-control: max-age=0, private,
 must-revalidate`, or the generated `x-request-id`. None of them is part of the

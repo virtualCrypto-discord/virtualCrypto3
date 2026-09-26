@@ -1,11 +1,8 @@
 //! The Discord authorization an account holds, and using it.
 //!
 //! Shared by the v2 user endpoint and by application registration, which need the
-//! same thing from it: a token to ask Discord with. It lives here rather than in
-//! either of them because it is two constants and a comparison — the fifteen
-//! minutes and the seven days — and a second copy is a second place for both to be
-//! got wrong, in a flow where getting them wrong means asking Discord with a token
-//! that has expired.
+//! same thing from it: a token to ask Discord with. Both use the stored expiry to
+//! decide when to refresh, then save the replacement token and its expiry here.
 
 use time::Duration;
 
@@ -14,9 +11,9 @@ use vc_core::model::{DiscordAuth, utc_now};
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// Reproduces `DiscordAuth.refresh_user/1` followed by the controller's use of
-/// the returned struct: refresh inside the final 15 minutes of the seven-day
-/// lifetime, store the new authorization, and use the refreshed token.
+/// Refresh inside the final 15 minutes of the stored lifetime, store the new
+/// authorization and expiry, and use the refreshed token. Authorizations with no
+/// stored expiry use the legacy seven-day estimate in `DiscordAuth::needs_refresh`.
 pub async fn resolve_token(
     state: &AppState,
     discord_id: i64,

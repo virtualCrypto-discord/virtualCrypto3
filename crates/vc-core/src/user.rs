@@ -130,7 +130,7 @@ pub async fn resolve_ids(
 pub async fn find_discord_auth(pool: &PgPool, discord_user_id: i64) -> Result<Option<DiscordAuth>> {
     let auth = sqlx::query_as!(
         DiscordAuth,
-        "SELECT discord_user_id AS \"discord_user_id!\", token, refresh_token, updated_at
+        "SELECT discord_user_id AS \"discord_user_id!\", token, refresh_token, expires, updated_at
          FROM discord_users WHERE discord_user_id = $1",
         discord_user_id
     )
@@ -144,7 +144,8 @@ pub async fn find_discord_auth(pool: &PgPool, discord_user_id: i64) -> Result<Op
 ///
 /// Deliberately leaves `updated_at` alone: the Elixir code updates this row with
 /// `Ecto.Repo.update_all/2`, which does not apply timestamps. The captured
-/// golden confirms `updated_at` is unchanged after a refresh.
+/// golden confirms `updated_at` is unchanged after a refresh. Subsequent refresh
+/// decisions use the new `expires`, not this unchanged timestamp.
 pub async fn update_discord_token(
     pool: &PgPool,
     discord_user_id: i64,
@@ -176,9 +177,7 @@ pub async fn update_discord_token(
 ///
 /// Both timestamps are set on conflict, because Ecto's `on_conflict:
 /// :replace_all` writes every field the struct carries and Ecto had filled in
-/// both. `updated_at` being one of them is load-bearing rather than tidy: the
-/// refresh window is measured from it, so a login is what starts the seven days
-/// before the next refresh.
+/// both. The supplied `expires` determines when the authorization needs refreshing.
 pub async fn insert_user(
     pool: &PgPool,
     discord_user_id: i64,

@@ -571,23 +571,18 @@ spelled differently.
 
 Registration's second and third steps — refresh the owner's Discord authorization
 when it is near expiry, then ask Discord who they are — are the same thing
-`GET /api/v2/users/@me` needed, and they are written there as `resolve_token` in
-`routes/v2/users.rs`:
+`GET /api/v2/users/@me` needs. Both use `resolve_token` in `discord_auth.rs`:
 
 ```rust
 async fn resolve_token(state: &AppState, discord_id: i64, authorization: &DiscordAuth)
     -> Result<String, ApiError>
 ```
 
-It refreshes inside the last fifteen minutes of the seven-day lifetime, stores the
-new authorization, and answers with the token to use.
-
-**It is private to that file, and registration should not copy it.** The behaviour
-is two constants and a comparison — the fifteen minutes and the seven days — and a
-second copy is a second place for both to be got wrong, in a flow where getting
-them wrong means asking Discord with a token that has expired. It wants to be
-shared: the natural move is to lift it out of `v2/users.rs` into a module of its
-own, and have both callers use it.
+It refreshes when the stored `expires` is within fifteen minutes or has passed,
+stores the new authorization and expiry, and answers with the token to use.
+Only rows with no stored expiry fall back to `updated_at + 7 days`. Refreshes
+preserve `updated_at`, as Elixir did, but the next request reads the new `expires`
+so it reuses a still-valid token instead of refreshing again.
 
 What registration adds after it is its own: the profile the token fetches answers
 with `bot`, and a bot account may not register — `user_verification_failed`. The
