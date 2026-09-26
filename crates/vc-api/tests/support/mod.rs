@@ -75,6 +75,7 @@ pub struct FakeDiscord {
     callbacks: Mutex<Vec<Value>>,
     response_edits: Mutex<Vec<Value>>,
     response_edit_finished: tokio::sync::Notify,
+    response_edit_error: bool,
     response_deletions: AtomicUsize,
     response_delete_finished: tokio::sync::Notify,
     response_delete_error: bool,
@@ -149,6 +150,7 @@ impl FakeDiscord {
             callbacks: Mutex::new(Vec::new()),
             response_edits: Mutex::new(Vec::new()),
             response_edit_finished: tokio::sync::Notify::new(),
+            response_edit_error: false,
             response_deletions: AtomicUsize::new(0),
             response_delete_finished: tokio::sync::Notify::new(),
             response_delete_error: false,
@@ -296,6 +298,12 @@ impl FakeDiscord {
     pub fn with_response_delete_error() -> Arc<Self> {
         let mut api = Self::new();
         api.response_delete_error = true;
+        Arc::new(api)
+    }
+
+    pub fn with_response_edit_error() -> Arc<Self> {
+        let mut api = Self::new();
+        api.response_edit_error = true;
         Arc::new(api)
     }
 
@@ -468,6 +476,12 @@ impl DiscordApi for FakeDiscord {
             "edit sent before initial response"
         );
         discord_schema::Payload::OriginalResponse.assert_valid(body);
+        if self.response_edit_error {
+            self.response_edit_finished.notify_one();
+            return Err(DiscordError::Request(
+                "simulated response edit failure".into(),
+            ));
+        }
         self.response_edits.lock().unwrap().push(body.clone());
         self.response_edit_finished.notify_one();
         Ok(())

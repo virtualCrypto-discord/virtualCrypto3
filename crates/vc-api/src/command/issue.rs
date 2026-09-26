@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 use vc_core::issue::{IssueError, Issued};
 
@@ -6,6 +10,72 @@ use super::{
     mention, value_text,
 };
 use crate::state::AppState;
+
+/// Acknowledge privately before issuing currency. Both success and refusal
+/// replace this message, keeping the command's existing ephemeral visibility.
+pub async fn respond(
+    state: &AppState,
+    options: &Map<String, Value>,
+    payload: &Value,
+) -> Result<Response, CommandError> {
+    let field = |name| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| CommandError::missing(&format!("interaction has no {name}")))
+    };
+    let interaction_id = field("id")?;
+    let application_id = field("application_id")?.to_owned();
+    let token = field("token")?.to_owned();
+    let acknowledgement = json!({
+        "type": CHANNEL_MESSAGE_WITH_SOURCE,
+        "data": {
+            "flags": crate::components::EPHEMERAL,
+            "content": "処理中…",
+            "allowed_mentions": { "parse": [] },
+        },
+    });
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        state
+            .discord()
+            .create_interaction_response(interaction_id, &token, &acknowledgement),
+    )
+    .await
+    .map_err(|_| CommandError::missing("the issuance acknowledgement timed out"))??;
+
+    let state = state.clone();
+    let options = options.clone();
+    let payload = payload.clone();
+    tokio::spawn(async move {
+        let response = match handle(&state, &options, &payload).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(?error, "Discord issuance failed");
+                render_error("発行結果を確認できませんでした。発行履歴を確認してください。")
+            }
+        };
+        let mut body = response["data"].clone();
+        // Privacy was fixed by the initial response. The renderers also clear
+        // content/embeds so this edit can switch the plain text to components.
+        body["flags"] = json!(crate::components::IS_COMPONENTS_V2);
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            state
+                .discord()
+                .edit_original_interaction_response(&application_id, &token, &body),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "issuance private response failed"),
+            Err(_) => tracing::warn!("issuance private response timed out"),
+        }
+    });
+
+    Ok(StatusCode::ACCEPTED.into_response())
+}
 
 /// `Command.handle/4` for `give`, rendered by `InteractionsJSON.give/1` through
 /// `Interactions.Give.render/2`.

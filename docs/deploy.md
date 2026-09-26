@@ -154,9 +154,14 @@ Errors replace the private message. If publishing or deleting fails after a
 successful payment, the private message is updated with the known success.
 Notification failures do not retry the payment.
 
+`/issue` also acknowledges with a private "処理中…" message before starting the
+issuance. Both success and error replace that private message. A rejected or
+timed-out acknowledgement never issues currency, and a notification failure
+never retries issuance.
+
 The endpoint returns an empty HTTP 202 after acknowledgement. Its receipt records
-acceptance, so replaying that 202 never restarts the payment, including while it
-is still running. Long database waits happen after the initial Discord response.
+acceptance, so replaying that 202 never restarts the payment or issuance, including
+while it is still running. Long database waits happen after the initial Discord response.
 
 ## Runtime timeouts
 
