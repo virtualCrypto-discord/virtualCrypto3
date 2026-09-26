@@ -80,15 +80,17 @@ pub async fn component(
     };
 
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
-    let now = time::OffsetDateTime::now_utc();
+    let clock = time::OffsetDateTime::now_utc;
 
     let decided = match action {
         Action::Approve => {
-            vc_core::contract::approve(state.pool(), contract_id, account, now).await
+            vc_core::contract::approve(state.pool(), contract_id, account, clock).await
         }
-        Action::Refuse => vc_core::contract::refuse(state.pool(), contract_id, account, now).await,
+        Action::Refuse => {
+            vc_core::contract::refuse(state.pool(), contract_id, account, clock()).await
+        }
         Action::Withdraw => {
-            vc_core::contract::withdraw(state.pool(), contract_id, account, now).await
+            vc_core::contract::withdraw(state.pool(), contract_id, account, clock).await
         }
     };
 

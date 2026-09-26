@@ -50,7 +50,7 @@ async fn aged(pool: &PgPool, application: i64) -> i64 {
     .await
     .expect("a contract");
 
-    vc_core::contract::approve(pool, id, PARTY, time::OffsetDateTime::now_utc())
+    vc_core::contract::approve(pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect("an approval");
 
@@ -134,7 +134,7 @@ async fn a_contract_that_is_still_running_is_left_alone(pool: PgPool) {
     .await
     .expect("a contract");
 
-    vc_core::contract::approve(&pool, id, PARTY, time::OffsetDateTime::now_utc())
+    vc_core::contract::approve(&pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect("an approval");
 
@@ -213,7 +213,7 @@ async fn a_settled_contract_cannot_be_withdrawn_from(pool: PgPool) {
 
     vc_api::scheduler::settle_expired(&state).await;
 
-    let refused = vc_core::contract::withdraw(&pool, id, PARTY, time::OffsetDateTime::now_utc())
+    let refused = vc_core::contract::withdraw(&pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect_err("a refusal");
 

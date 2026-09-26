@@ -95,6 +95,47 @@ async fn pay(pool: &PgPool, sender: i64, receiver: i64, unit: &str, amount: i64)
         .expect("a payment");
 }
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pagination_preserves_an_imported_emoji_unit(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    // This format exists in the production v2 data, despite v3's stricter
+    // validation for newly created currencies.
+    let unit = "<:winvista_calcexe:870168179052253215>";
+    sqlx::query("UPDATE currencies SET unit = $1 WHERE id = $2")
+        .bind(unit)
+        .bind(money.currency)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for _ in 0..6 {
+        pay(&pool, MONEY_USER1, MONEY_USER2, unit, 10).await;
+    }
+    pay(&pool, MONEY_USER2, MONEY_USER1, "w", 1).await;
+
+    let app = router(pool);
+    for other in [None, Some(MONEY_USER1)] {
+        let mut options = vec![option("unit", json!(unit))];
+        if let Some(other) = other {
+            options.push(option("user", json!(other.to_string())));
+        }
+        let first = interaction(app.clone(), history(MONEY_USER2, "pay", options)).await;
+        assert_eq!(first.status, 200, "{}", first.body);
+        assert!(rendered(&first).contains("(6件)"), "{}", first.body);
+
+        let second = interaction(
+            app.clone(),
+            support::button_from_guild(json!({"custom_id": next_button(&first)}), MONEY_USER2),
+        )
+        .await;
+        assert_eq!(second.status, 200, "{}", second.body);
+        let shown = rendered(&second);
+        assert!(shown.contains("(6件)"), "{shown}");
+        assert!(shown.contains(unit), "{shown}");
+        assert_eq!(shown.matches("受取: **10**").count(), 1, "{shown}");
+        assert!(!shown.contains("`w`"), "{shown}");
+    }
+}
+
 /// The same for the pool, through the path `/issue` uses.
 async fn issue(pool: &PgPool, receiver: i64, amount: i64) {
     vc_core::issue::issue(pool, MONEY_GUILD, receiver, Some(amount))
@@ -161,7 +202,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
     .expect("a contract");
 
     // The approval locks the money, so it is a movement and it shows.
-    vc_core::contract::approve(&pool, contract, 1, now)
+    vc_core::contract::approve(&pool, contract, 1, || now)
         .await
         .expect("an approval");
 
@@ -175,7 +216,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
 
     // What the application spends from the lock moves the escrow, not the wallet, so it is not in
     // this ledger at all.
-    vc_core::contract::pay(&pool, contract, application, OTHER, None, 25, now)
+    vc_core::contract::pay(&pool, contract, application, OTHER, None, 25, || now)
         .await
         .expect("a charge");
 
@@ -196,7 +237,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
     );
 
     // The end of the contract returns what is left of the lock, and that is a movement.
-    vc_core::contract::withdraw(&pool, contract, 1, now)
+    vc_core::contract::withdraw(&pool, contract, 1, || now)
         .await
         .expect("a withdrawal");
 
@@ -232,13 +273,13 @@ async fn edited_application_names_cannot_forge_contract_history(pool: PgPool) {
     )
     .await
     .unwrap();
-    vc_core::contract::approve(&pool, contract, 2, now)
+    vc_core::contract::approve(&pool, contract, 2, || now)
         .await
         .unwrap();
-    vc_core::contract::pay(&pool, contract, application, OTHER, None, 3, now)
+    vc_core::contract::pay(&pool, contract, application, OTHER, None, 3, || now)
         .await
         .unwrap();
-    vc_core::contract::withdraw(&pool, contract, 2, now)
+    vc_core::contract::withdraw(&pool, contract, 2, || now)
         .await
         .unwrap();
 
@@ -551,18 +592,19 @@ async fn a_payment_to_a_party_is_a_return_in_the_wallet_history(pool: PgPool) {
     .await
     .expect("a contract");
 
-    vc_core::contract::approve(&pool, contract, 1, now)
+    vc_core::contract::approve(&pool, contract, 1, || now)
         .await
         .expect("an approval");
-    vc_core::contract::approve(&pool, contract, 2, now)
+    vc_core::contract::approve(&pool, contract, 2, || now)
         .await
         .expect("an approval");
 
     // 120 out of the escrow into the first party's wallet: her own hundred and twenty of the
     // second party's.
-    let payed = vc_core::contract::pay(&pool, contract, application, MONEY_USER1, None, 120, now)
-        .await
-        .expect("a return");
+    let payed =
+        vc_core::contract::pay(&pool, contract, application, MONEY_USER1, None, 120, || now)
+            .await
+            .expect("a return");
 
     assert_eq!(payed.amount, 120);
 

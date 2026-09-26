@@ -86,7 +86,7 @@ async fn a_lock_moves_money_into_the_contract(pool: PgPool) {
 
     let before = supply(&pool).await;
 
-    approve(&pool, id, PARTY, time::OffsetDateTime::now_utc())
+    approve(&pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect("an approval");
 
@@ -125,10 +125,10 @@ async fn the_account_holds_what_the_parties_locked(pool: PgPool) {
 
     let before = supply(&pool).await;
 
-    approve(&pool, id, PARTY, time::OffsetDateTime::now_utc())
+    approve(&pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect("the first approval");
-    approve(&pool, id, 4, time::OffsetDateTime::now_utc())
+    approve(&pool, id, 4, time::OffsetDateTime::now_utc)
         .await
         .expect("the second approval");
 
@@ -149,11 +149,11 @@ async fn the_end_of_a_contract_empties_the_account(pool: PgPool) {
 
     let before = supply(&pool).await;
 
-    approve(&pool, id, PARTY, time::OffsetDateTime::now_utc())
+    approve(&pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect("an approval");
 
-    withdraw(&pool, id, PARTY, time::OffsetDateTime::now_utc())
+    withdraw(&pool, id, PARTY, time::OffsetDateTime::now_utc)
         .await
         .expect("a withdrawal");
 
@@ -192,7 +192,7 @@ async fn a_party_draw_and_a_return_move_no_supply(pool: PgPool) {
     .expect("a contract");
 
     for party in [PARTY, OTHER] {
-        approve(&pool, id, party, time::OffsetDateTime::now_utc())
+        approve(&pool, id, party, time::OffsetDateTime::now_utc)
             .await
             .expect("an approval");
     }
@@ -206,7 +206,7 @@ async fn a_party_draw_and_a_return_move_no_supply(pool: PgPool) {
         RECEIVER_DISCORD_ID,
         Some(PARTY_DISCORD_ID),
         40,
-        time::OffsetDateTime::now_utc(),
+        time::OffsetDateTime::now_utc,
     )
     .await
     .expect("a charge");
@@ -231,7 +231,7 @@ async fn a_party_draw_and_a_return_move_no_supply(pool: PgPool) {
         PARTY_DISCORD_ID,
         Some(PARTY_DISCORD_ID),
         40,
-        time::OffsetDateTime::now_utc(),
+        time::OffsetDateTime::now_utc,
     )
     .await
     .expect("a return");

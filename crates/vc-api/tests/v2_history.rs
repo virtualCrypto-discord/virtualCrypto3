@@ -48,11 +48,11 @@ async fn contract_charges_credit_the_receivers_ledger_without_debiting_the_parti
     .await
     .unwrap();
     for user in [1, 2] {
-        vc_core::contract::approve(&pool, contract, user, now)
+        vc_core::contract::approve(&pool, contract, user, || now)
             .await
             .unwrap();
     }
-    vc_core::contract::pay(&pool, contract, application, OTHER, None, 35, now)
+    vc_core::contract::pay(&pool, contract, application, OTHER, None, 35, || now)
         .await
         .unwrap();
     let amount: i64 =

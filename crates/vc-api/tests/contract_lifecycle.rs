@@ -26,7 +26,7 @@ async fn settled_contracts_are_not_listed_as_open(pool: PgPool) {
     )
     .await
     .unwrap();
-    vc_core::contract::approve(&pool, id, 2, past)
+    vc_core::contract::approve(&pool, id, 2, || past)
         .await
         .unwrap();
     let state = support::state(pool.clone(), support::fake());
@@ -82,35 +82,27 @@ async fn contract_payments_draw_from_the_first_approval_first(pool: PgPool) {
     let id = vc_core::contract::create(&pool, application, "nyan", &parties, None, None, now)
         .await
         .unwrap();
-    vc_core::contract::approve(&pool, id, 3, now).await.unwrap();
-    vc_core::contract::approve(&pool, id, 2, now).await.unwrap();
-    vc_core::contract::pay(
-        &pool,
-        id,
-        application,
-        owner,
-        None,
-        20,
-        now + time::Duration::seconds(20),
-    )
+    vc_core::contract::approve(&pool, id, 3, || now)
+        .await
+        .unwrap();
+    vc_core::contract::approve(&pool, id, 2, || now)
+        .await
+        .unwrap();
+    vc_core::contract::pay(&pool, id, application, owner, None, 20, || {
+        now + time::Duration::seconds(20)
+    })
     .await
     .unwrap();
     // A partial payment changes updated_at, and a repeated approval must not
     // move the party behind a later approval.
     assert!(
-        !vc_core::contract::approve(&pool, id, 3, now + time::Duration::seconds(21))
+        !vc_core::contract::approve(&pool, id, 3, || now + time::Duration::seconds(21))
             .await
             .unwrap()
     );
-    vc_core::contract::pay(
-        &pool,
-        id,
-        application,
-        owner,
-        None,
-        130,
-        now + time::Duration::seconds(22),
-    )
+    vc_core::contract::pay(&pool, id, application, owner, None, 130, || {
+        now + time::Duration::seconds(22)
+    })
     .await
     .unwrap();
     // The two approvals' locks first, then the money the charges drew: the lock
@@ -119,7 +111,7 @@ async fn contract_payments_draw_from_the_first_approval_first(pool: PgPool) {
     let history: Vec<(i64, i64)> = sqlx::query_as("SELECT sender_id, amount FROM currency_payment_histories WHERE contract_id = $1 ORDER BY id")
         .bind(id).fetch_all(&pool).await.unwrap();
     assert_eq!(history, vec![(3, 100), (2, 100), (3, 20), (3, 80), (2, 50)]);
-    vc_core::contract::withdraw(&pool, id, 2, now + time::Duration::seconds(30))
+    vc_core::contract::withdraw(&pool, id, 2, || now + time::Duration::seconds(30))
         .await
         .unwrap();
     let alice_balance: i64 =

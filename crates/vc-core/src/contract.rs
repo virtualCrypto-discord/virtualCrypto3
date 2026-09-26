@@ -561,13 +561,15 @@ fn with_parties(row: ContractRow, parties: Vec<Party>) -> Contract {
 /// Answers whether anything changed: approving twice is not a second decision —
 /// the money is already locked — and a caller that was told once does not need
 /// telling again.
+///
+/// The clock is read after acquiring the contract, party and balance locks, so
+/// waiting for another transaction cannot authorize an expired contract.
 pub async fn approve(
     pool: &PgPool,
     contract_id: i64,
     user_id: i32,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<bool, ContractError> {
-    let now = at(now);
     let mut tx = pool.begin().await.map_err(ContractError::Database)?;
 
     let contract = lock_contract(&mut tx, contract_id).await?;
@@ -592,10 +594,6 @@ pub async fn approve(
         return Err(ContractError::InvalidStatus);
     }
 
-    if has_expired(contract.expires_at, now) {
-        return Err(ContractError::Expired);
-    }
-
     let balance = sqlx::query_scalar!(
         "SELECT amount FROM assets
           WHERE user_id = $1 AND currency_id = $2
@@ -608,6 +606,11 @@ pub async fn approve(
     .map_err(ContractError::Database)?
     .flatten()
     .unwrap_or(0);
+
+    let now = at(clock());
+    if has_expired(contract.expires_at, now) {
+        return Err(ContractError::Expired);
+    }
 
     if balance < party.amount {
         return Err(ContractError::NotEnoughAmount);
@@ -781,12 +784,12 @@ pub async fn withdraw(
     pool: &PgPool,
     contract_id: i64,
     user_id: i32,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<bool, ContractError> {
-    let now = at(now);
     let mut tx = pool.begin().await.map_err(ContractError::Database)?;
 
     let contract = lock_contract(&mut tx, contract_id).await?;
+    let now = at(clock());
 
     // One that is already over has nothing left to take back: a settled expiry has
     // sent the remainders home, and a cancellation did the same.
@@ -861,7 +864,7 @@ pub async fn pay(
     receiver_discord_id: i64,
     party_discord_id: Option<i64>,
     amount: i64,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Payed, ContractError> {
     let mut tx = pool.begin().await.map_err(ContractError::Database)?;
 
@@ -872,7 +875,7 @@ pub async fn pay(
         receiver_discord_id,
         party_discord_id,
         amount,
-        now,
+        clock,
     )
     .await?;
 
@@ -883,6 +886,8 @@ pub async fn pay(
 
 /// The same charge, on a transaction the caller owns — which is what lets the
 /// idempotency layer's claim, the charge and the stored answer be one commit.
+/// The clock is read after the contract lock is acquired, when the remaining
+/// allowance and its deadline can be checked together.
 pub async fn pay_in(
     tx: &mut PgConnection,
     contract_id: i64,
@@ -890,15 +895,14 @@ pub async fn pay_in(
     receiver_discord_id: i64,
     party_discord_id: Option<i64>,
     amount: i64,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Payed, ContractError> {
     if amount <= 0 {
         return Err(ContractError::InvalidAmount);
     }
 
-    let now = at(now);
-
     let contract = lock_contract(&mut *tx, contract_id).await?;
+    let now = at(clock());
 
     if contract.application_id != application_id {
         return Err(ContractError::NotFound);

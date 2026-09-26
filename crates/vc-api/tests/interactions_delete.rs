@@ -250,11 +250,11 @@ async fn delete_after_approval(pool: PgPool, withdrawn: bool) {
         .unwrap()
         .unwrap()
         .id;
-    vc_core::contract::approve(&pool, id, account, now)
+    vc_core::contract::approve(&pool, id, account, || now)
         .await
         .unwrap();
     if withdrawn {
-        vc_core::contract::withdraw(&pool, id, account, now)
+        vc_core::contract::withdraw(&pool, id, account, || now)
             .await
             .unwrap();
     }
@@ -277,7 +277,7 @@ async fn delete_after_approval(pool: PgPool, withdrawn: bool) {
         .unwrap()
         .unwrap()
         .id;
-    vc_core::contract::approve(&pool, other_id, other_account, now)
+    vc_core::contract::approve(&pool, other_id, other_account, || now)
         .await
         .unwrap();
     let other_balance = support::get_amount(&pool, money.user2, money.currency2).await;

@@ -854,9 +854,8 @@ pub mod ui {
 
         /// The string a pagination button carries: `kind:page:unit:discord id`.
         ///
-        /// Four fields with a colon between them, as the grant space writes its two: text a
-        /// test can write down and a person can recognise in a log. An absent filter is an
-        /// empty field, and neither a unit nor an id is ever empty.
+        /// The first two and last separators delimit the fields: imported units may contain
+        /// colons themselves. An absent filter is an empty field.
         pub fn page_custom_id(listing: &Listing) -> String {
             let kind = match listing.screen {
                 Screen::Paid => "paid",
@@ -894,7 +893,7 @@ pub mod ui {
                 .rposition(|byte| *byte != 0)
                 .map_or(&rest[..0], |end| &rest[..=end]);
             let text = String::from_utf8(trimmed.to_vec()).map_err(|_| UiError::Head)?;
-            let mut fields = text.split(':');
+            let mut fields = text.splitn(3, ':');
 
             let screen = match fields.next() {
                 Some("paid") => Screen::Paid,
@@ -906,13 +905,14 @@ pub mod ui {
                 .next()
                 .and_then(|page| page.parse().ok())
                 .ok_or(UiError::Head)?;
-            let unit = fields
+            let (unit, discord_id) = fields
                 .next()
-                .filter(|unit| !unit.is_empty())
-                .map(str::to_owned);
-            let discord_id = match fields.next() {
-                Some("") | None => None,
-                Some(id) => Some(id.parse().map_err(|_| UiError::Head)?),
+                .and_then(|filters| filters.rsplit_once(':'))
+                .ok_or(UiError::Head)?;
+            let unit = (!unit.is_empty()).then(|| unit.to_owned());
+            let discord_id = match discord_id {
+                "" => None,
+                id => Some(id.parse().map_err(|_| UiError::Head)?),
             };
 
             Ok(Listing {
@@ -1355,6 +1355,31 @@ mod tests {
             ui::history::parse(&parse(&ui::history::page_custom_id(&listing))),
             Ok(listing)
         );
+    }
+
+    #[test]
+    fn history_arrows_preserve_colons_in_imported_units() {
+        for unit in [
+            "<:winvista_calcexe:870168179052253215>",
+            "<a:DiamondToppogi:1133702480094580766>",
+            "unit:1",
+            "99999amount:",
+            "pi\namount:186000",
+        ] {
+            for screen in [ui::history::Screen::Paid, ui::history::Screen::Issued] {
+                for discord_id in [None, Some(100_000_000_000_000_001)] {
+                    let listing = ui::history::Listing {
+                        screen,
+                        page: 2,
+                        unit: Some(unit.to_owned()),
+                        discord_id,
+                    };
+                    let encoded = ui::history::page_custom_id(&listing);
+                    assert_eq!(ui::history::parse(&parse(&encoded)), Ok(listing));
+                    assert!(encoded.chars().count() <= 100);
+                }
+            }
+        }
     }
 
     /// Its own head, for every other space's reason: an id here carries a ledger and a filter,

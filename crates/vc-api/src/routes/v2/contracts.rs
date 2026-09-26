@@ -126,7 +126,7 @@ pub async fn approve(
 ) -> Result<Json<Value>, ApiError> {
     let account = user.account_id();
 
-    let decided = contract::approve(state.pool(), id, account, OffsetDateTime::now_utc())
+    let decided = contract::approve(state.pool(), id, account, OffsetDateTime::now_utc)
         .await
         .map_err(contract_error)?;
 
@@ -180,7 +180,7 @@ pub async fn withdraw(
 ) -> Result<Json<Value>, ApiError> {
     let account = user.account_id();
 
-    let decided = contract::withdraw(state.pool(), id, account, OffsetDateTime::now_utc())
+    let decided = contract::withdraw(state.pool(), id, account, OffsetDateTime::now_utc)
         .await
         .map_err(contract_error)?;
 
@@ -265,7 +265,7 @@ async fn charge(
         payment.receiver_discord_id,
         payment.party_discord_id,
         payment.amount,
-        OffsetDateTime::now_utc(),
+        OffsetDateTime::now_utc,
     )
     .await
     {

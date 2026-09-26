@@ -44,6 +44,138 @@ async fn wait_for_pending(pool: &PgPool, id: &str) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
+async fn contract_deadlines_use_the_time_after_lock_waits(pool: PgPool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use time::OffsetDateTime;
+    use vc_core::contract::{self, ContractError, NewParty};
+
+    #[derive(Clone, Copy, Debug)]
+    enum Operation {
+        Approve,
+        ApproveAfterBalanceLock,
+        Pay,
+        Withdraw,
+    }
+
+    let money = setup_money(&pool).await;
+    let application = insert_application(&pool, money.user1, "deadline test").await;
+    for operation in [
+        Operation::Approve,
+        Operation::ApproveAfterBalanceLock,
+        Operation::Pay,
+        Operation::Withdraw,
+    ] {
+        let now = OffsetDateTime::now_utc();
+        let id = contract::create(
+            &pool,
+            application,
+            "n",
+            &[NewParty {
+                discord_id: MONEY_USER1,
+                amount: 100,
+            }],
+            None,
+            Some(60),
+            now,
+        )
+        .await
+        .unwrap();
+        if matches!(operation, Operation::Pay | Operation::Withdraw) {
+            contract::approve(&pool, id, 1, || now).await.unwrap();
+        }
+        let before = contract::find(&pool, id).await.unwrap().unwrap();
+        let deadline = before.expires_at.unwrap().assume_utc();
+        let payer_balance = get_amount(&pool, MONEY_USER1, money.currency).await;
+        let receiver_balance = get_amount(&pool, MONEY_USER2, money.currency).await;
+        let history_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let mut gate = pool.begin().await.unwrap();
+        if matches!(operation, Operation::ApproveAfterBalanceLock) {
+            sqlx::query(
+                "SELECT amount FROM assets WHERE user_id = 1 AND currency_id = $1 FOR UPDATE",
+            )
+            .bind(money.currency)
+            .execute(&mut *gate)
+            .await
+            .unwrap();
+        } else {
+            sqlx::query("SELECT id FROM contracts WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .execute(&mut *gate)
+                .await
+                .unwrap();
+        }
+
+        // Move an injected clock while the operation is demonstrably waiting
+        // for the lock, without sleeping until a real deadline.
+        let expired = Arc::new(AtomicBool::new(false));
+        let task_expired = expired.clone();
+        let task_pool = pool.clone();
+        let pending = tokio::spawn(async move {
+            let clock = || {
+                if task_expired.load(Ordering::SeqCst) {
+                    deadline
+                } else {
+                    now
+                }
+            };
+            match operation {
+                Operation::Approve | Operation::ApproveAfterBalanceLock => {
+                    contract::approve(&task_pool, id, 1, clock).await
+                }
+                Operation::Pay => {
+                    contract::pay(&task_pool, id, application, MONEY_USER2, None, 10, clock)
+                        .await
+                        .map(|_| true)
+                }
+                Operation::Withdraw => contract::withdraw(&task_pool, id, 1, clock).await,
+            }
+        });
+        wait_for_blocked(&pool, 1).await;
+        expired.store(true, Ordering::SeqCst);
+        gate.rollback().await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        let after = contract::find(&pool, id).await.unwrap().unwrap();
+        if matches!(operation, Operation::Withdraw) {
+            assert!(result.unwrap());
+            assert_eq!(after.remaining, 0);
+            assert_eq!(after.parties[0].status, "withdrawn");
+            assert_eq!(
+                get_amount(&pool, MONEY_USER1, money.currency).await,
+                payer_balance + 100
+            );
+        } else {
+            assert!(
+                matches!(result, Err(ContractError::Expired)),
+                "{operation:?}: {result:?}"
+            );
+            assert_eq!(after, before);
+            assert_eq!(
+                get_amount(&pool, MONEY_USER1, money.currency).await,
+                payer_balance
+            );
+            let after_count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(after_count, history_count);
+        }
+        assert_eq!(
+            get_amount(&pool, MONEY_USER2, money.currency).await,
+            receiver_balance
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
 async fn identical_signed_payment_is_replayed_across_app_instances(pool: PgPool) {
     let money = setup_money(&pool).await;
     let before = get_amount(&pool, money.user1, money.currency).await;
@@ -497,8 +629,8 @@ async fn contract_refunds_and_single_or_bulk_payments_both_commit(pool: PgPool) 
                 )
                 .await
                 .unwrap();
-                contract::approve(&pool, id, 1, now).await.unwrap();
-                contract::approve(&pool, id, 2, now).await.unwrap();
+                contract::approve(&pool, id, 1, || now).await.unwrap();
+                contract::approve(&pool, id, 2, || now).await.unwrap();
                 assert_eq!(
                     get_amount(&pool, money.user1, money.currency).await,
                     before_a - 100
@@ -514,7 +646,7 @@ async fn contract_refunds_and_single_or_bulk_payments_both_commit(pool: PgPool) 
                 let refund_pool = pool.clone();
                 let refund = tokio::spawn(async move {
                     match ending {
-                        Refund::Withdraw => contract::withdraw(&refund_pool, id, 1, now).await,
+                        Refund::Withdraw => contract::withdraw(&refund_pool, id, 1, || now).await,
                         Refund::Refuse => contract::refuse(&refund_pool, id, 3, now).await,
                         Refund::Expire => {
                             contract::settle(&refund_pool, id, now + time::Duration::seconds(60))
