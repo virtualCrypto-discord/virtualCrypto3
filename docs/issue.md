@@ -165,12 +165,19 @@ authenticated by Basic with the application's own id and secret:
 - still pending: `400 {"error":"authorization_pending"}` — keep polling;
 - approved: `200` with the guild token, minted from the grant the approval
   wrote;
-- unknown, expired, or approved-but-revoked: `400 {"error":"invalid_grant"}` —
+- unknown, expired, already exchanged, or approved-but-revoked: `400 {"error":"invalid_grant"}` —
   ask again.
 
 A guild token already issued keeps working until it expires, and it reads the
 grant's scopes when it is used rather than carrying them — so taking a scope away
 takes issuing away with it.
+
+A successful exchange marks the request `exchanged` in the same transaction as
+issuing its tokens. Repeated or simultaneous exchanges cannot issue another token
+or replace the first refresh token. If either token write fails, the request remains
+`approved` and can be retried. The request list retains exchanged requests until expiry.
+Migration `0026` also marks existing approved requests as exchanged when their grant
+already has an access or refresh token.
 
 ## The push next to the poll
 

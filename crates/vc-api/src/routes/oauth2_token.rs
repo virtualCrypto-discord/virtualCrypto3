@@ -131,7 +131,8 @@ async fn credentials(state: &AppState, headers: &HeaderMap, form: TokenForm) -> 
 /// - still pending: `400 authorization_pending`, and the device keeps polling;
 /// - approved: the guild token, minted from the grant the approval wrote;
 /// - unknown, expired, or approved-but-revoked: `400 invalid_grant`, and the
-///   device must start over with a new ask.
+///   device must start over with a new ask. A successful exchange consumes the
+///   code; replay cannot issue more tokens or replace the first refresh token.
 ///
 /// The failures after the first are one answer on purpose: a `device_code` that
 /// never existed and one whose ask died are indistinguishable to anyone but the

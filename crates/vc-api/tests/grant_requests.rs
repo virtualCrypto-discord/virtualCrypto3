@@ -1002,3 +1002,176 @@ async fn a_person_is_not_asked_for_a_guilds_scope(pool: PgPool) {
         assert_eq!(refused.body["error"], "invalid_request");
     }
 }
+
+async fn approved_device_request(pool: &PgPool, application: i64, target: Target) -> String {
+    let scope = match target {
+        Target::Guild(_) => "vc.issue",
+        Target::User(_) => "vc.pay",
+    };
+    let now = time::OffsetDateTime::now_utc();
+    let asked =
+        vc_core::grant::request_grant(pool, application, target, &[scope.into()], &[], 600, now)
+            .await
+            .unwrap();
+    vc_core::grant::decide_request(pool, &asked.user_code, target, now)
+        .await
+        .unwrap()
+        .unwrap();
+    asked.device_code.to_string()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_device_code_is_exchanged_once_without_invalidating_issued_tokens(pool: PgPool) {
+    let (application, _) = fixture(&pool).await;
+    for refresh in [false, true] {
+        let types: Vec<String> = if refresh {
+            vec!["refresh_token".into()]
+        } else {
+            vec![]
+        };
+        sqlx::query("UPDATE applications SET grant_types = $2::text[]::openid_connect_grant_types[] WHERE id = $1")
+            .bind(application).bind(types).execute(&pool).await.unwrap();
+        for target in [Target::Guild(GUILD), Target::User(PERSON)] {
+            let code = approved_device_request(&pool, application, target).await;
+            let (status, first) = device_poll(&pool, application, &code).await;
+            assert_eq!(status, 200, "{first}");
+            let (status, repeated) = device_poll(&pool, application, &code).await;
+            assert_eq!(status, 400, "{repeated}");
+            assert_eq!(repeated["error"], "invalid_grant");
+            let grant: i64 = first["grant_id"].as_str().unwrap().parse().unwrap();
+            let count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM access_tokens WHERE grant_id = $1")
+                    .bind(grant)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(count, 1);
+            assert!(
+                vc_core::grant::resolve_token(
+                    &pool,
+                    first["access_token"].as_str().unwrap().parse().unwrap(),
+                    time::OffsetDateTime::now_utc()
+                )
+                .await
+                .unwrap()
+                .is_some()
+            );
+            let recorded: String =
+                sqlx::query_scalar("SELECT status FROM grant_requests WHERE device_code = $1")
+                    .bind(uuid::Uuid::parse_str(&code).unwrap())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(recorded, "exchanged");
+            if refresh {
+                assert!(
+                    vc_core::grant::exchange_refresh_token(
+                        &pool,
+                        first["refresh_token"].as_str().unwrap(),
+                        time::OffsetDateTime::now_utc()
+                    )
+                    .await
+                    .is_ok()
+                );
+            } else {
+                assert!(first.get("refresh_token").is_none());
+            }
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_device_exchanges_have_only_one_winner(pool: PgPool) {
+    let (application, _) = fixture(&pool).await;
+    sqlx::query("UPDATE applications SET grant_types = ARRAY['refresh_token']::openid_connect_grant_types[] WHERE id = $1")
+        .bind(application).execute(&pool).await.unwrap();
+    let code = approved_device_request(&pool, application, Target::Guild(GUILD)).await;
+    let (first, second) = tokio::join!(
+        device_poll(&pool, application, &code),
+        device_poll(&pool, application, &code)
+    );
+    let (winner, loser) = if first.0 == 200 {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    assert_eq!(winner.0, 200, "{winner:?}");
+    assert_eq!(loser.0, 400, "{loser:?}");
+    assert_eq!(loser.1["error"], "invalid_grant");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM access_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(
+        vc_core::grant::exchange_refresh_token(
+            &pool,
+            winner.1["refresh_token"].as_str().unwrap(),
+            time::OffsetDateTime::now_utc()
+        )
+        .await
+        .is_ok()
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_device_token_writes_preserve_the_code_for_retry(pool: PgPool) {
+    let (application, _) = fixture(&pool).await;
+    sqlx::query("UPDATE applications SET grant_types = ARRAY['refresh_token']::openid_connect_grant_types[] WHERE id = $1")
+        .bind(application).execute(&pool).await.unwrap();
+    let code = approved_device_request(&pool, application, Target::Guild(GUILD)).await;
+    for (inject, restore) in [
+        (
+            "ALTER TABLE access_tokens ADD CONSTRAINT injected_failure CHECK (false)",
+            "ALTER TABLE access_tokens DROP CONSTRAINT injected_failure",
+        ),
+        (
+            "ALTER TABLE refresh_tokens ADD CONSTRAINT injected_failure CHECK (false)",
+            "ALTER TABLE refresh_tokens DROP CONSTRAINT injected_failure",
+        ),
+    ] {
+        sqlx::query(inject).execute(&pool).await.unwrap();
+        assert_eq!(device_poll(&pool, application, &code).await.0, 400);
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM grant_requests WHERE device_code = $1")
+                .bind(uuid::Uuid::parse_str(&code).unwrap())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "approved");
+        let counts: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM access_tokens), (SELECT count(*) FROM refresh_tokens)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (0, 0));
+        sqlx::query(restore).execute(&pool).await.unwrap();
+    }
+    assert_eq!(device_poll(&pool, application, &code).await.0, 200);
+    assert_eq!(device_poll(&pool, application, &code).await.0, 400);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn device_code_migration_preserves_unused_approvals_and_consumes_existing_issuance(
+    pool: PgPool,
+) {
+    let (application, _) = fixture(&pool).await;
+    let used = approved_device_request(&pool, application, Target::Guild(GUILD)).await;
+    let unused = approved_device_request(&pool, application, Target::Guild(GUILD)).await;
+    assert_eq!(device_poll(&pool, application, &used).await.0, 200);
+    // Model the old schema's approved state after it had already issued tokens.
+    sqlx::query("UPDATE grant_requests SET status = 'approved' WHERE device_code = $1")
+        .bind(uuid::Uuid::parse_str(&used).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../vc-core/migrations/0026_single_use_device_codes.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(device_poll(&pool, application, &used).await.0, 400);
+    assert_eq!(device_poll(&pool, application, &unused).await.0, 200);
+}

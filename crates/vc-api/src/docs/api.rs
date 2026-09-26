@@ -1057,7 +1057,7 @@ const ENDPOINTS: &[Endpoint] = &[
             "400 `{\"error\": \"invalid_grant\", \"error_description\": \"issued_to_other_client\"}` 認可コードが別のアプリケーションのもののとき。",
             "400 `{\"error\": \"invalid_grant\", \"error_description\": \"redirect_uri_mismatch\"}` `redirect_uri` が認可コードを求めたときと違うとき。",
             "400 `{\"error\": \"authorization_pending\"}` 申請がまだ承認されていないとき。",
-            "400 `{\"error\": \"invalid_grant\", \"error_description\": \"invalid_device_code\"}` `device_code` が無い、期限切れ、またはその許可が失効したとき。",
+            "400 `{\"error\": \"invalid_grant\", \"error_description\": \"invalid_device_code\"}` `device_code` が無い、期限切れ、交換済み、またはその許可が失効したとき。",
             "400 `{\"error\": \"invalid_grant\", \"error_description\": \"invalid_refresh_token\"}` リフレッシュトークンが無い、期限切れ、または入れ替わったあとのとき。",
             "400 `{\"error\": \"invalid_request\"}` `client_credentials` の `scope` に知らないスコープを求めたとき。",
         ],
@@ -1278,7 +1278,7 @@ const ENDPOINTS: &[Endpoint] = &[
             ],
         }),
         notes: &[
-            "`status` は `pending` か `approved` です。拒否という答えはなく、承認されないまま時間が過ぎれば消えます。",
+            "`status` は `pending`（未承認）、`approved`（承認済み・未交換）、`exchanged`（トークン交換済み）です。拒否という答えはなく、承認されないまま時間が過ぎれば消えます。",
             "承認されると、`POST /oauth2/token` のデバイスコードのポーリングがサーバーのトークンを返します。",
         ],
         errors: &[

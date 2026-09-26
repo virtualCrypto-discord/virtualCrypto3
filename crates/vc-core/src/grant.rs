@@ -548,6 +548,7 @@ pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Res
 /// Lock the scope rows until the token is committed so revocation cannot slip
 /// between checking permission and issuing the tokens. Refresh is opt-in, just
 /// as it is for the code exchange, and both tokens belong to this exact grant.
+/// Exclusively lock the request and mark it exchanged in the same transaction.
 pub async fn create_device_token(
     pool: &PgPool,
     request: &GrantRequest,
@@ -561,7 +562,7 @@ pub async fn create_device_token(
           WHERE r.id = $1 AND r.application_id = $2 AND r.status = 'approved'
             AND r.inserted_at + make_interval(secs => r.expires_in) > $3
             AND g.guild_id IS NOT DISTINCT FROM $4
-            AND g.discord_id IS NOT DISTINCT FROM $5 FOR SHARE OF g, r",
+            AND g.discord_id IS NOT DISTINCT FROM $5 FOR SHARE OF g FOR UPDATE OF r",
         request.id,
         request.application_id,
         PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second(),
@@ -582,6 +583,20 @@ pub async fn create_device_token(
     .fetch_all(&mut *tx)
     .await?;
     if request.scopes.iter().any(|scope| !scopes.contains(scope)) {
+        return Ok(None);
+    }
+    // Check the deadline again after any row-lock wait. Failure to issue either
+    // token rolls this transition back, allowing the client to retry.
+    let consumed = sqlx::query(
+        "UPDATE grant_requests SET status = 'exchanged', updated_at = clock_timestamp() AT TIME ZONE 'utc'
+         WHERE id = $1 AND status = 'approved'
+           AND inserted_at + make_interval(secs => expires_in) > clock_timestamp() AT TIME ZONE 'utc'",
+    )
+    .bind(request.id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if consumed == 0 {
         return Ok(None);
     }
     let access_token = create_access_token(&mut *tx, grant_id, now).await?;
