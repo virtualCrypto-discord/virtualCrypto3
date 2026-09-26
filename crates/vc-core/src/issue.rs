@@ -47,7 +47,9 @@ pub async fn issue(
 /// idempotency layer's claim, this write and the stored answer be one commit.
 ///
 /// The currency is read with a lock, so the pool check and the decrement cannot
-/// interleave with another issue.
+/// interleave with another issue. NO KEY UPDATE still serializes issuers, but
+/// lets transfers check their currency foreign keys while holding a balance
+/// this issue may need. FOR UPDATE would make those operations deadlock.
 pub async fn issue_in(
     tx: &mut PgConnection,
     guild_id: i64,
@@ -55,7 +57,7 @@ pub async fn issue_in(
     amount: Option<i64>,
 ) -> std::result::Result<Issued, IssueError> {
     let currency = sqlx::query!(
-        "SELECT id, unit, pool_amount FROM currencies WHERE guild_id = $1 FOR UPDATE",
+        "SELECT id, unit, pool_amount FROM currencies WHERE guild_id = $1 FOR NO KEY UPDATE",
         guild_id
     )
     .fetch_optional(&mut *tx)

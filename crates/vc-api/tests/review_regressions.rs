@@ -193,6 +193,237 @@ async fn opposite_single_and_bulk_payments_both_commit(pool: PgPool) {
     assert_eq!(count, 6);
 }
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn issuance_and_discord_payments_or_claim_approvals_both_commit(pool: PgPool) {
+    use vc_core::claim::{PartialClaim, Transition};
+    use vc_core::notification::NoopNotifier;
+
+    let money = setup_money(&pool).await;
+    let application = insert_application(&pool, money.user1, "issuer").await;
+    let token = insert_grant(&pool, application, money.guild, &["vc.issue"]).await;
+    let before_a = get_amount(&pool, money.user1, money.currency).await;
+    let before_b = get_amount(&pool, money.user2, money.currency).await;
+
+    // Pause A -> B with A's balance locked, then issue to A. FOR UPDATE on
+    // the currency made the payment's foreign-key check wait for the issue,
+    // which was already waiting for A's balance.
+    sqlx::raw_sql(
+        "CREATE FUNCTION issue_payment_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+             IF NEW.user_id = 2 AND NEW.amount = 10 THEN
+                 PERFORM pg_advisory_xact_lock_shared(778811);
+             END IF;
+             RETURN NEW;
+         END $$;
+         CREATE TRIGGER issue_payment_gate BEFORE INSERT ON assets
+         FOR EACH ROW EXECUTE FUNCTION issue_payment_gate();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    #[derive(Clone, Copy)]
+    enum Payment {
+        Discord,
+        Bulk,
+        Claim,
+        BulkClaim,
+    }
+    for via_api in [false, true] {
+        for kind in [
+            Payment::Discord,
+            Payment::Bulk,
+            Payment::Claim,
+            Payment::BulkClaim,
+        ] {
+            let claim_id = if matches!(kind, Payment::Claim | Payment::BulkClaim) {
+                Some(
+                    vc_core::claim::create(&pool, 2, money.user1, &money.unit, 10, None)
+                        .await
+                        .unwrap(),
+                )
+            } else {
+                None
+            };
+            let mut gate = pool.begin().await.unwrap();
+            sqlx::query("SELECT pg_advisory_xact_lock(778811)")
+                .execute(&mut *gate)
+                .await
+                .unwrap();
+            let payment_pool = pool.clone();
+            let payment = tokio::spawn(async move {
+                match kind {
+                    Payment::Discord => vc_core::payment::pay_from_discord(
+                        &payment_pool,
+                        MONEY_USER1,
+                        MONEY_USER2,
+                        "n",
+                        10,
+                    )
+                    .await
+                    .unwrap(),
+                    Payment::Bulk => pay(payment_pool, 1, MONEY_USER2, true).await.unwrap(),
+                    Payment::Claim => vc_core::claim::transition(
+                        &payment_pool,
+                        &NoopNotifier,
+                        1,
+                        claim_id.unwrap(),
+                        Transition::Approved,
+                        None,
+                    )
+                    .await
+                    .unwrap(),
+                    Payment::BulkClaim => {
+                        vc_core::claim::update_claims(
+                            &payment_pool,
+                            &NoopNotifier,
+                            1,
+                            &[PartialClaim {
+                                id: claim_id.unwrap(),
+                                status: Some("approved".into()),
+                                metadata: None,
+                            }],
+                        )
+                        .await
+                        .unwrap();
+                    }
+                }
+            });
+            wait_for_blocked(&pool, 1).await;
+            let issue_pool = pool.clone();
+            let token = token.clone();
+            let issuance = tokio::spawn(async move {
+                if via_api {
+                    assert_eq!(
+                        issue_via_api(issue_pool, &token, MONEY_USER1, 10).await,
+                        201
+                    );
+                } else {
+                    vc_core::issue::issue(&issue_pool, MONEY_GUILD, MONEY_USER1, Some(10))
+                        .await
+                        .unwrap();
+                }
+            });
+            wait_for_blocked(&pool, 2).await;
+            gate.rollback().await.unwrap();
+            let (payment, issuance) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(payment, issuance)
+            })
+            .await
+            .unwrap();
+            payment.unwrap();
+            issuance.unwrap();
+            if let Some(id) = claim_id {
+                let status: String =
+                    sqlx::query_scalar("SELECT status::text FROM claims WHERE id=$1")
+                        .bind(id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(status, "approved");
+            }
+        }
+    }
+    assert_eq!(
+        get_amount(&pool, money.user1, money.currency).await,
+        before_a
+    );
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        before_b + 80
+    );
+    assert_eq!(
+        currency_by_unit(&pool, &money.unit)
+            .await
+            .unwrap()
+            .pool_amount,
+        Some(420)
+    );
+    for query in [
+        "SELECT count(*) FROM currency_payment_histories",
+        "SELECT count(*) FROM currency_given_histories",
+    ] {
+        let count: i64 = sqlx::query_scalar(query).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 8);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_issuers_cannot_overspend_the_pool(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let application = insert_application(&pool, money.user1, "issuer").await;
+    let token = insert_grant(&pool, application, money.guild, &["vc.issue"]).await;
+    let before = get_amount(&pool, money.user1, money.currency).await;
+    sqlx::raw_sql(
+        "CREATE FUNCTION issuing_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN PERFORM pg_advisory_xact_lock_shared(778812); RETURN NEW; END $$;
+         CREATE TRIGGER issuing_gate BEFORE INSERT ON assets
+         FOR EACH ROW EXECUTE FUNCTION issuing_gate();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(778812)")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let first_pool = pool.clone();
+    let first = tokio::spawn(async move {
+        vc_core::issue::issue(&first_pool, MONEY_GUILD, MONEY_USER1, Some(400)).await
+    });
+    wait_for_blocked(&pool, 1).await;
+    let second_pool = pool.clone();
+    let second =
+        tokio::spawn(async move { issue_via_api(second_pool, &token, MONEY_USER1, 400).await });
+    wait_for_blocked(&pool, 2).await;
+    gate.rollback().await.unwrap();
+    let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(first, second)
+    })
+    .await
+    .unwrap();
+    assert_eq!(first.unwrap().unwrap().pool_amount, 100);
+    assert_eq!(second.unwrap(), 409);
+    assert_eq!(
+        get_amount(&pool, money.user1, money.currency).await,
+        before + 400
+    );
+    assert_eq!(
+        currency_by_unit(&pool, &money.unit)
+            .await
+            .unwrap()
+            .pool_amount,
+        Some(100)
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM currency_given_histories")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+async fn issue_via_api(pool: PgPool, token: &str, receiver: i64, amount: i64) -> u16 {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v2/currencies/issue")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(
+            json!({
+                "receiver_discord_id": receiver.to_string(), "amount": amount.to_string(),
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    vc_api::router(state(pool, fake()))
+        .oneshot(request)
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
 #[derive(Clone, Copy)]
 enum Refund {
     Withdraw,

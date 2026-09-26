@@ -265,14 +265,15 @@ pub async fn lock_units_in(
 }
 
 /// Issue under the same currency lock as issue_in. Taking the write lock now
-/// avoids competing issuers both upgrading a shared lock later.
+/// avoids competing issuers both upgrading a shared lock later. NO KEY UPDATE
+/// also lets concurrent transfers finish their currency foreign-key checks.
 pub async fn lock_guild_in(
     tx: &mut sqlx::PgConnection,
     resources: &[i64],
     guild_id: i64,
 ) -> Result<bool, ApiError> {
     let id = sqlx::query_scalar!(
-        "SELECT id FROM currencies WHERE guild_id = $1 FOR UPDATE",
+        "SELECT id FROM currencies WHERE guild_id = $1 FOR NO KEY UPDATE",
         guild_id
     )
     .fetch_optional(tx)

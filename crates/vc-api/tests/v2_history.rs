@@ -205,14 +205,74 @@ fn link(response: &Response) -> String {
         .to_owned()
 }
 
-/// The cursor a full page offers, as the link header spells it.
+/// Decode the cursor offered by a full page's link header.
 fn next_from(response: &Response) -> String {
     let link = link(response);
-    let start = link.find("next=").expect("a cursor") + "next=".len();
-    let rest = &link[start..];
-    let end = rest.find(['&', '>']).unwrap_or(rest.len());
+    let query = link.split_once('?').unwrap().1.split('>').next().unwrap();
+    let mut url = reqwest::Url::parse("http://localhost/").unwrap();
+    url.set_query(Some(query));
+    url.query_pairs()
+        .find(|(name, _)| name == "next")
+        .expect("a cursor")
+        .1
+        .into_owned()
+}
 
-    rest[..end].to_owned()
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn continuation_preserves_legacy_units_and_filters(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let token = mint(&pool, 1, &[]).await;
+    let app = router(pool.clone());
+
+    // v2's unanchored unit validation allowed all of these. Follow the returned
+    // link itself so encoding mistakes cannot be hidden by rebuilding a cursor.
+    for unit in ["n&x", "n+x", "n%26x", "n#x", "n=x", "n x", "n円"] {
+        sqlx::query("UPDATE currencies SET unit=$1 WHERE id=$2")
+            .bind(unit)
+            .bind(money.currency)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pay(&pool, MONEY_USER1, MONEY_USER2, unit, 10).await;
+        pay(&pool, MONEY_USER1, MONEY_USER2, unit, 20).await;
+        pay(&pool, MONEY_USER1, OTHER, unit, 30).await;
+
+        let mut url =
+            reqwest::Url::parse("http://localhost/api/v2/users/@me/transactions").unwrap();
+        url.query_pairs_mut()
+            .append_pair("limit", "1")
+            .append_pair("unit", unit)
+            .append_pair("related_discord_user_id", &MONEY_USER2.to_string());
+        let first = get(
+            app.clone(),
+            &format!("{}?{}", url.path(), url.query().unwrap()),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(first.status, 200, "{}", first.body);
+        assert_eq!(first.body.as_array().unwrap().len(), 1);
+        assert_eq!(first.body[0]["amount"], "20");
+
+        let continuation = link(&first);
+        let query = continuation
+            .split_once('?')
+            .unwrap()
+            .1
+            .split('>')
+            .next()
+            .unwrap();
+        let second = get(
+            app.clone(),
+            &format!("{}?{query}", url.path()),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(second.status, 200, "{}", second.body);
+        assert_eq!(second.body.as_array().unwrap().len(), 1, "{continuation}");
+        assert_eq!(second.body[0]["amount"], "10");
+        assert_eq!(second.body[0]["unit"], unit);
+        assert_ne!(first.body[0]["id"], second.body[0]["id"]);
+    }
 }
 
 /// Both directions on one list, and nobody else's rows in it.

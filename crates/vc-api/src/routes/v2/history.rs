@@ -190,8 +190,9 @@ fn related_id(value: &str) -> Result<i64, ApiError> {
 /// The filters travel in the link, unlike the contract family's three lists — those are filtered
 /// by who is asking and by nothing else, and a page 2 that dropped one of these would be a
 /// different list. The cursor travels as the list spelled it, because it is the list's own: an id
-/// for the issuance ledger, and the merged ledger's `time:ledger:id` for the payments one. Neither
-/// a unit, a Discord id nor that cursor needs escaping, so they are written as they arrived.
+/// for the issuance ledger, and the merged ledger's `time:ledger:id` for the payments one.
+/// Encode query values: currencies imported from v2 may have units containing
+/// reserved characters even though new currency creation now refuses them.
 fn paged(
     body: Value,
     next: Option<String>,
@@ -203,18 +204,19 @@ fn paged(
     let mut response = Json(body).into_response();
 
     if let Some(next) = next {
-        let mut query = format!("limit={}&next={next}", limit.unwrap_or_default());
-
-        for (name, value) in filters {
-            if let Some(value) = value {
-                query.push('&');
-                query.push_str(name);
-                query.push('=');
-                query.push_str(value);
+        let mut url = reqwest::Url::parse("http://placeholder/").expect("a base url");
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("limit", &limit.unwrap_or_default().to_string());
+            query.append_pair("next", &next);
+            for (name, value) in filters {
+                if let Some(value) = value {
+                    query.append_pair(name, value);
+                }
             }
         }
 
-        if let Some(value) = pagination::link(headers, path, &query) {
+        if let Some(value) = pagination::link(headers, path, url.query().unwrap_or_default()) {
             response.headers_mut().insert("link", value);
         }
     }

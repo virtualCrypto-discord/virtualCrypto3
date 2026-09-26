@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, unit, pool_amount FROM currencies WHERE guild_id = $1 FOR UPDATE",
+  "query": "SELECT id, unit, pool_amount FROM currencies WHERE guild_id = $1 FOR NO KEY UPDATE",
   "describe": {
     "columns": [
       {
@@ -48,5 +48,5 @@
       true
     ]
   },
-  "hash": "179118435d4d5a4efe48bbb120b5d2bf0f08e9089312a4a4ca5e898d6d278662"
+  "hash": "376109507f29a275484c68832a76593222d96660ffc502e13ce1d9efb385d77c"
 }
