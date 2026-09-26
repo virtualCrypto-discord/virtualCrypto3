@@ -853,7 +853,7 @@ async fn currency_restriction_applies_to_claim_approval(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn delegated_read_scopes_are_independent(pool: PgPool) {
+async fn delegated_reads_follow_scope_and_claim_relationship(pool: PgPool) {
     use vc_core::delegation::Scope;
     fixture(&pool).await;
     let app = insert_application(&pool, OWNER, "contract owner").await;
@@ -881,11 +881,22 @@ async fn delegated_read_scopes_are_independent(pool: PgPool) {
         CURRENCY_A,
     )
     .await;
+    insert_claim(
+        &pool,
+        2,
+        100,
+        "pending",
+        PERSON_ACCOUNT,
+        RECEIVER_ACCOUNT,
+        CURRENCY_A,
+    )
+    .await;
     let reads = [
         ("/api/v2/users/@me".to_owned(), Scope::ProfileRead),
         ("/api/v2/users/@me/balances".to_owned(), Scope::BalancesRead),
         ("/api/v2/users/@me/claims".to_owned(), Scope::ClaimsRead),
         ("/api/v2/users/@me/claims/1".to_owned(), Scope::ClaimsRead),
+        ("/api/v2/users/@me/claims/2".to_owned(), Scope::ClaimsRead),
         (
             "/api/v2/users/@me/contracts".to_owned(),
             Scope::ContractsRead,
@@ -899,12 +910,47 @@ async fn delegated_read_scopes_are_independent(pool: PgPool) {
     for scope in Scope::ALL {
         let (_, token, _) = ask_and_approve(&pool, None, &[scope.as_str()]).await;
         for (path, required) in &reads {
+            let incoming = matches!(
+                scope,
+                Scope::ClaimsRead
+                    | Scope::ClaimsMetadataWrite
+                    | Scope::ClaimsApprove
+                    | Scope::ClaimsDeny
+            );
+            let outgoing = matches!(
+                scope,
+                Scope::ClaimsRead
+                    | Scope::ClaimsMetadataWrite
+                    | Scope::ClaimsCreate
+                    | Scope::ClaimsCancel
+            );
+            let allowed = match path.as_str() {
+                "/api/v2/users/@me/claims" => incoming || outgoing,
+                "/api/v2/users/@me/claims/1" => incoming,
+                "/api/v2/users/@me/claims/2" => outgoing,
+                _ => scope == required,
+            };
+            let response = get(router(pool.clone()), path, Some(&token)).await;
             assert_eq!(
-                get(router(pool.clone()), path, Some(&token)).await.status,
-                if scope == required { 200 } else { 403 },
+                response.status,
+                if allowed { 200 } else { 403 },
                 "{} GET {path}",
                 scope.as_str()
             );
+            if path == "/api/v2/users/@me/claims" && allowed {
+                let expected: Vec<_> = [("2", outgoing), ("1", incoming)]
+                    .into_iter()
+                    .filter_map(|(id, allowed)| allowed.then_some(id))
+                    .collect();
+                let ids: Vec<_> = response
+                    .body
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["id"].as_str().unwrap())
+                    .collect();
+                assert_eq!(ids, expected, "{} list", scope.as_str());
+            }
         }
         for (method, path, body) in [
             (
@@ -943,6 +989,147 @@ async fn delegated_read_scopes_are_independent(pool: PgPool) {
             );
         }
     }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn claim_write_reads_preserve_relationship_currency_and_pagination(pool: PgPool) {
+    fixture(&pool).await;
+    insert_claim(
+        &pool,
+        10,
+        1,
+        "pending",
+        RECEIVER_ACCOUNT,
+        PERSON_ACCOUNT,
+        CURRENCY_A,
+    )
+    .await;
+    insert_claim(
+        &pool,
+        20,
+        1,
+        "pending",
+        PERSON_ACCOUNT,
+        RECEIVER_ACCOUNT,
+        CURRENCY_A,
+    )
+    .await;
+    insert_claim(
+        &pool,
+        30,
+        1,
+        "pending",
+        RECEIVER_ACCOUNT,
+        PERSON_ACCOUNT,
+        CURRENCY_A,
+    )
+    .await;
+    insert_claim(
+        &pool,
+        40,
+        1,
+        "pending",
+        RECEIVER_ACCOUNT,
+        PERSON_ACCOUNT,
+        CURRENCY_B,
+    )
+    .await;
+    let (_, token, _) = ask_and_approve(
+        &pool,
+        Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
+        &["vc.delegate.claims.approve"],
+    )
+    .await;
+
+    let first = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/claims?limit=1&order=asc_claim_id",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(first.status, 200);
+    assert_eq!(first.body[0]["id"], "10");
+    let link = first.headers["link"].to_str().unwrap();
+    let next = link
+        .split_once("/api/")
+        .unwrap()
+        .1
+        .split('>')
+        .next()
+        .unwrap();
+    let second = get(router(pool.clone()), &format!("/api/{next}"), Some(&token)).await;
+    assert_eq!(
+        second.body[0]["id"], "30",
+        "outgoing claims do not consume this reader's page"
+    );
+    let excluded = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/claims?next=30&order=asc_claim_id",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        excluded.body,
+        json!([]),
+        "the read implied by a write keeps its currency restriction"
+    );
+    for path in ["/api/v2/users/@me/claims/20", "/api/v2/users/@me/claims/40"] {
+        assert_eq!(
+            get(router(pool.clone()), path, Some(&token)).await.status,
+            403
+        );
+    }
+    let opposite = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/claims?type=claimed",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(opposite.status, 200);
+    assert_eq!(opposite.body, json!([]));
+    assert!(!opposite.headers.contains_key("link"));
+
+    let approved = request(
+        router(pool.clone()),
+        "PATCH",
+        "/api/v2/users/@me/claims/10",
+        Some(&token),
+        json!({"status":"approved"}),
+    )
+    .await;
+    assert_eq!(approved.status, 200);
+    let read = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/claims/10",
+        Some(&token),
+    )
+    .await;
+    assert_eq!(read.status, 200);
+    assert_eq!(
+        read.body["status"], "approved",
+        "a completed write can still be read"
+    );
+
+    let (_, combined, _) = ask_and_approve(
+        &pool,
+        Some(json!([format!("{SITE}/api/v2/currencies/{CURRENCY_A}")])),
+        &["vc.delegate.claims.approve", "vc.delegate.claims.cancel"],
+    )
+    .await;
+    let both = get(
+        router(pool.clone()),
+        "/api/v2/users/@me/claims",
+        Some(&combined),
+    )
+    .await;
+    let ids: Vec<_> = both
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|claim| claim["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["30", "20"]);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

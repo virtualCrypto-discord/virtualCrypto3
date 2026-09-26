@@ -1,5 +1,5 @@
 //! Personal-delegation scopes. Legacy account JWT scopes are a separate vocabulary.
-//! No wildcard, prefix matching, or implication between these permissions.
+//! Names match exactly. Claim writes also allow reading the claims they act on.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -55,11 +55,11 @@ impl Scope {
             Self::ContractsRead => "Read your contracts",
             Self::ContractPaymentsRead => "Read your contract payment history",
             Self::PaymentsCreate => "Send payments from your account",
-            Self::ClaimsCreate => "Create claims addressed to other accounts",
-            Self::ClaimsApprove => "Approve claims and pay from your account",
-            Self::ClaimsDeny => "Deny incoming claims",
-            Self::ClaimsCancel => "Cancel your outgoing claims",
-            Self::ClaimsMetadataWrite => "Edit or delete your claim metadata",
+            Self::ClaimsCreate => "Create and read your outgoing claims",
+            Self::ClaimsApprove => "Read incoming claims and approve them to pay from your account",
+            Self::ClaimsDeny => "Read and deny incoming claims",
+            Self::ClaimsCancel => "Read and cancel your outgoing claims",
+            Self::ClaimsMetadataWrite => "Read your claims and edit or delete their metadata",
         }
     }
 

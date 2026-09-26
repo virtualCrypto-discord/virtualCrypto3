@@ -21,7 +21,8 @@ and guild grants are not interchangeable merely because both tokens are UUIDs.
 ## Personal scope catalogue
 
 The `vc.delegate.` namespace is exclusively for personal delegations. Names are
-matched exactly; there are no wildcards, prefix grants, aliases or implied scopes.
+matched exactly; there are no wildcards, prefix grants or aliases. Claim write
+permissions include reading their target claims, as described below.
 The shared catalogue is [delegation.rs](../crates/vc-core/src/delegation.rs).
 
 | Scope | Operation |
@@ -32,17 +33,21 @@ The shared catalogue is [delegation.rs](../crates/vc-core/src/delegation.rs).
 | `vc.delegate.contracts.read` | Read the user's contract list and individual contracts |
 | `vc.delegate.contracts.payments.read` | Read a contract's payment history |
 | `vc.delegate.payments.create` | Make single or bulk payments from the account |
-| `vc.delegate.claims.create` | Create claims, including their initial metadata |
-| `vc.delegate.claims.approve` | Approve a claim and pay it from the account |
-| `vc.delegate.claims.deny` | Deny a claim addressed to the account |
-| `vc.delegate.claims.cancel` | Cancel a claim made by the account |
-| `vc.delegate.claims.metadata.write` | Set or delete the account's metadata on an existing claim |
+| `vc.delegate.claims.create` | Create claims, including initial metadata, and read outgoing claims |
+| `vc.delegate.claims.approve` | Read incoming claims and approve/pay them |
+| `vc.delegate.claims.deny` | Read and deny incoming claims |
+| `vc.delegate.claims.cancel` | Read and cancel outgoing claims |
+| `vc.delegate.claims.metadata.write` | Read the account's claims and set/delete its metadata |
 
 Claim creation does not authorize claim approval. Payment creation does not
 authorize claim approval, and approval does not authorize arbitrary payments.
 Reading contracts does not imply reading their payment history. No read scope
-implies a write, and no write scope implies access to a read endpoint. An authorized
-write may still return its result, as the API already does.
+implies a write. Claim writes include list and detail reads on the corresponding
+side: approve/deny cover incoming claims, create/cancel cover outgoing claims, and
+metadata-write covers both. Combining incoming and outgoing permissions covers
+both sides. These reads remain available after a claim changes status and retain
+the grant's currency restrictions. A query's `type` can narrow that set but cannot
+widen it. Balances, profiles and transaction histories remain separate permissions.
 
 A claim PATCH containing both a status transition and an explicit `metadata` field
 requires **both** the transition's scope and `claims.metadata.write`, including when
@@ -102,7 +107,7 @@ restriction into unrestricted access. See [resources.md](resources.md).
 | List/read | Currency restriction |
 |---|---|
 | Balances | Return only covered rows |
-| Claims | Filter after fetching a page; derive continuation from the unfiltered page |
+| Claims | Filter the authorized side before pagination; filter currencies after fetching a page and derive continuation from that page |
 | Contracts | Filter in SQL before applying cursor pagination and limit |
 | Claim detail, contract detail/history | Reject an excluded currency with 403 |
 
@@ -139,7 +144,14 @@ Delegated scopes and resources are read from the grant on each authentication.
 Each device approval has an independent scope/resource pair and token family.
 New approvals cannot change existing tokens or combine their permissions. Revoking
 one grant stops its tokens from authenticating while other grants remain valid.
-This does not retroactively cancel a request that already passed authorization.
+An already-authorized request may complete within the normal request timeout.
+Every v2 request has a 30-second timeout, starting before authentication and body
+parsing; runtime database statements also have a 30-second timeout, including lock
+waits. An unfinished handler is dropped, and its open transaction rolls back.
+This is ordinary request timeout handling, not synchronization between revocation
+and commit: a write already committed when the timeout occurs is not undone.
+`504 {"error":"request_timeout"}` therefore does not prove the write failed;
+retry idempotent writes with the same key and check other writes' current state.
 Account APIs retain their account-based rate limit.
 
 ## Refusals and public endpoints

@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use vc_auth::{AuthUser, Kind};
-use vc_core::claim::Transition;
+use vc_core::claim::{SrFilter, Transition};
 use vc_core::delegation::Scope;
 use vc_core::grant::Target;
 
@@ -123,7 +123,7 @@ impl Principal {
                     // it, so no scope reaches this and the token is refused rather than
                     // answered with an empty list.
                     ReadTransactions => false,
-                    ReadClaims => scopes.contains(&Scope::ClaimsRead),
+                    ReadClaims => self.claim_read_filter().is_some(),
                     Pay => scopes.contains(&Scope::PaymentsCreate),
                     CreateClaims => scopes.contains(&Scope::ClaimsCreate),
                     PatchClaims => scopes.iter().any(|scope| {
@@ -160,6 +160,55 @@ impl Principal {
             ),
         };
         if allowed { Ok(()) } else { Err(refusal) }
+    }
+
+    /// Claim writes include reading the same side of the account's claims,
+    /// including after the write has changed their status.
+    fn claim_read_filter(&self) -> Option<SrFilter> {
+        let Self::Delegated { scopes, .. } = self else {
+            return Some(SrFilter::All);
+        };
+        let incoming = scopes.iter().any(|scope| {
+            matches!(
+                scope,
+                Scope::ClaimsRead
+                    | Scope::ClaimsMetadataWrite
+                    | Scope::ClaimsApprove
+                    | Scope::ClaimsDeny
+            )
+        });
+        let outgoing = scopes.iter().any(|scope| {
+            matches!(
+                scope,
+                Scope::ClaimsRead
+                    | Scope::ClaimsMetadataWrite
+                    | Scope::ClaimsCreate
+                    | Scope::ClaimsCancel
+            )
+        });
+        match (incoming, outgoing) {
+            (true, true) => Some(SrFilter::All),
+            (true, false) => Some(SrFilter::Received),
+            (false, true) => Some(SrFilter::Claimed),
+            (false, false) => None,
+        }
+    }
+}
+
+impl Authorized<ReadClaims> {
+    /// Intersect the caller's requested side with the side their grant covers.
+    pub fn claim_filter(&self, requested: SrFilter) -> Option<SrFilter> {
+        match (self.principal.claim_read_filter()?, requested) {
+            (SrFilter::All, requested) => Some(requested),
+            (allowed, SrFilter::All) => Some(allowed),
+            (allowed, requested) if allowed == requested => Some(allowed),
+            _ => None,
+        }
+    }
+
+    pub fn may_read_claim(&self, claimant: i32, payer: i32) -> bool {
+        (claimant == self.account_id && self.claim_filter(SrFilter::Claimed).is_some())
+            || (payer == self.account_id && self.claim_filter(SrFilter::Received).is_some())
     }
 }
 

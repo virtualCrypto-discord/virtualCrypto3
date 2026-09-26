@@ -38,6 +38,9 @@ pub async fn get_by_id(
     if view.payer.id != operator_id && view.claimant.id != operator_id {
         return Err(ApiError::Forbidden("not_related_user"));
     }
+    if !user.may_read_claim(view.claimant.id, view.payer.id) {
+        return Err(ApiError::InsufficientScope);
+    }
 
     Ok(Json(serialize_claim(&state, view).await))
 }
@@ -108,6 +111,10 @@ pub async fn index(
         // 400 with a name rather than the 500 the Elixir's `parse_order/1` crash
         // produced. `docs/known-gaps.md` records the difference.
         Some(_) => return Err(ApiError::InvalidRequest("invalid_order")),
+    };
+
+    let Some(sr_filter) = user.claim_filter(sr_filter) else {
+        return Ok(Json(json!([])).into_response());
     };
 
     let claims = vc_core::claim::list(

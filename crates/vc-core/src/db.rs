@@ -8,12 +8,27 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 /// database and to the existing production database (see scripts/baseline-check.sh).
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
-pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
+/// Runtime queries, including row-lock waits, must not run indefinitely. Schema
+/// migrations use the separate migration command rather than this runtime pool.
+pub const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub fn pool_options(max_connections: u32) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(Duration::from_secs(10))
-        .connect(database_url)
-        .await
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('statement_timeout', $1, false)")
+                    .bind(QUERY_TIMEOUT.as_millis().to_string())
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+}
+
+pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
+    pool_options(max_connections).connect(database_url).await
 }
 
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {

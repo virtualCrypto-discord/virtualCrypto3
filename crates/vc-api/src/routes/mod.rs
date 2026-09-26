@@ -12,6 +12,7 @@ pub mod oauth2;
 pub mod oauth2_clients;
 pub mod oauth2_token;
 pub mod pagination;
+mod request_timeout;
 pub mod v2;
 pub mod web;
 

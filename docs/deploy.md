@@ -146,6 +146,15 @@ deciding whether another payment is needed. The receipt temporarily stores the
 response (including ephemeral response content), but not the incoming
 interaction token or request body.
 
+## Runtime timeouts
+
+The runtime database pool sets `statement_timeout` to 30 seconds on every new
+connection, including replacement connections. This bounds queries and row-lock
+waits; schema migrations still run through the separate migration command.
+The v2 API also applies a 30-second request timeout before authentication and body
+parsing. It returns `504 {"error":"request_timeout"}` on timeout; a committed
+write is not undone, so clients should retain their idempotency keys on retries.
+
 ## The frontend
 
 `web/dist` is not committed; CI builds it (`web` job) and a deployment packages the

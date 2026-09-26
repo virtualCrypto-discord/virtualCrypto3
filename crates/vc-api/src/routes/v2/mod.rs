@@ -60,4 +60,5 @@ pub fn router() -> Router<AppState> {
         // browser would read as a currency id can never be this one, because an id
         // is a number.
         .route("/api/v2/currencies/issue", axum::routing::post(issue::post))
+        .layer(axum::middleware::from_fn(super::request_timeout::enforce))
 }

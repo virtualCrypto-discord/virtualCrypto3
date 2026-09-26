@@ -20,6 +20,9 @@ pub enum ApiError {
     #[error("inconsistent state: {0}")]
     Internal(String),
 
+    #[error("request timed out")]
+    RequestTimeout,
+
     /// 403 `invalid_token` / `permission_denied`, what Guardian's scope checks
     /// produce inside the claim controller.
     #[error("permission denied")]
@@ -84,6 +87,10 @@ impl ApiError {
     /// it this way rather than by hand is what keeps the two from drifting apart.
     pub fn parts(self) -> (StatusCode, Value) {
         match self {
+            ApiError::RequestTimeout => (
+                StatusCode::GATEWAY_TIMEOUT,
+                json!({ "error": "request_timeout" }),
+            ),
             ApiError::PermissionDenied => (
                 StatusCode::FORBIDDEN,
                 json!({ "error": "invalid_token", "error_description": "permission_denied" }),
@@ -148,6 +155,14 @@ impl ApiError {
                 )
             }
             ApiError::Core(vc_core::Error::Database(error)) => {
+                if error
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .as_deref()
+                    == Some("57014")
+                {
+                    return ApiError::RequestTimeout.parts();
+                }
                 tracing::error!(%error, "database error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

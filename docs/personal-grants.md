@@ -41,14 +41,18 @@ For a personal request, each scope must be an exact member of this catalogue:
 | `vc.delegate.contracts.read` | Read contract lists and details |
 | `vc.delegate.contracts.payments.read` | Read contract payment histories |
 | `vc.delegate.payments.create` | Create single or bulk payments |
-| `vc.delegate.claims.create` | Create a claim, with optional initial metadata |
-| `vc.delegate.claims.approve` | Approve and pay a claim |
-| `vc.delegate.claims.deny` | Deny an incoming claim |
-| `vc.delegate.claims.cancel` | Cancel an outgoing claim |
-| `vc.delegate.claims.metadata.write` | Set or delete metadata on an existing claim |
+| `vc.delegate.claims.create` | Create claims with optional metadata, and read outgoing claims |
+| `vc.delegate.claims.approve` | Read, approve and pay incoming claims |
+| `vc.delegate.claims.deny` | Read and deny incoming claims |
+| `vc.delegate.claims.cancel` | Read and cancel outgoing claims |
+| `vc.delegate.claims.metadata.write` | Read claims and set or delete their metadata |
 
-No scope implies another. In particular, a claim creator cannot approve a claim,
-and a payment creator cannot approve claims. A status change with explicit metadata
+Claim write permissions include list and detail reads for the claims they act on,
+including after their status changes. The same currency restrictions apply.
+Create/cancel cover outgoing claims, approve/deny cover incoming claims, and
+metadata-write covers both. They do not grant balance or transaction-history reads.
+A claim creator cannot approve a claim, and a payment creator cannot approve claims.
+A status change with explicit metadata
 requires both the status operation's permission and metadata-write permission.
 An empty scope list grants no account operation. Duplicate or unknown names,
 `vc.delegate.*` wildcards, and the old broad `vc.read`, `vc.pay`, `vc.claim` names
@@ -173,6 +177,11 @@ refresh token; deleting the grant revokes it.
 Personal grants cannot authorize application administration, guild issuing,
 application-side contract creation/charging, or a user's contract approval,
 refusal or withdrawal. Adding scopes cannot change the credential's kind.
+
+Revocation rejects new requests. A request that already passed authorization may
+complete within the normal v2 timeout of 30 seconds; see
+[authorization.md](authorization.md#enforcement-boundaries) for timeout and retry
+semantics.
 
 The operation policy is enforced by typed extractors before domain work. Target
 relationship, currency and state checks remain necessary. Out-of-resource
