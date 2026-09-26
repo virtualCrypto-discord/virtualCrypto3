@@ -19,7 +19,6 @@ pub mod resource;
 pub mod routes;
 pub mod scheduler;
 pub mod security;
-pub mod session;
 pub mod state;
 
 use axum::Router;

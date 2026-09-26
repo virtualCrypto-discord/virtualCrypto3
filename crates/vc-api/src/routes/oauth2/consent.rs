@@ -6,7 +6,7 @@ use axum::response::{Html, IntoResponse, Response};
 
 use super::Consent;
 
-pub(super) fn respond(headers: &HeaderMap, consent: Consent, resources: &[String]) -> Response {
+pub(super) fn respond(headers: &HeaderMap, consent: Consent) -> Response {
     let html = headers.get_all(header::ACCEPT).iter().any(|value| {
         value.to_str().is_ok_and(|value| {
             value.split(',').any(|media| {
@@ -24,7 +24,7 @@ pub(super) fn respond(headers: &HeaderMap, consent: Consent, resources: &[String
         })
     });
     let mut response = if html {
-        Html(render(&consent, resources)).into_response()
+        Html(render(&consent)).into_response()
     } else {
         Json(consent).into_response()
     };
@@ -40,7 +40,7 @@ pub(super) fn respond(headers: &HeaderMap, consent: Consent, resources: &[String
     response
 }
 
-fn render(consent: &Consent, resources: &[String]) -> String {
+fn render(consent: &Consent) -> String {
     let mut html = String::from(
         r#"<!doctype html>
 <html lang="ja"><head><meta charset="utf-8">
@@ -74,24 +74,8 @@ fn render(consent: &Consent, resources: &[String]) -> String {
         html.push_str("</ul>");
     }
     html.push_str(r#"<form method="post" action="/oauth2/authorize">"#);
-    for (name, value) in [
-        ("response_type", "code"),
-        ("action", "approve"),
-        ("client_id", &consent.client_id),
-        ("redirect_uri", &consent.redirect_uri),
-        ("scope", &consent.scopes.join(" ")),
-        ("guild_id", &consent.guild_id.to_string()),
-    ] {
-        hidden(&mut html, name, value);
-    }
-    if let Some(state) = &consent.state {
-        hidden(&mut html, "state", state);
-    }
-    // Keep the request's URI values, including repetitions and the collection
-    // URI. Display units cannot be posted back as resource indicators.
-    for resource in resources {
-        hidden(&mut html, "resource", resource);
-    }
+    hidden(&mut html, "action", "approve");
+    hidden(&mut html, "flow_id", &consent.flow_id.to_string());
     html.push_str(
         r#"<button type="submit">承認する</button></form>
 <p>承認しない場合は、このページを閉じてください。</p></main></body></html>"#,

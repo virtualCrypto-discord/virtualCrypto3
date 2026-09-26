@@ -7,7 +7,7 @@ correct as this list.
 ## What the server requires
 
 **The names are this service's own**: the `VCRYPTO_*` secrets `virtualcrypto-prod`
-carries, plus `DATABASE_URL` and `SECRET_KEY_BASE`, which are Phoenix's and sqlx's.
+carries, plus `DATABASE_URL` for sqlx. Browser authorization uses temporary request-bound cookies and does not require `SECRET_KEY_BASE`.
 The port reads them as they are — there is no second spelling of them to keep in step.
 Two of them are older than the port: `VCRYPTO_WEBHOOK_PROXY_CERT` and
 `VCRYPTO_WEBHOOK_PROXY_KEY` are the names the Elixir itself read from the environment
@@ -18,7 +18,6 @@ This is what `require_env` refuses to start without, each named in the error it 
 with.
 
 - `DATABASE_URL`
-- `SECRET_KEY_BASE`
 - `VCRYPTO_API_JWT_SECRET_KEY`
 - `VCRYPTO_BOT_TOKEN`
 - `VCRYPTO_CLIENT_ID`

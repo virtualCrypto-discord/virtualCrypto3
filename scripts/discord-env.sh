@@ -34,11 +34,7 @@ export PORT="${PORT:-8080}"
 export VCRYPTO_SITE_URL="${VCRYPTO_SITE_URL:-http://localhost:${PORT}}"
 export VCRYPTO_INVITE_URL="${VCRYPTO_INVITE_URL:-https://discord.com/api/oauth2/authorize?client_id=${VCRYPTO_CLIENT_ID}&permissions=0&scope=applications.commands%20bot}"
 
-# The two the service needs that no older name covers: it signs sessions with
-# `SECRET_KEY_BASE` (a fixed value, so a restart does not sign everybody out), and
-# it expects a `Secure` cookie by default, which a browser on http will not send
-# back to the local site.
-export SECRET_KEY_BASE="${SECRET_KEY_BASE:-virtualcrypto3-dev-session-secret}"
+# HTTP development uses temporary OAuth binding cookies without Secure.
 export SECURE_COOKIES="${SECURE_COOKIES:-false}"
 
 echo "discord app: $VCRYPTO_CLIENT_ID ($(jq -r '.name' <<<"$application"))"

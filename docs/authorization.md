@@ -8,7 +8,7 @@ the account's own authority. Personal delegations are not converted into user JW
 
 | Credential | Representation | Account or resource it acts on |
 |---|---|---|
-| User JWT, including sessions and PATs | `Principal::Own`, `kind: user` | That user's account |
+| User JWT, including PATs | `Principal::Own`, `kind: user` | That user's account |
 | Application JWT | `Principal::Own`, `kind: app` | The application's own account |
 | Personal grant UUID token | `Principal::Delegated` | The approving user's account, with explicit operation and currency restrictions |
 | Guild grant UUID token | Separate `GuildToken` extractor | The approving guild's issuing pool |
@@ -18,21 +18,28 @@ checks still apply. An application's JWT does not grant access to its owner's
 personal assets. A personal grant never becomes an own credential, and personal
 and guild grants are not interchangeable merely because both tokens are UUIDs.
 
-## Browser sessions
+## Browser authorization without persistent login
 
-Authenticated browser cookies have a 24-hour expiry and a random session ID backed by
-`browser_sessions`. `/token` and both OAuth consent routes require an unexpired live
-row; a valid cookie signature alone is insufficient. Logout deletes the session row
-before clearing the cookie, invalidating saved copies across workers and restarts.
-Separate browser logins have separate rows, so logging out one does not end another.
-The expiry purge removes expired rows. Operators can revoke a user's browser sessions
-by deleting that user's rows from `browser_sessions`.
+`GET /oauth2/authorize` validates and stores one authorization request, then sends
+the browser to Discord for identity verification. A ten-minute, HttpOnly,
+SameSite=Lax cookie binds only that request to the browser; each flow has its own
+cookie so multiple tabs do not overwrite each other. It is not a login credential.
 
-Discord login state expires after ten minutes. Migration `0024` introduces the
-session table; older cookies without an expiry and registered session ID are refused,
-so existing browsers must log in again after deployment. Already-issued API JWTs
-retain their normal expiry and token revocation behavior; logout prevents further
-issuance from that browser session.
+`GET /callback/discord` consumes the Discord state once, verifies the user's
+identity and guild permissions, and displays consent for the stored client,
+redirect URI, scopes, guild and currencies. Discord access/refresh tokens are not
+stored. The form submits only `action=approve` and `flow_id`; it cannot redefine
+the saved request. Approval requires the same browser and origin, rechecks guild
+permissions and client registration, and consumes the flow in the transaction
+that writes the authorization code. Concurrent approval or callback replays fail.
+The temporary flow expires ten minutes after starting; abandoned flows are purged.
+
+There is no persistent browser login, session renewal, or browser-to-user-token
+exchange. `/login`, `/logout`, and `POST /token` return 410. User credentials come
+from `/pat create`, and delegated credentials from the device flow. Migration
+`0025` drops `browser_sessions` and introduces `browser_authorizations`.
+`SECRET_KEY_BASE` is no longer needed. Existing API tokens retain their normal
+expiry and revocation behavior.
 
 ## Personal scope catalogue
 

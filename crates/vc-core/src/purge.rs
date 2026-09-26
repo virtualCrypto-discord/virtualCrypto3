@@ -34,7 +34,7 @@ use time::PrimitiveDateTime;
 /// compute.
 const EXPIRING: [&str; 9] = [
     "DELETE FROM user_access_tokens WHERE expires < $1",
-    "DELETE FROM browser_sessions WHERE expires < ($1::timestamp AT TIME ZONE 'utc')",
+    "DELETE FROM browser_authorizations WHERE expires < ($1::timestamp AT TIME ZONE 'utc')",
     "DELETE FROM payments_idempotency WHERE expires < $1",
     "DELETE FROM authorization_codes WHERE expires < $1",
     "DELETE FROM access_tokens WHERE expires < $1",

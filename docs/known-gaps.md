@@ -828,3 +828,12 @@ Zero, negative IDs, explicit signs, whitespace, and overflow are rejected with H
 400 before any accounts, balances, claims, contracts, or idempotency keys change.
 This intentionally tightens v2's signed-integer parsing; amount parsing is unchanged.
 The check validates the ID representation, not the existence of a Discord account.
+
+## Persistent browser login is retired
+
+`GET /login`, `GET /logout`, and `POST /token` now return 410. Browser authorization
+instead verifies Discord identity for each request and uses a ten-minute,
+single-use, browser-bound authorization flow. It stores neither a reusable login
+session nor Discord access/refresh credentials. This supersedes the historical
+session and `/token` behavior described earlier in this document. PATs and the
+application/device token flows remain available.

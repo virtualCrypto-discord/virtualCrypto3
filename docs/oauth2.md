@@ -1,5 +1,13 @@
 # OAuth2 and applications
 
+The current browser flow is request-bound: `/oauth2/authorize` starts a new Discord
+identity check every time, `/callback/discord` shows consent, and a one-time
+`flow_id` approves only the stored request. There are no persistent browser
+sessions; `/login`, `/logout` and `POST /token` are retired (410). See
+[authorization.md](authorization.md#browser-authorization-without-persistent-login).
+The Elixir descriptions below are historical comparison notes.
+
+
 **There is not one Elixir test for any of this.** `test/` has no oauth2, token or
 client file, so unlike every other part of this migration there is no ported
 spec to fall back on: the contract below was read out of the controllers, and
@@ -14,10 +22,10 @@ work, not porting work.
 | `GET /oauth2/clients/@me` | `user` kind, `oauth2.register` scope | the caller's applications |
 | `GET /oauth2/clients/@me` | `app` kind, `oauth2.register` scope | one application |
 | `PATCH /oauth2/clients/@me` | `app` kind, `oauth2.register` scope | 204, or 400 |
-| `GET/POST /oauth2/authorize` | browser session | the consent screen — read below |
+| `GET/POST /oauth2/authorize` | one-time Discord identity check | request-bound consent |
 | `POST /oauth2/token` | client credentials | not read yet |
 | `POST /oauth2/token/revoke` | client credentials | not read yet |
-| `POST /token` | browser session | a VC API token — **implemented** |
+| `POST /token` | retired | 410; use a PAT for user API access |
 
 Note the same path means different things by method: `GET /oauth2/clients/@me`
 lists what the *user* owns, and the sibling `ClientController` answers the *app*

@@ -53,14 +53,14 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
 
     Router::new()
         .route("/health", get(health))
-        // The two pages a browser visits that are not the SPA's own routes.
-        .route("/login", get(web::login))
-        .route("/logout", get(web::logout))
-        .route("/callback/discord", get(web::discord_callback))
+        // Retired login routes and the request-bound Discord OAuth callback.
+        .route("/login", get(web::retired))
+        .route("/logout", get(web::retired))
+        .route("/callback/discord", get(oauth2::discord_callback))
         // Where the old site sent a browser that asked for the bot or the guild.
         .route("/invite", get(web::invite))
         .route("/support", get(web::support))
-        .route("/token", post(web::token))
+        .route("/token", post(web::retired))
         // The consent screen, which OAuth2 sends browsers to.
         .route("/oauth2/authorize", get(oauth2::authorize))
         .route("/oauth2/authorize", post(oauth2::approve))

@@ -171,9 +171,9 @@ async fn purging_twice_deletes_nothing_more(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn expired_browser_sessions_are_purged_without_ending_live_sessions(pool: PgPool) {
+async fn expired_browser_authorizations_are_purged_without_removing_live_requests(pool: PgPool) {
     insert_user(&pool, USER, USER_DISCORD_ID).await;
-    sqlx::query("INSERT INTO browser_sessions (id, user_id, expires) VALUES (gen_random_uuid(), $1, now() - interval '1 second'), (gen_random_uuid(), $1, now() + interval '1 hour')")
+    sqlx::query("INSERT INTO browser_authorizations (id, browser_secret, request, account_id, phase, expires) VALUES (gen_random_uuid(), gen_random_uuid(), '{}', $1, 'consent', now() - interval '1 second'), (gen_random_uuid(), gen_random_uuid(), '{}', $1, 'consent', now() + interval '1 hour')")
         .bind(i64::from(USER)).execute(&pool).await.unwrap();
     assert_eq!(
         vc_core::purge::expired(&pool, support::utc_now())
@@ -181,7 +181,7 @@ async fn expired_browser_sessions_are_purged_without_ending_live_sessions(pool: 
             .unwrap(),
         1
     );
-    let live: bool = sqlx::query_scalar("SELECT expires > now() FROM browser_sessions")
+    let live: bool = sqlx::query_scalar("SELECT expires > now() FROM browser_authorizations")
         .fetch_one(&pool)
         .await
         .unwrap();

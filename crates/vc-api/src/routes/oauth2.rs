@@ -4,18 +4,20 @@
 //! repeat the checks on submission before issuing a code.
 
 mod consent;
+mod flow;
 
-use axum::Json;
-use axum::extract::{FromRequest, Query, RawQuery, Request as HttpRequest, State};
-use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::extract::{Query, RawQuery, State};
+use axum::http::header::{CACHE_CONTROL, REFERRER_POLICY, SET_COOKIE};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
+use axum::{Form, Json};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::session;
+use crate::error::ApiError;
 use crate::state::AppState;
+use uuid::Uuid;
 use vc_core::application::PreauthorizeError;
 
 /// What to do about a refusal.
@@ -118,84 +120,11 @@ fn invalid_target() -> Response {
         .into_response()
 }
 
-/// The body the consent form posts back.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct AuthorizeForm {
-    pub response_type: Option<String>,
+/// Only the one-time flow ID is submitted; permissions and targets stay server-side.
+#[derive(Deserialize)]
+pub struct ApproveForm {
     pub action: Option<String>,
-    pub client_id: Option<String>,
-    pub redirect_uri: Option<String>,
-    pub scope: Option<String>,
-    pub guild_id: Option<String>,
-    pub state: Option<String>,
-}
-
-/// The approval form, with `resource` read as the repeated parameter RFC 8707
-/// says it is.
-///
-/// `serde_urlencoded`, which `Form` and `Query` both use, cannot collect a
-/// repeated key into a `Vec` — it hands each occurrence to the field as a single
-/// string and the sequence visitor refuses it. So the body is read once here and
-/// both halves are parsed from the same pairs, which keeps the one parameter the
-/// specification repeats from being the one parameter this flow cannot read.
-///
-/// Everything `Form` did is still done: the content type is required, the body
-/// is bounded, and the pairs are percent-decoded.
-pub struct Approval {
-    pub form: AuthorizeForm,
-    pub resources: Vec<String>,
-}
-
-impl FromRequest<AppState> for Approval {
-    type Rejection = Response;
-
-    async fn from_request(
-        request: HttpRequest,
-        _state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let is_form = request
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("application/x-www-form-urlencoded"));
-
-        if !is_form {
-            return Err((
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "expected an application/x-www-form-urlencoded body",
-            )
-                .into_response());
-        }
-
-        let body = axum::body::to_bytes(request.into_body(), 2 * 1024 * 1024)
-            .await
-            .map_err(|_| page())?;
-        let Ok(raw) = std::str::from_utf8(&body) else {
-            return Err(page());
-        };
-
-        let pairs = raw_query_pairs(raw);
-        let mut form = AuthorizeForm::default();
-        for (name, value) in &pairs {
-            match name.as_str() {
-                "response_type" => form.response_type = Some(value.clone()),
-                "action" => form.action = Some(value.clone()),
-                "client_id" => form.client_id = Some(value.clone()),
-                "redirect_uri" => form.redirect_uri = Some(value.clone()),
-                "scope" => form.scope = Some(value.clone()),
-                "guild_id" => form.guild_id = Some(value.clone()),
-                "state" => form.state = Some(value.clone()),
-                // Everything the request does not name is ignored, as a form
-                // deserialized into a struct with no field for it is.
-                _ => {}
-            }
-        }
-
-        Ok(Approval {
-            form,
-            resources: values_named(&pairs, "resource"),
-        })
-    }
+    pub flow_id: Uuid,
 }
 
 /// The pairs of an `application/x-www-form-urlencoded` string, decoded.
@@ -223,55 +152,19 @@ fn values_named(pairs: &[(String, String)], name: &str) -> Vec<String> {
         .collect()
 }
 
-impl From<AuthorizeForm> for AuthorizeQuery {
-    fn from(form: AuthorizeForm) -> Self {
-        Self {
-            response_type: form.response_type,
-            client_id: form.client_id,
-            redirect_uri: form.redirect_uri,
-            scope: form.scope,
-            guild_id: form.guild_id,
-            state: form.state,
-        }
-    }
-}
-
-/// `POST /oauth2/authorize`: the same checks, and then a code.
-///
-/// Unlike the `GET`, **nothing here is answered with a redirect to the client**,
-/// which is not an oversight: an approval that fails has not established that
-/// anything is approved, and the Elixir renders its error page for all of them.
+/// Approve exactly the request verified through Discord, once.
 pub async fn approve(
     State(state): State<AppState>,
     headers: HeaderMap,
-    approval: Approval,
-) -> Response {
-    let form = approval.form;
-
-    // The only action there is. There is no deny: the Elixir has no clause for
-    // one, so its answer to a request without `approve` is a crash rather than
-    // a decision, and a refusal is the decision that was missing.
+    Form(form): Form<ApproveForm>,
+) -> Result<Response, ApiError> {
     if form.action.as_deref() != Some("approve") {
-        return page();
+        return Ok(page());
     }
-
-    let Ok(request) = Request::parse(form.into()) else {
-        return page();
+    let Some(secret) = flow::binding(&headers, form.flow_id) else {
+        return Ok(unauthorized());
     };
-
-    let Some(session) =
-        session::authenticated(&headers, state.session_secret(), state.pool()).await
-    else {
-        return unauthorized();
-    };
-    let Some(account_id) = session.user_id else {
-        return unauthorized();
-    };
-
     if !super::csrf::same_origin(&headers, &state.links().site_url) {
-        // A write that failed the browser's own headers: from a sibling origin,
-        // from nowhere at all, from a client that sends no provenance. Refused
-        // is the decision; counted is the pattern, if it repeats.
         state
             .monitor()
             .observe(
@@ -280,35 +173,32 @@ pub async fn approve(
                 "the approval did not come from this site's own origin",
             )
             .await;
-        return crate::error::ApiError::Forbidden("invalid_origin").into_response();
+        return Err(ApiError::Forbidden("invalid_origin"));
     }
-
-    if vc_core::application::preauthorize(
-        state.pool(),
-        &request.scopes,
-        &request.redirect_uri,
-        &request.client_id,
-    )
-    .await
-    .is_err()
-    {
-        return page();
-    }
-
-    // The currencies this approval is for, resolved the way the `GET` resolves
-    // them and refused the same way. A refusal is not a redirect here: nothing
-    // has been approved, and this path never sends the browser to the client.
-    let resources = match resources_of(&state, request.guild_id, approval.resources).await {
-        Ok(resources) => resources,
-        Err(_) => return invalid_target(),
+    let Some((pending, account_id)) = flow::load(state.pool(), form.flow_id, secret)
+        .await
+        .map_err(db)?
+    else {
+        return Ok(unauthorized());
     };
-
+    let request = pending.request;
+    let resources = match resources_of(&state, request.guild_id, pending.resource_uris).await {
+        Ok(resources) => resources,
+        Err(_) => return Ok(invalid_target()),
+    };
     if describe(&state, &request, account_id).await.is_err() {
-        return page();
+        return Ok(page());
     }
 
-    let issued = vc_core::application::authorize(
-        state.pool(),
+    let mut tx = state.pool().begin().await.map_err(db)?;
+    if !flow::consume(&mut tx, form.flow_id, secret)
+        .await
+        .map_err(db)?
+    {
+        return Ok(unauthorized());
+    }
+    let code = match vc_core::application::authorize_in(
+        &mut tx,
         request.guild_id,
         &request.scopes,
         &resources,
@@ -316,15 +206,14 @@ pub async fn approve(
         &request.client_id,
         time::OffsetDateTime::now_utc(),
     )
-    .await;
-
-    let Ok(code) = issued else {
-        return page();
+    .await
+    {
+        Ok(code) => code,
+        Err(_) => return Ok(page()),
     };
-
+    tx.commit().await.map_err(db)?;
     let scope = request.scopes.join(" ");
     let guild_id = request.guild_id.to_string();
-
     let mut pairs = vec![
         ("code", code.as_str()),
         ("guild_id", guild_id.as_str()),
@@ -333,8 +222,26 @@ pub async fn approve(
     if let Some(state) = request.state.as_deref() {
         pairs.push(("state", state));
     }
+    let mut response = private(to_client(&request.redirect_uri, &pairs));
+    response.headers_mut().insert(
+        SET_COOKIE,
+        flow::clear_cookie(form.flow_id, state.secure_cookies()),
+    );
+    Ok(response)
+}
 
-    to_client(&request.redirect_uri, &pairs)
+fn db(error: sqlx::Error) -> ApiError {
+    vc_core::Error::from(error).into()
+}
+
+fn private(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+        .headers_mut()
+        .insert(REFERRER_POLICY, "no-referrer".parse().unwrap());
+    response
 }
 
 /// How `preauthorize`'s four answers are answered.
@@ -365,7 +272,7 @@ pub struct AuthorizeQuery {
 }
 
 /// A well-formed request: what the rest of the chain needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
     pub client_id: String,
     pub redirect_uri: String,
@@ -441,6 +348,7 @@ impl Request {
 /// narrowing being visible rather than something only the API knows.
 #[derive(Debug, Serialize)]
 pub struct Consent {
+    pub flow_id: Uuid,
     pub client_name: Option<String>,
     pub client_id: String,
     pub redirect_uri: String,
@@ -450,34 +358,96 @@ pub struct Consent {
     pub state: Option<String>,
 }
 
-/// `GET /oauth2/authorize`: check the request, then describe the consent.
-///
-/// The browser is sent to `/login` rather than answered when it has no session.
-/// An SPA's own requests want a 401, but this is a navigation, and a person who
-/// is not logged in is a person who should log in and come back.
+/// Start a fresh Discord identity check for this exact authorization request.
 pub async fn authorize(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    uri: Uri,
     Query(query): Query<AuthorizeQuery>,
     RawQuery(raw): RawQuery,
-) -> Response {
-    // Parsing happens before the client and redirect URI have been verified.
-    // No parse error may redirect to a destination supplied by the request.
+) -> Result<Response, ApiError> {
     let request = match Request::parse(query) {
         Ok(request) => request,
-        Err(_) => return page(),
+        Err(_) => return Ok(page()),
     };
+    if let Err(error) = vc_core::application::preauthorize(
+        state.pool(),
+        &request.scopes,
+        &request.redirect_uri,
+        &request.client_id,
+    )
+    .await
+    {
+        return Ok(answer(
+            refusal_for(error),
+            &request.redirect_uri,
+            request.state.as_deref(),
+        ));
+    }
+    let resource_uris = values_named(
+        &raw_query_pairs(raw.as_deref().unwrap_or_default()),
+        "resource",
+    );
+    if let Err(refusal) = resources_of(&state, request.guild_id, resource_uris.clone()).await {
+        return Ok(answer(
+            refusal,
+            &request.redirect_uri,
+            request.state.as_deref(),
+        ));
+    }
+    let (id, secret) = flow::start(
+        state.pool(),
+        flow::Pending {
+            request,
+            resource_uris,
+        },
+    )
+    .await
+    .map_err(db)?;
+    let mut response =
+        private(Redirect::to(&state.discord().authorize_url(&id.to_string())).into_response());
+    response
+        .headers_mut()
+        .insert(SET_COOKIE, flow::cookie(id, secret, state.secure_cookies()));
+    Ok(response)
+}
 
-    let Some(session) =
-        session::authenticated(&headers, state.session_secret(), state.pool()).await
+#[derive(Deserialize)]
+pub struct CallbackQuery {
+    pub state: Uuid,
+    pub code: Option<String>,
+}
+
+/// Verify Discord's response once, then show consent for the saved request.
+/// No login cookie or API token is issued, and Discord credentials are not retained.
+pub async fn discord_callback(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CallbackQuery>,
+) -> Result<Response, ApiError> {
+    let Some(secret) = flow::binding(&headers, query.state) else {
+        return Ok(unauthorized());
+    };
+    let Some(pending) = flow::claim(state.pool(), query.state, secret)
+        .await
+        .map_err(db)?
     else {
-        return to_login(&uri);
+        return Ok(unauthorized());
     };
-    let Some(account_id) = session.user_id else {
-        return to_login(&uri);
+    let Some(code) = query.code else {
+        return Ok(page());
     };
-
+    let token = state.discord().exchange_code(&code).await?;
+    let profile = state.discord().get_user_info(&token.token).await?;
+    let Some(discord_id) = profile
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::discord_id::parse)
+    else {
+        return Ok(unauthorized());
+    };
+    let account_id = vc_core::user::resolve_discord_id(state.pool(), discord_id)
+        .await
+        .map_err(db)?;
+    let request = pending.request;
     let preauthorized = match vc_core::application::preauthorize(
         state.pool(),
         &request.scopes,
@@ -486,53 +456,54 @@ pub async fn authorize(
     )
     .await
     {
-        Ok(preauthorized) => preauthorized,
+        Ok(checked) => checked,
         Err(error) => {
-            return answer(
+            return Ok(answer(
                 refusal_for(error),
                 &request.redirect_uri,
                 request.state.as_deref(),
-            );
+            ));
         }
     };
-
-    // The currencies the ask is for. This is after the client and the redirect
-    // URI, so a refusal here may go back to the client — which is the only way
-    // it learns the ask named something that is not ours.
-    let resource_uris = values_named(
-        &raw_query_pairs(raw.as_deref().unwrap_or_default()),
-        "resource",
-    );
-    let resources = match resources_of(&state, request.guild_id, resource_uris.clone()).await {
+    let resources = match resources_of(&state, request.guild_id, pending.resource_uris).await {
         Ok(resources) => resources,
-        Err(refusal) => return answer(refusal, &request.redirect_uri, request.state.as_deref()),
-    };
-
-    match describe(&state, &request, account_id).await {
-        Ok(guild_id) => {
-            let units = match crate::resource::units(state.pool(), &resources).await {
-                Ok(units) => units,
-                Err(error) => {
-                    return crate::error::ApiError::from(vc_core::Error::from(error))
-                        .into_response();
-                }
-            };
-            consent::respond(
-                &headers,
-                Consent {
-                    client_name: preauthorized.client_name,
-                    client_id: request.client_id,
-                    redirect_uri: request.redirect_uri,
-                    scopes: request.scopes,
-                    resources: units,
-                    guild_id,
-                    state: request.state,
-                },
-                &resource_uris,
-            )
+        Err(refusal) => {
+            return Ok(answer(
+                refusal,
+                &request.redirect_uri,
+                request.state.as_deref(),
+            ));
         }
-        Err(refusal) => answer(refusal, &request.redirect_uri, request.state.as_deref()),
+    };
+    if let Err(refusal) = describe(&state, &request, i64::from(account_id)).await {
+        return Ok(answer(
+            refusal,
+            &request.redirect_uri,
+            request.state.as_deref(),
+        ));
     }
+    let units = crate::resource::units(state.pool(), &resources)
+        .await
+        .map_err(db)?;
+    if !flow::ready(state.pool(), query.state, i64::from(account_id))
+        .await
+        .map_err(db)?
+    {
+        return Ok(unauthorized());
+    }
+    Ok(private(consent::respond(
+        &headers,
+        Consent {
+            flow_id: query.state,
+            client_name: preauthorized.client_name,
+            client_id: request.client_id,
+            redirect_uri: request.redirect_uri,
+            scopes: request.scopes,
+            resources: units,
+            guild_id: request.guild_id,
+            state: request.state,
+        },
+    )))
 }
 
 /// Resolve an ask's `resource` values, as the refusal the consent screen answers
@@ -554,33 +525,6 @@ async fn resources_of(
     )
     .await
     .map_err(|_| Refusal::redirect("invalid_target", "invalid_target"))
-}
-
-/// Send the browser to log in and come back here.
-fn to_login(uri: &Uri) -> Response {
-    let here = uri
-        .path_and_query()
-        .map(axum::http::uri::PathAndQuery::as_str)
-        .unwrap_or("/");
-
-    // Encoded rather than interpolated, for the same reason a refusal is: the
-    // value is partly the browser's own.
-    let mut login = Url::parse("http://placeholder/").expect("a base url");
-    login.set_path("/login");
-    login.query_pairs_mut().append_pair("continue", here);
-
-    // `Url` has no `path_and_query`, and does not need one: the pair is the path
-    // and whatever the encoder produced as the query.
-    let login = format!(
-        "{}{}",
-        login.path(),
-        login
-            .query()
-            .map(|query| format!("?{query}"))
-            .unwrap_or_default()
-    );
-
-    Redirect::to(&login).into_response()
 }
 
 /// The guild checks, and the account's right to act for it.

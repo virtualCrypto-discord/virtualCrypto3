@@ -32,23 +32,18 @@ impl Links {
     }
 }
 
-/// What the service signs with: the API's bearer tokens, and the browser's
-/// session. Held together because they are the same kind of decision, and kept
-/// as two *separate* secrets because both are JWTs — signing them with one
-/// secret is what would let a session cookie be replayed as an API token.
+/// API token signing and transport policy for temporary OAuth browser cookies.
 #[derive(Clone)]
 pub struct Signing {
     jwt: Arc<Vec<u8>>,
-    session: Arc<Vec<u8>>,
-    secure_session: bool,
+    secure_cookies: bool,
 }
 
 impl Signing {
-    pub fn new(jwt: impl Into<Vec<u8>>, session: impl Into<Vec<u8>>, secure_session: bool) -> Self {
+    pub fn new(jwt: impl Into<Vec<u8>>, secure_cookies: bool) -> Self {
         Self {
             jwt: Arc::new(jwt.into()),
-            session: Arc::new(session.into()),
-            secure_session,
+            secure_cookies,
         }
     }
 }
@@ -161,17 +156,9 @@ impl AppState {
         &self.signing.jwt
     }
 
-    /// What the browser's session cookie is signed with. Deliberately not the
-    /// one above: a session cookie and an API token are both JWTs, and they must
-    /// not be interchangeable.
-    pub fn session_secret(&self) -> &[u8] {
-        &self.signing.session
-    }
-
-    /// Whether the session cookie is marked `Secure`. Production wants it; a
-    /// development server on plain HTTP can never be sent one.
+    /// Temporary OAuth binding cookies use HTTPS in production.
     pub fn secure_cookies(&self) -> bool {
-        self.signing.secure_session
+        self.signing.secure_cookies
     }
 
     pub fn discord(&self) -> &Arc<dyn DiscordApi> {

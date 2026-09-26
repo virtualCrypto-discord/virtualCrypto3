@@ -19,8 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // The names are the deployment's own: the `VCRYPTO_*` secrets the app already
-    // carries, which is what the Elixir reads — plus `DATABASE_URL` and
-    // `SECRET_KEY_BASE`, which are Phoenix's and sqlx's. They are read as they are,
+    // carries, which is what the Elixir reads — plus `DATABASE_URL` for sqlx.
+    // They are read as they are,
     // each on its own: a value the environment does not have is refused by name.
     let database_url = require_env("DATABASE_URL")?;
     let jwt_secret = require_env("VCRYPTO_API_JWT_SECRET_KEY")?;
@@ -50,11 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     };
 
-    // A session that cannot be signed is not a session, so this secret is
-    // required rather than defaulted to something convenient.
-    let session_secret = require_env("SECRET_KEY_BASE")?;
-    // Secure unless switched off, because the alternative fails quietly: a
-    // missing flag would send session cookies in the clear.
+    // Temporary OAuth browser binding cookies require HTTPS in production.
     let secure_cookies = optional_env("SECURE_COOKIES", "true") != "false";
 
     // Validate outbound policy before connecting to the database or starting
@@ -110,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState::new(
         pool,
-        vc_api::state::Signing::new(jwt_secret, session_secret, secure_cookies),
+        vc_api::state::Signing::new(jwt_secret, secure_cookies),
         discord_public_key,
         links,
         // `Discord.Api.Cached`: the same lookups, remembered for fifteen

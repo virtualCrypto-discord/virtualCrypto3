@@ -11,9 +11,7 @@
 <h1>VirtualCrypto</h1>
 <p>Discord のサーバーで使う通貨を扱うためのサービスです。</p>
 
-<!-- No login here on purpose: the only flow that needs a session is OAuth2's,
-     and it sends the browser to `/login` itself when the consent screen is
-     reached without one. A button here would be a second way in for nobody. -->
+<!-- OAuth consent verifies identity with Discord for each request; there is no site login. -->
 
 <!-- An ordinary link: it reloads, and the API answers it with this document.
      The documentation is the service's own, rendered from the same content the

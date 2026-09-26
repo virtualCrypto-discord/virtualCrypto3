@@ -25,8 +25,6 @@ use vc_core::notification::{NoopNotifier, Notifier};
 /// The id the fake answers `bot_user_id` with.
 pub const BOT_USER_ID: i64 = 100_000_000_000_000_000;
 pub const JWT_SECRET: &str = "test-secret";
-/// The session cookie's own secret, which a test needs to read one back.
-pub const SESSION_SECRET: &str = "test-session-secret";
 pub const REFRESHED_TOKEN: &str = "refreshed-token";
 pub const REFRESHED_REFRESH_TOKEN: &str = "refreshed-refresh-token";
 /// Distinct from the refresh pair so a test can tell which path ran.
@@ -666,7 +664,7 @@ pub fn state_watched(
 ) -> AppState {
     AppState::new(
         pool,
-        vc_api::state::Signing::new(JWT_SECRET, SESSION_SECRET, false),
+        vc_api::state::Signing::new(JWT_SECRET, false),
         discord_public_key(),
         links(),
         discord,
@@ -689,7 +687,7 @@ pub fn state_with_notifier(
 ) -> AppState {
     AppState::new(
         pool,
-        vc_api::state::Signing::new(JWT_SECRET, SESSION_SECRET, false),
+        vc_api::state::Signing::new(JWT_SECRET, false),
         discord_public_key(),
         links(),
         discord,

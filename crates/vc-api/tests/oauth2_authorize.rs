@@ -1,412 +1,212 @@
-//! The consent screen's first answers.
-//!
-//! There is no Elixir test for any of this — OAuth2 is the one area of the
-//! migration without a ported spec — so these are additions.
-
+//! A new Discord identity check for every request, with one browser-bound approval.
 mod support;
-
-use axum::Router;
-use axum::body::Body;
-use axum::http::Request;
-use axum::http::header::LOCATION;
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{Request, header::LOCATION},
+    response::Response,
+};
+use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{fake, state};
+use support::*;
 use tower::ServiceExt;
 
-async fn visit(app: Router, uri: &str) -> (u16, String) {
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(uri)
-                .body(Body::empty())
-                .expect("request"),
-        )
+const REDIRECT: &str = "https://app.example/callback?x=one&y=two";
+const CLIENT_STATE: &str = "\"><script>alert('state')</script>&literal=&quot;";
+const NAME: &str = "<script>alert('app')</script> & App";
+
+struct Fixture {
+    app: Router,
+    client: String,
+    application: i64,
+}
+async fn fixture(pool: &PgPool) -> Fixture {
+    setup_money(pool).await;
+    let application = insert_application(pool, MONEY_USER1, NAME).await;
+    sqlx::query("UPDATE applications SET grant_types=ARRAY['authorization_code']::openid_connect_grant_types[] WHERE id=$1")
+        .bind(application).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO redirect_uris(application_id,redirect_uri,inserted_at,updated_at) VALUES($1,$2,now(),now())")
+        .bind(application).bind(REDIRECT).execute(pool).await.unwrap();
+    Fixture {
+        app: vc_api::router(state(
+            pool.clone(),
+            FakeDiscord::with_member(MONEY_USER1, &[], &[]),
+        )),
+        client: client_id_of(pool, application).await,
+        application,
+    }
+}
+fn uri(client: &str, resources: &[String]) -> String {
+    let mut url = reqwest::Url::parse("https://vc.example/oauth2/authorize").unwrap();
+    url.query_pairs_mut().extend_pairs([
+        ("response_type", "code"),
+        ("client_id", client),
+        ("redirect_uri", REDIRECT),
+        ("scope", "vc.issue"),
+        ("guild_id", &MONEY_GUILD.to_string()),
+        ("state", CLIENT_STATE),
+    ]);
+    for resource in resources {
+        url.query_pairs_mut().append_pair("resource", resource);
+    }
+    format!("{}?{}", url.path(), url.query().unwrap())
+}
+async fn get(app: &Router, uri: &str, cookie: Option<&str>, accept: &str) -> Response {
+    let mut request = Request::builder().uri(uri).header("accept", accept);
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    app.clone()
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
-        .expect("router response");
-
-    let location = response
-        .headers()
-        .get(LOCATION)
-        .map(|value| value.to_str().expect("a header").to_owned())
-        .unwrap_or_default();
-
-    (response.status().as_u16(), location)
+        .unwrap()
 }
-
-const A_REQUEST: &str = "/oauth2/authorize\
-    ?response_type=code\
-    &client_id=a-client\
-    &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback\
-    &scope=vc.issue\
-    &guild_id=1";
-
-/// A browser is a person: where an SPA's own request would be answered `401`,
-/// a navigation goes to the login page and comes back.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_browser_without_a_session_is_sent_to_log_in(pool: PgPool) {
-    let app = vc_api::router(state(pool, fake()));
-
-    let (status, location) = visit(app, A_REQUEST).await;
-
-    assert_eq!(status, 303);
-    assert!(location.starts_with("/login?continue="), "{location}");
-
-    // Back to here rather than to the front page, and encoded so that the second
-    // request's own query survives the trip.
-    assert!(location.contains("oauth2%2Fauthorize"), "{location}");
-    assert!(location.contains("%3Fresponse_type%3Dcode"), "{location}");
+struct Flow {
+    id: String,
+    cookie: String,
 }
-
-/// Nothing is looked up until the request is one: the response type is checked
-/// before the session, the client and the guild.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_request_that_is_not_the_code_flow_is_answered_here(pool: PgPool) {
-    let app = vc_api::router(state(pool, fake()));
-
-    let (status, location) = visit(app, "/oauth2/authorize?response_type=token&client_id=x").await;
-
-    assert_eq!(status, 400);
-    assert_eq!(location, "", "and it goes nowhere");
+async fn start(f: &Fixture, resources: &[String]) -> Flow {
+    let response = get(&f.app, &uri(&f.client, resources), None, "text/html").await;
+    assert_eq!(response.status(), 303);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let url = reqwest::Url::parse(response.headers()[LOCATION].to_str().unwrap()).unwrap();
+    assert_eq!(url.host_str(), Some("discord.test"));
+    let id = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    assert_ne!(id, CLIENT_STATE);
+    let set_cookie = response.headers()["set-cookie"].to_str().unwrap();
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Lax"));
+    assert!(set_cookie.contains("Max-Age=600"));
+    let cookie = set_cookie.split(';').next().unwrap().to_owned();
+    assert!(!cookie.starts_with("_virtualcrypto_session="));
+    Flow { id, cookie }
 }
-
-async fn post(app: Router, body: &str) -> (u16, String) {
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/oauth2/authorize")
-                .header(
-                    axum::http::header::CONTENT_TYPE,
-                    "application/x-www-form-urlencoded",
-                )
-                .body(Body::from(body.to_owned()))
-                .expect("request"),
-        )
+async fn callback(app: &Router, flow: &Flow, cookie: Option<&str>, accept: &str) -> Response {
+    get(
+        app,
+        &format!("/callback/discord?state={}&code=the-code", flow.id),
+        cookie,
+        accept,
+    )
+    .await
+}
+async fn post(app: &Router, flow: &Flow, body: &str, fields: &[(&str, &str)]) -> Response {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/oauth2/authorize")
+        .header("cookie", &flow.cookie)
+        .header("content-type", "application/x-www-form-urlencoded");
+    for (name, value) in fields {
+        request = request.header(*name, *value);
+    }
+    app.clone()
+        .oneshot(request.body(Body::from(body.to_owned())).unwrap())
         .await
-        .expect("router response");
-
-    let location = response
-        .headers()
-        .get(LOCATION)
-        .map(|value| value.to_str().expect("a header").to_owned())
-        .unwrap_or_default();
-
-    (response.status().as_u16(), location)
+        .unwrap()
 }
-
-const AN_APPROVAL: &str = "action=approve\
-    &response_type=code\
-    &client_id=a-client\
-    &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback\
-    &scope=vc.issue\
-    &guild_id=1";
-
-/// The Elixir has no clause for anything but `approve`, so a request without it
-/// crashes rather than being decided. A refusal is the decision that was missing.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_action_that_is_not_approval_is_answered_here(pool: PgPool) {
-    let app = vc_api::router(state(pool, fake()));
-
-    let (status, location) = post(app, &AN_APPROVAL.replace("approve", "deny")).await;
-
-    assert_eq!(status, 400);
-    assert_eq!(location, "", "and it goes nowhere");
+fn form(flow: &Flow) -> String {
+    format!("action=approve&flow_id={}", flow.id)
 }
-
-/// An approval from nobody is a 401 rather than a trip to the login page: a POST
-/// cannot be resumed by a navigation, so the SPA has to decide what to do.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_post_without_a_session_is_not_approved(pool: PgPool) {
-    let app = vc_api::router(state(pool, fake()));
-
-    let (status, location) = post(app, AN_APPROVAL).await;
-
-    assert_eq!(status, 401);
-    assert_eq!(location, "", "and it goes nowhere");
+async fn approve(app: &Router, flow: &Flow) -> Response {
+    post(app, flow, &form(flow), &[("sec-fetch-site", "same-origin")]).await
 }
-
-/// Invalid approvals never redirect to the client.
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn an_invalid_post_never_redirects_to_the_client(pool: PgPool) {
-    let app = vc_api::router(state(pool, fake()));
-
-    let (status, location) = post(app, &AN_APPROVAL.replace("code", "token")).await;
-
-    assert_eq!(status, 400);
-    assert_eq!(location, "", "and it goes nowhere");
+async fn count_codes(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM authorization_codes")
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
-
-/// Submit the actual hidden inputs emitted by the consent page, decoding HTML
-/// entities as a browser does before form encoding. This catches missing fields
-/// and resource values accidentally replaced with their display units.
 fn hidden_inputs(html: &str) -> Vec<(String, String)> {
     html.split("<input ")
         .skip(1)
         .map(|input| {
-            let tag = input.split_once('>').expect("closed input").0;
+            let tag = input.split_once('>').unwrap().0;
             let attribute = |name| {
                 tag.split_once(&format!("{name}=\""))
-                    .expect("attribute")
+                    .unwrap()
                     .1
                     .split_once('"')
-                    .expect("closed attribute")
+                    .unwrap()
                     .0
-                    .replace("&quot;", "\"")
-                    .replace("&#39;", "'")
-                    .replace("&lt;", "<")
-                    .replace("&gt;", ">")
-                    .replace("&amp;", "&")
+                    .to_owned()
             };
-            assert_eq!(attribute("type"), "hidden");
             (attribute("name"), attribute("value"))
         })
         .collect()
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn approval_requires_same_origin_browser_headers(pool: PgPool) {
-    use support::{MONEY_GUILD, MONEY_USER1, MONEY_USER2};
-    support::setup_money(&pool).await;
-    let application = support::insert_application(&pool, MONEY_USER2, "requesting app").await;
-    sqlx::query("UPDATE applications SET grant_types=ARRAY['authorization_code']::openid_connect_grant_types[] WHERE id=$1")
-        .bind(application).execute(&pool).await.unwrap();
-    let redirect = "https://other.example/callback";
-    sqlx::query("INSERT INTO redirect_uris(application_id,redirect_uri,inserted_at,updated_at) VALUES($1,$2,now(),now())")
-        .bind(application).bind(redirect).execute(&pool).await.unwrap();
-    let client = support::client_id_of(&pool, application).await;
-    let app = vc_api::router(state(
-        pool.clone(),
-        support::FakeDiscord::with_member(MONEY_USER1, &[], &[]),
-    ));
-    let session = vc_api::session::Session::logged_in(1);
-    session.register(&pool).await.unwrap();
-    let session = session.sign(support::SESSION_SECRET.as_bytes()).unwrap();
-    let mut form = reqwest::Url::parse("https://vcrypto.sumidora.com/").unwrap();
-    form.query_pairs_mut().extend_pairs([
-        ("action", "approve"),
-        ("response_type", "code"),
-        ("client_id", &client),
-        ("redirect_uri", redirect),
-        ("scope", "vc.issue"),
-        ("guild_id", &MONEY_GUILD.to_string()),
-    ]);
-    let mut issued = 0;
-    for (fields, allowed) in [
-        (vec![], false),
-        (
-            vec![
-                ("origin", "https://attacker.sumidora.com"),
-                ("sec-fetch-site", "same-site"),
-            ],
-            false,
-        ),
-        (
-            vec![
-                ("origin", "https://attacker.example"),
-                ("sec-fetch-site", "cross-site"),
-            ],
-            false,
-        ),
-        (
-            vec![
-                ("origin", "null"),
-                ("referer", "https://vcrypto.sumidora.com/"),
-            ],
-            false,
-        ),
-        (vec![("origin", "https://attacker.sumidora.com")], false),
-        (
-            vec![
-                ("origin", "https://attacker.example"),
-                ("host", "attacker.example"),
-            ],
-            false,
-        ),
-        (
-            vec![
-                ("sec-fetch-site", "same-origin"),
-                ("origin", "https://attacker.example"),
-            ],
-            false,
-        ),
-        (vec![("origin", "https://vcrypto.sumidora.com")], true),
-        (
-            vec![(
-                "referer",
-                "https://vcrypto.sumidora.com/oauth2/authorize?client_id=1",
-            )],
-            true,
-        ),
-        (vec![("sec-fetch-site", "same-origin")], true),
-    ] {
-        let mut request = Request::builder()
-            .method("POST")
-            .uri("/oauth2/authorize")
-            .header(
-                "cookie",
-                format!("{}={session}", vc_api::session::COOKIE_NAME),
-            )
-            .header("content-type", "application/x-www-form-urlencoded");
-        for (name, value) in &fields {
-            request = request.header(*name, *value);
-        }
-        let response = app
-            .clone()
-            .oneshot(
-                request
-                    .body(Body::from(form.query().unwrap().to_owned()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            if allowed { 303 } else { 403 },
-            "{fields:?}"
-        );
-        if allowed {
-            issued += 1;
-            assert!(
-                response.headers()[LOCATION]
-                    .to_str()
-                    .unwrap()
-                    .starts_with(redirect)
-            );
-        } else {
-            assert!(!response.headers().contains_key(LOCATION));
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body["error_description"], "invalid_origin");
-        }
-        let codes: i64 = sqlx::query_scalar("SELECT count(*) FROM authorization_codes")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(codes, issued, "{fields:?}");
-    }
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn browser_consent_preserves_the_request_through_approval_and_token_exchange(pool: PgPool) {
-    use support::{MONEY_GUILD, MONEY_USER1};
-    let money = support::setup_money(&pool).await;
-    let name = "<script>alert('app')</script> & App";
-    let application = support::insert_application(&pool, MONEY_USER1, name).await;
-    sqlx::query("UPDATE applications SET grant_types = ARRAY['authorization_code']::openid_connect_grant_types[] WHERE id=$1")
-        .bind(application).execute(&pool).await.unwrap();
-    let redirect_uri = "https://app.example/callback?x=one&y=two";
-    sqlx::query("INSERT INTO redirect_uris(application_id,redirect_uri,inserted_at,updated_at) VALUES($1,$2,now(),now())")
-        .bind(application).bind(redirect_uri).execute(&pool).await.unwrap();
-    let client = support::client_id_of(&pool, application).await;
-    let app = vc_api::router(state(
-        pool.clone(),
-        support::FakeDiscord::with_member(MONEY_USER1, &[], &[]),
-    ));
-    let session = vc_api::session::Session::logged_in(1);
-    session.register(&pool).await.unwrap();
-    let session = session.sign(support::SESSION_SECRET.as_bytes()).unwrap();
-    let cookie = format!("{}={session}", vc_api::session::COOKIE_NAME);
-    let client_state = "\"><script>alert('state')</script>&literal=&quot;";
-    let collection = format!("{}/api/v2/currencies", support::links().site_url);
-    let currency = format!("{collection}/{}", money.currency);
-
-    // No indicator, the collection indicator, and repeated currency indicators
-    // must all survive the browser round trip without widening the grant.
+async fn browser_request_survives_discord_consent_and_token_exchange(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let collection = format!("{}/api/v2/currencies", links().site_url);
+    let currency = format!("{collection}/1");
     for resources in [vec![], vec![collection], vec![currency.clone(), currency]] {
-        let expected = if resources
-            .first()
-            .is_some_and(|uri| uri.ends_with(&format!("/{}", money.currency)))
-        {
-            vec![money.currency]
-        } else {
-            vec![]
-        };
-        let mut url = reqwest::Url::parse("https://vc.example/oauth2/authorize").unwrap();
-        url.query_pairs_mut().extend_pairs([
-            ("response_type", "code"),
-            ("client_id", &client),
-            ("redirect_uri", redirect_uri),
-            ("scope", "vc.issue"),
-            ("guild_id", &MONEY_GUILD.to_string()),
-            ("state", client_state),
-        ]);
-        for resource in &resources {
-            url.query_pairs_mut().append_pair("resource", resource);
-        }
-        let uri = format!("{}?{}", url.path(), url.query().unwrap());
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(&uri)
-                    .header("cookie", &cookie)
-                    .header("accept", "text/html,application/xhtml+xml;q=0.9")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let restricted = resources.first().is_some_and(|r| r.ends_with("/1"));
+        let flow = start(&f, &resources).await;
+        let response = callback(
+            &f.app,
+            &flow,
+            Some(&flow.cookie),
+            "text/html,application/xhtml+xml;q=0.9",
+        )
+        .await;
         assert_eq!(response.status(), 200);
-        assert!(
-            response.headers()["content-type"]
-                .to_str()
-                .unwrap()
-                .starts_with("text/html")
-        );
         assert_eq!(response.headers()["cache-control"], "no-store");
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("<form method=\"post\" action=\"/oauth2/authorize\">"));
-        assert!(html.contains("<button type=\"submit\">"));
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert_eq!(response.headers()["x-frame-options"], "DENY");
+        assert!(!response.headers().contains_key("set-cookie"));
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>"));
-        assert!(html.contains(if expected.is_empty() {
-            "このサーバーのすべての通貨"
-        } else {
+        assert!(html.contains(if restricted {
             "<li>n</li>"
+        } else {
+            "このサーバーのすべての通貨"
         }));
         let inputs = hidden_inputs(&html);
         assert_eq!(
-            inputs
-                .iter()
-                .filter(|(name, _)| name == "resource")
-                .map(|(_, value)| value.clone())
-                .collect::<Vec<_>>(),
-            resources
+            inputs,
+            vec![
+                ("action".into(), "approve".into()),
+                ("flow_id".into(), flow.id.clone())
+            ]
         );
-        let mut form = reqwest::Url::parse("https://vc.example/").unwrap();
-        form.query_pairs_mut().extend_pairs(&inputs);
-        let approved = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/oauth2/authorize")
-                    .header("cookie", &cookie)
-                    .header("origin", support::links().site_url)
-                    .header("sec-fetch-site", "same-origin")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from(form.query().unwrap().to_owned()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let mut encoded = reqwest::Url::parse("https://vc.example/").unwrap();
+        encoded.query_pairs_mut().extend_pairs(&inputs);
+        let approved = post(
+            &f.app,
+            &flow,
+            encoded.query().unwrap(),
+            &[("origin", &links().site_url)],
+        )
+        .await;
         assert_eq!(approved.status(), 303);
-        let destination =
-            reqwest::Url::parse(approved.headers()[LOCATION].to_str().unwrap()).unwrap();
-        let pairs: std::collections::HashMap<_, _> =
-            destination.query_pairs().into_owned().collect();
-        assert_eq!(pairs["state"], client_state);
+        assert!(
+            approved.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        let url = reqwest::Url::parse(approved.headers()[LOCATION].to_str().unwrap()).unwrap();
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(pairs["state"], CLIENT_STATE);
         assert_eq!(pairs["guild_id"], MONEY_GUILD.to_string());
         assert_eq!(pairs["scope"], "vc.issue");
         assert_eq!(pairs["y"], "two");
-
-        let exchange = serde_json::json!({"grant_type": "authorization_code", "client_id": client, "redirect_uri": redirect_uri, "code": pairs["code"]});
-        let exchanged = app
+        let exchange = json!({"grant_type":"authorization_code", "client_id":f.client, "redirect_uri":REDIRECT, "code":pairs["code"]});
+        let response = f
+            .app
             .clone()
             .oneshot(
                 Request::builder()
@@ -418,71 +218,242 @@ async fn browser_consent_preserves_the_request_through_approval_and_token_exchan
             )
             .await
             .unwrap();
-        assert_eq!(exchanged.status(), 200);
-        let bytes = axum::body::to_bytes(exchanged.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let token: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(token["access_token"].as_str().is_some());
-        let stored: Vec<i64> = sqlx::query_scalar(
-            "SELECT r.currency_id FROM grant_resources r JOIN access_tokens t ON t.grant_id=r.grant_id WHERE t.token_id=$1",
-        )
-        .bind(uuid::Uuid::parse_str(token["access_token"].as_str().unwrap()).unwrap())
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        assert_eq!(stored, expected);
-
-        for accept in ["application/json", "text/html;q=0,application/json"] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(&uri)
-                        .header("cookie", &cookie)
-                        .header("accept", accept)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
+        assert_eq!(response.status(), 200);
+        let token: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
-            assert_eq!(response.status(), 200);
-            assert_eq!(response.headers()["content-type"], "application/json");
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let consent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(consent["client_name"], name);
-            assert_eq!(consent["state"], client_state);
-            assert_eq!(
-                consent["resources"],
-                if expected.is_empty() {
-                    serde_json::json!([])
-                } else {
-                    serde_json::json!(["n"])
-                }
-            );
-        }
+        let stored: Vec<i64> = sqlx::query_scalar("SELECT r.currency_id FROM grant_resources r JOIN access_tokens t ON t.grant_id=r.grant_id WHERE t.token_id=$1")
+            .bind(uuid::Uuid::parse_str(token["access_token"].as_str().unwrap()).unwrap()).fetch_all(&pool).await.unwrap();
+        assert_eq!(stored, if restricted { vec![1] } else { vec![] });
+        assert_eq!(approve(&f.app, &flow).await.status(), 401);
+    }
+    for table in [
+        "SELECT count(*) FROM discord_users",
+        "SELECT count(*) FROM user_access_tokens",
+        "SELECT count(*) FROM browser_authorizations",
+    ] {
+        let count: i64 = sqlx::query_scalar(table).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "no persistent login credentials: {table}");
     }
 }
 
-/// An invalid guild must not turn the consent endpoint into an open redirect.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn malformed_requests_never_redirect_to_an_unverified_destination(pool: PgPool) {
-    for suffix in [
-        "",
-        "&guild_id=",
-        "&guild_id=invalid",
-        "&guild_id=9223372036854775808",
+async fn independent_flows_require_their_own_browser_and_callback_once(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let a = start(&f, &[]).await;
+    let b = start(&f, &[]).await;
+    assert_ne!(a.id, b.id);
+    assert_eq!(
+        approve(&f.app, &a).await.status(),
+        401,
+        "cannot approve before Discord"
+    );
+    for cookie in [
+        None,
+        Some(b.cookie.as_str()),
+        Some("_virtualcrypto_session=legacy"),
     ] {
-        let uri = format!(
-            "/oauth2/authorize?response_type=code&client_id=unregistered&redirect_uri=https%3A%2F%2Funregistered.example%2Fcallback&scope=vc.issue&state=client-state{suffix}"
-        );
-        let (status, location) = visit(vc_api::router(state(pool.clone(), fake())), &uri).await;
-        assert_eq!(status, 400, "{suffix}: {location}");
-        assert!(
-            location.is_empty(),
-            "an unverified destination must never receive a redirect: {location}"
+        assert_eq!(
+            callback(&f.app, &a, cookie, "text/html").await.status(),
+            401
         );
     }
+    let both = format!("{}; {}", a.cookie, b.cookie);
+    for flow in [&a, &b] {
+        let response = callback(&f.app, flow, Some(&both), "application/json").await;
+        assert_eq!(response.status(), 200);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["flow_id"], flow.id);
+        assert_eq!(body["client_name"], NAME);
+        assert_eq!(body["state"], CLIENT_STATE);
+        assert_eq!(
+            callback(&f.app, flow, Some(&both), "application/json")
+                .await
+                .status(),
+            401
+        );
+    }
+    let substituted = Flow {
+        id: a.id.clone(),
+        cookie: b.cookie.clone(),
+    };
+    assert_eq!(approve(&f.app, &substituted).await.status(), 401);
+    assert_eq!(approve(&f.app, &a).await.status(), 303);
+    assert_eq!(approve(&f.app, &b).await.status(), 303);
+    assert_eq!(count_codes(&pool).await, 2);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn forged_post_fields_cannot_change_the_saved_request(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let resource = format!("{}/api/v2/currencies/1", links().site_url);
+    let flow = start(&f, &[resource]).await;
+    assert_eq!(
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    let response = post(&f.app, &flow, &format!("{}&client_id=other&redirect_uri=https://attacker.example/&scope=vc.pay&guild_id=42&resource=https://attacker.example/&state=changed", form(&flow)), &[("sec-fetch-site","same-origin")]).await;
+    assert_eq!(response.status(), 303);
+    let url = reqwest::Url::parse(response.headers()[LOCATION].to_str().unwrap()).unwrap();
+    assert_eq!(url.host_str(), Some("app.example"));
+    assert_eq!(
+        url.query_pairs().find(|(k, _)| k == "state").unwrap().1,
+        CLIENT_STATE
+    );
+    let stored: (i64, Vec<i64>, Vec<String>) =
+        sqlx::query_as("SELECT guild_id, resources, scopes::text[] FROM authorization_codes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, (MONEY_GUILD, vec![1], vec!["vc.issue".into()]));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approval_requires_same_origin_and_a_live_single_use_flow(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for fields in [
+        vec![],
+        vec![("origin", "https://attacker.example")],
+        vec![("sec-fetch-site", "same-site")],
+        vec![
+            ("origin", "null"),
+            ("referer", "https://vcrypto.sumidora.com/"),
+        ],
+        vec![
+            ("sec-fetch-site", "same-origin"),
+            ("origin", "https://attacker.example"),
+        ],
+    ] {
+        let flow = start(&f, &[]).await;
+        assert_eq!(
+            callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+                .await
+                .status(),
+            200
+        );
+        assert_eq!(
+            post(&f.app, &flow, &form(&flow), &fields).await.status(),
+            403
+        );
+    }
+    assert_eq!(count_codes(&pool).await, 0);
+    let flow = start(&f, &[]).await;
+    let (a, b) = tokio::join!(
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html"),
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+    );
+    let mut statuses = [a.status().as_u16(), b.status().as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [200, 401]);
+    let (a, b) = tokio::join!(approve(&f.app, &flow), approve(&f.app, &flow));
+    let mut statuses = [a.status().as_u16(), b.status().as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [303, 401]);
+    assert_eq!(count_codes(&pool).await, 1);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn expired_requests_and_expired_consent_cannot_be_used(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for verified in [false, true] {
+        let flow = start(&f, &[]).await;
+        if verified {
+            assert_eq!(
+                callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+                    .await
+                    .status(),
+                200
+            );
+        }
+        sqlx::query(
+            "UPDATE browser_authorizations SET expires=now()-interval '1 second' WHERE id=$1",
+        )
+        .bind(uuid::Uuid::parse_str(&flow.id).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+                .await
+                .status(),
+            401
+        );
+        assert_eq!(approve(&f.app, &flow).await.status(), 401);
+    }
+    assert_eq!(count_codes(&pool).await, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn approval_rechecks_guild_permissions_and_client_registration(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let flow = start(&f, &[]).await;
+    assert_eq!(
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    let denied = vc_api::router(state(
+        pool.clone(),
+        FakeDiscord::with_member(MONEY_USER2, &[], &[]),
+    ));
+    assert_eq!(approve(&denied, &flow).await.status(), 400);
+    assert_eq!(count_codes(&pool).await, 0);
+    sqlx::query("DELETE FROM redirect_uris WHERE application_id=$1")
+        .bind(f.application)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(approve(&f.app, &flow).await.status(), 400);
+    assert_eq!(count_codes(&pool).await, 0);
+    // Failed issuance rolls consumption back; after restoring registration it can be approved once.
+    sqlx::query("INSERT INTO redirect_uris(application_id,redirect_uri,inserted_at,updated_at) VALUES($1,$2,now(),now())")
+        .bind(f.application).bind(REDIRECT).execute(&pool).await.unwrap();
+    assert_eq!(approve(&f.app, &flow).await.status(), 303);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn invalid_requests_do_not_redirect_to_unverified_clients_or_create_flows(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for uri in [
+        "/oauth2/authorize?response_type=token".to_owned(),
+        uri("unregistered", &[]),
+        uri(&f.client, &[]).replace(&format!("guild_id={MONEY_GUILD}"), "guild_id=invalid"),
+        uri(&f.client, &[]).replace("redirect_uri=https", "redirect_uri=otherhttps"),
+    ] {
+        let response = get(&f.app, &uri, None, "text/html").await;
+        assert_eq!(response.status(), 400, "{uri}");
+        assert!(!response.headers().contains_key(LOCATION));
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM browser_authorizations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn failed_or_denied_discord_callbacks_cannot_be_replayed(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let flow = start(&f, &[]).await;
+    let rejected = get(
+        &f.app,
+        &format!("/callback/discord?state={}&error=access_denied", flow.id),
+        Some(&flow.cookie),
+        "text/html",
+    )
+    .await;
+    assert_eq!(rejected.status(), 400);
+    assert_eq!(
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+            .await
+            .status(),
+        401
+    );
+    assert_eq!(approve(&f.app, &flow).await.status(), 401);
+    assert_eq!(count_codes(&pool).await, 0);
 }

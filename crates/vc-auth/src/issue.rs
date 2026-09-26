@@ -18,10 +18,8 @@ use crate::jwt;
 /// same kind of thing, which is why [`Issuance::ttl`] is what says so.
 pub const TTL: Duration = Duration::hours(1);
 
-/// The scopes an account's own token carries, whether it was issued to a browser session or to a
-/// personal access token. One list rather than two: a token for a tool is not a new kind of
-/// authority, it is the same account with a longer memory, and a second list would be a second
-/// place for the two to drift apart.
+/// The scopes a personal access token carries. The constant retains its historical name;
+/// browser authorization no longer issues account tokens.
 pub const BROWSER_SCOPES: &[&str] = &["oauth2.register", "vc.pay", "vc.claim"];
 
 /// Issue a token for a user, recording it so that it can be revoked.
@@ -92,7 +90,7 @@ pub struct Issuance<'a> {
     /// credential something that is not a browser keeps, and which nobody is around to renew.
     pub ttl: Option<Duration>,
     /// Set for a personal access token and nothing else. It is what tells such a row apart from
-    /// the hour-long one a session writes, and the name a person revokes it by.
+    /// an expiring user token, and the name a person revokes it by.
     pub name: Option<&'a str>,
 }
 
@@ -112,9 +110,7 @@ pub enum PersonalError {
     Auth(#[from] AuthError),
 }
 
-/// A token for something that is not a browser: the same account, the same scopes as a session's
-/// token, a name to revoke it by, and no lifetime — an agent or a test keeps the credential it was
-/// given until somebody takes it away, because there is nobody to notice it stopped working.
+/// A named personal access token with no expiration, valid until revoked.
 ///
 /// The name is unique per account, and the index that says so is what refuses a repeat — a
 /// lookup first would be a race with itself, and the caller would still have to handle the index.

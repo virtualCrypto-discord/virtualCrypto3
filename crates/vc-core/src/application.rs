@@ -46,7 +46,11 @@ pub async fn preauthorize(
     redirect_uri: &str,
     client_id: &str,
 ) -> Result<Preauthorized, PreauthorizeError> {
-    let application = check(pool, scopes, redirect_uri, client_id).await?;
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    let application = check(&mut conn, scopes, redirect_uri, client_id).await?;
 
     Ok(Preauthorized {
         client_name: application.client_name,
@@ -57,17 +61,17 @@ pub async fn preauthorize(
 /// order. Answering with the application is what lets one of them show a name
 /// and the other write a row.
 async fn check(
-    pool: &sqlx::PgPool,
+    conn: &mut sqlx::PgConnection,
     scopes: &[String],
     redirect_uri: &str,
     client_id: &str,
 ) -> Result<Application, PreauthorizeError> {
-    let application = find_by_client_id(pool, client_id)
+    let application = find_by_client_id(&mut *conn, client_id)
         .await
         .map_err(|_| PreauthorizeError::InvalidClientId)?
         .ok_or(PreauthorizeError::InvalidClientId)?;
 
-    if !redirect_uri_is_registered(pool, application.id, redirect_uri)
+    if !redirect_uri_is_registered(&mut *conn, application.id, redirect_uri)
         .await
         .map_err(|_| PreauthorizeError::InvalidRedirectUri)?
     {
@@ -109,7 +113,38 @@ pub async fn authorize(
     client_id: &str,
     now: time::OffsetDateTime,
 ) -> Result<String, PreauthorizeError> {
-    let application = check(pool, scopes, redirect_uri, client_id).await?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    let code = authorize_in(
+        &mut tx,
+        guild_id,
+        scopes,
+        resources,
+        redirect_uri,
+        client_id,
+        now,
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    Ok(code)
+}
+
+/// Issue on the caller's transaction, so consuming browser consent and writing
+/// its authorization code commit together.
+pub async fn authorize_in(
+    conn: &mut sqlx::PgConnection,
+    guild_id: i64,
+    scopes: &[String],
+    resources: &[i64],
+    redirect_uri: &str,
+    client_id: &str,
+    now: time::OffsetDateTime,
+) -> Result<String, PreauthorizeError> {
+    let application = check(&mut *conn, scopes, redirect_uri, client_id).await?;
 
     let code = new_code();
     // Truncated to seconds, as `NaiveDateTime.truncate(:second)` does: the column
@@ -131,7 +166,7 @@ pub async fn authorize(
         at + CODE_TTL,
         at
     )
-    .execute(pool)
+    .execute(conn)
     .await
     .map_err(|_| PreauthorizeError::InvalidClientId)?;
 

@@ -1,5 +1,11 @@
 # The web UI, derived from the site it replaces
 
+Current behavior: the site has no persistent browser login. OAuth consent verifies
+identity with Discord for each authorization request; `/login`, `/logout` and
+`POST /token` are retired. The old-app session description below is historical,
+not an implementation requirement. See [authorization.md](authorization.md).
+
+
 > **The SPA is dropped, by decision.** Nothing below is a plan to build `web/` any more.
 > What stays true, and is why this document is worth keeping, is everything read out of
 > the old site that the **service** needs regardless of who is calling it: the connect
