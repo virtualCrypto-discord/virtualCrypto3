@@ -135,6 +135,38 @@ struct Entry {
     detail: String,
 }
 
+impl Entry {
+    fn summary(&self, signal: Signal, subject: &str, window: Duration) -> Option<Report> {
+        // The first report already covered everything up to the threshold.
+        (self.first_emitted && self.count > signal.threshold()).then(|| Report {
+            signal,
+            subject: subject.to_owned(),
+            kind: Kind::Summary,
+            count: self.count,
+            window_secs: window.as_secs(),
+            detail: self.detail.clone(),
+        })
+    }
+}
+
+/// Collect summaries before removing expired entries, whether a request or the
+/// timer triggers cleanup. Reports are emitted after the entries lock is released.
+fn collect_expired(
+    entries: &mut HashMap<(Signal, String), Entry>,
+    window: Duration,
+    now: Instant,
+    reports: &mut Vec<Report>,
+) {
+    entries.retain(|(signal, subject), entry| {
+        if now.duration_since(entry.started) >= window {
+            reports.extend(entry.summary(*signal, subject, window));
+            false
+        } else {
+            true
+        }
+    });
+}
+
 /// Requests seen this window, by status class, for the signals no single
 /// subject owns: an error rate and a surge are properties of the whole service.
 #[derive(Default)]
@@ -234,25 +266,20 @@ impl BehaviorMonitor {
     /// Count one occurrence of `signal` for `subject`, warning immediately if it
     /// reaches the signal's threshold and otherwise leaving it to the sweep.
     pub fn observe(&self, signal: Signal, subject: &str, detail: &str) {
-        if let Some(report) = self.observe_at(signal, subject, detail, Instant::now()) {
+        for report in self.observe_at(signal, subject, detail, Instant::now()) {
             emit(&report, &self.sink);
         }
     }
 
     /// [`BehaviorMonitor::observe`], with the moment given: what a test drives
     /// so no test waits on a window.
-    fn observe_at(
-        &self,
-        signal: Signal,
-        subject: &str,
-        detail: &str,
-        now: Instant,
-    ) -> Option<Report> {
+    fn observe_at(&self, signal: Signal, subject: &str, detail: &str, now: Instant) -> Vec<Report> {
+        let mut reports = Vec::new();
         let mut entries = self.entries.lock().expect("the monitor is not poisoned");
 
         let window = self.window;
         if entries.len() >= SWEEP_AT {
-            entries.retain(|_, entry| now.duration_since(entry.started) < window);
+            collect_expired(&mut entries, window, now, &mut reports);
         }
 
         let entry = entries
@@ -264,8 +291,10 @@ impl BehaviorMonitor {
                 detail: String::new(),
             });
 
-        // A window that has passed starts again, the way the limiters' does.
+        // A request can arrive after expiry but before the next timer sweep.
+        // Preserve the old window's summary before starting the new one.
         if now.duration_since(entry.started) >= window {
+            reports.extend(entry.summary(signal, subject, window));
             *entry = Entry {
                 started: now,
                 count: 0,
@@ -279,7 +308,7 @@ impl BehaviorMonitor {
 
         if !entry.first_emitted && entry.count >= signal.threshold() {
             entry.first_emitted = true;
-            return Some(Report {
+            reports.push(Report {
                 signal,
                 subject: subject.to_owned(),
                 kind: Kind::First,
@@ -289,7 +318,7 @@ impl BehaviorMonitor {
             });
         }
 
-        None
+        reports
     }
 
     /// Whether `subject` exceeded the watch's window — an observation-only
@@ -355,58 +384,23 @@ impl BehaviorMonitor {
             let share = (total * SERVER_ERROR_PERCENT) / 100;
             if server_error >= share.max(SERVER_ERROR_MIN) {
                 let detail = format!("{server_error} of {total} requests failed");
-                if let Some(report) =
-                    self.observe_at(Signal::ServerErrorRate, "all-requests", &detail, now)
-                {
-                    reports.push(report);
-                }
+                reports.extend(self.observe_at(
+                    Signal::ServerErrorRate,
+                    "all-requests",
+                    &detail,
+                    now,
+                ));
             }
         }
 
         let surge_at = self.surge_per_minute.saturating_mul(self.window.as_secs()) / 60;
         if surge_at > 0 && total > surge_at {
             let detail = format!("{total} requests in one window");
-            if let Some(report) =
-                self.observe_at(Signal::RequestSurge, "all-requests", &detail, now)
-            {
-                reports.push(report);
-            }
+            reports.extend(self.observe_at(Signal::RequestSurge, "all-requests", &detail, now));
         }
 
-        let window = self.window;
         let mut entries = self.entries.lock().expect("the monitor is not poisoned");
-        let mut expired: Vec<(Signal, String, u32, bool, String)> = Vec::new();
-        entries.retain(|(signal, subject), entry| {
-            if now.duration_since(entry.started) >= window {
-                expired.push((
-                    *signal,
-                    subject.clone(),
-                    entry.count,
-                    entry.first_emitted,
-                    entry.detail.clone(),
-                ));
-                false
-            } else {
-                true
-            }
-        });
-        drop(entries);
-
-        for (signal, subject, count, first_emitted, detail) in expired {
-            // The summary is owed only when there was more than the first
-            // warning counted: one occurrence at threshold 1 is already fully
-            // told by its own line.
-            if first_emitted && count > signal.threshold() {
-                reports.push(Report {
-                    signal,
-                    subject,
-                    kind: Kind::Summary,
-                    count,
-                    window_secs: window.as_secs(),
-                    detail,
-                });
-            }
-        }
+        collect_expired(&mut entries, self.window, now, &mut reports);
 
         reports
     }
@@ -479,6 +473,8 @@ impl WebhookSink {
                 .await;
 
             if let Err(error) = sent {
+                // Discord and Slack webhook paths contain credentials.
+                let error = error.without_url();
                 tracing::warn!(
                     target: "vc_security",
                     signal,
@@ -579,7 +575,7 @@ mod tests {
             now,
         );
         assert_eq!(
-            first.as_ref().map(|report| (report.kind, report.count)),
+            first.first().map(|report| (report.kind, report.count)),
             Some((Kind::First, 1))
         );
 
@@ -591,7 +587,7 @@ mod tests {
                     "invalid_origin",
                     now
                 )
-                .is_none()
+                .is_empty()
         );
         assert_eq!(monitor.count_for(Signal::CsrfRejected, "oauth2-approve"), 2);
 
@@ -636,7 +632,7 @@ mod tests {
         // And the next occurrence warns as a first again, not as a continuation.
         let first_again = monitor.observe_at(Signal::AuthFailed, "unauthenticated", "why", later);
         assert_eq!(
-            first_again.as_ref().map(|report| report.kind),
+            first_again.first().map(|report| report.kind),
             Some(Kind::First)
         );
     }
@@ -652,21 +648,21 @@ mod tests {
             assert!(
                 monitor
                     .observe_at(Signal::ReplayDuplicate, "interaction-receipts", "id", now)
-                    .is_none(),
+                    .is_empty(),
                 "nine duplicates are still a retry"
             );
         }
 
         let tenth = monitor.observe_at(Signal::ReplayDuplicate, "interaction-receipts", "id", now);
         assert_eq!(
-            tenth.as_ref().map(|report| (report.kind, report.count)),
+            tenth.first().map(|report| (report.kind, report.count)),
             Some((Kind::First, 10))
         );
 
         assert!(
             monitor
                 .observe_at(Signal::ReplayDuplicate, "interaction-receipts", "id", now)
-                .is_none(),
+                .is_empty(),
             "the tenth was the warning; the rest wait for the window"
         );
 
@@ -834,5 +830,162 @@ mod tests {
         assert_eq!(generic["count"], 1);
         assert_eq!(generic["detail"], "no session");
         assert!(generic.get("content").is_none(), "a collector wants fields");
+    }
+
+    #[test]
+    fn a_request_before_the_sweep_preserves_the_previous_windows_summary() {
+        let monitor = monitor();
+        let now = Instant::now();
+        for _ in 0..100 {
+            monitor.observe_at(Signal::AuthFailed, "unauthenticated", "old detail", now);
+        }
+
+        let later = now + Duration::from_secs(301);
+        let reports =
+            monitor.observe_at(Signal::AuthFailed, "unauthenticated", "new detail", later);
+        assert_eq!(reports.len(), 2);
+        assert_eq!(reports[0].kind, Kind::Summary);
+        assert_eq!(reports[0].count, 100);
+        assert_eq!(reports[0].detail, "old detail");
+        assert_eq!(reports[1].kind, Kind::First);
+        assert_eq!(reports[1].count, 1);
+        assert_eq!(reports[1].detail, "new detail");
+        assert!(monitor.sweep_at(later).is_empty(), "no duplicate summary");
+
+        monitor.observe_at(Signal::AuthFailed, "unauthenticated", "new detail", later);
+        let reports = monitor.sweep_at(later + Duration::from_secs(300));
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].kind, Kind::Summary);
+        assert_eq!(reports[0].count, 2, "the new window has its own count");
+    }
+
+    #[test]
+    fn request_rollover_only_summarizes_occurrences_after_the_first_warning() {
+        for (signal, count, owes_summary) in [
+            (Signal::AuthFailed, 1, false),
+            (Signal::ReplayDuplicate, 9, false),
+            (Signal::ReplayDuplicate, 10, false),
+            (Signal::ReplayDuplicate, 11, true),
+        ] {
+            let monitor = monitor();
+            let now = Instant::now();
+            for _ in 0..count {
+                monitor.observe_at(signal, "subject", "old detail", now);
+            }
+            let later = now + Duration::from_secs(300);
+            let reports = monitor.observe_at(signal, "subject", "new detail", later);
+            let summaries: Vec<_> = reports
+                .iter()
+                .filter(|report| report.kind == Kind::Summary)
+                .collect();
+            assert_eq!(summaries.len(), usize::from(owes_summary));
+            if owes_summary {
+                assert_eq!(summaries[0].count, count);
+                assert_eq!(summaries[0].detail, "old detail");
+            }
+            assert_eq!(monitor.count_for(signal, "subject"), 1);
+            assert!(monitor.sweep_at(later).is_empty());
+        }
+    }
+
+    #[test]
+    fn request_cleanup_preserves_other_subjects_summaries() {
+        let monitor = monitor();
+        let now = Instant::now();
+        for i in 0..SWEEP_AT {
+            monitor.observe_at(Signal::AuthFailed, &format!("account:{i}"), "why", now);
+        }
+        for subject in ["account:0", "account:1"] {
+            monitor.observe_at(Signal::AuthFailed, subject, "why", now);
+        }
+
+        let later = now + Duration::from_secs(300);
+        let reports = monitor.observe_at(Signal::AuthFailed, "new-account", "new", later);
+        assert_eq!(reports.len(), 3);
+        for subject in ["account:0", "account:1"] {
+            assert!(reports.iter().any(|report| report.subject == subject
+                && report.kind == Kind::Summary
+                && report.count == 2));
+            assert_eq!(monitor.count_for(Signal::AuthFailed, subject), 0);
+        }
+        assert_eq!(reports[2].kind, Kind::First);
+        assert_eq!(reports[2].subject, "new-account");
+        assert!(
+            monitor.sweep_at(later).is_empty(),
+            "cleanup already collected the summaries"
+        );
+    }
+
+    /// Capture the actual sink's log, including its spawned delivery task.
+    struct Capture(tokio::sync::mpsc::UnboundedSender<String>);
+
+    #[derive(Default)]
+    struct LogFields(String);
+
+    impl tracing::field::Visit for LogFields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write;
+            write!(&mut self.0, " {field}={value:?}").unwrap();
+        }
+    }
+
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().target() == "vc_security" {
+                let mut fields = LogFields::default();
+                event.record(&mut fields);
+                let _ = self.0.send(fields.0);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn webhook_transport_errors_do_not_log_url_secrets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, mut logs) = tokio::sync::mpsc::unbounded_channel();
+        let _subscriber = tracing::subscriber::set_default(Capture(sender));
+        let mut sink = WebhookSink::new(Some(format!(
+            "http://{address}/api/webhooks/1/path-secret?token=query-secret"
+        )));
+        sink.http = reqwest::Client::builder().no_proxy().build().unwrap();
+        sink.send(&Report {
+            signal: Signal::AuthFailed,
+            subject: "unauthenticated".into(),
+            kind: Kind::First,
+            count: 1,
+            window_secs: 300,
+            detail: "no credential".into(),
+        });
+
+        // Close the connection without a response to force a transport error.
+        let (connection, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(connection);
+        drop(listener);
+        let log = tokio::time::timeout(Duration::from_secs(10), logs.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            log.contains("the security webhook could not be reached"),
+            "{log}"
+        );
+        assert!(log.contains("auth_failed"), "{log}");
+        for secret in ["path-secret", "query-secret", "http://", "/api/webhooks/"] {
+            assert!(!log.contains(secret), "{log}");
+        }
     }
 }
