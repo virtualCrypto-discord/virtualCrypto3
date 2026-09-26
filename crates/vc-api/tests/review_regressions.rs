@@ -20,6 +20,8 @@ fn payment_payload(money: &Money, id: &str) -> Value {
         money.user1,
     );
     payload["id"] = json!(id);
+    payload["application_id"] = json!("123");
+    payload["token"] = json!("pay-token");
     payload
 }
 
@@ -182,9 +184,10 @@ async fn identical_signed_payment_is_replayed_across_app_instances(pool: PgPool)
     let payload = payment_payload(&money, "900000000000000001");
     let body = serde_json::to_vec(&payload).unwrap();
     let (timestamp, signature) = sign_interaction(&body);
+    let discord = fake();
     let mut responses = Vec::new();
     for _ in 0..2 {
-        let app = vc_api::router(state(pool.clone(), fake()));
+        let app = vc_api::router(state(pool.clone(), discord.clone()));
         let request = Request::builder()
             .method("POST")
             .uri("/api/integrations/discord/interactions")
@@ -194,13 +197,17 @@ async fn identical_signed_payment_is_replayed_across_app_instances(pool: PgPool)
             .body(Body::from(body.clone()))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), 200);
+        assert_eq!(response.status(), 202);
         responses.push((
-            response.headers()["content-type"].clone(),
+            response.headers().get("content-type").cloned(),
             to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         ));
     }
     assert_eq!(responses[0], responses[1]);
+    assert!(responses[0].1.is_empty());
+    discord.payment_finished().await;
+    assert_eq!(discord.callbacks().len(), 1);
+    assert_eq!(discord.webhooks().len(), 1);
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         20
@@ -213,11 +220,12 @@ async fn identical_signed_payment_is_replayed_across_app_instances(pool: PgPool)
 
     // An intentional second payment has a new interaction id.
     let response = interaction(
-        vc_api::router(state(pool.clone(), fake())),
+        vc_api::router(state(pool.clone(), discord.clone())),
         payment_payload(&money, "900000000000000002"),
     )
     .await;
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, 202);
+    discord.payment_finished().await;
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         40
@@ -234,8 +242,10 @@ async fn simultaneous_duplicate_does_not_dispatch_or_cancel_the_owner(pool: PgPo
         .execute(&mut *gate)
         .await
         .unwrap();
+    let callback_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let discord = FakeDiscord::with_callback_gate(callback_gate.clone());
     let owner = tokio::spawn(interaction(
-        vc_api::router(state(pool.clone(), fake())),
+        vc_api::router(state(pool.clone(), discord.clone())),
         payload.clone(),
     ));
     wait_for_pending(&pool, "900000000000000003").await;
@@ -245,12 +255,13 @@ async fn simultaneous_duplicate_does_not_dispatch_or_cancel_the_owner(pool: PgPo
 
     // Dropping the HTTP waiter must not cancel a claimed financial operation.
     owner.abort();
+    callback_gate.add_permits(1);
     gate.rollback().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let response =
                 interaction(vc_api::router(state(pool.clone(), fake())), payload.clone()).await;
-            if response.status == 200 {
+            if response.status == 202 {
                 break;
             }
             assert_eq!(response.status, 409);
@@ -259,6 +270,8 @@ async fn simultaneous_duplicate_does_not_dispatch_or_cancel_the_owner(pool: PgPo
     })
     .await
     .unwrap();
+    discord.payment_finished().await;
+    assert_eq!(discord.callbacks().len(), 1);
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         20
@@ -834,7 +847,8 @@ async fn receipts_and_response_bodies_expire_without_allowing_old_signed_payment
     .execute(&pool)
     .await
     .unwrap();
-    let state = state(pool.clone(), fake());
+    let discord = fake();
+    let state = state(pool.clone(), discord.clone());
     vc_api::scheduler::purge_expired(&state).await;
     vc_api::scheduler::purge_expired(&state).await;
     let kept: Vec<String> = sqlx::query_scalar("SELECT id FROM discord_interactions ORDER BY id")
@@ -880,7 +894,8 @@ async fn receipts_and_response_bodies_expire_without_allowing_old_signed_payment
         payment_payload(&money, "900000000000000016"),
     )
     .await;
-    assert_eq!(fresh.status, 200);
+    assert_eq!(fresh.status, 202);
+    discord.payment_finished().await;
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         20

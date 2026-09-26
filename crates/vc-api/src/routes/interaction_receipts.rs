@@ -7,6 +7,8 @@
 //! response bodies are purged after 24 hours; the endpoint refuses signed
 //! requests older than five minutes, including after their receipt is gone.
 //! Neither the interaction token nor its request body is stored here.
+//! For commands acknowledged through Discord's callback, the saved 202 records
+//! acceptance, not completion; replay must not restart their background work.
 
 use axum::body::{Body, to_bytes};
 use axum::http::{StatusCode, header::CONTENT_TYPE};

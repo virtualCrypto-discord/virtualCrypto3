@@ -125,12 +125,18 @@ pub trait DiscordApi: Send + Sync {
         body: &Value,
     ) -> Result<(), DiscordError>;
 
-    /// Replace the loading response after a deferred interaction has been acknowledged.
+    /// Edit the original response after an interaction has been acknowledged.
     async fn edit_original_interaction_response(
         &self,
         application_id: &str,
         token: &str,
         body: &Value,
+    ) -> Result<(), DiscordError>;
+
+    async fn delete_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
     ) -> Result<(), DiscordError>;
 
     /// `post_webhook_message/3`: the follow-up a component answers with, which
@@ -405,6 +411,16 @@ impl DiscordApi for CachedDiscord {
     ) -> Result<(), DiscordError> {
         self.inner
             .post_webhook_message(application_id, token, body)
+            .await
+    }
+
+    async fn delete_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+    ) -> Result<(), DiscordError> {
+        self.inner
+            .delete_original_interaction_response(application_id, token)
             .await
     }
 
@@ -815,6 +831,30 @@ impl DiscordApi for HttpDiscordApi {
             )));
         }
 
+        Ok(())
+    }
+
+    async fn delete_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+    ) -> Result<(), DiscordError> {
+        let response = self
+            .http
+            .delete(self.endpoint(&format!(
+                "/webhooks/{application_id}/{token}/messages/@original"
+            )))
+            .send()
+            .await
+            .map_err(|_| {
+                DiscordError::Request("the interaction response could not be deleted".into())
+            })?;
+        if !response.status().is_success() {
+            return Err(DiscordError::Request(format!(
+                "the interaction response deletion answered {}",
+                response.status()
+            )));
+        }
         Ok(())
     }
 

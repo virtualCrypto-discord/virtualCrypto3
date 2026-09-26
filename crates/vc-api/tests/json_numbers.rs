@@ -278,7 +278,8 @@ async fn event_subscriptions_accept_integer_notations_and_reject_fractions(pool:
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn discord_commands_accept_integer_values_written_as_decimals(pool: PgPool) {
     support::setup_money(&pool).await;
-    let app = vc_api::router(state(pool.clone(), fake()));
+    let discord = fake();
+    let app = vc_api::router(state(pool.clone(), discord.clone()));
     let mut payload = support::execute_from_guild(
         json!({"name":"pay","options":[
             {"name":"user","type":6.0,"value":"100000000000000002"},
@@ -288,8 +289,11 @@ async fn discord_commands_accept_integer_values_written_as_decimals(pool: PgPool
         PARTY,
     );
     payload["type"] = json!(2.0);
+    payload["application_id"] = json!("123");
+    payload["token"] = json!("pay-token");
     let response = support::interaction(app, payload).await;
-    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.status, 202, "{}", response.body);
+    discord.payment_finished().await;
     assert_eq!(
         support::get_amount(&pool, 100_000_000_000_000_002, 1).await,
         1_020

@@ -75,9 +75,13 @@ pub struct FakeDiscord {
     callbacks: Mutex<Vec<Value>>,
     response_edits: Mutex<Vec<Value>>,
     response_edit_finished: tokio::sync::Notify,
+    response_deletions: AtomicUsize,
+    response_delete_finished: tokio::sync::Notify,
+    response_delete_error: bool,
     followup_gate: Option<Arc<tokio::sync::Semaphore>>,
     followup_error: bool,
     callback_error: bool,
+    callback_gate: Option<Arc<tokio::sync::Semaphore>>,
     followup_started: tokio::sync::Notify,
     followup_finished: tokio::sync::Notify,
 }
@@ -145,9 +149,13 @@ impl FakeDiscord {
             callbacks: Mutex::new(Vec::new()),
             response_edits: Mutex::new(Vec::new()),
             response_edit_finished: tokio::sync::Notify::new(),
+            response_deletions: AtomicUsize::new(0),
+            response_delete_finished: tokio::sync::Notify::new(),
+            response_delete_error: false,
             followup_gate: None,
             followup_error: false,
             callback_error: false,
+            callback_gate: None,
             followup_started: tokio::sync::Notify::new(),
             followup_finished: tokio::sync::Notify::new(),
         }
@@ -277,6 +285,33 @@ impl FakeDiscord {
         let mut api = Self::new();
         api.callback_error = true;
         Arc::new(api)
+    }
+
+    pub fn with_callback_gate(gate: Arc<tokio::sync::Semaphore>) -> Arc<Self> {
+        let mut api = Self::new();
+        api.callback_gate = Some(gate);
+        Arc::new(api)
+    }
+
+    pub fn with_response_delete_error() -> Arc<Self> {
+        let mut api = Self::new();
+        api.response_delete_error = true;
+        Arc::new(api)
+    }
+
+    pub fn response_deletions(&self) -> usize {
+        self.response_deletions.load(Ordering::SeqCst)
+    }
+
+    pub async fn payment_finished(&self) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                () = self.response_edit_finished.notified() => {},
+                () = self.response_delete_finished.notified() => {},
+            }
+        })
+        .await
+        .expect("payment delivered its final response");
     }
 
     pub fn callbacks(&self) -> Vec<Value> {
@@ -410,6 +445,9 @@ impl DiscordApi for FakeDiscord {
         assert!(!interaction_id.is_empty());
         assert!(!token.is_empty());
         discord_schema::Payload::InteractionResponse.assert_valid(body);
+        if let Some(gate) = &self.callback_gate {
+            let _permit = gate.acquire().await.unwrap();
+        }
         if self.callback_error {
             return Err(DiscordError::Request("simulated callback failure".into()));
         }
@@ -460,6 +498,27 @@ impl DiscordApi for FakeDiscord {
             .push(body.clone());
         self.followup_finished.notify_one();
 
+        Ok(())
+    }
+
+    async fn delete_original_interaction_response(
+        &self,
+        application_id: &str,
+        token: &str,
+    ) -> Result<(), DiscordError> {
+        assert!(!application_id.is_empty());
+        assert!(!token.is_empty());
+        assert!(
+            !self.webhooks().is_empty(),
+            "deleted before public success was sent"
+        );
+        if self.response_delete_error {
+            return Err(DiscordError::Request(
+                "simulated response deletion failure".into(),
+            ));
+        }
+        self.response_deletions.fetch_add(1, Ordering::SeqCst);
+        self.response_delete_finished.notify_one();
         Ok(())
     }
 

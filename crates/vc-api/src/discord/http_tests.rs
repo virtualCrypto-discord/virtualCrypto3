@@ -254,6 +254,29 @@ async fn original_interaction_response_is_patched_and_errors_are_sanitized() {
 }
 
 #[tokio::test]
+async fn original_response_deletion_uses_delete_and_sanitizes_errors() {
+    let (client, server) = server(vec![(204, Value::Null), (403, json!({"code": 50013}))]).await;
+    let cached = CachedDiscord::new(Arc::new(client));
+    cached
+        .delete_original_interaction_response("123", "test-token")
+        .await
+        .unwrap();
+    let error = cached
+        .delete_original_interaction_response("123", "test-token")
+        .await
+        .unwrap_err();
+    assert!(!error.to_string().contains("test-token"));
+    let requests = server.wire.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].0,
+        "/api/webhooks/123/test-token/messages/@original"
+    );
+    assert_eq!(requests[0].2, axum::http::Method::DELETE);
+    assert!(requests[0].1.is_empty());
+}
+
+#[tokio::test]
 async fn failed_lookups_release_flight_locks() {
     let entries = Entries::<i64>::new();
     for key in 0..100 {

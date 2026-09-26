@@ -146,6 +146,18 @@ deciding whether another payment is needed. The receipt temporarily stores the
 response (including ephemeral response content), but not the incoming
 interaction token or request body.
 
+`/pay` first sends a private "処理中…" message (`type: 4`, `EPHEMERAL`) through
+Discord's callback endpoint. Only after Discord accepts it does the payment
+start; a failed or timed-out acknowledgement does not transfer funds. Success is
+sent as a public follow-up, then the private processing message is deleted.
+Errors replace the private message. If publishing or deleting fails after a
+successful payment, the private message is updated with the known success.
+Notification failures do not retry the payment.
+
+The endpoint returns an empty HTTP 202 after acknowledgement. Its receipt records
+acceptance, so replaying that 202 never restarts the payment, including while it
+is still running. Long database waits happen after the initial Discord response.
+
 ## Runtime timeouts
 
 The runtime database pool sets `statement_timeout` to 30 seconds on every new

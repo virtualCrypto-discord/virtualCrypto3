@@ -341,6 +341,14 @@ async fn command(state: &AppState, payload: &Value) -> Response {
         .map(|options| crate::command::parse_options(options))
         .unwrap_or_default();
 
+    if name == "pay" {
+        return match crate::command::pay::respond(state, &options, payload).await {
+            Ok(response) => response,
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     match crate::command::handle(state, name, &options, payload).await {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
         Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
