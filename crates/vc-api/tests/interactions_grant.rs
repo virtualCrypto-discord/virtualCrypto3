@@ -22,7 +22,8 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
     DEFAULT_GUILD, DEFAULT_PERMISSIONS, Recorded, Response, button_from_guild, client_id_of, fake,
-    insert_application, insert_currency, interaction, state, state_with_notifier,
+    insert_application, insert_currency, rendered_interaction as interaction, state,
+    state_with_notifier,
 };
 use tower::ServiceExt;
 use vc_api::custom_id::ui::grant::{Page, page_custom_id};
@@ -43,14 +44,18 @@ const FIRST_OWNER: i64 = 910_000_000_000_000_001;
 const EMPTY: &str = "発行を許可しているアプリケーションはありません。申請が来たときは、\
                      アプリケーションが表示するコードを `/grant approve code:` に入れて承認します。";
 
-fn router(pool: PgPool) -> Router {
-    vc_api::router(state(pool, fake()))
+fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
+    vc_api::router(state(pool, discord))
 }
 
 /// The same router, with the decisions told to `notified` rather than to
 /// nobody.
-fn router_with(pool: PgPool, notified: Arc<Recorded>) -> Router {
-    vc_api::router(state_with_notifier(pool, fake(), notified))
+fn router_with(
+    discord: Arc<support::FakeDiscord>,
+    pool: PgPool,
+    notified: Arc<Recorded>,
+) -> Router {
+    vc_api::router(state_with_notifier(pool, discord, notified))
 }
 
 /// An application with a name, which is what the screens show, and its pending
@@ -173,10 +178,12 @@ async fn request_status(pool: &PgPool, application: i64) -> String {
 /// shows the administrator, and the list is what the guild may act on.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_ask_is_not_on_the_list(pool: PgPool) {
+    let discord = fake();
     fixture(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
@@ -188,6 +195,7 @@ async fn an_ask_is_not_on_the_list(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
+    let discord = fake();
     use vc_api::custom_id::ui::grant as ids;
     use vc_core::grant::Target;
 
@@ -197,7 +205,7 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
     let account = support::account_of(&pool, application).await;
     let client_id = client_id_of(&pool, application).await;
     let token = support::mint_app(&pool, account, &["oauth2.register"]).await;
-    let http = router(pool.clone());
+    let http = router(discord.clone(), pool.clone());
     // This name is accepted through the real API. Only its presentation changes.
     let patch = axum::http::Request::builder()
         .method("PATCH")
@@ -261,16 +269,22 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
                 Target::User(_) => from_dm(ADMIN, options),
                 Target::Guild(_) => grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, options),
             };
-            let review =
-                interaction(http.clone(), command(approve_options(&asked.user_code))).await;
+            let review = interaction(
+                discord.clone(),
+                http.clone(),
+                command(approve_options(&asked.user_code)),
+            )
+            .await;
             check(&review);
             let page = interaction(
+                discord.clone(),
                 http.clone(),
                 press_as(command(json!([])), &ids::review_page_custom_id(asked.id, 1)),
             )
             .await;
             check(&page);
             interaction(
+                discord.clone(),
                 http.clone(),
                 press_as(command(json!([])), &buttons(&review)[0]),
             )
@@ -281,12 +295,13 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
                     .fetch_one(&pool)
                     .await
                     .unwrap();
-            let list = interaction(
+            let list = interaction(discord.clone(),
                 http.clone(),
                 command(json!([{"name": if matches!(target, Target::User(_)) { "user" } else { "server" }, "type":1}])),
             ).await;
             check(&list);
             let details = interaction(
+                discord.clone(),
                 http.clone(),
                 press_as(command(json!([])), &ids::details_custom_id(grant_id, 1)),
             )
@@ -298,6 +313,7 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_shows_who_may_issue(pool: PgPool) {
+    let discord = fake();
     let (app, client_id) = authorized(&pool, FIRST_OWNER, "an application").await;
     let grant_id = vc_core::grant::grant_for(&pool, app, DEFAULT_GUILD)
         .await
@@ -305,7 +321,8 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
         .unwrap();
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
@@ -334,6 +351,7 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
 /// difference the screen exists to show.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
+    let discord = fake();
     const CURRENCY: i64 = 7;
 
     insert_currency(&pool, CURRENCY, "nyan", "nyan", DEFAULT_GUILD, 500).await;
@@ -352,7 +370,8 @@ async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
     let client_id = client_id_of(&pool, application).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
@@ -368,15 +387,17 @@ async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn approving_the_code_writes_the_grant(pool: PgPool) {
+    let discord = fake();
     let (application, user_code) = fixture(&pool).await;
 
     let response = approve_and_confirm(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
         ["発行を許可しました。この申請は、すべての通貨を操作できます。"]
@@ -390,6 +411,7 @@ async fn approving_the_code_writes_the_grant(pool: PgPool) {
 /// the narrowing they just approved was.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
+    let discord = fake();
     const CURRENCY: i64 = 7;
 
     insert_currency(&pool, CURRENCY, "nyan", "nyan", DEFAULT_GUILD, 500).await;
@@ -411,7 +433,8 @@ async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
     .expect("an ask");
 
     let response = approve_and_confirm(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(
             ADMIN,
             DEFAULT_PERMISSIONS,
@@ -420,7 +443,7 @@ async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
         ["発行を許可しました。この申請は、通貨 nyan だけを操作できます。"]
@@ -430,11 +453,13 @@ async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
 /// And the application it was written for is what the list then shows.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn approving_puts_the_application_on_the_list(pool: PgPool) {
+    let discord = fake();
     let (application, user_code) = fixture(&pool).await;
     let client_id = client_id_of(&pool, application).await;
 
     approve_and_confirm(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
     .await;
@@ -446,7 +471,8 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
             .await
             .unwrap();
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
@@ -465,10 +491,12 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
+    let discord = fake();
     fixture(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options("deadbeef")),
     )
     .await;
@@ -486,10 +514,12 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
 /// device polls for is written from the request it made.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_grant_carries_the_asked_scopes(pool: PgPool) {
+    let discord = fake();
     let (application, user_code) = fixture(&pool).await;
 
     approve_and_confirm(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
     .await;
@@ -513,11 +543,13 @@ async fn the_grant_carries_the_asked_scopes(pool: PgPool) {
 /// row.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn pressing_revoke_takes_the_permission_back(pool: PgPool) {
+    let discord = fake();
     let (application, client_id) = authorized(&pool, FIRST_OWNER, "an application").await;
     let notified = Arc::new(Recorded::default());
 
     let response = interaction(
-        router_with(pool.clone(), notified.clone()),
+        discord.clone(),
+        router_with(discord.clone(), pool.clone(), notified.clone()),
         button_from_guild(
             json!({ "custom_id": revoke_button(&pool, &client_id).await }),
             ADMIN,
@@ -525,7 +557,7 @@ async fn pressing_revoke_takes_the_permission_back(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], 7, "a redraw: {}", response.body);
     assert_eq!(texts(&response), [EMPTY]);
     assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
@@ -541,6 +573,7 @@ async fn pressing_revoke_takes_the_permission_back(pool: PgPool) {
 /// screen was drawn with.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
+    let discord = fake();
     let (application, client_id) = authorized(&pool, FIRST_OWNER, "an application").await;
 
     let payload = json!({
@@ -550,9 +583,14 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
         "guild_id": DEFAULT_GUILD.to_string(),
     });
 
-    let response = interaction(router(pool.clone()), payload).await;
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        payload,
+    )
+    .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
         ["エラー: This grant is no longer available."]
@@ -565,6 +603,7 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
 /// names is the page the redraw shows.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_pages(pool: PgPool) {
+    let discord = fake();
     let mut client_ids = Vec::new();
 
     for index in 0..6 {
@@ -579,7 +618,8 @@ async fn the_list_pages(pool: PgPool) {
     }
 
     let first = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
     .await;
@@ -603,7 +643,8 @@ async fn the_list_pages(pool: PgPool) {
     );
 
     let second = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         button_from_guild(json!({ "custom_id": page_custom_id(Page::Next, 2) }), ADMIN),
     )
     .await;
@@ -639,7 +680,8 @@ async fn the_list_pages(pool: PgPool) {
 
     for arrow in [&arrows[0], &arrows[1]] {
         let back = interaction(
-            router(pool.clone()),
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
             button_from_guild(json!({ "custom_id": arrow }), ADMIN),
         )
         .await;
@@ -665,7 +707,8 @@ async fn the_list_pages(pool: PgPool) {
 
     // And ⏩ from the first screen: the end of the list, which is where ⏭️ went.
     let last = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         button_from_guild(json!({ "custom_id": buttons(&first)[8] }), ADMIN),
     )
     .await;
@@ -690,11 +733,13 @@ async fn the_list_pages(pool: PgPool) {
 /// its token may still do without polling for the difference.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_decision_pings_the_application(pool: PgPool) {
+    let discord = fake();
     let (application, user_code) = fixture(&pool).await;
     let notified = Arc::new(Recorded::default());
 
     approve_and_confirm(
-        router_with(pool.clone(), notified.clone()),
+        discord.clone(),
+        router_with(discord.clone(), pool.clone(), notified.clone()),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&user_code)),
     )
     .await;
@@ -708,7 +753,8 @@ async fn a_decision_pings_the_application(pool: PgPool) {
     let client_id = client_id_of(&pool, application).await;
 
     interaction(
-        router_with(pool.clone(), notified.clone()),
+        discord.clone(),
+        router_with(discord.clone(), pool.clone(), notified.clone()),
         button_from_guild(
             json!({ "custom_id": revoke_button(&pool, &client_id).await }),
             ADMIN,
@@ -725,10 +771,12 @@ async fn a_decision_pings_the_application(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_command_needs_the_administrator_bit(pool: PgPool) {
+    let discord = fake();
     let (_, user_code) = fixture(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         grant_from_guild(ADMIN, NOT_ADMIN, approve_options(&user_code)),
     )
     .await;
@@ -744,6 +792,7 @@ async fn the_command_needs_the_administrator_bit(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_command_is_refused_in_a_direct_message(pool: PgPool) {
+    let discord = fake();
     fixture(&pool).await;
 
     let payload = json!({
@@ -752,21 +801,25 @@ async fn the_command_is_refused_in_a_direct_message(pool: PgPool) {
         "user": { "id": ADMIN.to_string() },
     });
 
-    let response = interaction(router(pool), payload).await;
+    let response = interaction(discord.clone(), router(discord.clone(), pool), payload).await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), ["エラー: DMでは実行できません。"]);
 }
 
-async fn approve_and_confirm(app: Router, payload: Value) -> Response {
-    let reviewed = interaction(app.clone(), payload.clone()).await;
+async fn approve_and_confirm(
+    discord: Arc<support::FakeDiscord>,
+    app: Router,
+    payload: Value,
+) -> Response {
+    let reviewed = interaction(discord.clone(), app.clone(), payload.clone()).await;
     let Some(id) = buttons(&reviewed).first().cloned() else {
         return reviewed;
     };
     let mut press = payload;
     press["type"] = json!(3);
     press["data"] = json!({"custom_id":id,"component_type":2});
-    interaction(app, press).await
+    interaction(discord.clone(), app, press).await
 }
 
 fn from_dm(user: i64, options: Value) -> Value {
@@ -804,6 +857,7 @@ async fn grant_count(pool: &PgPool) -> i64 {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
+    let discord = fake();
     let app = insert_application(&pool, FIRST_OWNER, "personal app").await;
     // No preexisting user row: first consent must create a usable account.
     let asked = personal_request(
@@ -814,9 +868,9 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     )
     .await;
     let notified = Arc::new(Recorded::default());
-    let http = router_with(pool.clone(), notified.clone());
+    let http = router_with(discord.clone(), pool.clone(), notified.clone());
     let command = from_dm(ADMIN, approve_options(&asked.user_code));
-    let review = interaction(http.clone(), command.clone()).await;
+    let review = interaction(discord.clone(), http.clone(), command.clone()).await;
     let description = texts(&review).join("\n");
     assert!(description.contains("personal app"));
     assert!(description.contains("Your account"));
@@ -828,6 +882,7 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     assert!(confirm.chars().count() <= 100);
     // A copied button does not let another user consent, even as a guild admin.
     interaction(
+        discord.clone(),
         http.clone(),
         press_as(
             grant_from_guild(ADMIN + 1, DEFAULT_PERMISSIONS, json!([])),
@@ -837,11 +892,15 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     .await;
     assert_eq!(grant_count(&pool).await, 0);
     let (one, two) = tokio::join!(
-        interaction(http.clone(), press_as(command.clone(), &confirm)),
-        interaction(http.clone(), press_as(command, &confirm))
+        interaction(
+            discord.clone(),
+            http.clone(),
+            press_as(command.clone(), &confirm)
+        ),
+        interaction(discord.clone(), http.clone(), press_as(command, &confirm))
     );
-    assert_eq!(one.status, 200);
-    assert_eq!(two.status, 200);
+    assert_eq!(one.status, 202);
+    assert_eq!(two.status, 202);
     assert_eq!(grant_count(&pool).await, 1);
     assert_eq!(notified.personal_grant_decisions().len(), 1);
     // Poll through the real token endpoint, then exercise the resulting account token.
@@ -855,6 +914,7 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
         200
     );
     let list = interaction(
+        discord.clone(),
         http.clone(),
         from_dm(ADMIN, json!([{"name":"user","type":1}])),
     )
@@ -866,12 +926,18 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     );
     let revoke = buttons(&list)[0].clone();
     interaction(
+        discord.clone(),
         http.clone(),
         press_as(from_dm(ADMIN + 1, json!([])), &revoke),
     )
     .await;
     assert_eq!(grant_count(&pool).await, 1);
-    interaction(http.clone(), press_as(from_dm(ADMIN, json!([])), &revoke)).await;
+    interaction(
+        discord.clone(),
+        http.clone(),
+        press_as(from_dm(ADMIN, json!([])), &revoke),
+    )
+    .await;
     assert_eq!(grant_count(&pool).await, 0);
     assert_eq!(
         support::get(http, "/api/v2/users/@me/balances", Some(token))
@@ -892,16 +958,19 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn personal_approval_in_a_guild_does_not_need_admin(pool: PgPool) {
+    let discord = fake();
     let app = insert_application(&pool, FIRST_OWNER, "personal app").await;
     let asked = personal_request(&pool, app, ADMIN, &["vc.delegate.profile.read"]).await;
     approve_and_confirm(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         grant_from_guild(ADMIN, NOT_ADMIN, approve_options(&asked.user_code)),
     )
     .await;
     assert_eq!(grant_count(&pool).await, 1);
     let other = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_dm(ADMIN + 1, approve_options(&asked.user_code)),
     )
     .await;
@@ -910,37 +979,45 @@ async fn personal_approval_in_a_guild_does_not_need_admin(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool) {
+    let discord = fake();
     let (_, code) = fixture(&pool).await;
-    let http = router(pool.clone());
+    let http = router(discord.clone(), pool.clone());
     let payload = grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&code));
-    let review = interaction(http.clone(), payload.clone()).await;
+    let review = interaction(discord.clone(), http.clone(), payload.clone()).await;
     assert_eq!(grant_count(&pool).await, 0);
     assert!(texts(&review).join("\n").contains("This server"));
     let confirm = buttons(&review)[0].clone();
     interaction(
+        discord.clone(),
         http.clone(),
         press_as(grant_from_guild(ADMIN, NOT_ADMIN, json!([])), &confirm),
     )
     .await;
     let mut wrong = payload.clone();
     wrong["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());
-    interaction(http.clone(), press_as(wrong, &confirm)).await;
-    interaction(http.clone(), press_as(from_dm(ADMIN, json!([])), &confirm)).await;
+    interaction(discord.clone(), http.clone(), press_as(wrong, &confirm)).await;
+    interaction(
+        discord.clone(),
+        http.clone(),
+        press_as(from_dm(ADMIN, json!([])), &confirm),
+    )
+    .await;
     assert_eq!(grant_count(&pool).await, 0);
     sqlx::query("UPDATE grant_requests SET inserted_at=inserted_at-interval '1 hour'")
         .execute(&pool)
         .await
         .unwrap();
-    interaction(http, press_as(payload, &confirm)).await;
+    interaction(discord.clone(), http, press_as(payload, &confirm)).await;
     assert_eq!(grant_count(&pool).await, 0);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_old_confirmation_cannot_approve_a_reused_code(pool: PgPool) {
+    let discord = fake();
     let (app, code) = fixture(&pool).await;
-    let http = router(pool.clone());
+    let http = router(discord.clone(), pool.clone());
     let payload = grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&code));
-    let review = interaction(http.clone(), payload.clone()).await;
+    let review = interaction(discord.clone(), http.clone(), payload.clone()).await;
     let confirm = buttons(&review)[0].clone();
     sqlx::query("UPDATE grant_requests SET inserted_at=inserted_at-interval '1 hour'")
         .execute(&pool)
@@ -963,7 +1040,7 @@ async fn an_old_confirmation_cannot_approve_a_reused_code(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    interaction(http, press_as(payload, &confirm)).await;
+    interaction(discord.clone(), http, press_as(payload, &confirm)).await;
     assert_eq!(grant_count(&pool).await, 0);
     assert_eq!(request_status(&pool, app).await, "pending");
 }
@@ -997,6 +1074,7 @@ async fn pending_codes_are_global_and_random_collisions_retry(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) {
+    let discord = fake();
     let mut apps = Vec::new();
     for index in 0..5 {
         let app =
@@ -1007,28 +1085,32 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
             .collect();
         let asked = personal_request(&pool, app, ADMIN, &scopes).await;
         approve_and_confirm(
-            router(pool.clone()),
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
             from_dm(ADMIN, approve_options(&asked.user_code)),
         )
         .await;
         apps.push(app);
     }
     let list = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         from_dm(ADMIN, json!([{"name":"user","type":1}])),
     )
     .await;
     assert!(texts(&list).join("\n").contains("Page 1/3"));
     let last = vc_api::custom_id::ui::grant::user_page_custom_id(ADMIN, 3);
     let last_page = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         press_as(from_dm(ADMIN, json!([])), &last),
     )
     .await;
     assert!(texts(&last_page).join("\n").contains("Page 3/3"));
     let requested = personal_request(&pool, apps[0], ADMIN, &["vc.delegate.profile.read"]).await;
     approve_and_confirm(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         from_dm(ADMIN, approve_options(&requested.user_code)),
     )
     .await;
@@ -1048,7 +1130,12 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
                 .unwrap()
         );
     }
-    let clamped = interaction(router(pool), press_as(from_dm(ADMIN, json!([])), &last)).await;
+    let clamped = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        press_as(from_dm(ADMIN, json!([])), &last),
+    )
+    .await;
     assert!(texts(&clamped).join("\n").contains("Page 1/1"));
 }
 
@@ -1085,6 +1172,7 @@ async fn poll_personal(pool: &PgPool, application: i64, device_code: &str) -> (u
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool: PgPool) {
+    let discord = fake();
     use vc_api::custom_id::ui::grant as ids;
     let app = insert_application(&pool, FIRST_OWNER, "normal").await;
     let mut resources = Vec::new();
@@ -1114,8 +1202,9 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
     )
     .await
     .unwrap();
-    let http = router(pool.clone());
+    let http = router(discord.clone(), pool.clone());
     let first = interaction(
+        discord.clone(),
         http.clone(),
         from_dm(ADMIN, approve_options(&asked.user_code)),
     )
@@ -1132,6 +1221,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
         // The request has 400 ten-character entries, spread across five pages.
         for page in 2..=end {
             current = interaction(
+                discord.clone(),
                 http.clone(),
                 press_as(
                     from_dm(ADMIN, json!([])),
@@ -1146,6 +1236,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
         assert!(displayed.contains(unit), "missing {unit}");
     }
     let denied = interaction(
+        discord.clone(),
         http.clone(),
         press_as(
             from_dm(ADMIN + 1, json!([])),
@@ -1155,6 +1246,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
     .await;
     assert!(buttons(&denied).is_empty());
     interaction(
+        discord.clone(),
         http.clone(),
         press_as(from_dm(ADMIN, json!([])), &ids::confirm_custom_id(asked.id)),
     )
@@ -1165,6 +1257,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
         .await
         .unwrap();
     let list = interaction(
+        discord.clone(),
         http.clone(),
         from_dm(ADMIN, json!([{"name":"user","type":1}])),
     )
@@ -1172,6 +1265,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
     assert!(texts(&list).join("\n").contains("400 currencies"));
     assert!(buttons(&list).contains(&ids::details_custom_id(grant, 1)));
     let details = interaction(
+        discord.clone(),
         http.clone(),
         press_as(
             from_dm(ADMIN, json!([])),
@@ -1185,6 +1279,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
             .contains(expected.last().unwrap())
     );
     let denied = interaction(
+        discord.clone(),
         http.clone(),
         press_as(
             from_dm(ADMIN + 1, json!([])),
@@ -1195,12 +1290,14 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
     assert!(buttons(&denied).is_empty());
     let second = personal_request(&pool, app, ADMIN, &["vc.delegate.profile.read"]).await;
     approve_and_confirm(
+        discord.clone(),
         http.clone(),
         from_dm(ADMIN, approve_options(&second.user_code)),
     )
     .await;
     assert_eq!(grant_count(&pool).await, 2);
     interaction(
+        discord.clone(),
         http,
         press_as(from_dm(ADMIN, json!([])), &ids::revoke_one_custom_id(grant)),
     )
@@ -1227,6 +1324,7 @@ async fn revoke_button(pool: &PgPool, client: &str) -> String {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool) {
+    let discord = fake();
     use vc_api::custom_id::ui::grant as ids;
     let app = insert_application(&pool, FIRST_OWNER, "server app").await;
     insert_currency(&pool, 1, "nyan", "nyan", DEFAULT_GUILD, 100).await;
@@ -1266,9 +1364,10 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
     .await
     .unwrap();
     assert_ne!(a.id, b.id);
-    let http = router(pool.clone());
+    let http = router(discord.clone(), pool.clone());
     for asked in [&a, &b] {
         approve_and_confirm(
+            discord.clone(),
             http.clone(),
             grant_from_guild(
                 ADMIN,
@@ -1319,6 +1418,7 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
         Some(legacy)
     );
     let list = interaction(
+        discord.clone(),
         http.clone(),
         grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
     )
@@ -1329,10 +1429,16 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
     let revoke = ids::revoke_one_custom_id(ga);
     let mut other_guild = button_from_guild(json!({"custom_id":revoke}), ADMIN);
     other_guild["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());
-    interaction(http.clone(), other_guild).await;
-    interaction(http.clone(), press_as(from_dm(ADMIN, json!([])), &revoke)).await;
+    interaction(discord.clone(), http.clone(), other_guild).await;
+    interaction(
+        discord.clone(),
+        http.clone(),
+        press_as(from_dm(ADMIN, json!([])), &revoke),
+    )
+    .await;
     assert_eq!(grant_count(&pool).await, 3);
     interaction(
+        discord.clone(),
         http.clone(),
         button_from_guild(json!({"custom_id":revoke}), ADMIN),
     )
@@ -1361,6 +1467,7 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
     // A stale application-wide button must never revoke a later independent grant.
     let client = client_id_of(&pool, app).await;
     interaction(
+        discord.clone(),
         http,
         button_from_guild(json!({"custom_id":ids::revoke_custom_id(&client)}), ADMIN),
     )

@@ -213,6 +213,7 @@ async fn repeated_menu_values_are_saved_once(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn discord_inputs_share_the_limits_and_overlong_submissions_are_explained(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, 1, OWNER).await;
     let app = insert_application(&pool, OWNER, "before").await;
     let client_id = client_id_of(&pool, app).await;
@@ -229,8 +230,9 @@ async fn discord_inputs_share_the_limits_and_overlong_submissions_are_explained(
             limit
         );
     }
-    let response = interaction(
-        vc_api::router(state(pool.clone(), fake())),
+    let response = support::rendered_interaction(
+        discord.clone(),
+        vc_api::router(state(pool.clone(), discord)),
         json!({
             "type":5, "user":{"id":OWNER.to_string()},
             "data":{"custom_id":custom_id_for_field(Screen::Edit, &client_id, "client_name"),
@@ -240,7 +242,7 @@ async fn discord_inputs_share_the_limits_and_overlong_submissions_are_explained(
         }),
     )
     .await;
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, 202);
     assert!(
         response
             .body

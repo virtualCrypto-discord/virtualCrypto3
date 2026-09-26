@@ -170,6 +170,16 @@ is sent privately without changing its screen, with the same edit fallback.
 All these mutations start only after a successful acknowledgement, and result
 delivery failures never repeat them.
 
+The same ordering applies to `/create`, `/pat create|revoke`, `/mute` and
+`/unmute` changes, `/application register`, and currency deletion submissions.
+They acknowledge privately and replace the message with the result. Grant
+approval/revocation, mute removal buttons, and application setting/bot selectors
+acknowledge with `type: 6` before updating their private screen. A separate private
+refusal remains a follow-up, with an edit fallback if delivery fails. Every
+application settings form submission uses the existing private `type: 5` path,
+including edits with no webhook handshake. Buttons opening modals and read-only
+navigation keep their inline responses.
+
 These paths return an empty HTTP 202 after acknowledgement. Its receipt records
 acceptance, so replaying that 202 never restarts the operation, including while it
 is still running. Long database waits happen after the initial Discord response.

@@ -182,13 +182,9 @@ async fn modal(state: &AppState, payload: &Value) -> Response {
     if let Ok((screen, client_id)) =
         crate::custom_id::ui::developer::parse(&crate::custom_id::parse(custom_id))
     {
-        if matches!(screen, crate::custom_id::ui::developer::Screen::Edit)
-            && crate::command::application::verifies_webhook(payload)
-        {
-            return match crate::command::application::deferred_webhook_edit(
-                state, &client_id, payload,
-            )
-            .await
+        if matches!(screen, crate::custom_id::ui::developer::Screen::Edit) {
+            return match crate::command::application::deferred_edit(state, &client_id, payload)
+                .await
             {
                 Ok(response) => response,
                 Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
@@ -205,13 +201,12 @@ async fn modal(state: &AppState, payload: &Value) -> Response {
     let path = crate::custom_id::ui::modal::parse(&crate::custom_id::parse(custom_id));
 
     match path {
-        Ok((["delete", "confirm"], _)) => {
-            match crate::command::delete::confirm(state, payload).await {
-                Ok(body) => (StatusCode::OK, Json(body)).into_response(),
-                Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
-                Err(CommandError::Internal(error)) => error.into_response(),
-            }
-        }
+        Ok((["delete", "confirm"], _)) => management_response(
+            crate::command::response::run(state, payload, false, |state, payload| async move {
+                crate::command::delete::confirm(&state, &payload).await
+            })
+            .await,
+        ),
         _ => text(StatusCode::BAD_REQUEST, "Type Not Found"),
     }
 }
@@ -231,8 +226,22 @@ async fn component(state: &AppState, payload: &Value) -> Response {
     // The developer screens have a head byte of their own, so trying them first cannot read a
     // button that belongs to another screen — which is what their ids are for.
     if let Some(custom_id) = custom_id
-        && crate::custom_id::ui::developer::parse(&crate::custom_id::parse(custom_id)).is_ok()
+        && let Ok((screen, _)) =
+            crate::custom_id::ui::developer::parse(&crate::custom_id::parse(custom_id))
     {
+        use crate::custom_id::ui::developer::Screen;
+        if matches!(
+            (component_type, screen),
+            (Some(3), Screen::Edit) | (Some(5), Screen::Connect)
+        ) {
+            let custom_id = custom_id.to_owned();
+            return management_response(
+                crate::command::response::run(state, payload, true, |state, payload| async move {
+                    crate::command::application::component(&state, &custom_id, &payload).await
+                })
+                .await,
+            );
+        }
         return match crate::command::application::component(state, custom_id, payload).await {
             Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
@@ -268,8 +277,18 @@ async fn component(state: &AppState, payload: &Value) -> Response {
     // The grant buttons carry a head byte of their own, for the same reason: each
     // names the application whose permission it takes back.
     if let Some(custom_id) = custom_id
-        && crate::custom_id::ui::grant::parse(&crate::custom_id::parse(custom_id)).is_ok()
+        && let Ok(pressed) = crate::custom_id::ui::grant::parse(&crate::custom_id::parse(custom_id))
     {
+        use crate::custom_id::ui::grant::Pressed;
+        if matches!(pressed, Pressed::Confirmed(_) | Pressed::RevokeOne(_)) {
+            let custom_id = custom_id.to_owned();
+            return management_response(
+                crate::command::response::run(state, payload, true, |state, payload| async move {
+                    crate::command::grant::component(&state, &custom_id, &payload).await
+                })
+                .await,
+            );
+        }
         return match crate::command::grant::component(state, custom_id, payload).await {
             Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
@@ -291,8 +310,18 @@ async fn component(state: &AppState, payload: &Value) -> Response {
     // The mutes screen's arrows and its one button per row, which name the currency or the
     // person a press puts back.
     if let Some(custom_id) = custom_id
-        && crate::custom_id::ui::mute::parse(&crate::custom_id::parse(custom_id)).is_ok()
+        && let Ok(pressed) = crate::custom_id::ui::mute::parse(&crate::custom_id::parse(custom_id))
     {
+        use crate::custom_id::ui::mute::Pressed;
+        if matches!(pressed, Pressed::Currency(_) | Pressed::User(_)) {
+            let custom_id = custom_id.to_owned();
+            return management_response(
+                crate::command::response::run(state, payload, true, |state, payload| async move {
+                    crate::command::mute::component(&state, &custom_id, &payload).await
+                })
+                .await,
+            );
+        }
         return match crate::command::mute::component(state, custom_id, payload).await {
             Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
@@ -359,8 +388,34 @@ async fn command(state: &AppState, payload: &Value) -> Response {
         };
     }
 
+    let subcommand = options.get("subcommand").and_then(Value::as_str);
+    let management = match name {
+        "create" => true,
+        "pat" => matches!(subcommand, Some("create" | "revoke")),
+        "mute" | "unmute" => matches!(subcommand, Some("currency" | "user")),
+        "application" => subcommand == Some("register"),
+        _ => false,
+    };
+    if management {
+        let name = name.to_owned();
+        return management_response(
+            crate::command::response::run(state, payload, false, |state, payload| async move {
+                crate::command::handle(&state, &name, &options, &payload).await
+            })
+            .await,
+        );
+    }
+
     match crate::command::handle(state, name, &options, payload).await {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+        Err(CommandError::Internal(error)) => error.into_response(),
+    }
+}
+
+fn management_response(result: Result<Response, CommandError>) -> Response {
+    match result {
+        Ok(response) => response,
         Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
         Err(CommandError::Internal(error)) => error.into_response(),
     }

@@ -1,9 +1,58 @@
 use std::{sync::Arc, time::Duration};
 
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::{Value, json};
 
 use super::CommandError;
 use crate::{discord::DiscordApi, state::AppState};
+
+/// Run a private management operation only after Discord accepts its callback.
+/// Commands and modal submissions create a private message; buttons update their
+/// existing private screen. A type 4 refusal from a button remains a separate reply.
+pub(crate) async fn run<F, Fut>(
+    state: &AppState,
+    payload: &Value,
+    update: bool,
+    operation: F,
+) -> Result<Response, CommandError>
+where
+    F: FnOnce(AppState, Value) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<Value, CommandError>> + Send,
+{
+    let reply = if update {
+        Acknowledged::update(state, payload).await?
+    } else {
+        Acknowledged::private(state, payload).await?
+    };
+    let state = state.clone();
+    let payload = payload.clone();
+    tokio::spawn(async move {
+        let response = operation(state, payload).await.unwrap_or_else(|error| {
+            tracing::warn!(?error, "Discord management operation failed");
+            json!({
+                "type": super::CHANNEL_MESSAGE_WITH_SOURCE,
+                "data": crate::components::ephemeral(vec![crate::components::container(
+                    Some(super::COLOR_ERROR as u32),
+                    vec![crate::components::text(
+                        "処理結果を確認できませんでした。現在の状態を確認してください。"
+                    )],
+                )]),
+            })
+        });
+        let body = response["data"].clone();
+        if update
+            && response["type"] == super::CHANNEL_MESSAGE_WITH_SOURCE
+            && reply.followup(&body).await
+        {
+            return;
+        }
+        reply.edit(body).await;
+    });
+    Ok(StatusCode::ACCEPTED.into_response())
+}
 
 /// A successful callback must precede any mutation. Delivery after that point
 /// may fail, but must never cause the mutation to run again.
@@ -31,7 +80,7 @@ impl Acknowledged {
     }
 
     /// Type 6 acknowledges a component without replacing its source message.
-    /// The claim and contract screens are already ephemeral.
+    /// The caller must use this only for an already private screen.
     pub async fn update(state: &AppState, payload: &Value) -> Result<Self, CommandError> {
         Self::send(state, payload, json!({"type": 6})).await
     }

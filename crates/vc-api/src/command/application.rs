@@ -40,9 +40,7 @@ pub async fn handle(
 
     let sub_options = options.get("sub_options");
 
-    // Every arm answers with a whole response, because they are not all the same kind:
-    // `register` and `edit` open a modal, which is its own callback type and cannot be
-    // wrapped in the message one.
+    // Registration creates the application and returns its credentials privately.
     match subcommand {
         "list" => Ok(message(list(state, payload).await?)),
         "show" => Ok(message(
@@ -325,17 +323,9 @@ pub async fn modal(
     }
 }
 
-/// Clearing a webhook makes no external call. Inspect the submitted fields so legacy
-/// forms containing several settings take the same deferred path as the current field form.
-pub(crate) fn verifies_webhook(payload: &Value) -> bool {
-    submitted(payload)
-        .iter()
-        .any(|(field, value)| field == "webhook_url" && !value.is_empty())
-}
-
-/// A webhook handshake makes two external requests. Acknowledge before starting it,
-/// then replace the private loading response with the usual success or refusal screen.
-pub async fn deferred_webhook_edit(
+/// Acknowledge every settings submission before database work or a webhook handshake,
+/// then replace the private loading response with the success or refusal screen.
+pub async fn deferred_edit(
     state: &AppState,
     client_id: &str,
     payload: &Value,

@@ -10,15 +10,18 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use support::{execute_from_dm, execute_from_guild, fake, interaction, state, state_with_limiter};
+use support::{
+    execute_from_dm, execute_from_guild, fake, rendered_interaction as interaction, state,
+    state_with_limiter,
+};
 use vc_api::rate_limit::RateLimiter;
 
 const SITE_URL: &str = "https://vcrypto.sumidora.com";
 const BOT_INVITE_URL: &str = "https://discord.com/api/oauth2/authorize?client_id=791984306632654869&permissions=0&scope=applications.commands%20bot";
 const SUPPORT_GUILD_INVITE_URL: &str = "https://discord.com/invite/Hgp5DpG";
 
-fn router(pool: PgPool) -> Router {
-    vc_api::router(state(pool, fake()))
+fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
+    vc_api::router(state(pool, discord))
 }
 
 /// `/help`: every command, the sentence Discord's picker shows for it, and the
@@ -28,8 +31,10 @@ fn router(pool: PgPool) -> Router {
 /// registered and missing here would be a command nobody can find out about.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn help(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         execute_from_guild(json!({ "name": "help" }), 12),
     )
     .await;
@@ -83,8 +88,10 @@ async fn help(pool: PgPool) {
 /// `/help command:<名前>`: the same screen the menu opens, reached by typing.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn help_opens_one_command(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         execute_from_guild(
             json!({
                 "name": "help",
@@ -115,8 +122,10 @@ async fn help_opens_one_command(pool: PgPool) {
 /// it: the menu offers the real ones, and a typed value can be anything.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn help_says_when_a_name_is_not_a_command(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         execute_from_guild(
             json!({
                 "name": "help",
@@ -142,8 +151,10 @@ async fn help_says_when_a_name_is_not_a_command(pool: PgPool) {
 /// message a person moves through, and a message per choice would leave a trail.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_menu_opens_the_command_it_names(pool: PgPool) {
+    let discord = fake();
     let chosen = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         chose_multi(&vc_api::custom_id::ui::help::select(), &["claim"], 12),
     )
     .await;
@@ -165,8 +176,10 @@ async fn the_menu_opens_the_command_it_names(pool: PgPool) {
 /// wrong command wants to be.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_back_button_shows_the_list_again(pool: PgPool) {
+    let discord = fake();
     let pressed = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         pressed(&vc_api::custom_id::ui::help::index(), 12),
     )
     .await;
@@ -184,8 +197,10 @@ async fn the_back_button_shows_the_list_again(pool: PgPool) {
 /// rendered here, rather than a jump to the site.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn help_opens_the_starting_page(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         execute_from_guild(json!({ "name": "help" }), 12),
     )
     .await;
@@ -202,7 +217,8 @@ async fn help_opens_the_starting_page(pool: PgPool) {
 
     // Pressing it draws the page, which is the document the site shows rather than a link to it.
     let pressed = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         support::button_from_guild(
             json!({ "custom_id": vc_api::custom_id::ui::help::start() }),
             12,
@@ -225,7 +241,9 @@ async fn help_opens_the_starting_page(pool: PgPool) {
 /// application's ids are known, and the plain name when they are not.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn help_links_a_command_when_discord_knows_its_id(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
+        discord.clone(),
         vc_api::router(support::state(
             pool,
             support::FakeDiscord::with_commands(&[("bal", 1_234_567_890)]),
@@ -250,7 +268,9 @@ async fn help_links_a_command_when_discord_knows_its_id(pool: PgPool) {
 /// written as.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_starting_page_links_the_commands_it_names(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
+        discord.clone(),
         vc_api::router(support::state(
             pool,
             support::FakeDiscord::with_commands(&[("create", 11), ("pay", 22), ("bal", 33)]),
@@ -285,7 +305,9 @@ async fn the_starting_page_links_the_commands_it_names(pool: PgPool) {
 /// stays exactly as it was written, whether or not this deployment has an id for it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_usage_line_stays_as_it_was_written(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
+        discord.clone(),
         vc_api::router(support::state(
             pool,
             support::FakeDiscord::with_command_payloads(vec![json!({
@@ -339,6 +361,7 @@ async fn no_command_puts_a_mention_in_a_code_block(pool: PgPool) {
 
     // The list first: it is the same walk over the same text, and it is where a person starts.
     let menu = interaction(
+        discord.clone(),
         vc_api::router(support::state(pool.clone(), discord.clone())),
         execute_from_guild(json!({ "name": "help" }), 12),
     )
@@ -354,6 +377,7 @@ async fn no_command_puts_a_mention_in_a_code_block(pool: PgPool) {
 
     for showing in vc_api::docs::showings() {
         let response = interaction(
+            discord.clone(),
             vc_api::router(support::state(pool.clone(), discord.clone())),
             execute_from_guild(
                 json!({
@@ -469,8 +493,10 @@ fn code_mentions(data: &Value) -> (Vec<String>, usize) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn invite(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         execute_from_guild(json!({ "name": "invite" }), 12),
     )
     .await;
@@ -506,7 +532,13 @@ async fn invite(pool: PgPool) {
 /// the same `Type Not Found` an unhandled type gets.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_command_without_a_name_is_400(pool: PgPool) {
-    let response = interaction(router(pool), execute_from_guild(json!({}), 12)).await;
+    let discord = fake();
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        execute_from_guild(json!({}), 12),
+    )
+    .await;
 
     assert_eq!(response.status, 400);
     assert_eq!(response.body, Value::String("Type Not Found".into()));
@@ -517,8 +549,10 @@ async fn a_command_without_a_name_is_400(pool: PgPool) {
 /// act on, which is the same `Type Not Found` a missing name gets.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_unknown_command_is_400(pool: PgPool) {
+    let discord = fake();
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         execute_from_guild(json!({ "name": "nonexistent" }), 12),
     )
     .await;
@@ -531,6 +565,7 @@ async fn an_unknown_command_is_400(pool: PgPool) {
 /// held against them rather than against the address they came from.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_user_is_held_to_their_allowance(pool: PgPool) {
+    let discord = fake();
     let api = fake();
     let limiter = Arc::new(RateLimiter::new(1, Duration::from_secs(60)));
 
@@ -542,10 +577,20 @@ async fn a_user_is_held_to_their_allowance(pool: PgPool) {
         ))
     };
 
-    let first = interaction(app(), execute_from_guild(json!({ "name": "help" }), 12)).await;
+    let first = interaction(
+        discord.clone(),
+        app(),
+        execute_from_guild(json!({ "name": "help" }), 12),
+    )
+    .await;
     assert_eq!(first.status, 200, "body: {}", first.body);
 
-    let second = interaction(app(), execute_from_guild(json!({ "name": "help" }), 12)).await;
+    let second = interaction(
+        discord.clone(),
+        app(),
+        execute_from_guild(json!({ "name": "help" }), 12),
+    )
+    .await;
     assert_eq!(second.status, 429, "body: {}", second.body);
 
     // The refusal says how long the window it hit has left, which is the whole
@@ -563,7 +608,12 @@ async fn a_user_is_held_to_their_allowance(pool: PgPool) {
     );
 
     // Another user brings their own allowance.
-    let other = interaction(app(), execute_from_guild(json!({ "name": "help" }), 13)).await;
+    let other = interaction(
+        discord.clone(),
+        app(),
+        execute_from_guild(json!({ "name": "help" }), 13),
+    )
+    .await;
     assert_eq!(other.status, 200, "body: {}", other.body);
 }
 
@@ -572,6 +622,7 @@ async fn a_user_is_held_to_their_allowance(pool: PgPool) {
 /// would show it to the person already reading.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_show_renders_the_callers_own(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -580,7 +631,8 @@ async fn application_show_renders_the_callers_own(pool: PgPool) {
     let client_id = support::client_id_of(&pool, application).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         application_payload("show", &client_id, DISCORD),
     )
     .await;
@@ -604,6 +656,7 @@ async fn application_show_renders_the_callers_own(pool: PgPool) {
 /// menu's id names the application and the field, the way the other menus do.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_show_offers_the_event_menu(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -612,7 +665,8 @@ async fn application_show_offers_the_event_menu(pool: PgPool) {
     let client_id = support::client_id_of(&pool, application).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         application_payload("show", &client_id, DISCORD),
     )
     .await;
@@ -638,12 +692,14 @@ async fn application_show_offers_the_event_menu(pool: PgPool) {
 /// All four menus reflect persisted values on first display and after edits, including empty sets.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_menus_show_saved_selections(pool: PgPool) {
+    let discord = fake();
     const DISCORD: i64 = 100_000_000_000_000_001;
     support::insert_user(&pool, 1, DISCORD).await;
     let application = support::insert_application(&pool, DISCORD, "テスト").await;
     let client_id = support::client_id_of(&pool, application).await;
     let mut shown = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         application_payload("show", &client_id, DISCORD),
     )
     .await;
@@ -668,8 +724,13 @@ async fn application_menus_show_saved_selections(pool: PgPool) {
             "{field}"
         );
         let menu = field_menu(&shown.body["data"], field);
-        shown = interaction(router(pool.clone()), chose_multi(&menu, after, DISCORD)).await;
-        assert_eq!(shown.status, 200, "{}", shown.body);
+        shown = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            chose_multi(&menu, after, DISCORD),
+        )
+        .await;
+        assert_eq!(shown.status, 202, "{}", shown.body);
         assert_eq!(
             selected_values(&shown.body["data"], field),
             after,
@@ -691,6 +752,7 @@ async fn application_menus_show_saved_selections(pool: PgPool) {
 /// sees the set they now have rather than the one they chose.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn choosing_events_writes_the_set(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -699,7 +761,8 @@ async fn choosing_events_writes_the_set(pool: PgPool) {
     let client_id = support::client_id_of(&pool, application).await;
 
     let shown = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         application_payload("show", &client_id, DISCORD),
     )
     .await;
@@ -708,9 +771,14 @@ async fn choosing_events_writes_the_set(pool: PgPool) {
 
     let menu = field_menu(&shown.body["data"], "subscribed_events");
 
-    let response = interaction(router(pool.clone()), chose_multi(&menu, &["3"], DISCORD)).await;
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        chose_multi(&menu, &["3"], DISCORD),
+    )
+    .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
 
     let now = vc_api::routes::oauth2_clients::details(&pool, application)
         .await
@@ -730,8 +798,13 @@ async fn choosing_events_writes_the_set(pool: PgPool) {
     // Add an event to what Discord already has checked; the saved subscription must survive.
     let mut selected = selected_values(&response.body["data"], "subscribed_events");
     selected.push("4");
-    let added = interaction(router(pool.clone()), chose_multi(&menu, &selected, DISCORD)).await;
-    assert_eq!(added.status, 200, "{}", added.body);
+    let added = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        chose_multi(&menu, &selected, DISCORD),
+    )
+    .await;
+    assert_eq!(added.status, 202, "{}", added.body);
     let now = vc_api::routes::oauth2_clients::details(&pool, application)
         .await
         .unwrap()
@@ -788,6 +861,7 @@ fn selected_values<'a>(screen: &'a Value, field: &str) -> Vec<&'a str> {
 /// point of checking ownership before the id rather than after.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_show_does_not_confirm_somebody_elses(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
     const STRANGER: i64 = 100_000_000_000_000_002;
@@ -797,7 +871,8 @@ async fn application_show_does_not_confirm_somebody_elses(pool: PgPool) {
     let theirs_id = support::client_id_of(&pool, theirs).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         application_payload("show", &theirs_id, DISCORD),
     )
     .await;
@@ -833,6 +908,7 @@ fn application_payload(subcommand: &str, client_id: &str, user: i64) -> Value {
 /// answers with rather than by the name somebody typed.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_list_offers_the_callers_own(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -841,7 +917,8 @@ async fn application_list_offers_the_callers_own(pool: PgPool) {
     let client_id = support::client_id_of(&pool, application).await;
 
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         execute_from_guild(
             json!({ "name": "application", "options": [{ "name": "list", "type": 1 }] }),
             DISCORD,
@@ -861,7 +938,8 @@ async fn application_list_offers_the_callers_own(pool: PgPool) {
     // And with nothing to show it says so and offers the form, rather than an empty menu
     // with nothing to pick: an empty state teaches the space.
     let empty = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         execute_from_guild(
             json!({ "name": "application", "options": [{ "name": "list", "type": 1 }] }),
             999,
@@ -907,6 +985,7 @@ fn edit_form(client_id: &str) -> String {
 /// answer is the application as it now is.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_submitted_edit_changes_the_application(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -915,7 +994,8 @@ async fn a_submitted_edit_changes_the_application(pool: PgPool) {
     let client_id = support::client_id_of(&pool, application).await;
 
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         submitted_form(
             &edit_form(&client_id),
             json!([
@@ -933,7 +1013,7 @@ async fn a_submitted_edit_changes_the_application(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], 4);
 
     let now = vc_api::routes::oauth2_clients::details(&pool, application)
@@ -1017,6 +1097,7 @@ fn select_id(screen: &Value) -> String {
 /// offers the form, and the form is about that application.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -1025,7 +1106,8 @@ async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool)
     let client_id = support::client_id_of(&pool, application).await;
 
     let listed = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         execute_from_dm(
             json!({ "name": "application", "options": [{ "name": "list", "type": 1 }] }),
             DISCORD,
@@ -1036,7 +1118,8 @@ async fn a_menu_choice_is_the_application_and_its_form_is_about_it(pool: PgPool)
     assert_eq!(listed.status, 200, "body: {}", listed.body);
 
     let chosen = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         chose(&select_id(&listed.body["data"]), &client_id, DISCORD),
     )
     .await;
@@ -1081,12 +1164,13 @@ async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
     ));
 
     let response = interaction(
+        discord.clone(),
         vc_api::router(support::state(pool.clone(), discord)),
         chose_bot(&client_id, BOT, DISCORD),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
 
     let rendered = response.body["data"].to_string();
 
@@ -1123,12 +1207,13 @@ async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
     ));
 
     let response = interaction(
+        discord.clone(),
         vc_api::router(support::state(pool.clone(), discord)),
         chose_bot(&client_id, BOT, DISCORD),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
 
     let rendered = response.body["data"].to_string();
 
@@ -1153,6 +1238,7 @@ async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
 /// nothing there and does not say whether there is.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_show_of_something_else_says_nothing_is_there(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
     const SOMEBODY_ELSE: i64 = 100_000_000_000_000_002;
@@ -1162,7 +1248,8 @@ async fn application_show_of_something_else_says_nothing_is_there(pool: PgPool) 
     let client_id = support::client_id_of(&pool, theirs).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         application_payload("show", &client_id, DISCORD),
     )
     .await;
@@ -1245,6 +1332,7 @@ fn field_control(screen: &Value, field: &str) -> String {
 /// leaves the other eight alone.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_field_button_opens_its_own_form(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
@@ -1253,7 +1341,8 @@ async fn a_field_button_opens_its_own_form(pool: PgPool) {
     let client_id = support::client_id_of(&pool, application).await;
 
     let shown = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         application_payload("show", &client_id, DISCORD),
     )
     .await;
@@ -1261,7 +1350,8 @@ async fn a_field_button_opens_its_own_form(pool: PgPool) {
     assert_eq!(shown.status, 200, "body: {}", shown.body);
 
     let pressed = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         pressed(&field_control(&shown.body["data"], "client_name"), DISCORD),
     )
     .await;
@@ -1297,7 +1387,8 @@ async fn a_field_button_opens_its_own_form(pool: PgPool) {
         .expect("it exists");
 
     let submitted = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         submitted_form(
             &form,
             json!([field("クライアント名", "client_name", "あと")]),
@@ -1306,7 +1397,7 @@ async fn a_field_button_opens_its_own_form(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(submitted.status, 200, "body: {}", submitted.body);
+    assert_eq!(submitted.status, 202, "body: {}", submitted.body);
 
     let now = vc_api::routes::oauth2_clients::details(&pool, application)
         .await
@@ -1326,13 +1417,15 @@ async fn a_field_button_opens_its_own_form(pool: PgPool) {
 /// with them and answered with the screen that changes them.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn application_register_makes_one_with_defaults(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
 
     support::insert_user(&pool, USER, DISCORD).await;
 
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         execute_from_guild(
             json!({ "name": "application", "options": [{ "name": "register", "type": 1 }] }),
             DISCORD,
@@ -1340,7 +1433,7 @@ async fn application_register_makes_one_with_defaults(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], 4);
     assert_eq!(response.body["data"]["flags"], 32832, "ephemeral");
 
@@ -1381,6 +1474,7 @@ async fn application_register_makes_one_with_defaults(pool: PgPool) {
 /// A DM has no guild to connect to, and the picker says where to go rather than failing.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
+    let discord = fake();
     const USER: i32 = 1;
     const DISCORD: i64 = 100_000_000_000_000_001;
     const BOT: i64 = 200_000_000_000_000_002;
@@ -1397,9 +1491,9 @@ async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
         .expect("an object")
         .remove("guild_id");
 
-    let response = interaction(router(pool), payload).await;
+    let response = interaction(discord.clone(), router(discord.clone(), pool), payload).await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
 
     let rendered = response.body["data"].to_string();
 
@@ -1415,6 +1509,7 @@ async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn optional_application_fields_can_be_cleared_through_the_modal(pool: PgPool) {
+    let discord = fake();
     use vc_api::custom_id::ui::developer::{Screen, custom_id_for_field};
     let owner = 500_000_000_000_000_001;
     support::insert_user(&pool, 1, owner).await;
@@ -1437,7 +1532,12 @@ async fn optional_application_fields_can_be_cleared_through_the_modal(pool: PgPo
     ] {
         let custom_id = custom_id_for_field(Screen::Edit, &client_id, name);
         let payload = json!({"type":3,"user":{"id":owner.to_string()},"data":{"component_type":2,"custom_id":custom_id}});
-        let response = interaction(router(pool.clone()), payload).await;
+        let response = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            payload,
+        )
+        .await;
         assert_eq!(response.status, 200, "{}", response.body);
         assert_eq!(response.body["type"], 9);
         assert_eq!(
@@ -1447,7 +1547,8 @@ async fn optional_application_fields_can_be_cleared_through_the_modal(pool: PgPo
     }
     let custom_id = custom_id_for_field(Screen::Edit, &client_id, "webhook_url");
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         submitted_form(
             &custom_id,
             json!([field("webhook URL", "webhook_url", "")]),
@@ -1455,7 +1556,7 @@ async fn optional_application_fields_can_be_cleared_through_the_modal(pool: PgPo
         ),
     )
     .await;
-    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.status, 202, "{}", response.body);
     let details = vc_api::routes::oauth2_clients::details(&pool, application)
         .await
         .unwrap()

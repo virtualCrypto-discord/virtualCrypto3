@@ -746,7 +746,8 @@ async fn create_responds_while_discovery_is_blocked_and_later_uses_the_cache(poo
     let app = vc_api::router(state.clone());
     let response = tokio::time::timeout(
         Duration::from_secs(1),
-        interaction(
+        support::rendered_interaction(
+            discord.clone(),
             app,
             execute_from_guild(
                 json!({
@@ -762,7 +763,7 @@ async fn create_responds_while_discovery_is_blocked_and_later_uses_the_cache(poo
     )
     .await
     .expect("discovery must not use the three-second interaction budget");
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, 202);
     assert_eq!(response.body["type"], 4);
     assert!(!response.body.to_string().contains("</info:123>"));
     assert_eq!(discord.command_calls(), 1);

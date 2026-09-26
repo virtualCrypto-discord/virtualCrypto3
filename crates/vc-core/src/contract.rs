@@ -1032,82 +1032,31 @@ pub async fn pay_in(
     .await
     .map_err(ContractError::Database)?;
 
-    // The ledger records what moved and from whom, and **which side of the row is
-    // NULL is what says what kind of movement it was** — the same pair of columns
-    // every payment already used.
-    //
-    // When the receiver is one of the contract's parties, the money went out of the
-    // escrow — which is the parties' remainders — and into that party's own wallet:
-    // a return, the mirror of the lock their approval wrote, and a movement of the
-    // person's money rather than of an application's. Charge-shaped, with both sides
-    // set, it said the opposite, and a wallet history that reads the NULL side was
-    // right to leave it out.
-    //
-    // The contract's own names are what answer this, rather than the request: a
-    // payment that names no party still lands in one when the receiver is one of them.
-    let receiver_is_party = sqlx::query_scalar!(
-        "SELECT EXISTS (SELECT 1 FROM contract_parties
-                         WHERE contract_id = $1 AND discord_id = $2) AS \"exists!\"",
+    // Keep every drawn party's slice. Only a slice sent back to its own owner
+    // is a return (NULL sender); paying another party is still a charge from
+    // the party whose remainder funded it. One payment can contain both kinds.
+    let amounts: Vec<i64> = taken.iter().map(|row| row.amount).collect();
+    let senders: Vec<i64> = taken.iter().map(|row| i64::from(row.sender_id)).collect();
+
+    sqlx::query!(
+        "INSERT INTO currency_payment_histories
+             (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
+              updated_at)
+         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6
+           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)
+           JOIN users u ON u.id = t.sender_id
+           JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id
+          ORDER BY p.approval_order, p.id",
+        &amounts,
+        &senders,
+        i64::from(receiver.id),
+        contract.currency_id,
         contract_id,
-        receiver_discord_id
+        now
     )
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await
     .map_err(ContractError::Database)?;
-
-    if receiver_is_party {
-        // One row for the whole movement rather than one per drawn remainder: the
-        // sender side is the escrow, which is nobody's account, so which slice came
-        // from which party is not a thing this row could say. The amount is what the
-        // wallet received.
-        sqlx::query!(
-            "INSERT INTO currency_payment_histories
-                 (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-                  updated_at)
-             VALUES ($1, NULL, $2, $3, $4, $5, $5, $5)",
-            amount,
-            i64::from(receiver.id),
-            contract.currency_id,
-            contract_id,
-            now
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(ContractError::Database)?;
-    } else {
-        // Otherwise one row per party whose remainder was drawn on, which is the
-        // money's own path into the receiver's balance rather than a note that an
-        // application paid. The contract is named beside it, because a statement per
-        // contract cannot be read out of rows that do not say which contract they
-        // belong to.
-        let amounts: Vec<i64> = taken.iter().map(|row| row.amount).collect();
-        let senders: Vec<i64> = taken.iter().map(|row| i64::from(row.sender_id)).collect();
-
-        // `ORDER BY p.approval_order, p.id` is what makes a payment's rows ordered rather than
-        // unfortunate: without it the rows of one payment are inserted in whatever
-        // order the draw returned them, and a statement lists them by id. This is the
-        // draw's own order — oldest approval first — so a reader sees the slices in
-        // the order the money left.
-        sqlx::query!(
-            "INSERT INTO currency_payment_histories
-                 (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-                  updated_at)
-             SELECT t.amount, t.sender_id, $3, $4, $5, $6, $6, $6
-               FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)
-               JOIN users u ON u.id = t.sender_id
-               JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id
-              ORDER BY p.approval_order, p.id",
-            &amounts,
-            &senders,
-            i64::from(receiver.id),
-            contract.currency_id,
-            contract_id,
-            now
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(ContractError::Database)?;
-    }
 
     Ok(Payed {
         amount,

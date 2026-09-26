@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
     MONEY_USER1, MONEY_USER2, Money, Response, account_of, button_from_guild, execute_from_dm,
-    fake, get, insert_application, insert_claim, insert_user, interaction, mint, mint_app,
-    setup_money, state,
+    fake, get, insert_application, insert_claim, insert_user, mint, mint_app,
+    rendered_interaction as interaction, setup_money, state,
 };
 use tower::ServiceExt;
 use vc_core::claim::SrFilter;
@@ -28,8 +28,8 @@ const OTHER_DISCORD_ID: i64 = 100_000_000_000_000_003;
 /// file is read from their side.
 const MUTER: i32 = 2;
 
-fn router(pool: PgPool) -> Router {
-    vc_api::router(state(pool, fake()))
+fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
+    vc_api::router(state(pool, discord))
 }
 
 /// A `/mute` or `/unmute` interaction, typed in a direct message by the person it belongs to:
@@ -108,20 +108,36 @@ async fn two_currencies_claimed(pool: &PgPool) -> Money {
 /// stays — which is the whole of what 「表示しない」 means.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_muted_currency_leaves_the_claim_list(pool: PgPool) {
+    let discord = fake();
     let money = two_currencies_claimed(&pool).await;
 
-    let before = rendered(&interaction(router(pool.clone()), claim_list(MONEY_USER2)).await);
+    let before = rendered(
+        &interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            claim_list(MONEY_USER2),
+        )
+        .await,
+    );
     assert!(before.contains("請求額: **500**"), "{before}");
     assert!(before.contains("請求額: **700**"), "{before}");
 
     let muted = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
-    assert_eq!(muted.status, 200, "body: {}", muted.body);
+    assert_eq!(muted.status, 202, "body: {}", muted.body);
 
-    let after = rendered(&interaction(router(pool.clone()), claim_list(MONEY_USER2)).await);
+    let after = rendered(
+        &interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            claim_list(MONEY_USER2),
+        )
+        .await,
+    );
     assert!(!after.contains("請求額: **500**"), "{after}");
     assert!(after.contains("請求額: **700**"), "{after}");
 }
@@ -130,6 +146,7 @@ async fn a_muted_currency_leaves_the_claim_list(pool: PgPool) {
 /// currency, and leaves everybody else's alone.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_muted_person_leaves_the_claim_list(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
     insert_user(&pool, OTHER, OTHER_DISCORD_ID).await;
 
@@ -137,7 +154,8 @@ async fn a_muted_person_leaves_the_claim_list(pool: PgPool) {
     insert_claim(&pool, 2, 700, "pending", OTHER, MUTER, money.currency).await;
 
     let muted = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(
             MONEY_USER2,
             "user",
@@ -145,9 +163,16 @@ async fn a_muted_person_leaves_the_claim_list(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(muted.status, 200, "body: {}", muted.body);
+    assert_eq!(muted.status, 202, "body: {}", muted.body);
 
-    let after = rendered(&interaction(router(pool.clone()), claim_list(MONEY_USER2)).await);
+    let after = rendered(
+        &interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            claim_list(MONEY_USER2),
+        )
+        .await,
+    );
     assert!(!after.contains("請求額: **500**"), "{after}");
     assert!(after.contains("請求額: **700**"), "{after}");
 }
@@ -156,11 +181,12 @@ async fn a_muted_person_leaves_the_claim_list(pool: PgPool) {
 /// is left out of `/users/@me/claims` too, and comes back when the mute does.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_api_answers_the_list_the_reader_can_see(pool: PgPool) {
+    let discord = fake();
     let money = two_currencies_claimed(&pool).await;
     let token = mint(&pool, MUTER, &["vc.claim"]).await;
 
     let before = get(
-        router(pool.clone()),
+        router(discord.clone(), pool.clone()),
         "/api/v2/users/@me/claims",
         Some(&token),
     )
@@ -169,13 +195,14 @@ async fn the_api_answers_the_list_the_reader_can_see(pool: PgPool) {
     assert_eq!(before.body.as_array().expect("a list").len(), 2);
 
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
 
     let muting = get(
-        router(pool.clone()),
+        router(discord.clone(), pool.clone()),
         "/api/v2/users/@me/claims",
         Some(&token),
     )
@@ -185,13 +212,14 @@ async fn the_api_answers_the_list_the_reader_can_see(pool: PgPool) {
     assert_eq!(rows[0]["amount"], "700");
 
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         unmute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
 
     let after = get(
-        router(pool.clone()),
+        router(discord.clone(), pool.clone()),
         "/api/v2/users/@me/claims",
         Some(&token),
     )
@@ -204,6 +232,7 @@ async fn the_api_answers_the_list_the_reader_can_see(pool: PgPool) {
 /// the button to a third page with nothing on it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_last_page_counts_only_what_the_reader_can_see(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
     insert_user(&pool, OTHER, OTHER_DISCORD_ID).await;
 
@@ -223,7 +252,8 @@ async fn the_last_page_counts_only_what_the_reader_can_see(pool: PgPool) {
     assert_eq!(before, 3);
 
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(
             MONEY_USER2,
             "user",
@@ -250,13 +280,15 @@ async fn the_last_page_counts_only_what_the_reader_can_see(pool: PgPool) {
 /// trip a person makes, in the order they make it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_mute_screen_shows_its_rows_and_takes_one_back(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
     insert_user(&pool, OTHER, OTHER_DISCORD_ID).await;
 
     // The person first and the currency second, because the list is newest first and the row a
     // press takes back is the one the screen put at the top.
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(
             MONEY_USER2,
             "user",
@@ -265,12 +297,18 @@ async fn the_mute_screen_shows_its_rows_and_takes_one_back(pool: PgPool) {
     )
     .await;
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
 
-    let screen = interaction(router(pool.clone()), mute(MONEY_USER2, "list", None)).await;
+    let screen = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        mute(MONEY_USER2, "list", None),
+    )
+    .await;
     let shown = rendered(&screen);
     assert!(shown.contains("**ミュート一覧** (2件)"), "{shown}");
     assert!(shown.contains(&money.name), "{shown}");
@@ -278,7 +316,8 @@ async fn the_mute_screen_shows_its_rows_and_takes_one_back(pool: PgPool) {
 
     // A second mute of the same currency is the mute that is already there, and says so.
     let again = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
@@ -291,11 +330,12 @@ async fn the_mute_screen_shows_its_rows_and_takes_one_back(pool: PgPool) {
     // The row's own button, taken from the screen rather than rebuilt: what a person presses is
     // what the screen drew.
     let pressed = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         button_from_guild(json!({ "custom_id": accessory(&screen) }), MONEY_USER2),
     )
     .await;
-    assert_eq!(pressed.status, 200, "body: {}", pressed.body);
+    assert_eq!(pressed.status, 202, "body: {}", pressed.body);
 
     let after = rendered(&pressed);
     assert!(after.contains("**ミュート一覧** (1件)"), "{after}");
@@ -308,16 +348,25 @@ async fn the_mute_screen_shows_its_rows_and_takes_one_back(pool: PgPool) {
 /// The list is the reader's own: what somebody else muted changes nothing about yours.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn one_persons_mute_is_not_another_persons(pool: PgPool) {
+    let discord = fake();
     let money = two_currencies_claimed(&pool).await;
 
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
 
     // The claimant's own list, which is the same claim seen from the other side.
-    let theirs = rendered(&interaction(router(pool.clone()), claim_list(MONEY_USER1)).await);
+    let theirs = rendered(
+        &interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            claim_list(MONEY_USER1),
+        )
+        .await,
+    );
     assert!(theirs.contains("請求額: **500**"), "{theirs}");
 }
 
@@ -325,10 +374,12 @@ async fn one_persons_mute_is_not_another_persons(pool: PgPool) {
 /// written as a row that would leave you looking at nothing.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn muting_yourself_is_refused(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     let refused = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(
             MONEY_USER2,
             "user",
@@ -337,7 +388,7 @@ async fn muting_yourself_is_refused(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(refused.status, 200, "body: {}", refused.body);
+    assert_eq!(refused.status, 202, "body: {}", refused.body);
     assert!(
         rendered(&refused).contains("自分自身はミュートできません"),
         "{}",
@@ -349,11 +400,13 @@ async fn muting_yourself_is_refused(pool: PgPool) {
 /// the answer says what is missing rather than refusing.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn muting_somebody_with_no_account_says_so(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     let stranger: i64 = 100_000_000_000_000_009;
     let answered = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(
             MONEY_USER2,
             "user",
@@ -362,7 +415,7 @@ async fn muting_somebody_with_no_account_says_so(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(answered.status, 200, "body: {}", answered.body);
+    assert_eq!(answered.status, 202, "body: {}", answered.body);
     assert!(
         rendered(&answered).contains("アカウントがまだありません"),
         "{}",
@@ -374,6 +427,7 @@ async fn muting_somebody_with_no_account_says_so(pool: PgPool) {
 /// out loud — so a page and its count agreeing is something a person can read.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_muted_currency_leaves_the_contract_list(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
     // An application contracts for both currencies, naming the muter as the party: what a
@@ -388,7 +442,7 @@ async fn a_muted_currency_leaves_the_contract_list(pool: PgPool) {
 
     for unit in [&money.unit, &money.unit2] {
         let created = send(
-            router(pool.clone()),
+            router(discord.clone(), pool.clone()),
             "/api/v2/contracts",
             &token,
             json!({
@@ -401,22 +455,37 @@ async fn a_muted_currency_leaves_the_contract_list(pool: PgPool) {
         assert_eq!(created.status, 201, "body: {}", created.body);
     }
 
-    let before = rendered(&interaction(router(pool.clone()), contract_list(MONEY_USER2)).await);
+    let before = rendered(
+        &interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            contract_list(MONEY_USER2),
+        )
+        .await,
+    );
     assert!(before.contains("**契約** (2件)"), "{before}");
 
     interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         mute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
     )
     .await;
 
-    let after = rendered(&interaction(router(pool.clone()), contract_list(MONEY_USER2)).await);
+    let after = rendered(
+        &interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            contract_list(MONEY_USER2),
+        )
+        .await,
+    );
     assert!(after.contains("**契約** (1件)"), "{after}");
     assert!(after.contains(&format!("（{}）", money.unit2)), "{after}");
 
     // The API answers the same list, as it does for claims.
     let listed = get(
-        router(pool.clone()),
+        router(discord.clone(), pool.clone()),
         "/api/v2/users/@me/contracts",
         Some(&mint(&pool, MUTER, &[]).await),
     )

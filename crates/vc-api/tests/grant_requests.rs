@@ -763,12 +763,13 @@ async fn poll_after_discord_revocation(pool: PgPool, keep_another: bool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let revoked = support::interaction(vc_api::router(state(pool.clone(), fake())), json!({
+        let discord = fake();
+        let revoked = support::rendered_interaction(discord.clone(), vc_api::router(state(pool.clone(), discord)), json!({
             "type":3, "data":{"component_type":2,"custom_id":vc_api::custom_id::ui::grant::revoke_one_custom_id(grant)},
             "member":{"user":{"id":OWNER_DISCORD_ID.to_string()},"permissions":support::DEFAULT_PERMISSIONS.to_string()},
             "guild_id":GUILD.to_string()
         })).await;
-        assert_eq!(revoked.status, 200);
+        assert_eq!(revoked.status, 202);
         assert!(
             vc_core::grant::grants_of(&pool, application)
                 .await

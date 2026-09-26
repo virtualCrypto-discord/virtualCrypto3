@@ -11,11 +11,9 @@
 //! is a way to move one party's remainder to another person, which is why the
 //! exemption holds only when the receiver *is* the party being drawn on.
 //!
-//! A payment whose receiver is one of the contract's parties is a `return` in the
-//! ledger rather than a `charge` — the escrow on the sender side, the party's own
-//! account on the receiver side — because that is what happened: money left the
-//! escrow and arrived in that party's wallet. A charge-shaped row said the opposite,
-//! and the party's own history, which reads the NULL side, left it out.
+//! A slice paid back to the party it draws on is a `return`. A slice paid to any
+//! other person is a `charge`, even when that receiver is another contract party.
+//! Both credit the receiving wallet; neither debits the payer's wallet again.
 
 mod support;
 
@@ -44,6 +42,10 @@ struct Fixture {
 }
 
 async fn fixture(pool: &PgPool) -> Fixture {
+    fixture_with_receiver(pool, Some(RECEIVER_DISCORD_ID)).await
+}
+
+async fn fixture_with_receiver(pool: &PgPool, receiver: Option<i64>) -> Fixture {
     insert_user(pool, OWNER, OWNER_DISCORD_ID).await;
     insert_user(pool, ALICE, ALICE_DISCORD_ID).await;
     insert_user(pool, BOB, BOB_DISCORD_ID).await;
@@ -63,7 +65,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
         json!({
             "unit": "nyan",
             "parties": [party(ALICE_DISCORD_ID, 100), party(BOB_DISCORD_ID, 50)],
-            "receiver_discord_id": RECEIVER_DISCORD_ID.to_string(),
+            "receiver_discord_id": receiver.map(|id| id.to_string()),
         }),
     )
     .await;
@@ -422,4 +424,89 @@ async fn the_party_is_read_like_every_other_id(pool: PgPool) {
         wrong_type.body["error_description"],
         "invalid_type_of_variable"
     );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn cross_party_payments_preserve_each_source_in_statements_and_wallet_history(pool: PgPool) {
+    let fixture = fixture_with_receiver(&pool, None).await;
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let uri = format!("/api/v2/contracts/{}/payments", fixture.contract);
+
+    let paid = charge(&pool, &fixture, Some(ALICE_DISCORD_ID), BOB_DISCORD_ID, 40).await;
+    assert_eq!(paid.status, 201);
+    assert_eq!(paid.body["party_remaining"], "60");
+    let statement = send(app.clone(), "GET", &uri, &fixture.token, Value::Null).await;
+    assert_eq!(statement.body[0]["event"], "charge");
+    assert_eq!(
+        statement.body[0]["discord_id"],
+        ALICE_DISCORD_ID.to_string()
+    );
+    assert_eq!(
+        statement.body[0]["receiver_discord_id"],
+        BOB_DISCORD_ID.to_string()
+    );
+    assert_eq!(statement.body[0]["amount"], "40");
+
+    // Alice's remaining 60 and Bob's own 20 fund one credit of 80 to Bob.
+    let mixed = charge(&pool, &fixture, None, BOB_DISCORD_ID, 80).await;
+    assert_eq!(mixed.status, 201);
+    assert_eq!(mixed.body["remaining"], "30");
+    let statement = send(app.clone(), "GET", &uri, &fixture.token, Value::Null).await;
+    let rows = statement.body.as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0]["event"], "return");
+    assert_eq!(rows[0]["discord_id"], Value::Null);
+    assert_eq!(rows[0]["receiver_discord_id"], BOB_DISCORD_ID.to_string());
+    assert_eq!(rows[0]["amount"], "20");
+    assert_eq!(rows[1]["event"], "charge");
+    assert_eq!(rows[1]["discord_id"], ALICE_DISCORD_ID.to_string());
+    assert_eq!(rows[1]["receiver_discord_id"], BOB_DISCORD_ID.to_string());
+    assert_eq!(rows[1]["amount"], "60");
+
+    let bob = mint(&pool, BOB, &[]).await;
+    let ledger = support::get(
+        app.clone(),
+        "/api/v2/users/@me/transactions?unit=nyan",
+        Some(&bob),
+    )
+    .await;
+    assert_eq!(ledger.status, 200);
+    assert_eq!(ledger.body.as_array().unwrap().len(), 4);
+    assert_eq!(ledger.body[0]["event"], "return");
+    assert_eq!(ledger.body[1]["event"], "charge");
+    let filtered = support::get(
+        app.clone(),
+        &format!(
+            "/api/v2/users/@me/transactions?unit=nyan&related_discord_user_id={ALICE_DISCORD_ID}"
+        ),
+        Some(&bob),
+    )
+    .await;
+    assert_eq!(filtered.status, 200);
+    assert_eq!(filtered.body.as_array().unwrap().len(), 2);
+    assert_eq!(filtered.body[0]["amount"], "60");
+    assert_eq!(filtered.body[1]["amount"], "40");
+    let alice = mint(&pool, ALICE, &[]).await;
+    let ledger = support::get(
+        app.clone(),
+        "/api/v2/users/@me/transactions?unit=nyan",
+        Some(&alice),
+    )
+    .await;
+    assert_eq!(
+        ledger.body.as_array().unwrap().len(),
+        1,
+        "escrow spends are not wallet debits"
+    );
+    assert_eq!(ledger.body[0]["event"], "lock");
+    assert_eq!(support::get_amount(&pool, ALICE_DISCORD_ID, 1).await, 900);
+    assert_eq!(support::get_amount(&pool, BOB_DISCORD_ID, 1).await, 1_070);
+
+    // No explicit party is required for a genuine return: only Bob has funds left.
+    let returned = charge(&pool, &fixture, None, BOB_DISCORD_ID, 10).await;
+    assert_eq!(returned.status, 201);
+    let statement = send(app, "GET", &uri, &fixture.token, Value::Null).await;
+    assert_eq!(statement.body[0]["event"], "return");
+    assert_eq!(statement.body[0]["amount"], "10");
+    assert_eq!(statement.body[0]["discord_id"], Value::Null);
 }

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
     DEFAULT_PERMISSIONS, Response, currency_by_unit, execute_from_guild, fake, get_amount,
-    interaction, setup_money, state,
+    rendered_interaction as interaction, setup_money, state,
 };
 
 const COLOR_OK: i64 = 0x0038_EA42;
@@ -17,8 +17,8 @@ const COLOR_ERROR: i64 = 0x00EA_3875;
 /// `setup_money` guild.
 const FREE_GUILD: i64 = 494_780_225_280_802_818;
 
-fn router(pool: PgPool) -> Router {
-    vc_api::router(state(pool, fake()))
+fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
+    vc_api::router(state(pool, discord))
 }
 
 /// `InteractionsControllerTest.Create.Helper.create_data/1`.
@@ -55,7 +55,7 @@ fn from_guild_in(
 
 /// `Interactions.Create.render/3` for `{:ok, :ok, options}`.
 fn assert_ok(response: &Response, unit: &str) {
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -75,7 +75,7 @@ fn assert_ok(response: &Response, unit: &str) {
 
 /// `Interactions.Create.render/3` for `{:error, reason, options}`.
 fn assert_error(response: &Response, description: &str) {
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -92,11 +92,13 @@ fn assert_error(response: &Response, description: &str) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
     let sender = 100_000_000_000_000_101;
 
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         from_guild(json!(10000), "ua", "funyu1", sender),
     )
     .await;
@@ -114,19 +116,18 @@ async fn create_makes_the_currency_and_the_creators_grant(pool: PgPool) {
 /// are known: the same rule the document's prose follows, because the same person reads both.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_created_message_links_the_commands_it_names(pool: PgPool) {
+    let discord = support::FakeDiscord::with_commands(&[("info", 7), ("delete", 8)]);
     setup_money(&pool).await;
     let sender = 100_000_000_000_000_101;
 
     let response = interaction(
-        vc_api::router(state(
-            pool,
-            support::FakeDiscord::with_commands(&[("info", 7), ("delete", 8)]),
-        )),
+        discord.clone(),
+        vc_api::router(state(pool, discord.clone())),
         from_guild(json!(10000), "ub", "funyu2", sender),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
 
     let rendered = response.body["data"].to_string();
 
@@ -146,11 +147,13 @@ async fn the_created_message_links_the_commands_it_names(pool: PgPool) {
 /// branch this port dropped, because every guild carries it now.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_succeeds_in_another_guild(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
     let sender = 100_000_000_000_000_102;
 
     let response = interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         from_guild_in(
             json!(10000),
             "ub",
@@ -173,10 +176,12 @@ async fn create_succeeds_in_another_guild(pool: PgPool) {
 /// already taken.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_currency_name_that_is_taken(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_guild_in(
             json!(10000),
             "uc",
@@ -199,10 +204,12 @@ async fn create_rejects_a_currency_name_that_is_taken(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_currency_unit_that_is_taken(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_guild_in(
             json!(10000),
             &money.unit,
@@ -225,10 +232,12 @@ async fn create_rejects_a_currency_unit_that_is_taken(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_guild_in(
             json!("9007199254740992"),
             "ue",
@@ -248,10 +257,12 @@ async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_needs_the_administrator_bit(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_guild_in(
             json!(10000),
             "uf",
@@ -268,10 +279,12 @@ async fn create_needs_the_administrator_bit(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_guild_in(
             json!(10000),
             "ug",
@@ -291,11 +304,13 @@ async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
 /// characters.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_unit_that_is_not_one_to_ten_lowercase_letters(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     for unit in ["AA", "u1", "abcdefghijk"] {
         let response = interaction(
-            router(pool.clone()),
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
             from_guild(json!(10000), unit, "funyu8", 100_000_000_000_000_108),
         )
         .await;
@@ -309,10 +324,12 @@ async fn create_rejects_a_unit_that_is_not_one_to_ten_lowercase_letters(pool: Pg
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_name_without_enough_alphanumerics(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     let response = interaction(
-        router(pool),
+        discord.clone(),
+        router(discord.clone(), pool),
         from_guild(json!(10000), "a", " ", 100_000_000_000_000_109),
     )
     .await;
@@ -328,11 +345,13 @@ async fn create_rejects_a_name_without_enough_alphanumerics(pool: PgPool) {
 /// through.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn create_rejects_a_name_that_is_too_long_or_has_a_mark_in_it(pool: PgPool) {
+    let discord = fake();
     setup_money(&pool).await;
 
     for (unit, name) in [("ua", "0123456789abcdefg"), ("ub", "funyua!")] {
         let response = interaction(
-            router(pool.clone()),
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
             from_guild(json!(10000), unit, name, 100_000_000_000_000_110),
         )
         .await;
@@ -345,6 +364,7 @@ async fn create_rejects_a_name_that_is_too_long_or_has_a_mark_in_it(pool: PgPool
 }
 
 async fn racing_create(pool: PgPool, collision: &str) {
+    let discord = fake();
     let money = setup_money(&pool).await;
     let mut blocker = pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE currencies IN SHARE MODE")
@@ -358,7 +378,8 @@ async fn racing_create(pool: PgPool, collision: &str) {
         _ => unreachable!(),
     };
     let first = tokio::spawn(interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         from_guild_in(
             json!(100),
             "racea",
@@ -369,7 +390,8 @@ async fn racing_create(pool: PgPool, collision: &str) {
         ),
     ));
     let second = tokio::spawn(interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         from_guild_in(
             json!(100),
             unit,
@@ -392,7 +414,7 @@ async fn racing_create(pool: PgPool, collision: &str) {
     let second = second.await.unwrap();
     assert_eq!(
         (first.status, second.status),
-        (200, 200),
+        (202, 202),
         "{collision}: first={}, second={}",
         first.body,
         second.body

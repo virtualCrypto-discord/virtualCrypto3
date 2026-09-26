@@ -8,11 +8,11 @@ mod support;
 use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{DEFAULT_PERMISSIONS, fake, interaction, setup_money, state};
+use support::{DEFAULT_PERMISSIONS, fake, rendered_interaction as interaction, setup_money, state};
 use time::{Duration, OffsetDateTime};
 
-fn router(pool: PgPool) -> Router {
-    vc_api::router(state(pool, fake()))
+fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
+    vc_api::router(state(pool, discord))
 }
 
 fn delete_data() -> Value {
@@ -27,9 +27,15 @@ fn from_guild(user: i64, guild_id: i64) -> Value {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn delete_asks_for_confirmation(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
-    let response = interaction(router(pool), from_guild(money.user1, money.guild)).await;
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        from_guild(money.user1, money.guild),
+    )
+    .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(9));
@@ -54,19 +60,30 @@ async fn delete_asks_for_confirmation(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn delete_requires_current_administrator_permissions(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
     let balance = support::get_amount(&pool, money.user1, money.currency).await;
     // Missing and malformed permissions must fail closed as well as a valid non-admin bit set.
     for permissions in [json!("0"), json!("32"), json!("invalid"), Value::Null] {
         let mut command = from_guild(money.user1, money.guild);
         command["member"]["permissions"] = permissions.clone();
-        let response = interaction(router(pool.clone()), command).await;
+        let response = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            command,
+        )
+        .await;
         assert_eq!(response.status, 200);
         assert_eq!(response.body["type"], 4, "no modal without permission");
         assert!(response.body.to_string().contains("管理者権限"));
 
         // The form was opened while the user was an administrator, but submitted after revocation.
-        let opened = interaction(router(pool.clone()), from_guild(money.user1, money.guild)).await;
+        let opened = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            from_guild(money.user1, money.guild),
+        )
+        .await;
         assert_eq!(opened.body["type"], 9);
         let submission = json!({
             "type": 5,
@@ -79,8 +96,13 @@ async fn delete_requires_current_administrator_permissions(pool: PgPool) {
                 }}],
             },
         });
-        let response = interaction(router(pool.clone()), submission).await;
-        assert_eq!(response.status, 200);
+        let response = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            submission,
+        )
+        .await;
+        assert_eq!(response.status, 202);
         assert!(response.body.to_string().contains("管理者権限"));
         assert!(
             support::currency_by_unit(&pool, &money.unit)
@@ -98,13 +120,19 @@ async fn delete_requires_current_administrator_permissions(pool: PgPool) {
 /// the same thing from the query's point of view.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn delete_outside_the_window_is_refused(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
     let aged = OffsetDateTime::now_utc() - Duration::days(73);
     let aged = time::PrimitiveDateTime::new(aged.date(), aged.time());
     support::set_currency_inserted_at(&pool, money.currency, aged).await;
 
-    let response = interaction(router(pool), from_guild(money.user1, money.guild)).await;
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        from_guild(money.user1, money.guild),
+    )
+    .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
@@ -124,6 +152,7 @@ async fn delete_outside_the_window_is_refused(pool: PgPool) {
 /// the currency and everything hanging off it go.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
 
     let payload = json!({
@@ -148,9 +177,14 @@ async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
         "guild_id": money.guild.to_string(),
     });
 
-    let response = interaction(router(pool.clone()), payload).await;
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        payload,
+    )
+    .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -172,8 +206,14 @@ async fn confirming_the_modal_deletes_the_currency(pool: PgPool) {
 }
 
 async fn submit_confirmation(pool: PgPool, uppercase: bool, expired: bool, legacy: bool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
-    let opened = interaction(router(pool.clone()), from_guild(money.user1, money.guild)).await;
+    let opened = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        from_guild(money.user1, money.guild),
+    )
+    .await;
     assert_eq!(opened.body["type"], 9);
     if expired {
         let now = OffsetDateTime::now_utc() - Duration::hours(73);
@@ -191,13 +231,13 @@ async fn submit_confirmation(pool: PgPool, uppercase: bool, expired: bool, legac
     } else {
         json!({"type":18,"component":input})
     };
-    let response = interaction(router(pool.clone()), json!({
+    let response = interaction(discord.clone(), router(discord.clone(), pool.clone()), json!({
         "type":5,
         "data":{"custom_id":opened.body["data"]["custom_id"],"components":[component]},
         "member":{"user":{"id":money.user1.to_string()},"permissions":DEFAULT_PERMISSIONS.to_string()},
         "guild_id":money.guild.to_string()
     })).await;
-    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.status, 202, "{}", response.body);
     assert_eq!(
         support::currency_by_unit(&pool, &money.unit)
             .await
@@ -228,6 +268,7 @@ async fn confirmation_accepts_a_legacy_action_row(pool: PgPool) {
 }
 
 async fn delete_after_approval(pool: PgPool, withdrawn: bool) {
+    let discord = fake();
     let money = setup_money(&pool).await;
     let app = support::insert_application(&pool, money.user1, "contract app").await;
     let now = OffsetDateTime::now_utc();
@@ -281,9 +322,14 @@ async fn delete_after_approval(pool: PgPool, withdrawn: bool) {
         .await
         .unwrap();
     let other_balance = support::get_amount(&pool, money.user2, money.currency2).await;
-    let opened = interaction(router(pool.clone()), from_guild(money.user1, money.guild)).await;
+    let opened = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        from_guild(money.user1, money.guild),
+    )
+    .await;
     assert_eq!(opened.body["type"], 9);
-    let response = interaction(router(pool.clone()), json!({
+    let response = interaction(discord.clone(), router(discord.clone(), pool.clone()), json!({
         "type": 5,
         "data": { "custom_id": opened.body["data"]["custom_id"], "components": [
             {"type": 18, "component": {"type": 4, "custom_id": "confirm", "value": format!("delete {}", money.unit)}}
@@ -292,7 +338,7 @@ async fn delete_after_approval(pool: PgPool, withdrawn: bool) {
         "guild_id": money.guild.to_string()
     })).await;
     assert_eq!(
-        response.status, 200,
+        response.status, 202,
         "withdrawn={withdrawn}: {}",
         response.body
     );

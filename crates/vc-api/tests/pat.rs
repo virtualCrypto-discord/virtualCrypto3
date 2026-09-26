@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
     Response, account_of, execute_from_dm, fake, get, insert_application, insert_asset,
-    insert_currency, insert_user, interaction, mint, mint_app, state,
+    insert_currency, insert_user, mint, mint_app, rendered_interaction as interaction, state,
 };
 use tower::ServiceExt;
 
@@ -62,8 +62,8 @@ async fn request(app: Router, method: &str, uri: &str, token: &str, body: Value)
     }
 }
 
-fn router(pool: PgPool) -> Router {
-    vc_api::router(state(pool, fake()))
+fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
+    vc_api::router(state(pool, discord))
 }
 
 /// A `/pat` interaction, typed by the account's own user in a direct message.
@@ -145,18 +145,29 @@ async fn names_of(pool: &PgPool) -> Vec<String> {
 /// with it does not.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_token_carries_the_scopes_the_registration_surface_checks(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
-    let created = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let created = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
     let token = token_of(&created);
 
-    let listed = get(router(pool.clone()), LIST_URI, Some(&token)).await;
+    let listed = get(
+        router(discord.clone(), pool.clone()),
+        LIST_URI,
+        Some(&token),
+    )
+    .await;
     assert_eq!(listed.status, 200, "{:?}", listed.body);
 
     // The same caller with a token that carries nothing: the endpoint is the scope's, not the
     // account's, so this is what proves the line above was the PAT's scope talking.
     let bare = mint(&pool, USER, &[]).await;
-    let refused = get(router(pool), LIST_URI, Some(&bare)).await;
+    let refused = get(router(discord.clone(), pool), LIST_URI, Some(&bare)).await;
     assert_ne!(refused.status, 200, "{:?}", refused.body);
 }
 
@@ -164,9 +175,15 @@ async fn the_token_carries_the_scopes_the_registration_surface_checks(pool: PgPo
 /// day could have been recorded — the `exp` claim and the row's `expires`.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_token_is_named_and_lives_until_it_is_revoked(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
-    let created = interaction(router(pool.clone()), pat("create", Some("claude code"))).await;
+    let created = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("claude code")),
+    )
+    .await;
 
     assert_eq!(accent(&created), COLOR_OK, "{:?}", created.body);
     assert!(token_of(&created).matches('.').count() >= 2, "a JWT");
@@ -208,25 +225,44 @@ async fn a_token_is_named_and_lives_until_it_is_revoked(pool: PgPool) {
 /// that answered 200 answers 401 the moment the name is revoked.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn revoking_a_name_kills_the_token(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
-    let created = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let created = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
     let token = token_of(&created);
 
     assert_eq!(
-        get(router(pool.clone()), LIST_URI, Some(&token))
-            .await
-            .status,
+        get(
+            router(discord.clone(), pool.clone()),
+            LIST_URI,
+            Some(&token)
+        )
+        .await
+        .status,
         200
     );
 
-    let revoked = interaction(router(pool.clone()), pat("revoke", Some("agent"))).await;
+    let revoked = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("revoke", Some("agent")),
+    )
+    .await;
 
     assert_eq!(accent(&revoked), COLOR_OK, "{:?}", revoked.body);
     assert_eq!(
-        get(router(pool.clone()), LIST_URI, Some(&token))
-            .await
-            .status,
+        get(
+            router(discord.clone(), pool.clone()),
+            LIST_URI,
+            Some(&token)
+        )
+        .await
+        .status,
         401,
         "the row is gone, so the token is"
     );
@@ -239,6 +275,7 @@ async fn revoking_a_name_kills_the_token(pool: PgPool) {
 /// user token, so it is the party: it approves, and it reads the contract among its own.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
     insert_currency(&pool, 1, "nyan", "nyan", GUILD, 500).await;
     insert_asset(&pool, USER, 1, 1_000).await;
@@ -252,7 +289,7 @@ async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
     .await;
 
     let created = request(
-        router(pool.clone()),
+        router(discord.clone(), pool.clone()),
         "POST",
         "/api/v2/contracts",
         &writer,
@@ -266,11 +303,16 @@ async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
     assert_eq!(created.status, 201, "{:?}", created.body);
     let id = created.body["id"].as_str().expect("a contract id");
 
-    let made = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let made = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
     let token = token_of(&made);
 
     let approved = request(
-        router(pool.clone()),
+        router(discord.clone(), pool.clone()),
         "POST",
         &format!("/api/v2/contracts/{id}/approval"),
         &token,
@@ -281,7 +323,12 @@ async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
     assert_eq!(approved.status, 200, "{:?}", approved.body);
     assert_eq!(approved.body["parties"][0]["status"], "approved");
 
-    let mine = get(router(pool), "/api/v2/users/@me/contracts", Some(&token)).await;
+    let mine = get(
+        router(discord.clone(), pool),
+        "/api/v2/users/@me/contracts",
+        Some(&token),
+    )
+    .await;
 
     assert_eq!(mine.status, 200, "{:?}", mine.body);
     assert_eq!(mine.body.as_array().map(Vec::len), Some(1));
@@ -291,17 +338,32 @@ async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
 /// second is refused rather than made, and the first keeps working.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_name_can_only_be_used_once(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
-    let first = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
-    let again = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let first = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
+    let again = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
 
     assert_eq!(accent(&again), COLOR_ERROR, "{:?}", again.body);
     assert_eq!(names_of(&pool).await.len(), 1, "the first one is still it");
     assert_eq!(
-        get(router(pool), LIST_URI, Some(&token_of(&first)))
-            .await
-            .status,
+        get(
+            router(discord.clone(), pool),
+            LIST_URI,
+            Some(&token_of(&first))
+        )
+        .await
+        .status,
         200
     );
 }
@@ -310,10 +372,16 @@ async fn a_name_can_only_be_used_once(pool: PgPool) {
 /// statement about the command and this is the code that has to make it true.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_name_longer_than_the_option_allows_is_refused(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
     let long = "a".repeat(33);
-    let refused = interaction(router(pool.clone()), pat("create", Some(&long))).await;
+    let refused = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some(&long)),
+    )
+    .await;
 
     assert_eq!(accent(&refused), COLOR_ERROR, "{:?}", refused.body);
     assert!(
@@ -330,9 +398,15 @@ async fn a_name_longer_than_the_option_allows_is_refused(pool: PgPool) {
 /// nothing else, and the token itself is one place only — the message that made it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
-    let empty = interaction(router(pool.clone()), pat("list", None)).await;
+    let empty = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("list", None),
+    )
+    .await;
     assert_eq!(accent(&empty), COLOR_BRAND, "{:?}", empty.body);
     assert!(
         lines(&empty)[0].contains("/pat create"),
@@ -340,13 +414,28 @@ async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
         lines(&empty)
     );
 
-    let created = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let created = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
     let token = token_of(&created);
 
-    let second = interaction(router(pool.clone()), pat("create", Some("claude code"))).await;
+    let second = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("claude code")),
+    )
+    .await;
     assert_eq!(accent(&second), COLOR_OK, "{:?}", second.body);
 
-    let listed = interaction(router(pool), pat("list", None)).await;
+    let listed = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        pat("list", None),
+    )
+    .await;
 
     assert_eq!(
         lines(&listed),
@@ -364,11 +453,13 @@ async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
 /// sent to still holds every name.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
     for index in 0..25 {
         let made = interaction(
-            router(pool.clone()),
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
             pat("create", Some(&format!("t{index:02}"))),
         )
         .await;
@@ -376,7 +467,12 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
         assert_eq!(accent(&made), COLOR_OK, "{:?}", made.body);
     }
 
-    let refused = interaction(router(pool.clone()), pat("create", Some("one too many"))).await;
+    let refused = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("one too many")),
+    )
+    .await;
 
     assert_eq!(accent(&refused), COLOR_ERROR, "{:?}", refused.body);
 
@@ -389,7 +485,12 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
     );
     assert_eq!(names_of(&pool).await.len(), 25, "and nothing more was made");
 
-    let listed = interaction(router(pool), pat("list", None)).await;
+    let listed = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        pat("list", None),
+    )
+    .await;
 
     assert_eq!(
         lines(&listed).len(),
@@ -407,7 +508,13 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
 /// than being handed a credential that would resolve against nothing.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_caller_without_an_account_is_told_so(pool: PgPool) {
-    let created = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let discord = fake();
+    let created = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
 
     assert_eq!(accent(&created), COLOR_ERROR, "{:?}", created.body);
     assert!(
@@ -420,10 +527,12 @@ async fn a_caller_without_an_account_is_told_so(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn concurrent_pat_creation_respects_limit(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
     for index in 0..24 {
         let response = interaction(
-            router(pool.clone()),
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
             pat("create", Some(&format!("token{index}"))),
         )
         .await;
@@ -438,11 +547,13 @@ async fn concurrent_pat_creation_respects_limit(pool: PgPool) {
         .await
         .unwrap();
     let a = tokio::spawn(interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         pat("create", Some("parallel-a")),
     ));
     let b = tokio::spawn(interaction(
-        router(pool.clone()),
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
         pat("create", Some("parallel-b")),
     ));
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -456,8 +567,8 @@ async fn concurrent_pat_creation_respects_limit(pool: PgPool) {
     blocker.commit().await.unwrap();
     let a = a.await.unwrap();
     let b = b.await.unwrap();
-    assert_eq!(a.status, 200);
-    assert_eq!(b.status, 200);
+    assert_eq!(a.status, 202);
+    assert_eq!(b.status, 202);
     let mut colors = [
         a.body["data"]["components"][0]["accent_color"]
             .as_i64()
@@ -481,7 +592,12 @@ async fn pat_registration(
     pool: &PgPool,
     discord: std::sync::Arc<support::FakeDiscord>,
 ) -> Response {
-    let made = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let made = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
     assert_eq!(accent(&made), COLOR_OK);
     request(
         vc_api::router(state(pool.clone(), discord)),
@@ -511,7 +627,12 @@ async fn pat_registers_and_reads_profile_without_browser_login(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(owner, DISCORD_ID);
-    let made = interaction(router(pool.clone()), pat("create", Some("profile"))).await;
+    let made = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("profile")),
+    )
+    .await;
     let me = get(
         vc_api::router(state(pool, discord)),
         "/api/v2/users/@me",
@@ -531,6 +652,7 @@ async fn pat_registers_and_reads_profile_without_browser_login(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn pat_works_with_an_unusable_browser_authorization(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
     support::insert_discord_auth(&pool, DISCORD_ID, "old-token").await;
     support::set_discord_updated_at(
@@ -545,11 +667,20 @@ async fn pat_works_with_an_unusable_browser_authorization(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(pat_registration(&pool, fake()).await.status, 201);
-    let made = interaction(router(pool.clone()), pat("create", Some("profile"))).await;
+    let made = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("profile")),
+    )
+    .await;
     assert_eq!(
-        get(router(pool), "/api/v2/users/@me", Some(&token_of(&made)))
-            .await
-            .status,
+        get(
+            router(discord.clone(), pool),
+            "/api/v2/users/@me",
+            Some(&token_of(&made))
+        )
+        .await
+        .status,
         200
     );
 }
@@ -572,8 +703,14 @@ async fn pat_registration_still_refuses_bots(pool: PgPool) {
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn pat_registration_requires_a_successful_profile_lookup(pool: PgPool) {
+    let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
-    let made = interaction(router(pool.clone()), pat("create", Some("agent"))).await;
+    let made = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("create", Some("agent")),
+    )
+    .await;
     let token = token_of(&made);
     for status in [404, 503] {
         let discord = std::sync::Arc::new(support::FakeDiscord::with_user_status(status));

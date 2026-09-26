@@ -559,14 +559,10 @@ async fn an_issuance_to_the_reader_is_on_their_own_screen(pool: PgPool) {
     assert!(!other.contains("発行: **300**"), "{other}");
 }
 
-/// A payment whose receiver is one of the contract's parties puts the money back in that party's
-/// wallet, and their own ledger shows it: a return, not a charge the wallet's history hides.
-///
-/// Two parties and no fixed receiver, so the draw is the oldest approval first and the money
-/// lands in one of their wallets — one movement of the escrow into one wallet, which is why the
-/// ledger gets one row for it rather than a slice per party drawn on.
+/// A credit funded by the receiver and another party separates the receiver's
+/// own return from the other party's payment, on both the screen and statement.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_payment_to_a_party_is_a_return_in_the_wallet_history(pool: PgPool) {
+async fn a_mixed_payment_to_a_party_shows_the_return_and_receipt_separately(pool: PgPool) {
     let money = setup_money(&pool).await;
 
     let application = insert_application(&pool, MONEY_USER1, "a metered service").await;
@@ -604,32 +600,40 @@ async fn a_payment_to_a_party_is_a_return_in_the_wallet_history(pool: PgPool) {
     let payed =
         vc_core::contract::pay(&pool, contract, application, MONEY_USER1, None, 120, || now)
             .await
-            .expect("a return");
+            .expect("a payment containing a return and a charge");
 
     assert_eq!(payed.amount, 120);
 
-    // The wallet's ledger has the lock and the return, and not a charge.
+    // Both credits appear, without debiting either wallet again for the charge.
     let screen =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
-    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
+    assert!(screen.contains("**送金の履歴** (3件)"), "{screen}");
     assert!(
         screen.contains("契約にロック: **100** `n` → Bot未連携: `a metered service`"),
         "{screen}"
     );
     assert!(
-        screen.contains("契約から返却: **120** `n` ← Bot未連携: `a metered service`"),
+        screen.contains("契約から返却: **100** `n` ← Bot未連携: `a metered service`"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("契約から受取: **20** `n` ← Bot未連携: `a metered service`"),
         "{screen}"
     );
 
-    // And the contract's own statement agrees, in one row: the escrow sent it, and the party
-    // received it.
+    // The statement preserves the other party's source separately from the return.
     let statement =
         vc_core::contract::payments(&pool, contract, vc_core::page::Cursor::First, None)
             .await
             .expect("a statement");
 
-    assert_eq!(statement[0].event, "return");
-    assert_eq!(statement[0].amount, 120);
-    assert_eq!(statement[0].discord_id, None, "the escrow sent it");
+    assert_eq!(statement.len(), 4);
+    assert_eq!(statement[0].event, "charge");
+    assert_eq!(statement[0].amount, 20);
+    assert_eq!(statement[0].discord_id, Some(MONEY_USER2));
     assert_eq!(statement[0].receiver_discord_id, Some(MONEY_USER1));
+    assert_eq!(statement[1].event, "return");
+    assert_eq!(statement[1].amount, 100);
+    assert_eq!(statement[1].discord_id, None);
+    assert_eq!(statement[1].receiver_discord_id, Some(MONEY_USER1));
 }

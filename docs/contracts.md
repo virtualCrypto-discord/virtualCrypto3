@@ -234,6 +234,11 @@ multi-party contract has several rows for one payment; for the one-party contrac
 a metered application writes, the two are the same list. A row names the party the
 money came out of, the amount of that slice, the receiver, and when.
 
+Only a slice returned to the same party it was drawn from is a `return` with a
+null sender. Paying a different party remains a `charge` naming the source party.
+A payment drawn across several parties can therefore write both charge and
+return rows when the receiver is one of them.
+
 The ledger does not say which contract a row belongs to on its own: the column
 that does it is this service's own, added in migration `0009`, and **the rows
 written before it are not in any statement** — they are byte for byte an ordinary

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency_payment_histories\n             (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,\n              updated_at)\n         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6\n           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)\n           JOIN users u ON u.id = t.sender_id\n           JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id\n          ORDER BY p.approval_order, p.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "142ed1d8b647372f5ac1913d0cb1a8e0a119158bf5d611f32d6010ca4784d625"
+}

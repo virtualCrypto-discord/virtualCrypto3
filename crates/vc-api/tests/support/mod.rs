@@ -71,9 +71,9 @@ pub struct FakeDiscord {
     user_calls: AtomicUsize,
     user_status: u16,
     user_profile: Option<Map<String, Value>>,
-    webhooks: Mutex<Vec<Value>>,
-    callbacks: Mutex<Vec<Value>>,
-    response_edits: Mutex<Vec<Value>>,
+    webhooks: Mutex<Vec<(String, Value)>>,
+    callbacks: Mutex<Vec<(String, Value)>>,
+    response_edits: Mutex<Vec<(String, Value)>>,
     response_edit_finished: tokio::sync::Notify,
     response_edit_error: bool,
     response_deletions: AtomicUsize,
@@ -323,11 +323,21 @@ impl FakeDiscord {
     }
 
     pub fn callbacks(&self) -> Vec<Value> {
-        self.callbacks.lock().unwrap().clone()
+        self.callbacks
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, body)| body.clone())
+            .collect()
     }
 
     pub fn response_edits(&self) -> Vec<Value> {
-        self.response_edits.lock().unwrap().clone()
+        self.response_edits
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, body)| body.clone())
+            .collect()
     }
 
     pub async fn response_edit_finished(&self) {
@@ -348,7 +358,9 @@ impl FakeDiscord {
         self.webhooks
             .lock()
             .expect("the fake is not poisoned")
-            .clone()
+            .iter()
+            .map(|(_, body)| body.clone())
+            .collect()
     }
 }
 
@@ -459,7 +471,10 @@ impl DiscordApi for FakeDiscord {
         if self.callback_error {
             return Err(DiscordError::Request("simulated callback failure".into()));
         }
-        self.callbacks.lock().unwrap().push(body.clone());
+        self.callbacks
+            .lock()
+            .unwrap()
+            .push((token.to_owned(), body.clone()));
         Ok(())
     }
 
@@ -482,7 +497,10 @@ impl DiscordApi for FakeDiscord {
                 "simulated response edit failure".into(),
             ));
         }
-        self.response_edits.lock().unwrap().push(body.clone());
+        self.response_edits
+            .lock()
+            .unwrap()
+            .push((token.to_owned(), body.clone()));
         self.response_edit_finished.notify_one();
         Ok(())
     }
@@ -490,7 +508,7 @@ impl DiscordApi for FakeDiscord {
     async fn post_webhook_message(
         &self,
         _application_id: &str,
-        _token: &str,
+        token: &str,
         body: &Value,
     ) -> Result<(), DiscordError> {
         assert!(
@@ -509,7 +527,7 @@ impl DiscordApi for FakeDiscord {
         self.webhooks
             .lock()
             .expect("the fake is not poisoned")
-            .push(body.clone());
+            .push((token.to_owned(), body.clone()));
         self.followup_finished.notify_one();
 
         Ok(())
@@ -1408,6 +1426,72 @@ pub fn callback_fields(mut payload: Value) -> Value {
     payload["application_id"] = json!("123");
     payload["token"] = json!("interaction-test-token");
     payload
+}
+
+/// Read the final private message for rendering assertions while retaining the
+/// real HTTP status. Raw acknowledgement and failure tests use `interaction`.
+/// Correlating by token also covers concurrent interactions using the same fake.
+pub async fn rendered_interaction(
+    discord: Arc<FakeDiscord>,
+    app: Router,
+    payload: Value,
+) -> Response {
+    static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(1);
+    let token = format!("rendered-{}", NEXT_TOKEN.fetch_add(1, Ordering::SeqCst));
+    let mut payload = callback_fields(payload);
+    payload["token"] = json!(token);
+    let response = interaction(app, payload).await;
+    if response.status != 202 {
+        return response;
+    }
+    let callback = discord
+        .callbacks
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(key, _)| key == &token)
+        .expect("callback before HTTP 202")
+        .1
+        .clone();
+    let update = callback["type"] == 6;
+    if update {
+        assert_eq!(callback, json!({"type":6}));
+    } else {
+        assert!(callback["type"] == 4 || callback["type"] == 5);
+        assert_eq!(callback["data"]["flags"], 64);
+    }
+    let body = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some((_, body)) = discord
+                .response_edits
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(key, _)| key == &token)
+            {
+                assert_eq!(body["flags"], 32768);
+                let mut body = body.clone();
+                // An edit inherits the original message's ephemeral state.
+                body["flags"] = json!(32832);
+                return json!({"type":if update {7} else {4}, "data":body});
+            }
+            if let Some((_, body)) = discord
+                .webhooks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(key, _)| key == &token)
+            {
+                assert!(update);
+                assert_eq!(body["flags"], 32832);
+                return json!({"type":4, "data":body});
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("operation delivered its result");
+    Response { body, ..response }
 }
 
 /// Rendering tests read the delivered message inside the old type/data envelope.
