@@ -39,6 +39,8 @@
 //! `--role-id` in place of `--receiver-id` pays everyone who holds that role,
 //! `--amount` each. The sample reads Discord itself with `--bot-token`, so the
 //! service is asked to do nothing it did not already do.
+//! Register `refresh_token` in the application's `grant_types` for role runs.
+//! The program renews expired tokens and continues with the unpaid member.
 //!
 //! ```text
 //! cargo run -p vc-demo-app --bin demo-issue -- \
@@ -108,6 +110,38 @@ struct Ask {
 struct Token {
     access_token: String,
     token_type: String,
+    refresh_token: Option<String>,
+}
+
+impl Token {
+    async fn renew(&mut self, client: &reqwest::Client, service: &str) -> Result<(), String> {
+        let refresh_token = self.refresh_token.as_deref().ok_or_else(|| {
+            "token renewal requires refresh_token in the application's grant_types".to_owned()
+        })?;
+        let answer = client
+            .post(format!("{service}/oauth2/token"))
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+            ])
+            .send()
+            .await
+            .map_err(|error| format!("the token endpoint could not be reached: {error}"))?;
+        if answer.status() != reqwest::StatusCode::OK {
+            let refused: Value = answer.json().await.unwrap_or(Value::Null);
+            return Err(format!("the guild token could not be renewed: {refused}"));
+        }
+        let next: Token = answer
+            .json()
+            .await
+            .map_err(|error| format!("the token endpoint returned an invalid token: {error}"))?;
+        if next.token_type != "Bearer" || next.refresh_token.is_none() {
+            return Err("the token endpoint did not return a renewable Bearer token".into());
+        }
+        // Refresh tokens rotate: the next renewal must use the replacement.
+        *self = next;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -370,17 +404,20 @@ async fn plan_role_run(
 /// A 429 comes from the `GuildToken` extractor, which runs before the handler
 /// does — nothing was written, so waiting and resending is safe without an
 /// `Idempotency-Key`. The window is fixed, so sixty-one seconds is past its end.
+/// A 401 also precedes the write. Renew and retry this member once; completed
+/// members stay completed, and an unusable replacement must not loop forever.
 async fn issue_to(
     client: &reqwest::Client,
     service: &str,
-    access_token: &str,
+    token: &mut Token,
     receiver: &str,
     amount: &str,
-) -> Issued {
+) -> Result<Issued, String> {
+    let mut renewed = false;
     loop {
         let answer = client
             .post(format!("{service}/api/v2/currencies/issue"))
-            .bearer_auth(access_token)
+            .bearer_auth(&token.access_token)
             .header("Accept", "application/json")
             .json(&serde_json::json!({
                 "receiver_discord_id": receiver,
@@ -388,24 +425,30 @@ async fn issue_to(
             }))
             .send()
             .await
-            .unwrap_or_else(|error| {
-                eprintln!("the issuing endpoint could not be reached: {error}");
-                std::process::exit(1)
-            });
+            .map_err(|error| format!("the issuing endpoint could not be reached: {error}"))?;
 
         if answer.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            eprintln!("rate limited; waiting 60s");
+            eprintln!("rate limited; waiting 61s");
             tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+            continue;
+        }
+
+        if answer.status() == reqwest::StatusCode::UNAUTHORIZED && !renewed {
+            token.renew(client, service).await?;
+            renewed = true;
             continue;
         }
 
         if answer.status() != reqwest::StatusCode::CREATED {
             let refused: Value = answer.json().await.unwrap_or(Value::Null);
-            eprintln!("the guild would not issue to {receiver}: {refused}");
-            std::process::exit(1);
+            return Err(format!(
+                "the guild would not issue to {receiver}: {refused}"
+            ));
         }
 
-        answer.json().await.expect("an issuance")
+        return answer.json().await.map_err(|error| {
+            format!("the issuing endpoint returned an invalid issuance: {error}")
+        });
     }
 }
 
@@ -503,7 +546,7 @@ async fn main() {
     // The poll, the way RFC 8628 says a device polls: the same `device_code`
     // until the guild answers, and `authorization_pending` is the answer that
     // means "not yet".
-    let token: Token = loop {
+    let mut token: Token = loop {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         let answer = client
@@ -540,10 +583,19 @@ async fn main() {
     // Every holder of the role, one at a time. `holders` cannot be empty here:
     // an empty role was refused before the device flow, so this always runs.
     if let (Some(role_id), Some(_)) = (&role_id, &bot_token) {
+        if token.refresh_token.is_none() {
+            eprintln!("role distribution requires refresh_token in the application's grant_types");
+            std::process::exit(1);
+        }
         let mut pool_held = String::new();
 
         for (index, holder) in holders.iter().enumerate() {
-            let issued = issue_to(&client, &service, &token.access_token, holder, &amount).await;
+            let issued = issue_to(&client, &service, &mut token, holder, &amount)
+                .await
+                .unwrap_or_else(|error| {
+                    eprintln!("{error}");
+                    std::process::exit(1)
+                });
             pool_held = issued.pool_amount;
 
             println!(
@@ -565,25 +617,12 @@ async fn main() {
 
     let receiver_id = receiver_id.expect("one target was chosen above");
 
-    let issued: Issued = client
-        .post(format!("{service}/api/v2/currencies/issue"))
-        .bearer_auth(&token.access_token)
-        .header("Accept", "application/json")
-        .json(&serde_json::json!({
-            "receiver_discord_id": receiver_id,
-            "amount": amount,
-        }))
-        .send()
+    let issued = issue_to(&client, &service, &mut token, &receiver_id, &amount)
         .await
-        .expect("the issuing endpoint answers")
-        .error_for_status()
         .unwrap_or_else(|error| {
-            eprintln!("the guild would not issue: {error}");
+            eprintln!("{error}");
             std::process::exit(1)
-        })
-        .json()
-        .await
-        .expect("an issuance");
+        });
 
     println!(
         "issued {} {} to {receiver_id}; the pool holds {}",
@@ -632,5 +671,216 @@ mod tests {
         assert_eq!(total_for(0, 100), Some(0));
         assert_eq!(total_for(3, 100), Some(300));
         assert_eq!(total_for(3, i64::MAX), None);
+    }
+
+    #[tokio::test]
+    async fn successful_issuances_return_and_pay_each_holder_once() {
+        use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+        use std::sync::{Arc, Mutex};
+
+        async fn issue(
+            State(paid): State<Arc<Mutex<Vec<Value>>>>,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            let mut paid = paid.lock().unwrap();
+            paid.push(body);
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "amount": "10", "pool_amount": (100 - paid.len() * 10).to_string(), "unit": "n"
+                })),
+            )
+        }
+
+        let paid = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/api/v2/currencies/issue", post(issue))
+            .with_state(paid.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let service = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut token = Token {
+            access_token: "test-token".into(),
+            token_type: "Bearer".into(),
+            refresh_token: Some("test-refresh".into()),
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for (index, receiver) in ["1", "2", "3"].into_iter().enumerate() {
+                let issued = issue_to(&client, &service, &mut token, receiver, "10")
+                    .await
+                    .unwrap();
+                assert_eq!(issued.amount, "10");
+                assert_eq!(issued.pool_amount, (90 - index * 10).to_string());
+                assert_eq!(issued.unit, "n");
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *paid.lock().unwrap(),
+            ["1", "2", "3"].map(|receiver| json!({
+                "receiver_discord_id": receiver, "amount": "10"
+            }))
+        );
+        server.abort();
+    }
+
+    struct Script {
+        replies: std::collections::VecDeque<(&'static str, u16, Value)>,
+        requests: Vec<(String, String, String)>,
+    }
+
+    struct ScriptServer {
+        url: String,
+        script: std::sync::Arc<std::sync::Mutex<Script>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for ScriptServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    async fn scripted(replies: Vec<(&'static str, u16, Value)>) -> ScriptServer {
+        use axum::{Json, Router, extract::Request, http::StatusCode};
+        use std::sync::{Arc, Mutex};
+
+        let script = Arc::new(Mutex::new(Script {
+            replies: replies.into(),
+            requests: Vec::new(),
+        }));
+        let handler = script.clone();
+        let app = Router::new().fallback(move |request: Request| {
+            let script = handler.clone();
+            async move {
+                let path = request.uri().path().to_owned();
+                let auth = request
+                    .headers()
+                    .get("authorization")
+                    .map(|value| value.to_str().unwrap().to_owned())
+                    .unwrap_or_default();
+                let body = axum::body::to_bytes(request.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let mut script = script.lock().unwrap();
+                script.requests.push((
+                    path.clone(),
+                    auth,
+                    String::from_utf8(body.to_vec()).unwrap(),
+                ));
+                let (expected, status, body) =
+                    script.replies.pop_front().expect("unexpected request");
+                assert_eq!(path, expected);
+                (StatusCode::from_u16(status).unwrap(), Json(body))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        ScriptServer { url, script, task }
+    }
+
+    fn renewable_token() -> Token {
+        Token {
+            access_token: "access-0".into(),
+            token_type: "Bearer".into(),
+            refresh_token: Some("refresh-0".into()),
+        }
+    }
+
+    fn renewed_token(generation: usize) -> Value {
+        json!({
+            "access_token": format!("access-{generation}"), "token_type": "Bearer",
+            "refresh_token": format!("refresh-{generation}"), "expires_in": 3600
+        })
+    }
+
+    const ISSUE: &str = "/api/v2/currencies/issue";
+    const TOKEN: &str = "/oauth2/token";
+
+    #[tokio::test]
+    async fn token_expiry_resumes_the_unpaid_member_and_uses_rotated_refresh_tokens() {
+        let issued = json!({"amount":"10", "pool_amount":"70", "unit":"n"});
+        let expired = json!({"error":"invalid_token"});
+        let server = scripted(vec![
+            (ISSUE, 201, issued.clone()),
+            (ISSUE, 401, expired.clone()),
+            (TOKEN, 200, renewed_token(1)),
+            (ISSUE, 201, issued.clone()),
+            (ISSUE, 401, expired),
+            (TOKEN, 200, renewed_token(2)),
+            (ISSUE, 201, issued),
+        ])
+        .await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut token = renewable_token();
+        for receiver in ["1", "2", "3"] {
+            let result = issue_to(&client, &server.url, &mut token, receiver, "10")
+                .await
+                .unwrap();
+            assert_eq!(result.amount, "10");
+        }
+        let script = server.script.lock().unwrap();
+        assert!(script.replies.is_empty());
+        let issues: Vec<_> = script
+            .requests
+            .iter()
+            .filter(|(path, _, _)| path == ISSUE)
+            .collect();
+        let receivers: Vec<Value> = issues
+            .iter()
+            .map(|(_, _, body)| {
+                serde_json::from_str::<Value>(body).unwrap()["receiver_discord_id"].clone()
+            })
+            .collect();
+        assert_eq!(receivers, ["1", "2", "2", "3", "3"].map(Value::from));
+        assert_eq!(
+            issues
+                .iter()
+                .map(|(_, auth, _)| auth.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Bearer access-0",
+                "Bearer access-0",
+                "Bearer access-1",
+                "Bearer access-1",
+                "Bearer access-2"
+            ]
+        );
+        let refreshes: Vec<_> = script
+            .requests
+            .iter()
+            .filter(|(path, _, _)| path == TOKEN)
+            .map(|(_, _, body)| body.as_str())
+            .collect();
+        assert_eq!(
+            refreshes,
+            [
+                "grant_type=refresh_token&refresh_token=refresh-0",
+                "grant_type=refresh_token&refresh_token=refresh-1"
+            ]
+        );
+        assert_eq!(token.refresh_token.as_deref(), Some("refresh-2"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_or_unusable_replacement_stops_without_looping() {
+        for refresh_fails in [true, false] {
+            let mut replies = vec![(ISSUE, 401, json!({"error":"invalid_token"}))];
+            if refresh_fails {
+                replies.push((TOKEN, 400, json!({"error":"invalid_grant"})));
+            } else {
+                replies.push((TOKEN, 200, renewed_token(1)));
+                replies.push((ISSUE, 401, json!({"error":"invalid_token"})));
+            }
+            let server = scripted(replies).await;
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let result = issue_to(&client, &server.url, &mut renewable_token(), "2", "10").await;
+            assert!(result.is_err());
+            assert!(server.script.lock().unwrap().replies.is_empty());
+        }
     }
 }

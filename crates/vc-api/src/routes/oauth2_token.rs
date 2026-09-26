@@ -177,20 +177,23 @@ async fn device(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Respo
         return error("invalid_grant", "invalid_device_code");
     }
 
-    let access_token =
-        match create_device_token(state.pool(), &asked, OffsetDateTime::now_utc()).await {
-            Ok(Some(token)) => token,
-            Ok(None) => return error("invalid_grant", "invalid_device_code"),
-            Err(_) => return invalid_client(),
-        };
+    let exchanged = match create_device_token(state.pool(), &asked, OffsetDateTime::now_utc()).await
+    {
+        Ok(Some(token)) => token,
+        Ok(None) => return error("invalid_grant", "invalid_device_code"),
+        Err(_) => return invalid_client(),
+    };
 
-    Json(json!({
-        "access_token": access_token,
+    let mut body = json!({
+        "access_token": exchanged.access_token,
         "grant_id": asked.grant_id.map(|id| id.to_string()),
         "token_type": "Bearer",
-        "expires_in": EXPIRES_IN,
-    }))
-    .into_response()
+        "expires_in": exchanged.expires_in,
+    });
+    if let Some(refresh_token) = exchanged.refresh_token {
+        body["refresh_token"] = json!(refresh_token);
+    }
+    Json(body).into_response()
 }
 
 /// The shape that answers with a signed JWT, for the application itself rather

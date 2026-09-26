@@ -398,6 +398,10 @@ belief into a fact, and each of these was run while the code was written:
       a bot without the `GUILD_MEMBERS` intent, or one that is not in the guild,
       is refused with the Discord status and body. `--discord-api` points the
       Discord half at a stub so the three refusals can be reached by hand.
+      Enable `refresh_token` in the application's `grant_types`: without it the
+      run stops before issuing. Expire an access token during distribution and
+      verify that renewal resumes at the unpaid member, with one issuance per
+      member; a revoked grant stops renewal.
 
 ## 3. Human
 

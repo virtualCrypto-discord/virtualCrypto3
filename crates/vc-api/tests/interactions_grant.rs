@@ -1294,11 +1294,13 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
     let ta = vc_core::grant::create_device_token(&pool, &a, now)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .access_token;
     let tb = vc_core::grant::create_device_token(&pool, &b, now)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .access_token;
     for (token, resources) in [(&legacy_token, vec![]), (&ta, vec![]), (&tb, vec![1])] {
         assert_eq!(
             vc_core::grant::resolve_token(&pool, token.parse().unwrap(), now)

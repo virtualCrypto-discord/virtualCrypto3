@@ -80,6 +80,24 @@ async fn a_credential_that_does_not_resolve_is_counted(pool: PgPool) {
     assert_eq!(monitor.count_for(Signal::AuthFailed, "unauthenticated"), 1);
 }
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_refusal_saves_its_notification_before_returning(pool: PgPool) {
+    let monitor = Arc::new(BehaviorMonitor::for_test().with_webhook(
+        pool.clone(),
+        Some("https://security.example.invalid/webhook/secret".into()),
+    ));
+    let app = vc_api::router(state_watched(pool.clone(), fake(), unlimited(), monitor));
+    let response = get(app, URI, Some("not-a-jwt")).await;
+    assert_eq!(response.status, 401);
+    let saved: (String, serde_json::Value) =
+        sqlx::query_as("SELECT signal, body FROM security_webhook_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(saved.0, "auth_failed");
+    assert_eq!(saved.1["subject"], "unauthenticated");
+}
+
 /// Every response is a datum for the error rate and the surge, except the
 /// heartbeat: this service asking about itself is not callers' behaviour.
 #[sqlx::test(migrations = "../vc-core/migrations")]

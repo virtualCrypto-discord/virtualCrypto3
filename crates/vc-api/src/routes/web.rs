@@ -108,14 +108,17 @@ pub struct CallbackQuery {
 /// The state is what makes an answer checkable at all: without a session that
 /// remembers what was asked for, an answer cannot be told apart from one
 /// somebody else solicited.
-fn refuse(state: &AppState, why: &str) -> Response {
+async fn refuse(state: &AppState, why: &str) -> Response {
     tracing::info!(why, "refusing a Discord callback");
 
-    state.monitor().observe(
-        crate::security::Signal::CallbackRefused,
-        "discord-callback",
-        why,
-    );
+    state
+        .monitor()
+        .observe(
+            crate::security::Signal::CallbackRefused,
+            "discord-callback",
+            why,
+        )
+        .await;
 
     (
         [(SET_COOKIE, clear_cookie(state.secure_cookies()))],
@@ -137,23 +140,23 @@ pub async fn discord_callback(
     Query(query): Query<CallbackQuery>,
 ) -> Response {
     let Some(session) = session::from_headers(&headers, state.session_secret()) else {
-        return refuse(&state, "no session");
+        return refuse(&state, "no session").await;
     };
 
     let Some(attempt) = session.discord_oauth2 else {
-        return refuse(&state, "no login in flight");
+        return refuse(&state, "no login in flight").await;
     };
 
     if attempt.state != query.state {
-        return refuse(&state, "the state does not match the one we sent");
+        return refuse(&state, "the state does not match the one we sent").await;
     }
 
     let Ok(token) = state.discord().exchange_code(&query.code).await else {
-        return refuse(&state, "the code could not be exchanged");
+        return refuse(&state, "the code could not be exchanged").await;
     };
 
     let Ok(profile) = state.discord().get_user_info(&token.token).await else {
-        return refuse(&state, "the profile could not be read");
+        return refuse(&state, "the profile could not be read").await;
     };
 
     let Some(discord_user_id) = profile
@@ -161,7 +164,7 @@ pub async fn discord_callback(
         .and_then(Value::as_str)
         .and_then(|id| id.parse::<i64>().ok())
     else {
-        return refuse(&state, "the profile has no usable id");
+        return refuse(&state, "the profile has no usable id").await;
     };
 
     let now = OffsetDateTime::now_utc();
@@ -177,7 +180,7 @@ pub async fn discord_callback(
     )
     .await
     else {
-        return refuse(&state, "the authorization could not be recorded");
+        return refuse(&state, "the authorization could not be recorded").await;
     };
 
     match set_cookie(
@@ -190,7 +193,7 @@ pub async fn discord_callback(
             Redirect::to(login_return_path(&attempt.continue_to)),
         )
             .into_response(),
-        Err(_) => refuse(&state, "the session could not be signed"),
+        Err(_) => refuse(&state, "the session could not be signed").await,
     }
 }
 

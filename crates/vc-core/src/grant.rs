@@ -299,7 +299,7 @@ impl ExchangeError {
     }
 }
 
-/// What a code is exchanged for.
+/// What a code or an approved device request is exchanged for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exchanged {
     pub access_token: String,
@@ -544,17 +544,20 @@ pub async fn grant_for(pool: &PgPool, application_id: i64, guild_id: i64) -> Res
     Ok(found)
 }
 
-/// Mint a device token only while every approved scope is still granted.
+/// Mint device tokens only while every approved scope is still granted.
 /// Lock the scope rows until the token is committed so revocation cannot slip
-/// between checking permission and issuing the token.
+/// between checking permission and issuing the tokens. Refresh is opt-in, just
+/// as it is for the code exchange, and both tokens belong to this exact grant.
 pub async fn create_device_token(
     pool: &PgPool,
     request: &GrantRequest,
     now: OffsetDateTime,
-) -> Result<Option<String>> {
+) -> Result<Option<Exchanged>> {
     let mut tx = pool.begin().await?;
-    let grant_id = sqlx::query_scalar!(
-        "SELECT g.id FROM grants g JOIN grant_requests r ON r.grant_id = g.id
+    let grant = sqlx::query!(
+        "SELECT g.id, COALESCE(a.grant_types::text[], ARRAY[]::text[]) AS \"grant_types!\"
+           FROM grants g JOIN grant_requests r ON r.grant_id = g.id
+           JOIN applications a ON a.id = g.application_id
           WHERE r.id = $1 AND r.application_id = $2 AND r.status = 'approved'
             AND r.inserted_at + make_interval(secs => r.expires_in) > $3
             AND g.guild_id IS NOT DISTINCT FROM $4
@@ -567,9 +570,10 @@ pub async fn create_device_token(
     )
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(grant_id) = grant_id else {
+    let Some(grant) = grant else {
         return Ok(None);
     };
+    let grant_id = grant.id;
     let scopes = sqlx::query_scalar!(
         r#"SELECT scope::text AS "scope!" FROM grant_scopes
             WHERE grant_id = $1 FOR SHARE"#,
@@ -580,9 +584,19 @@ pub async fn create_device_token(
     if request.scopes.iter().any(|scope| !scopes.contains(scope)) {
         return Ok(None);
     }
-    let token = create_access_token(&mut *tx, grant_id, now).await?;
+    let access_token = create_access_token(&mut *tx, grant_id, now).await?;
+    let refresh_token = if grant.grant_types.iter().any(|kind| kind == "refresh_token") {
+        Some(create_refresh_token(&mut *tx, grant_id, now).await?)
+    } else {
+        None
+    };
     tx.commit().await?;
-    Ok(Some(token))
+    Ok(Some(Exchanged {
+        access_token,
+        refresh_token,
+        scopes,
+        expires_in: EXPIRES_IN,
+    }))
 }
 
 /// The grant's row and the scopes it carries, written as one act.

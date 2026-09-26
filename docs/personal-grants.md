@@ -165,8 +165,10 @@ The legacy bulk guild event shape is unchanged.
 | Scopes/resources | Read from the grant when the token is authenticated |
 | Revocation | Deleting the grant removes its dependent tokens; a token can also be deleted independently |
 
-The device flow currently returns access tokens only; the shared refresh-token
-mechanism, when used, stays bound to the original grant.
+The device flow also returns a refresh token when the application's `grant_types`
+includes `refresh_token`. Both tokens are issued atomically, and refresh stays
+bound to the original grant's target, scopes and resources. Renewals rotate the
+refresh token; deleting the grant revokes it.
 
 Personal grants cannot authorize application administration, guild issuing,
 application-side contract creation/charging, or a user's contract approval,

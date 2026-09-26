@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO security_webhook_queue (signal, body)\n             SELECT report->>'signal', report->'body'\n               FROM jsonb_array_elements($1) WITH ORDINALITY AS batch(report, position)\n              ORDER BY position",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5a9462164468e3b88af69f38b2f29ec1ae3bd13359c13b00b1bba2aac71e29b"
+}

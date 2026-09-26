@@ -19,6 +19,7 @@ tower-http.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
+httpdate.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 sqlx.workspace = true

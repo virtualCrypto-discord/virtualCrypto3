@@ -23,7 +23,8 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
             &state,
             "the signature headers were not both present",
             "invalid request signature",
-        );
+        )
+        .await;
     };
 
     if !crate::discord::verify_signature(state.discord_public_key(), signature, timestamp, &body) {
@@ -31,7 +32,8 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
             &state,
             "the signature is not Discord's",
             "invalid request signature",
-        );
+        )
+        .await;
     }
 
     // Receipts are purged after 24 hours. Accept signed requests for only five
@@ -46,7 +48,8 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
             &state,
             "the signature's timestamp is outside the window",
             "expired request signature",
-        );
+        )
+        .await;
     }
 
     // An unparsable body is a `Type Not Found` rather than a signature failure:
@@ -57,13 +60,16 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
 
     // A loose per-user allowance, held against the authenticated Discord user.
     if let Some(user) = crate::command::get_user(&payload) {
-        state.monitor().watch(&format!("discord:{user}"));
+        state.monitor().watch(&format!("discord:{user}")).await;
         if let Err(remaining) = state.limiter().allow(&format!("discord:{user}")) {
-            state.monitor().observe(
-                crate::security::Signal::RateLimited,
-                &format!("discord:{user}"),
-                "the loose per-caller limit refused a request",
-            );
+            state
+                .monitor()
+                .observe(
+                    crate::security::Signal::RateLimited,
+                    &format!("discord:{user}"),
+                    "the loose per-caller limit refused a request",
+                )
+                .await;
             let mut response = text(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
             response
                 .headers_mut()
@@ -97,12 +103,15 @@ pub(super) async fn dispatch(state: &AppState, payload: &Value) -> Response {
 /// verify, or a timestamp outside the window. The caller keeps the answer it
 /// always had — which part failed is this service's to know, and the repetition
 /// of any of them is what is worth saying to an operator.
-fn refused(state: &AppState, why: &str, body: &'static str) -> Response {
-    state.monitor().observe(
-        crate::security::Signal::InteractionSignature,
-        "interaction-signature",
-        why,
-    );
+async fn refused(state: &AppState, why: &str, body: &'static str) -> Response {
+    state
+        .monitor()
+        .observe(
+            crate::security::Signal::InteractionSignature,
+            "interaction-signature",
+            why,
+        )
+        .await;
 
     text(StatusCode::UNAUTHORIZED, body)
 }

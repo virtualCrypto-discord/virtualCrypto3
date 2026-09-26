@@ -693,15 +693,18 @@ pub async fn create(
         // requester spending all of it.
         if let Some((too_soon, remaining)) = state.handshake_limiter().refuse(&subject.to_string())
         {
-            state.monitor().observe(
-                crate::security::Signal::HandshakeRefused,
-                &format!("subject:{subject}"),
-                match too_soon {
-                    TooSoon::Seconds3 => "the three-second window refused",
-                    TooSoon::Hour => "the hour's window refused",
-                    TooSoon::Day => "the day's window refused",
-                },
-            );
+            state
+                .monitor()
+                .observe(
+                    crate::security::Signal::HandshakeRefused,
+                    &format!("subject:{subject}"),
+                    match too_soon {
+                        TooSoon::Seconds3 => "the three-second window refused",
+                        TooSoon::Hour => "the hour's window refused",
+                        TooSoon::Day => "the day's window refused",
+                    },
+                )
+                .await;
             return Err(Box::new(rate_limited(too_soon, remaining)));
         }
 
@@ -714,11 +717,14 @@ pub async fn create(
         // Unreachable is not counted here: that is this service's own way of
         // reaching applications, not the application's behaviour.
         if handshake == Handshake::Failed {
-            state.monitor().observe(
-                crate::security::Signal::WebhookUnverified,
-                &format!("subject:{subject}"),
-                "the registration's webhook did not verify the handshake",
-            );
+            state
+                .monitor()
+                .observe(
+                    crate::security::Signal::WebhookUnverified,
+                    &format!("subject:{subject}"),
+                    "the registration's webhook did not verify the handshake",
+                )
+                .await;
         }
 
         if handshake != Handshake::Passed {

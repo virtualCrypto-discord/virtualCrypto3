@@ -79,29 +79,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Watching for behaviour worth a warning: how long a subject's counts are
     // held, the tighter observation-only window that fires before a 429, and
     // where the warnings go besides the log. Nothing here refuses a request.
-    let monitor = Arc::new(vc_api::security::BehaviorMonitor::new(
-        Duration::from_secs(
-            std::env::var("VCRYPTO_SECURITY_WINDOW_SECS")
+    let monitor = Arc::new(
+        vc_api::security::BehaviorMonitor::new(
+            Duration::from_secs(
+                std::env::var("VCRYPTO_SECURITY_WINDOW_SECS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(300),
+            ),
+            std::env::var("VCRYPTO_WATCH_LIMIT")
                 .ok()
                 .and_then(|value| value.parse().ok())
-                .unwrap_or(300),
-        ),
-        std::env::var("VCRYPTO_WATCH_LIMIT")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(30),
-        Duration::from_secs(
-            std::env::var("VCRYPTO_WATCH_WINDOW_SECS")
+                .unwrap_or(30),
+            Duration::from_secs(
+                std::env::var("VCRYPTO_WATCH_WINDOW_SECS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(10),
+            ),
+            std::env::var("VCRYPTO_REQUEST_SURGE_PER_MIN")
                 .ok()
                 .and_then(|value| value.parse().ok())
-                .unwrap_or(10),
+                .unwrap_or(3000),
+        )
+        .with_webhook(
+            pool.clone(),
+            std::env::var("VCRYPTO_SECURITY_WEBHOOK_URL").ok(),
         ),
-        std::env::var("VCRYPTO_REQUEST_SURGE_PER_MIN")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(3000),
-        std::env::var("VCRYPTO_SECURITY_WEBHOOK_URL").ok(),
-    ));
+    );
 
     let state = AppState::new(
         pool,

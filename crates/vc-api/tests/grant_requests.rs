@@ -376,6 +376,7 @@ async fn an_answer_lets_the_device_poll_a_guild_token(pool: PgPool) {
 
     assert_eq!(status, 200, "body: {body}");
     assert_eq!(body["token_type"], "Bearer");
+    assert!(body.get("refresh_token").is_none(), "refresh is opt-in");
 
     let guild_token = body["access_token"].as_str().expect("a guild token");
 
@@ -400,6 +401,164 @@ async fn an_answer_lets_the_device_poll_a_guild_token(pool: PgPool) {
         .expect("router response");
 
     assert_eq!(response.status().as_u16(), 201);
+}
+
+async fn refresh_device_token(pool: &PgPool, token: &str) -> (u16, Value) {
+    let response = vc_api::router(state(pool.clone(), fake()))
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/oauth2/token")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    json!({
+                        "grant_type": "refresh_token", "refresh_token": token
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn device_refresh_preserves_the_approved_grant_after_the_ask_and_access_token_expire(
+    pool: PgPool,
+) {
+    let (application, _) = fixture(&pool).await;
+    insert_user(&pool, 101, PERSON).await;
+    support::insert_currency(&pool, 1, "nyan", "n", GUILD, 100).await;
+    sqlx::query("UPDATE applications SET grant_types = ARRAY['refresh_token']::openid_connect_grant_types[] WHERE id = $1")
+        .bind(application).execute(&pool).await.unwrap();
+
+    for (target, scope) in [
+        (Target::Guild(GUILD), "vc.issue"),
+        (Target::User(PERSON), "vc.pay"),
+    ] {
+        let now = time::OffsetDateTime::now_utc();
+        let asked = vc_core::grant::request_grant(
+            &pool,
+            application,
+            target,
+            &[scope.into()],
+            &[1],
+            600,
+            now,
+        )
+        .await
+        .unwrap();
+        vc_core::grant::decide_request(&pool, &asked.user_code, target, now)
+            .await
+            .unwrap()
+            .unwrap();
+        let (status, issued) =
+            device_poll(&pool, application, &asked.device_code.to_string()).await;
+        assert_eq!(status, 200, "{issued}");
+        let grant_id: i64 = issued["grant_id"].as_str().unwrap().parse().unwrap();
+        let refresh = issued["refresh_token"].as_str().unwrap();
+
+        // An expired ask may have been purged by the time the access token dies.
+        sqlx::query("DELETE FROM grant_requests WHERE id = $1")
+            .bind(asked.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE access_tokens SET expires = now() - interval '2 seconds' WHERE grant_id = $1",
+        )
+        .bind(grant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            vc_core::grant::resolve_token(
+                &pool,
+                issued["access_token"].as_str().unwrap().parse().unwrap(),
+                time::OffsetDateTime::now_utc()
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+
+        let (status, renewed) = refresh_device_token(&pool, refresh).await;
+        assert_eq!(status, 200, "{renewed}");
+        let access: uuid::Uuid = renewed["access_token"].as_str().unwrap().parse().unwrap();
+        let resolved = vc_core::grant::resolve_token(&pool, access, now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.application_id, application);
+        assert_eq!(resolved.target, target);
+        assert_eq!(resolved.scopes, [scope]);
+        assert_eq!(resolved.resources, [1]);
+        let renewed_grant: i64 =
+            sqlx::query_scalar("SELECT grant_id FROM access_tokens WHERE token_id = $1")
+                .bind(access)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(renewed_grant, grant_id);
+
+        // Every replacement is usable once, and revocation ends renewal too.
+        let (status, refused) = refresh_device_token(&pool, refresh).await;
+        assert_eq!(status, 400, "{refused}");
+        let next_refresh = renewed["refresh_token"].as_str().unwrap();
+        let (status, again) = refresh_device_token(&pool, next_refresh).await;
+        assert_eq!(status, 200, "{again}");
+        sqlx::query("DELETE FROM grants WHERE id = $1")
+            .bind(grant_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, refused) =
+            refresh_device_token(&pool, again["refresh_token"].as_str().unwrap()).await;
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error_description"], "invalid_refresh_token");
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_failed_device_refresh_token_insert_rolls_back_the_access_token(pool: PgPool) {
+    let (application, _) = fixture(&pool).await;
+    sqlx::query("UPDATE applications SET grant_types = ARRAY['refresh_token']::openid_connect_grant_types[] WHERE id = $1")
+        .bind(application).execute(&pool).await.unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let asked = vc_core::grant::request_grant(
+        &pool,
+        application,
+        Target::Guild(GUILD),
+        &["vc.issue".into()],
+        &[],
+        600,
+        now,
+    )
+    .await
+    .unwrap();
+    vc_core::grant::decide_request(&pool, &asked.user_code, Target::Guild(GUILD), now)
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::raw_sql("CREATE FUNCTION refuse_refresh() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test failure'; END $$;
+        CREATE TRIGGER refuse_refresh BEFORE INSERT ON refresh_tokens FOR EACH ROW EXECUTE FUNCTION refuse_refresh();")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        device_poll(&pool, application, &asked.device_code.to_string())
+            .await
+            .0,
+        400
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM access_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
 }
 
 /// A user token asks with no application behind it, and nothing says the caller
@@ -740,7 +899,8 @@ async fn a_person_is_asked_and_only_their_code_answers_it(pool: PgPool) {
     let minted = vc_core::grant::create_device_token(&pool, &asked, now)
         .await
         .unwrap()
-        .expect("the approved ask hands out a token");
+        .expect("the approved ask hands out a token")
+        .access_token;
     let resolved =
         vc_core::grant::resolve_token(&pool, uuid::Uuid::parse_str(&minted).unwrap(), now)
             .await

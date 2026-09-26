@@ -65,6 +65,20 @@ A guild token already issued keeps working until it expires, and it reads the
 grant's scopes when it is used rather than carrying them — so taking a scope away
 takes issuing away with it.
 
+Applications that register `refresh_token` in `grant_types` also receive a
+`refresh_token` in the successful poll response. It is issued in the same
+transaction and belongs to that approval's grant. Exchange it at
+`POST /oauth2/token` with `grant_type=refresh_token` and save the replacement
+refresh token returned each time. Renewal works after the device request expires;
+deleting the grant revokes its refresh token too. Applications that do not opt in
+continue to receive only an access token.
+
+`demo-issue --role-id` requires this refresh opt-in and checks the token response
+before issuing anything. On an expired-token 401 it renews and retries the unpaid
+member, leaving completed members alone. A failed renewal or a second 401 stops
+the run. This preserves progress within the running process; restarting the
+program still starts a new distribution.
+
 ## How a guild says yes — two ways in, one ask
 
 A guild token is what a grant makes spendable, and a grant with `vc.issue` is

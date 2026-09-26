@@ -16,14 +16,12 @@
 //! The warnings leave two ways: a `tracing` event under the stable target
 //! `vc_security` (so `RUST_LOG=vc_security=warn` collects exactly these, and a
 //! deployment's log drain can alert on them), and, when
-//! `VCRYPTO_SECURITY_WEBHOOK_URL` is configured, one HTTP POST per report to the
-//! operator's own webhook. The log is the record; the webhook is the tap on the
+//! `VCRYPTO_SECURITY_WEBHOOK_URL` is configured, a database queue sends reports
+//! to the operator's webhook, retrying temporary failures. The log is the record; the webhook is the tap on the
 //! shoulder.
 //!
-//! Everything is in memory and per process, like the limiters beside it: a
-//! restart forgets counts that had not reached their window's end, and two
-//! machines count separately. A warning that never fires is a cost of zero, and
-//! warnings that fire are still visible in the log after a restart.
+//! Counts are in memory and per process, like the limiters beside them. Queued
+//! notifications survive restarts; multiple machines share one delivery queue.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,6 +29,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+
+mod webhook;
+pub use webhook::WebhookSink;
 
 /// What an operator is being warned about. The name travels in every log field
 /// and webhook payload, so it stays stable: a dashboard grepping for
@@ -231,7 +232,6 @@ impl BehaviorMonitor {
         watch_limit: u32,
         watch_window: Duration,
         surge_per_minute: u64,
-        webhook_url: Option<String>,
     ) -> Self {
         Self {
             window,
@@ -241,20 +241,19 @@ impl BehaviorMonitor {
             entries: Mutex::new(HashMap::new()),
             watch: Mutex::new(HashMap::new()),
             counters: Arc::new(RequestCounters::default()),
-            sink: WebhookSink::new(webhook_url),
+            sink: WebhookSink::default(),
         }
+    }
+
+    pub fn with_webhook(mut self, pool: sqlx::PgPool, url: Option<String>) -> Self {
+        self.sink = WebhookSink::new(pool, url);
+        self
     }
 
     /// A monitor with no webhook and short windows, which is what a test that
     /// drives the clock itself wants.
     pub fn for_test() -> Self {
-        Self::new(
-            Duration::from_secs(300),
-            30,
-            Duration::from_secs(10),
-            3000,
-            None,
-        )
+        Self::new(Duration::from_secs(300), 30, Duration::from_secs(10), 3000)
     }
 
     /// The counters the router's middleware records into. They live here rather
@@ -265,10 +264,12 @@ impl BehaviorMonitor {
 
     /// Count one occurrence of `signal` for `subject`, warning immediately if it
     /// reaches the signal's threshold and otherwise leaving it to the sweep.
-    pub fn observe(&self, signal: Signal, subject: &str, detail: &str) {
-        for report in self.observe_at(signal, subject, detail, Instant::now()) {
-            emit(&report, &self.sink);
-        }
+    pub async fn observe(&self, signal: Signal, subject: &str, detail: &str) {
+        emit(
+            &self.observe_at(signal, subject, detail, Instant::now()),
+            &self.sink,
+        )
+        .await;
     }
 
     /// [`BehaviorMonitor::observe`], with the moment given: what a test drives
@@ -326,8 +327,13 @@ impl BehaviorMonitor {
     /// burst is reported *before* it becomes a 429. Never refuses anything.
     ///
     /// Zero disables it, the way `RATE_LIMIT_PER_MINUTE=0` does.
-    pub fn watch(&self, subject: &str) -> bool {
-        self.watch_at(subject, Instant::now())
+    pub async fn watch(&self, subject: &str) -> bool {
+        let exceeded = self.watch_at(subject, Instant::now());
+        if exceeded {
+            self.observe(Signal::WatchBurst, subject, "the watch window was exceeded")
+                .await;
+        }
+        exceeded
     }
 
     fn watch_at(&self, subject: &str, now: Instant) -> bool {
@@ -348,18 +354,7 @@ impl BehaviorMonitor {
         }
 
         entry.1 = entry.1.saturating_add(1);
-        let exceeded = entry.1 > self.watch_limit;
-
-        // Observed after the lock is dropped: observe takes another lock, and a
-        // warning inside the watch's own critical section would hold every
-        // caller's while it is written.
-        drop(watch);
-
-        if exceeded {
-            self.observe(Signal::WatchBurst, subject, "the watch window was exceeded");
-        }
-
-        exceeded
+        entry.1 > self.watch_limit
     }
 
     /// Every warning the window that just ended owes, and every warning the
@@ -368,10 +363,8 @@ impl BehaviorMonitor {
     /// Called on a timer of one window, which is also what resets the global
     /// counters: an error rate needs a denominator, and the denominator is this
     /// window's requests.
-    pub fn sweep(&self) {
-        for report in self.sweep_at(Instant::now()) {
-            emit(&report, &self.sink);
-        }
+    pub async fn sweep(&self) {
+        emit(&self.sweep_at(Instant::now()), &self.sink).await;
     }
 
     fn sweep_at(&self, now: Instant) -> Vec<Report> {
@@ -421,73 +414,22 @@ impl BehaviorMonitor {
     /// turns the contract clock off, and an operator who silenced contract
     /// settlement has not asked for these warnings to stop.
     pub async fn run(self: Arc<Self>) {
-        let mut ticker = tokio::time::interval(self.window);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        loop {
-            ticker.tick().await;
-            self.sweep();
-        }
-    }
-}
-
-/// Where a report goes besides the log: an operator's own webhook, if one is
-/// configured. Unrelated to [`crate::notification::WebhookNotifier`], which
-/// delivers *business* events to applications with a signature and a row to
-/// read; this is one deployment telling itself something.
-pub struct WebhookSink {
-    url: Option<String>,
-    http: reqwest::Client,
-}
-
-impl WebhookSink {
-    fn new(url: Option<String>) -> Self {
-        Self {
-            // An empty variable is no variable: a deployment that exported one
-            // blank gets the log, not a POST to "".
-            url: url.filter(|url| !url.trim().is_empty()),
-            http: reqwest::Client::new(),
-        }
-    }
-
-    fn send(&self, report: &Report) {
-        let Some(url) = self.url.clone() else {
-            return;
-        };
-
-        // Outside a runtime there is nowhere to spawn, and the log line has
-        // already carried the warning — which is the record of the two.
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-
-        let http = self.http.clone();
-        let body = payload(&url, report);
-        let signal = report.signal.name();
-        runtime.spawn(async move {
-            let sent = http
-                .post(&url)
-                .timeout(Duration::from_secs(5))
-                .json(&body)
-                .send()
-                .await;
-
-            if let Err(error) = sent {
-                // Discord and Slack webhook paths contain credentials.
-                let error = error.without_url();
-                tracing::warn!(
-                    target: "vc_security",
-                    signal,
-                    "the security webhook could not be reached: {error}"
-                );
+        let sweep = async {
+            let mut ticker = tokio::time::interval(self.window);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                self.sweep().await;
             }
-        });
+        };
+        tokio::join!(sweep, self.sink.run());
     }
 }
 
 /// The warning, once, where an operator can act on it.
-fn emit(report: &Report, sink: &WebhookSink) {
-    tracing::warn!(
+async fn emit(reports: &[Report], sink: &WebhookSink) {
+    for report in reports {
+        tracing::warn!(
         target: "vc_security",
         signal = report.signal.name(),
         subject = %report.subject,
@@ -496,9 +438,12 @@ fn emit(report: &Report, sink: &WebhookSink) {
         window_secs = report.window_secs,
         detail = %report.detail,
         "suspicious behaviour observed"
-    );
-
-    sink.send(report);
+        );
+    }
+    if let Err(error) = sink.enqueue(reports).await {
+        tracing::warn!(target: "vc_security", %error, count = reports.len(),
+            "the security webhook notifications could not be saved");
+    }
 }
 
 /// The body the webhook is POSTed, shaped for where it is going.
@@ -552,13 +497,7 @@ mod tests {
     use super::*;
 
     fn monitor() -> BehaviorMonitor {
-        BehaviorMonitor::new(
-            Duration::from_secs(300),
-            3,
-            Duration::from_secs(10),
-            0,
-            None,
-        )
+        BehaviorMonitor::new(Duration::from_secs(300), 3, Duration::from_secs(10), 0)
     }
 
     /// The first occurrence at threshold 1 is a warning of its own, and the
@@ -686,7 +625,6 @@ mod tests {
             monitor.watch_at("account:1", now),
             "the fourth is over a watch of three"
         );
-        assert_eq!(monitor.count_for(Signal::WatchBurst, "account:1"), 1);
     }
 
     /// And a window that has passed starts the watch again.
@@ -698,7 +636,6 @@ mod tests {
         for _ in 0..4 {
             monitor.watch_at("account:1", now);
         }
-        assert_eq!(monitor.count_for(Signal::WatchBurst, "account:1"), 1);
 
         let later = now + Duration::from_secs(10);
         assert!(!monitor.watch_at("account:1", later));
@@ -708,13 +645,7 @@ mod tests {
     /// rate limit.
     #[test]
     fn a_watch_of_zero_never_fires() {
-        let monitor = BehaviorMonitor::new(
-            Duration::from_secs(300),
-            0,
-            Duration::from_secs(10),
-            0,
-            None,
-        );
+        let monitor = BehaviorMonitor::new(Duration::from_secs(300), 0, Duration::from_secs(10), 0);
         let now = Instant::now();
 
         for _ in 0..100 {
@@ -771,13 +702,8 @@ mod tests {
     /// zero disables it.
     #[test]
     fn a_surge_is_measured_against_the_configured_rate() {
-        let monitor = BehaviorMonitor::new(
-            Duration::from_secs(300),
-            30,
-            Duration::from_secs(10),
-            100,
-            None,
-        );
+        let monitor =
+            BehaviorMonitor::new(Duration::from_secs(300), 30, Duration::from_secs(10), 100);
         let counters = monitor.counters();
         let now = Instant::now();
 
@@ -914,78 +840,5 @@ mod tests {
             monitor.sweep_at(later).is_empty(),
             "cleanup already collected the summaries"
         );
-    }
-
-    /// Capture the actual sink's log, including its spawned delivery task.
-    struct Capture(tokio::sync::mpsc::UnboundedSender<String>);
-
-    #[derive(Default)]
-    struct LogFields(String);
-
-    impl tracing::field::Visit for LogFields {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            use std::fmt::Write;
-            write!(&mut self.0, " {field}={value:?}").unwrap();
-        }
-    }
-
-    impl tracing::Subscriber for Capture {
-        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-        fn event(&self, event: &tracing::Event<'_>) {
-            if event.metadata().target() == "vc_security" {
-                let mut fields = LogFields::default();
-                event.record(&mut fields);
-                let _ = self.0.send(fields.0);
-            }
-        }
-        fn enter(&self, _: &tracing::span::Id) {}
-        fn exit(&self, _: &tracing::span::Id) {}
-    }
-
-    #[tokio::test]
-    async fn webhook_transport_errors_do_not_log_url_secrets() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (sender, mut logs) = tokio::sync::mpsc::unbounded_channel();
-        let _subscriber = tracing::subscriber::set_default(Capture(sender));
-        let mut sink = WebhookSink::new(Some(format!(
-            "http://{address}/api/webhooks/1/path-secret?token=query-secret"
-        )));
-        sink.http = reqwest::Client::builder().no_proxy().build().unwrap();
-        sink.send(&Report {
-            signal: Signal::AuthFailed,
-            subject: "unauthenticated".into(),
-            kind: Kind::First,
-            count: 1,
-            window_secs: 300,
-            detail: "no credential".into(),
-        });
-
-        // Close the connection without a response to force a transport error.
-        let (connection, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
-            .await
-            .unwrap()
-            .unwrap();
-        drop(connection);
-        drop(listener);
-        let log = tokio::time::timeout(Duration::from_secs(10), logs.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            log.contains("the security webhook could not be reached"),
-            "{log}"
-        );
-        assert!(log.contains("auth_failed"), "{log}");
-        for secret in ["path-secret", "query-secret", "http://", "/api/webhooks/"] {
-            assert!(!log.contains(secret), "{log}");
-        }
     }
 }

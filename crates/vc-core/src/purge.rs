@@ -32,7 +32,7 @@ use time::PrimitiveDateTime;
 /// The ask is the one whose expiry is not a column: it is the moment it was made
 /// plus the `expires_in` it asked for, which is the same sum its two readers
 /// compute.
-const EXPIRING: [&str; 7] = [
+const EXPIRING: [&str; 8] = [
     "DELETE FROM user_access_tokens WHERE expires < $1",
     "DELETE FROM payments_idempotency WHERE expires < $1",
     "DELETE FROM authorization_codes WHERE expires < $1",
@@ -42,6 +42,9 @@ const EXPIRING: [&str; 7] = [
     // The endpoint rejects signatures older than five minutes, so a deleted
     // receipt cannot allow its original signed request to execute again.
     "DELETE FROM discord_interactions WHERE inserted_at < $1 - interval '24 hours'",
+    // Delivered security notifications are deleted immediately. Keep permanent
+    // failures for a week; pending retries must survive outages and restarts.
+    "DELETE FROM security_webhook_queue WHERE failed_at < ($1::timestamp AT TIME ZONE 'utc') - interval '7 days'",
 ];
 
 /// How many rows went, which is what a caller logs: zero is the common answer and

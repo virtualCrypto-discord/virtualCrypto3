@@ -989,6 +989,7 @@ pub async fn insert_personal_grant(
         .await
         .expect("a token")
         .expect("the approved ask hands one out")
+        .access_token
 }
 
 /// The token for a grant that is already there: `create_access_token/2`, which is

@@ -200,11 +200,14 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                 let Some(resolved) =
                     resolved.filter(|grant| matches!(grant.target, Target::User(_)))
                 else {
-                    state.monitor().observe(
-                        crate::security::Signal::AuthFailed,
-                        "invalid-token",
-                        "a bearer token resolved to nothing usable",
-                    );
+                    state
+                        .monitor()
+                        .observe(
+                            crate::security::Signal::AuthFailed,
+                            "invalid-token",
+                            "a bearer token resolved to nothing usable",
+                        )
+                        .await;
                     return Err((
                         StatusCode::UNAUTHORIZED,
                         Json(json!({"error":"invalid_token"})),
@@ -221,19 +224,23 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
                     resources: resolved.resources,
                 }
             }
-            None => Principal::Own(AuthUser::from_request_parts(parts, state).await.map_err(
-                |error| {
+            None => match AuthUser::from_request_parts(parts, state).await {
+                Ok(user) => Principal::Own(user),
+                Err(error) => {
                     // A credential that did not authenticate is worth
                     // counting: missing once is normal, and the same
                     // absence repeated is somebody's vocabulary.
-                    state.monitor().observe(
-                        crate::security::Signal::AuthFailed,
-                        "unauthenticated",
-                        "a request without a credential that resolves",
-                    );
-                    error.into_response()
-                },
-            )?),
+                    state
+                        .monitor()
+                        .observe(
+                            crate::security::Signal::AuthFailed,
+                            "unauthenticated",
+                            "a request without a credential that resolves",
+                        )
+                        .await;
+                    return Err(error.into_response());
+                }
+            },
         };
         let account_id = match &principal {
             Principal::Own(user) => i32::try_from(user.subject)
@@ -243,13 +250,19 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
         // The watch's own, tighter window: a burst is worth saying before it is
         // worth refusing, and this count is held beside the loose limit's rather
         // than inside it.
-        state.monitor().watch(&format!("account:{account_id}"));
+        state
+            .monitor()
+            .watch(&format!("account:{account_id}"))
+            .await;
         if let Err(remaining) = state.limiter().allow(&format!("v2:{account_id}")) {
-            state.monitor().observe(
-                crate::security::Signal::RateLimited,
-                &format!("account:{account_id}"),
-                "the loose per-caller limit refused a request",
-            );
+            state
+                .monitor()
+                .observe(
+                    crate::security::Signal::RateLimited,
+                    &format!("account:{account_id}"),
+                    "the loose per-caller limit refused a request",
+                )
+                .await;
             let mut response = (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({"error":"rate_limited"})),
@@ -261,11 +274,14 @@ impl<P: Permission> FromRequestParts<AppState> for Authorized<P> {
             return Err(response);
         }
         if let Err(error) = principal.authorize(P::OPERATION) {
-            state.monitor().observe(
-                crate::security::Signal::Forbidden,
-                &format!("account:{account_id}"),
-                P::OPERATION.name(),
-            );
+            state
+                .monitor()
+                .observe(
+                    crate::security::Signal::Forbidden,
+                    &format!("account:{account_id}"),
+                    P::OPERATION.name(),
+                )
+                .await;
             return Err(error.into_response());
         }
         Ok(Self {

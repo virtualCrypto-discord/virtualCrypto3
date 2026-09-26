@@ -84,6 +84,24 @@ a burst *before* it becomes a 429; `VCRYPTO_WATCH_LIMIT=0` disables it.
 exceed before that is warned about; zero disables it. None of this refuses a
 request — it only tells the operator.
 
+Webhook reports are committed to `security_webhook_queue` before enqueueing
+returns (migration `0022`). A worker resumes pending rows on startup and sends
+them in order, with a database lock preventing concurrent delivery by multiple
+machines. The worker also runs when `VCRYPTO_SETTLE_INTERVAL_SECS=0`.
+Network failures and HTTP 408, 429, and 5xx remain queued, with exponential retry
+delays from one second up to five minutes. A longer `Retry-After` header or
+Discord JSON `retry_after` takes precedence; later reports wait behind it.
+Successful rows are deleted immediately. Other HTTP errors are retained as
+permanent failures with `failed_at` and `last_status`; the normal purge removes
+them after seven days and never removes pending retries.
+
+The queue stores the report, attempt count, and next attempt time, never the
+webhook URL. Pending reports use the currently configured URL, including after
+credential rotation. Delivery is at least once: a crash after the webhook accepts
+a report but before the database commits can produce a duplicate notification.
+Fixing a permanent failure's cause and clearing its `failed_at`, with
+`next_attempt_at = now()`, makes that row eligible for delivery again.
+
 `VCRYPTO_WEBHOOK_PROXY_CERT` and `VCRYPTO_WEBHOOK_PROXY_KEY` are the mTLS client the
 webhook handshake goes through — the Cloudflare Worker in front of an application's
 webhook requires a client certificate, which is why the pair is required together

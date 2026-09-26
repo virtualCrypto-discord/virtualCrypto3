@@ -146,10 +146,16 @@ when one is set). What it does *not* do, and why:
   `X-Forwarded-For` is caller-controlled unless a trusted-proxy layer parses
   it. Per-address counting is therefore still a gap, same as it is for the
   rate limiters above.
-- **Everything is in memory, per process.** A restart loses counts that had not
+- **Counts are in memory, per process.** A restart loses counts that had not
   reached their window's end, and every Fly machine counts its own — the same
-  property the rate limiters have. What survives a restart is the log line that
-  was already written.
+  property the rate limiters have. Emitted webhook reports are saved to
+  `security_webhook_queue`; both pending reports and retry times survive restarts.
+  If the database cannot accept an enqueue, the incident and the enqueue failure
+  remain in the log.
+- **Delivery is at least once.** A database lock prevents concurrent senders,
+  but a crash after remote acceptance and before the queue row's deletion commits
+  can cause a repeat. Success deletes the row; permanent failures are kept for
+  seven days by the normal purge, while pending retries are preserved.
 - **It warns; it never refuses.** The loose limit still decides what a caller
   is answered, and the tighter `VCRYPTO_WATCH_LIMIT` window beside it only
   counts. Nothing here changes a response.
