@@ -457,3 +457,44 @@ async fn failed_or_denied_discord_callbacks_cannot_be_replayed(pool: PgPool) {
     assert_eq!(approve(&f.app, &flow).await.status(), 401);
     assert_eq!(count_codes(&pool).await, 0);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn everyone_administrator_can_authorize_and_revocation_is_rechecked(pool: PgPool) {
+    let mut f = fixture(&pool).await;
+    f.app = vc_api::router(state(
+        pool.clone(),
+        FakeDiscord::with_member(MONEY_USER1 + 1, &[], &[(MONEY_GUILD, 8)]),
+    ));
+    let flow = start(&f, &[]).await;
+    assert_eq!(
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    // Removing administrator from @everyone between consent and approval must
+    // reject the write, even if an unrelated role still has administrator.
+    let revoked = vc_api::router(state(
+        pool.clone(),
+        FakeDiscord::with_member(
+            MONEY_USER1 + 1,
+            &[],
+            &[(MONEY_GUILD, 1), (MONEY_GUILD + 1, 8)],
+        ),
+    ));
+    assert_eq!(approve(&revoked, &flow).await.status(), 400);
+    assert_eq!(count_codes(&pool).await, 0);
+    assert_eq!(approve(&f.app, &flow).await.status(), 303);
+    assert_eq!(count_codes(&pool).await, 1);
+
+    f.app = revoked;
+    let denied = start(&f, &[]).await;
+    let response = callback(&f.app, &denied, Some(&denied.cookie), "text/html").await;
+    assert_eq!(response.status(), 303);
+    assert!(
+        response.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("permission_denied")
+    );
+}

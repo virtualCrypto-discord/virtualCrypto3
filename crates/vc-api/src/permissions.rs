@@ -3,8 +3,8 @@
 //! An interaction arrives with the caller's permissions already computed by
 //! Discord, which is why the commands need only
 //! [`crate::command::is_administrator`] applied to a number. A consent screen is
-//! a REST lookup instead, so the number has to be built here — the Elixir ORs
-//! together the permissions of the roles the member carries.
+//! a REST lookup instead, so compute the combined permissions of @everyone
+//! and the roles the member carries here.
 
 use serde_json::{Map, Value};
 
@@ -20,6 +20,7 @@ use crate::state::AppState;
 /// worth being a function with tests rather than three lines inside a handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuildFacts {
+    pub guild_id: i64,
     pub owner_id: i64,
     pub member_role_ids: Vec<i64>,
     pub roles: Vec<(i64, u64)>,
@@ -31,6 +32,7 @@ pub struct GuildFacts {
 /// the lookup that produced these. This is a payload that does not make sense,
 /// and the caller answers it as a bad request.
 pub fn guild_facts(
+    guild_id: i64,
     guild: &Map<String, Value>,
     member: &Map<String, Value>,
     roles: &[Map<String, Value>],
@@ -55,6 +57,7 @@ pub fn guild_facts(
         .collect::<Option<Vec<(i64, u64)>>>()?;
 
     Some(GuildFacts {
+        guild_id,
         owner_id,
         member_role_ids,
         roles,
@@ -68,10 +71,14 @@ pub fn guild_facts(
 /// see the deliberate differences in docs/known-gaps.md.
 pub fn may_act_for_guild(account_discord_id: i64, facts: &GuildFacts) -> bool {
     account_discord_id == facts.owner_id
-        || is_administrator(member_permissions(&facts.member_role_ids, &facts.roles))
+        || is_administrator(member_permissions(
+            facts.guild_id,
+            &facts.member_role_ids,
+            &facts.roles,
+        ))
 }
 
-/// The permissions a member has: the permissions of their roles, ORed together.
+/// Combine @everyone (whose role ID is the guild ID) with assigned roles.
 ///
 /// A role id the guild does not have is skipped, which is a **fix** and not a
 /// defensive flourish. The Elixir indexes the guild's roles with each of the
@@ -82,9 +89,10 @@ pub fn may_act_for_guild(account_discord_id: i64, facts: &GuildFacts) -> bool {
 /// come from two separate Discord calls, and a role deleted between them lands
 /// exactly here. The Elixir's answer is a 500 for the consent screen; this one is
 /// a permission check that may be a moment stale.
-pub fn member_permissions(member_role_ids: &[i64], roles: &[(i64, u64)]) -> u64 {
+pub fn member_permissions(guild_id: i64, member_role_ids: &[i64], roles: &[(i64, u64)]) -> u64 {
     member_role_ids
         .iter()
+        .chain(std::iter::once(&guild_id))
         .filter_map(|id| {
             roles
                 .iter()
@@ -166,7 +174,7 @@ pub async fn guild_access(state: &AppState, guild_id: i64, account_id: i32) -> G
         .await
         .unwrap_or_default();
 
-    let Some(facts) = guild_facts(&guild, &member, &roles) else {
+    let Some(facts) = guild_facts(guild_id, &guild, &member, &roles) else {
         return GuildAccess::Unknown;
     };
 
@@ -184,7 +192,7 @@ mod tests {
 
     #[test]
     fn a_member_holds_what_their_roles_hold() {
-        assert_eq!(member_permissions(&[7], &[(7, 0x100)]), 0x100);
+        assert_eq!(member_permissions(100, &[7], &[(7, 0x100)]), 0x100);
     }
 
     /// The OR is over the roles, not over the member: a bit any one role carries
@@ -192,26 +200,29 @@ mod tests {
     #[test]
     fn roles_are_ored_together() {
         assert_eq!(
-            member_permissions(&[7, 8], &[(7, 0x100), (8, 0x200)]),
-            0x300
+            member_permissions(100, &[7, 8], &[(100, 0x400), (7, 0x100), (8, 0x200)]),
+            0x700
         );
     }
 
     #[test]
     fn a_role_the_member_does_not_have_does_not_count() {
-        assert_eq!(member_permissions(&[7], &[(7, 0x100), (8, 0x200)]), 0x100);
+        assert_eq!(
+            member_permissions(100, &[7], &[(7, 0x100), (8, 0x200)]),
+            0x100
+        );
     }
 
     /// The case the Elixir would raise on. Discord's own lists agree, so this is
     /// about not turning a surprise into an outage.
     #[test]
     fn a_role_the_guild_does_not_have_is_skipped() {
-        assert_eq!(member_permissions(&[7, 999], &[(7, 0x100)]), 0x100);
+        assert_eq!(member_permissions(100, &[7, 999], &[(7, 0x100)]), 0x100);
     }
 
     #[test]
-    fn a_member_with_no_roles_holds_nothing() {
-        assert_eq!(member_permissions(&[], &[(7, 0x100)]), 0);
+    fn a_member_with_no_roles_or_everyone_permissions_holds_nothing() {
+        assert_eq!(member_permissions(100, &[], &[(7, 0x100)]), 0);
     }
 
     /// How the consent screen will use it: the mask, then the one question the
@@ -219,14 +230,20 @@ mod tests {
     #[test]
     fn the_administrator_bit_survives_a_role_that_carries_it() {
         assert!(is_administrator(member_permissions(
+            100,
             &[7, 8],
             &[(7, 0x1), (8, 0x8)]
         )));
-        assert!(!is_administrator(member_permissions(&[7], &[(7, 0x1)])));
+        assert!(!is_administrator(member_permissions(
+            100,
+            &[7],
+            &[(7, 0x1)]
+        )));
     }
 
     fn facts() -> GuildFacts {
         guild_facts(
+            100,
             &json!({ "owner_id": "10" }).as_object().cloned().unwrap(),
             &json!({ "roles": ["20", "21"] })
                 .as_object()
@@ -253,6 +270,7 @@ mod tests {
         assert_eq!(
             facts(),
             GuildFacts {
+                guild_id: 100,
                 owner_id: 10,
                 member_role_ids: vec![20, 21],
                 roles: vec![(20, 1), (21, 8)],
@@ -263,6 +281,7 @@ mod tests {
     #[test]
     fn the_owner_may_act_without_any_role() {
         let facts = GuildFacts {
+            guild_id: 100,
             owner_id: 10,
             member_role_ids: vec![],
             roles: vec![],
@@ -281,6 +300,7 @@ mod tests {
     #[test]
     fn a_member_without_the_bit_may_not() {
         let facts = GuildFacts {
+            guild_id: 100,
             owner_id: 10,
             member_role_ids: vec![20],
             roles: vec![(20, 1)],
@@ -293,6 +313,7 @@ mod tests {
     fn an_unreadable_payload_is_no_facts() {
         assert_eq!(
             guild_facts(
+                100,
                 &json!({}).as_object().cloned().unwrap(),
                 &json!({ "roles": [] }).as_object().cloned().unwrap(),
                 &[],
@@ -302,6 +323,7 @@ mod tests {
 
         assert_eq!(
             guild_facts(
+                100,
                 &json!({ "owner_id": "10" }).as_object().cloned().unwrap(),
                 &json!({ "roles": ["20"] }).as_object().cloned().unwrap(),
                 &[json!({ "id": "20" }).as_object().cloned().unwrap()],
