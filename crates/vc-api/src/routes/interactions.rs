@@ -246,8 +246,8 @@ async fn component(state: &AppState, payload: &Value) -> Response {
     if let Some(custom_id) = custom_id
         && crate::custom_id::ui::contract::parse(&crate::custom_id::parse(custom_id)).is_ok()
     {
-        return match crate::command::contract::component(state, custom_id, payload).await {
-            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        return match crate::command::contract::respond(state, custom_id, payload).await {
+            Ok(response) => response,
             Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
             Err(CommandError::Internal(error)) => error.into_response(),
         };
@@ -341,10 +341,16 @@ async fn command(state: &AppState, payload: &Value) -> Response {
         .map(|options| crate::command::parse_options(options))
         .unwrap_or_default();
 
-    if matches!(name, "pay" | "issue") {
+    let mutating_claim = name == "claim"
+        && matches!(
+            options.get("subcommand").and_then(Value::as_str),
+            Some("make" | "approve" | "deny" | "cancel")
+        );
+    if matches!(name, "pay" | "issue") || mutating_claim {
         let response = match name {
             "pay" => crate::command::pay::respond(state, &options, payload).await,
-            _ => crate::command::issue::respond(state, &options, payload).await,
+            "issue" => crate::command::issue::respond(state, &options, payload).await,
+            _ => crate::command::claim::respond(state, &options, payload).await,
         };
         return match response {
             Ok(response) => response,

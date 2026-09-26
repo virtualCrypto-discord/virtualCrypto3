@@ -118,19 +118,19 @@ async fn make_creates_a_claim_and_reports_its_id(pool: PgPool) {
     let claims = setup_claim(&pool).await;
     let money = &claims.money;
 
-    let response = interaction(
-        router(pool.clone()),
+    let response = completed(
+        pool.clone(),
         make_from_guild(money.user2, money.user1, &money.unit, json!(100)),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
 
     let description = response.body["data"]["components"][0]["components"][0]["content"]
         .as_str()
         .expect("a description")
         .to_string();
-    assert_eq!(response.body["data"]["flags"], json!(32832));
+    assert_eq!(response.body["data"]["flags"], json!(32768));
     assert_eq!(response.body["type"], json!(4));
 
     let prefix = "請求id: ";
@@ -162,13 +162,13 @@ async fn make_rejects_a_non_positive_amount(pool: PgPool) {
     let claims = setup_claim(&pool).await;
     let money = &claims.money;
 
-    let response = interaction(
-        router(pool),
+    let response = completed(
+        pool,
         make_from_guild(money.user2, money.user1, &money.unit, json!(-100)),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -180,7 +180,7 @@ async fn make_rejects_a_non_positive_amount(pool: PgPool) {
             }],
         }])
     );
-    assert_eq!(response.body["data"]["flags"], json!(32832));
+    assert_eq!(response.body["data"]["flags"], json!(32768));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -188,13 +188,13 @@ async fn make_rejects_an_unknown_unit(pool: PgPool) {
     let claims = setup_claim(&pool).await;
     let money = &claims.money;
 
-    let response = interaction(
-        router(pool),
+    let response = completed(
+        pool,
         make_from_guild(money.user2, money.user1, "void", json!(100)),
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -206,7 +206,7 @@ async fn make_rejects_an_unknown_unit(pool: PgPool) {
             }],
         }])
     );
-    assert_eq!(response.body["data"]["flags"], json!(32832));
+    assert_eq!(response.body["data"]["flags"], json!(32768));
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -291,14 +291,19 @@ fn patch_from_guild(action: &str, id: i64, user: i64) -> Value {
     )
 }
 
+async fn completed(pool: PgPool, payload: Value) -> support::Response {
+    let api = fake();
+    support::completed_interaction(vc_api::router(state(pool, api.clone())), api, payload).await
+}
+
 async fn patch(pool: PgPool, action: &str, id: i64, user: i64) -> support::Response {
-    interaction(router(pool), patch_from_guild(action, id, user)).await
+    completed(pool, patch_from_guild(action, id, user)).await
 }
 
 /// `Helper.assert_discord_message/2`: the claim command's error embed, which
 /// carries no `allowed_mentions`.
 fn assert_message(response: &support::Response, message: &str) {
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -310,12 +315,11 @@ fn assert_message(response: &support::Response, message: &str) {
             }],
         }])
     );
-    assert_eq!(response.body["data"]["flags"], json!(32832));
 }
 
 /// `Interactions.Claim.render/1` for a transition the caller was allowed to make.
 fn assert_action_result(response: &support::Response, claim_id: i64, result: &str) {
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["data"]["components"],
         json!([{
@@ -327,7 +331,7 @@ fn assert_action_result(response: &support::Response, claim_id: i64, result: &st
             }],
         }])
     );
-    assert_eq!(response.body["data"]["flags"], json!(32832));
+    assert_eq!(response.body["data"]["flags"], json!(32768));
 }
 
 const INVALID_OPERATOR: &str = "この請求に対してこの操作を行う権限がありません。";
@@ -1114,19 +1118,14 @@ async fn press(
 
     assert_eq!(response.status, 202, "{}", response.body);
     assert_eq!(response.body, Value::Null);
-    // Existing rendering assertions inspect the response delivered through the
-    // callback now; the incoming request has only an empty acknowledgement.
-    let response = support::Response {
-        status: response.status,
-        headers: response.headers,
-        body: api
-            .callbacks()
-            .pop()
-            .expect("an initial response was posted"),
-    };
+    assert_eq!(api.callbacks().last(), Some(&json!({"type": 6})));
     tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_finished())
         .await
         .expect("follow-up completed");
+    let response = support::Response {
+        body: json!({"type": 7, "data": api.response_edits().pop().expect("list redrawn")}),
+        ..response
+    };
     let mut posted = api.webhooks();
     let body = posted.pop().expect("a follow-up was posted");
 
@@ -1175,7 +1174,7 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     // The press answers with the list redrawn, not with the outcome.
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(7));
-    assert_eq!(response.body["data"]["flags"], json!(32832));
+    assert_eq!(response.body["data"]["flags"], json!(32768));
     assert_eq!(
         response.body["data"]["components"][0]["components"][0]["content"],
         json!("**請求一覧(all)**")
@@ -1903,8 +1902,9 @@ async fn pressing_the_show_screens_approve_updates_the_claim(pool: PgPool) {
     let claim_id = claims.id(0);
 
     let api = fake();
-    let response = interaction(
+    let response = support::completed_interaction(
         vc_api::router(state(pool.clone(), api.clone())),
+        api.clone(),
         action_data(
             single_action_custom_id(Action::Approve, claim_id),
             money.user2,
@@ -1912,7 +1912,7 @@ async fn pressing_the_show_screens_approve_updates_the_claim(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], json!(7), "the screen edits itself");
 
     let children = response.body["data"]["components"][0]["components"]
@@ -1945,8 +1945,8 @@ async fn pressing_the_show_screens_approve_as_the_claimant_is_refused(pool: PgPo
     let claims = setup_claim(&pool).await;
     let money = &claims.money;
 
-    let response = interaction(
-        vc_api::router(state(pool.clone(), fake())),
+    let response = completed(
+        pool.clone(),
         action_data(
             single_action_custom_id(Action::Approve, claims.id(0)),
             money.user1,
@@ -2008,7 +2008,7 @@ async fn followup_failure_does_not_fail_the_paid_claim_response(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(api.callbacks().len(), 1);
-    assert_eq!(api.callbacks()[0]["type"], 7);
+    assert_eq!(api.callbacks()[0]["type"], 6);
     assert!(api.webhooks().is_empty());
     let claim = vc_core::claim::view(&pool, 1, id).await.unwrap().unwrap();
     assert_eq!(claim.status.as_deref(), Some("approved"));
@@ -2041,7 +2041,7 @@ async fn slow_followup_does_not_block_initial_response(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(api.callbacks().len(), 1);
-    assert_eq!(api.callbacks()[0]["type"], 7);
+    assert_eq!(api.callbacks()[0]["type"], 6);
     assert!(api.webhooks().is_empty());
     gate.add_permits(1);
     tokio::time::timeout(std::time::Duration::from_secs(2), api.followup_finished())

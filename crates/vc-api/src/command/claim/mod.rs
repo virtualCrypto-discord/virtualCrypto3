@@ -4,6 +4,10 @@ pub mod list;
 pub mod make;
 pub mod show;
 
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::{Map, Value, json};
 use time::PrimitiveDateTime;
 use vc_core::claim::{ClaimUser, Transition, TransitionError};
@@ -13,6 +17,30 @@ use crate::claim_list::Position;
 use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError};
 use crate::error::ApiError;
 use crate::state::AppState;
+
+/// The mutating slash commands acknowledge privately before doing any DB work.
+pub async fn respond(
+    state: &AppState,
+    options: &Map<String, Value>,
+    payload: &Value,
+) -> Result<Response, CommandError> {
+    let reply = super::response::Acknowledged::private(state, payload).await?;
+    let state = state.clone();
+    let options = options.clone();
+    let payload = payload.clone();
+    tokio::spawn(async move {
+        let response = handle(&state, &options, &payload)
+            .await
+            .unwrap_or_else(failed);
+        reply.edit(response["data"].clone()).await;
+    });
+    Ok(StatusCode::ACCEPTED.into_response())
+}
+
+fn failed(error: CommandError) -> Value {
+    tracing::warn!(?error, "Discord claim operation failed");
+    render_error("請求の処理結果を確認できませんでした。請求の状態と履歴を確認してください。")
+}
 
 /// A Discord user or Bot is mentioned; an unbound application needs its public identity.
 fn user_identity(user: &ClaimUser) -> String {

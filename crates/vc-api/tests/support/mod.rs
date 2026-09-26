@@ -1404,6 +1404,57 @@ pub async fn interaction(app: Router, mut payload: Value) -> Response {
     }
 }
 
+pub fn callback_fields(mut payload: Value) -> Value {
+    payload["application_id"] = json!("123");
+    payload["token"] = json!("interaction-test-token");
+    payload
+}
+
+/// Rendering tests read the delivered message inside the old type/data envelope.
+/// The status remains the actual HTTP 202; the initial callback is checked here.
+/// List actions have two deliveries and use their own helper instead.
+pub async fn completed_interaction(
+    app: Router,
+    discord: Arc<FakeDiscord>,
+    payload: Value,
+) -> Response {
+    let command = payload["type"] == 2;
+    let edits_before = discord.response_edits().len();
+    let followups_before = discord.webhooks().len();
+    let response = interaction(app, callback_fields(payload)).await;
+    assert_eq!(response.status, 202, "{}", response.body);
+    let callback = discord.callbacks().pop().expect("acknowledged");
+    if command {
+        assert_eq!(callback["type"], 4);
+        assert_eq!(callback["data"]["flags"], 64);
+        assert_eq!(callback["data"]["content"], "処理中…");
+    } else {
+        assert_eq!(callback, json!({"type": 6}));
+    }
+    let body = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(body) = discord.response_edits().get(edits_before) {
+                assert_eq!(body["flags"], 32768);
+                assert_eq!(body["content"], Value::Null);
+                assert_eq!(body["embeds"], json!([]));
+                break json!({"type": if command { 4 } else { 7 }, "data": body});
+            }
+            if let Some(body) = discord.webhooks().get(followups_before) {
+                assert!(!command, "private commands edit their acknowledgement");
+                assert_eq!(body["flags"], 32832);
+                break json!({"type": 4, "data": body});
+            }
+            tokio::select! {
+                () = discord.response_edit_finished() => {},
+                () = discord.followup_finished() => {},
+            }
+        }
+    })
+    .await
+    .expect("operation delivered its result");
+    Response { body, ..response }
+}
+
 /// The accounts and balances `EnvironmentBootstrapper.setup_money/1` leaves
 /// behind.
 ///

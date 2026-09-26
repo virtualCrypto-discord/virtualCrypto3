@@ -159,9 +159,20 @@ issuance. Both success and error replace that private message. A rejected or
 timed-out acknowledgement never issues currency, and a notification failure
 never retries issuance.
 
-The endpoint returns an empty HTTP 202 after acknowledgement. Its receipt records
-acceptance, so replaying that 202 never restarts the payment or issuance, including
-while it is still running. Long database waits happen after the initial Discord response.
+`/claim make`, `/claim approve`, `/claim deny`, and `/claim cancel` use the same
+private processing message and replace it with the result. Claim decision buttons
+and contract approval, refusal, and withdrawal buttons first acknowledge with
+`type: 6` (deferred message update), then perform the operation and edit their
+existing private screen. Claim list decisions also send the outcome as a private
+follow-up. If that follow-up fails, the outcome replaces the private screen; a
+failed list redraw does not discard the operation's result. A single-claim refusal
+is sent privately without changing its screen, with the same edit fallback.
+All these mutations start only after a successful acknowledgement, and result
+delivery failures never repeat them.
+
+These paths return an empty HTTP 202 after acknowledgement. Its receipt records
+acceptance, so replaying that 202 never restarts the operation, including while it
+is still running. Long database waits happen after the initial Discord response.
 
 ## Runtime timeouts
 

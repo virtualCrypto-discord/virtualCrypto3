@@ -9,6 +9,11 @@
 //! guild to be in — the screen is the caller's own, which is why this command
 //! runs in a DM as well as in a guild.
 
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::{Map, Value, json};
 use time::PrimitiveDateTime;
 
@@ -30,6 +35,36 @@ const MAX_CONTRACTS: usize = 5;
 /// Where a screen starts, and where a decision draws next: page numbers count from
 /// one, as the claim list's do.
 const FIRST_PAGE: i64 = 1;
+
+/// Decisions acknowledge before acquiring any database locks. Pagination keeps
+/// its inline response because it does not mutate a contract.
+pub async fn respond(
+    state: &AppState,
+    custom_id: &str,
+    payload: &Value,
+) -> Result<Response, CommandError> {
+    let pressed = crate::custom_id::ui::contract::parse(&crate::custom_id::parse(custom_id))
+        .map_err(|error| CommandError::Internal(ApiError::Internal(error.to_string())))?;
+    if matches!(pressed, Pressed::Paged(_, _)) {
+        return Ok(Json(component(state, custom_id, payload).await?).into_response());
+    }
+    let reply = super::response::Acknowledged::update(state, payload).await?;
+    let state = state.clone();
+    let custom_id = custom_id.to_owned();
+    let payload = payload.clone();
+    tokio::spawn(async move {
+        let response = component(&state, &custom_id, &payload)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(?error, "Discord contract operation failed");
+                error_screen(
+                    "契約の処理結果を確認できませんでした。契約一覧と履歴を確認してください。",
+                )
+            });
+        reply.edit(response["data"].clone()).await;
+    });
+    Ok(StatusCode::ACCEPTED.into_response())
+}
 
 /// `Command.handle/4` for `contract`: the subcommand picks what to draw.
 pub async fn handle(

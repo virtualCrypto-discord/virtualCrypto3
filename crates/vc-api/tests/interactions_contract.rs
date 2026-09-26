@@ -13,8 +13,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use support::{
     Recorded, Response, button_from_guild, client_id_of, execute_from_guild, fake,
-    insert_application, insert_asset, insert_currency, insert_user, interaction,
-    state_with_notifier,
+    insert_application, insert_asset, insert_currency, insert_user, state_with_notifier,
 };
 use vc_api::custom_id::ui::contract::{Action, Page, custom_id, page_custom_id};
 
@@ -56,8 +55,32 @@ async fn asking(pool: &PgPool, application: i64, expires_in: Option<i64>) -> i64
     .expect("a contract")
 }
 
-fn router(pool: &PgPool, recorded: std::sync::Arc<Recorded>) -> axum::Router {
-    vc_api::router(state_with_notifier(pool.clone(), fake(), recorded))
+fn router(
+    pool: &PgPool,
+    recorded: std::sync::Arc<Recorded>,
+) -> (axum::Router, std::sync::Arc<support::FakeDiscord>) {
+    let api = fake();
+    (
+        vc_api::router(state_with_notifier(pool.clone(), api.clone(), recorded)),
+        api,
+    )
+}
+
+async fn interaction(
+    (app, api): (axum::Router, std::sync::Arc<support::FakeDiscord>),
+    payload: serde_json::Value,
+) -> Response {
+    let decision = payload["data"]["custom_id"].as_str().is_some_and(|id| {
+        matches!(
+            vc_api::custom_id::ui::contract::parse(&vc_api::custom_id::parse(id)),
+            Ok(vc_api::custom_id::ui::contract::Pressed::Decided(_, _))
+        )
+    });
+    if decision {
+        support::completed_interaction(app, api, payload).await
+    } else {
+        support::interaction(app, payload).await
+    }
 }
 
 /// What the one container says, which is everything a screen has to say.
@@ -316,7 +339,7 @@ async fn approving_from_the_button_locks_it(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         response.body["type"], 7,
         "the message is updated, not added to"
@@ -361,7 +384,7 @@ async fn refusing_from_the_button_ends_it(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         vc_core::contract::find(&pool, id)
             .await
@@ -395,7 +418,7 @@ async fn somebody_elses_contract_is_refused(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
         ["エラー: その契約はあなたを対象にしていません。"]
@@ -419,7 +442,7 @@ async fn a_running_contract_offers_no_withdraw(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(approved.status, 200, "body: {}", approved.body);
+    assert_eq!(approved.status, 202, "body: {}", approved.body);
     assert!(buttons(&approved).is_empty(), "{:?}", buttons(&approved));
 
     // And asking anyway is refused the way the endpoint refuses it.
@@ -432,7 +455,7 @@ async fn a_running_contract_offers_no_withdraw(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(refused.status, 200, "body: {}", refused.body);
+    assert_eq!(refused.status, 202, "body: {}", refused.body);
     assert!(
         texts(&refused)[0].starts_with("エラー: その契約には今この操作ができません。"),
         "{:?}",

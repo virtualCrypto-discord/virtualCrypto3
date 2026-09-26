@@ -84,15 +84,17 @@ async fn unbound_claimants_are_identifiable_before_and_after_payment(pool: PgPoo
         .unwrap();
     let button = &row["components"][0];
     assert_eq!(button["disabled"], false);
-    let paid = interaction(
-        vc_api::router(state(pool.clone(), fake())),
+    let api = fake();
+    let paid = support::completed_interaction(
+        vc_api::router(state(pool.clone(), api.clone())),
+        api,
         button_from_guild(
             json!({"component_type":2, "custom_id":button["custom_id"]}),
             PAYER,
         ),
     )
     .await;
-    assert_eq!(paid.status, 200);
+    assert_eq!(paid.status, 202);
     assert_eq!(paid.body["type"], 7);
     assert!(
         children(&paid.body)[1]["content"]

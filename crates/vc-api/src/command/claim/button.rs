@@ -41,10 +41,21 @@ pub async fn handle(
         // `[:claim, :action_single, action]`: one claim's own screen, which answers with
         // itself rather than with a list.
         Path::ActionSingle(action) => {
-            return Ok(
-                Json(show::pressed(state, me, action, single_claim_id(&data)?).await?)
-                    .into_response(),
-            );
+            let id = single_claim_id(&data)?;
+            let reply = crate::command::response::Acknowledged::update(state, payload).await?;
+            let state = state.clone();
+            tokio::spawn(async move {
+                let response = show::pressed(&state, me, action, id)
+                    .await
+                    .unwrap_or_else(super::failed);
+                let body = response["data"].clone();
+                if response["type"] == crate::command::UPDATE_MESSAGE
+                    || !reply.followup(&body).await
+                {
+                    reply.edit(body).await;
+                }
+            });
+            return Ok(StatusCode::ACCEPTED.into_response());
         }
         Path::Act(action) => action,
     };
@@ -53,42 +64,22 @@ pub async fn handle(
         CommandError::Internal(ApiError::Internal("the button payload is malformed".into()))
     })?;
 
-    let application_id = payload
-        .get("application_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CommandError::missing("interaction has no application id"))?;
-    let token = payload
-        .get("token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CommandError::missing("interaction has no token"))?;
-
-    let interaction_id = payload
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CommandError::missing("interaction has no id"))?;
     let ids = claim_ids(rest);
-    let body = patch(state, me, action, &ids).await?;
-    let page = list::page(state, me, options).await?;
-
-    // Await Discord's acknowledgement before sending a follow-up. Spawning the
-    // follow-up beside an inline response would race delivery of that response.
-    state
-        .discord()
-        .create_interaction_response(interaction_id, token, &page)
-        .await?;
-    let discord = state.discord().clone();
-    let application_id = application_id.to_owned();
-    let token = token.to_owned();
+    let reply = crate::command::response::Acknowledged::update(state, payload).await?;
+    let state = state.clone();
     tokio::spawn(async move {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            discord.post_webhook_message(&application_id, &token, &body),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::warn!(%error, "claim outcome follow-up failed"),
-            Err(_) => tracing::warn!("claim outcome follow-up timed out"),
+        let body = patch(&state, me, action, &ids)
+            .await
+            .unwrap_or_else(|error| super::failed(error)["data"].clone());
+        // A failed redraw must not discard the already-known operation result.
+        match list::page(&state, me, options).await {
+            Ok(page) => {
+                reply.edit(page["data"].clone()).await;
+            }
+            Err(error) => tracing::warn!(?error, "claim list redraw failed"),
+        }
+        if !reply.followup(&body).await {
+            reply.edit(body).await;
         }
     });
 
