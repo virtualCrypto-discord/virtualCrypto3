@@ -447,8 +447,7 @@ main {
   background: #e5edf9;
   color: #426ea2;
 }
-.badge.changes,
-.badge.stale {
+.badge.changes {
   background: #fae9dc;
   color: #9b5123;
 }
@@ -941,10 +940,6 @@ dialog::backdrop {
 .turn-diff {
   font-size: 12px;
   margin: 12px 0;
-}
-#stale-warning button {
-  display: block;
-  margin-top: 10px;
 }
 .sr-only {
   position: absolute;

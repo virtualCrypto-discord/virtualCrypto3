@@ -123,14 +123,10 @@ test("catalogue covers every project document and references real files", () => 
   }
 });
 
-test("decisions require human evidence, persist, detect conflicts, and become stale", (t) => {
+test("human decisions survive code and catalogue changes; only concurrent record updates conflict", (t) => {
   const dir = temporary(t),
     store = new Store(dir),
     item = catalog[0];
-  assert.throws(
-    () => store.update(item.id, { ...validDecision(), evidence: "" }, repo),
-    /根拠/,
-  );
   assert.throws(
     () =>
       store.update(
@@ -140,41 +136,66 @@ test("decisions require human evidence, persist, detect conflicts, and become st
       ),
     /判断基準/,
   );
-  assert.throws(
-    () =>
-      store.update(
-        item.id,
-        { ...validDecision(), status: "waived", notes: "" },
-        repo,
-      ),
-    /判断メモ/,
-  );
   store.update(item.id, validDecision(), repo);
-  assert.equal(store.present(item, repo).stale, false);
+  const saved = store.record(item.id);
   assert.throws(
     () => store.update(item.id, validDecision(), repo),
     (error) => error.status === 409,
   );
-  assert.throws(
-    () =>
-      store.update(
-        item.id,
-        { ...validDecision(), version: 1 },
-        { ...repo, fingerprint: "second" },
-      ),
-    /対象コード/,
-  );
+  const changed = {
+    ...repo,
+    head: "b".repeat(40),
+    fingerprint: "second",
+    dirty: true,
+  };
+  for (const definition of [
+    item,
+    {
+      ...item,
+      question: "Updated question",
+      criteria: [...item.criteria].reverse(),
+    },
+  ]) {
+    const shown = store.present(definition, changed);
+    assert.equal(shown.displayStatus, "approved");
+    assert.deepEqual(shown.state, saved);
+  }
+  // A form opened before a code change still saves normally.
+  store.update(item.id, { ...validDecision(), version: 1 }, changed);
   const reopened = new Store(dir);
   assert.equal(reopened.record(item.id).status, "approved");
-  assert.equal(reopened.record(item.id).history.length, 1);
-  assert.equal(
-    reopened.present(item, { ...repo, fingerprint: "second" }).stale,
-    true,
-  );
-  assert.equal(
-    reopened.present({ ...item, question: "new criteria" }, repo).stale,
-    true,
-  );
+  assert.deepEqual(reopened.record(item.id).checks, saved.checks);
+  assert.equal(reopened.record(item.id).history.length, 2);
+  assert.equal(reopened.record(item.id).history[0].head, repo.head);
+  assert.equal(reopened.record(item.id).history[1].head, changed.head);
+});
+
+test("all progress states can be saved with optional notes, evidence and reviewer left blank", (t) => {
+  const store = new Store(temporary(t));
+  for (const [version, status] of [
+    "approved",
+    "waived",
+    "blocked",
+    "changes",
+    "reviewing",
+    "todo",
+  ].entries()) {
+    const saved = store.update(
+      "UX-01",
+      {
+        ...validDecision(),
+        version,
+        status,
+        notes: "",
+        evidence: "",
+        reviewer: "",
+      },
+      repo,
+    );
+    assert.equal(saved.state.status, status);
+    assert.equal(saved.state.notes, "");
+    assert.equal(saved.state.evidence, "");
+  }
 });
 
 test("agent output never overwrites a human decision; restart marks unfinished preparations interrupted", (t) => {
@@ -220,7 +241,7 @@ test("fingerprint observes edits and untracked files, excludes secrets, and does
   assert.equal(workspaceSnapshot(workspace).fingerprint, withLink);
 });
 
-test("custom items and exports retain reasons, source revision and stale status", (t) => {
+test("custom items and exports preserve human decisions after source changes", (t) => {
   const store = new Store(temporary(t));
   const item = store.add({
     title: "追加の判断",
@@ -241,7 +262,8 @@ test("custom items and exports retain reasons, source revision and stale status"
     [store.present(item, { ...repo, fingerprint: "new" })],
     repo,
   );
-  assert.match(output, /要再確認/);
+  assert.match(output, /状態: 対象外/);
+  assert.doesNotMatch(output, /要再確認|再確認が必要/);
   assert.match(output, /今回の対象ではない/);
   assert.match(output, new RegExp(repo.head));
   assert.throws(
@@ -302,7 +324,7 @@ test("review conversation investigates, edits source, rechecks and retains the h
   const send = async (instruction, options = {}) => {
     await manager.start("UX-01", {
       instruction,
-      fingerprint: snapshot().fingerprint,
+      fingerprint: before.fingerprint,
       ...options,
     });
     await until(() => !manager.active);
@@ -329,18 +351,8 @@ test("review conversation investigates, edits source, rechecks and retains the h
   );
   const pending = store.present(catalog[0], snapshot());
   assert.equal(pending.state.status, "changes");
-  assert.equal(pending.stale, true);
-  assert.equal(pending.workStale, false);
+  assert.deepEqual(pending.state.checks, validDecision().checks);
   assert.equal(pending.displayStatus, "ready");
-  assert.throws(
-    () =>
-      store.update(
-        "UX-01",
-        { ...validDecision(catalog[0], before.fingerprint), version: 1 },
-        snapshot(),
-      ),
-    /対象コード/,
-  );
   const recheck = await send("修正後をもう一度確認して", { mode: "read-only" });
   assert.equal(recheck.threadId, fix.threadId);
   assert.match(recheck.report, /label=fixed/);
@@ -390,39 +402,38 @@ test("current workspace diff includes staged and untracked edits, excluding igno
   assert.doesNotMatch(diff, /ignored value|external value/);
 });
 
-for (const mode of ["approval", "question", "permissions", "early", "crash"]) {
-  test(`stdio harness lifecycle: ${mode}`, async (t) => {
-    const client = fixtureClient(mode),
+for (const [scenario, access, expected] of [
+  ["approval", "workspace-write", "accept"],
+  ["approval", "read-only", "decline"],
+  ["permissions", "workspace-write", "enabled"],
+  ["permissions", "read-only", 'permissions":{}'],
+  ["question", "workspace-write"],
+  ["early", "workspace-write"],
+  ["crash", "workspace-write"],
+]) {
+  test(`stdio harness without execution prompts: ${scenario}/${access}`, async (t) => {
+    let manager;
+    t.after(() => manager?.close());
+    const client = fixtureClient(scenario),
       store = new Store(temporary(t));
-    const manager = new ReviewManager({
-      client,
-      store,
-      root,
-      snapshot: () => repo,
-    });
-    t.after(() => manager.close());
+    manager = new ReviewManager({ client, store, root, snapshot: () => repo });
     const run = await manager.start("UX-01", {
       instruction: "fixture",
-      mode: "read-only",
-      fingerprint: repo.fingerprint,
+      mode: access,
     });
-    if (["approval", "question", "permissions"].includes(mode)) {
+    if (scenario === "question") {
       await until(() => manager.active?.requests.length === 1);
       const request = manager.active.requests[0];
       assert.equal(manager.active.status, "waiting");
       assert.equal(store.record("UX-01").status, "todo");
       await assert.rejects(
-        manager.start("UX-02", {
-          mode: "read-only",
-          fingerprint: repo.fingerprint,
-        }),
+        manager.start("UX-02", { mode: access }),
         (e) => e.status === 409,
       );
-      if (mode === "question")
-        manager.answer(request.key, { answers: { environment: "ローカル" } });
-      else manager.answer(request.key, { decision: "decline" });
+      manager.answer(request.key, { answers: { environment: "ローカル" } });
       assert.throws(
-        () => manager.answer(request.key, { decision: "accept" }),
+        () =>
+          manager.answer(request.key, { answers: { environment: "ローカル" } }),
         (e) => e.status === 409,
       );
     }
@@ -432,22 +443,23 @@ for (const mode of ["approval", "question", "permissions", "early", "crash"]) {
     assert.equal(saved.runs.at(-1).id, run.id);
     assert.equal(
       saved.runs.at(-1).status,
-      mode === "crash" ? "interrupted" : "completed",
+      scenario === "crash" ? "interrupted" : "completed",
     );
-    if (mode === "approval") assert.match(saved.runs.at(-1).report, /decline/);
-    if (mode === "question") assert.match(saved.runs.at(-1).report, /ローカル/);
-    if (mode === "permissions")
-      assert.match(
-        saved.runs.at(-1).report,
-        /"permissions":\{\},"scope":"turn"/,
+    assert.deepEqual(saved.runs.at(-1).requests, []);
+    if (expected) assert(saved.runs.at(-1).report.includes(expected));
+    if (scenario === "question")
+      assert.match(saved.runs.at(-1).report, /ローカル/);
+    if (scenario !== "crash")
+      assert.equal(
+        store.present(catalog[0], { ...repo, fingerprint: "new-code" })
+          .displayStatus,
+        "ready",
       );
-    if (mode !== "crash")
-      assert.equal(store.present(catalog[0], repo).displayStatus, "ready");
   });
 }
 
-test("interrupting an approval does not approve it or leave a live request", async (t) => {
-  const client = fixtureClient("approval"),
+test("interrupting a question preserves progress and clears the pending request", async (t) => {
+  const client = fixtureClient("question"),
     store = new Store(temporary(t));
   const manager = new ReviewManager({
     client,
@@ -477,7 +489,7 @@ test("missing Codex executable is a recoverable error", async (t) => {
   assert.equal(client.info.connected, false);
 });
 
-test("file approvals include the proposed diff and unrelated requests are refused", async (t) => {
+test("legacy file approvals resolve automatically while unrelated requests are refused", async (t) => {
   const client = new EventEmitter(),
     sent = [];
   client.connect = async () => ({ authenticated: true });
@@ -525,10 +537,9 @@ test("file approvals include the proposed diff and unrelated requests are refuse
       reason: "prepare fixture",
     },
   });
-  assert.match(manager.active.requests[0].changes, /review fixture/);
-  const key = manager.active.requests[0].key;
-  manager.answer(key, { decision: "decline" });
-  assert.deepEqual(sent.at(-1), { id: 81, result: { decision: "decline" } });
+  assert.match(manager.filePreviews.get("patch"), /review fixture/);
+  assert.deepEqual(manager.active.requests, []);
+  assert.deepEqual(sent.at(-1), { id: 81, result: { decision: "accept" } });
   client.emit("request", {
     id: 82,
     method: "item/commandExecution/requestApproval",
@@ -601,6 +612,7 @@ test("HTTP decisions enforce origin, CSRF, source whitelist and optimistic updat
     (await fetch(`${origin}/api/source?path=README.md`)).status,
     200,
   );
+  writeFileSync(join(workspace, "README.md"), "updated during review\n");
   assert.equal((await patch({ "X-Review-Token": state.token })).status, 200);
   assert.equal((await patch({ "X-Review-Token": state.token })).status, 409);
   const exported = await (

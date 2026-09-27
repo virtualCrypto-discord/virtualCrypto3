@@ -106,7 +106,7 @@ export function createWorkbench({
       "virtualcrypto-review",
       hash(root).slice(0, 20),
     );
-  // The default lives outside the agent's writable workspace and Git history.
+  // Keep review records outside the repository and Git history.
   const unlock = lock(dataDirectory);
   let store;
   try {

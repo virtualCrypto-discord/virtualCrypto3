@@ -68,26 +68,24 @@ async function api(path, method = "GET", body) {
   return result;
 }
 function label(item) {
-  if (item.stale) return "要再確認";
   if (state.active?.itemId === item.id) return runLabels[state.active.status];
   return state.statuses[item.displayStatus];
 }
 function badge(item) {
-  return `<span class="badge ${item.stale ? "stale" : item.displayStatus}">${esc(label(item))}</span>`;
+  return `<span class="badge ${item.displayStatus}">${esc(label(item))}</span>`;
 }
 function settled(item) {
-  return !item.stale && ["approved", "waived"].includes(item.displayStatus);
+  return ["approved", "waived"].includes(item.displayStatus);
 }
 function renderOverview() {
-  const done = state.items.filter(settled).length,
-    stale = state.items.filter((i) => i.stale).length;
+  const done = state.items.filter(settled).length;
   $("#repository").innerHTML =
     `<strong>${esc(state.repository.branch)}</strong><code>${esc(state.repository.head.slice(0, 7))}</code>${state.repository.dirty ? '<span class="dirty">変更あり</span>' : ""}`;
   $("#connect").textContent = state.codex.authenticated
     ? "Codex 接続済み"
     : "Codex 接続確認";
   $("#progress").innerHTML =
-    `<div><strong>${done}</strong><span> / ${state.items.length} 件の判断済み</span></div><progress value="${done}" max="${state.items.length}" aria-label="レビュー完了率"></progress><small>${state.items.filter((i) => i.displayStatus === "changes").length}件 要修正 · ${state.items.filter((i) => i.displayStatus === "blocked").length}件 保留 · ${stale}件 要再確認</small>`;
+    `<div><strong>${done}</strong><span> / ${state.items.length} 件の判断済み</span></div><progress value="${done}" max="${state.items.length}" aria-label="レビュー完了率"></progress><small>${state.items.filter((i) => i.displayStatus === "changes").length}件 要修正 · ${state.items.filter((i) => i.displayStatus === "blocked").length}件 保留</small>`;
   $("#categories").innerHTML = [
     { id: "all", label: "すべての項目" },
     ...state.categories,
@@ -114,11 +112,7 @@ function renderList() {
       (category === "all" || item.category === category) &&
       (!critical || item.priority === "critical") &&
       (filter === "all" ||
-        (filter === "open"
-          ? !settled(item)
-          : filter === "stale"
-            ? item.stale
-            : item.displayStatus === filter)) &&
+        (filter === "open" ? !settled(item) : item.displayStatus === filter)) &&
       (!query ||
         [item.id, item.title, item.question, ...item.criteria, ...item.sources]
           .join(" ")
@@ -142,15 +136,12 @@ function renderList() {
 function initDraft() {
   draft = {
     version: detail.state.version,
-    fingerprint: detail.fingerprint,
     status: detail.state.status,
     reviewer:
       detail.state.reviewer || localStorage.getItem("review:reviewer") || "",
     notes: detail.state.notes,
     evidence: detail.state.evidence,
-    checks: detail.criteria.map((_, i) =>
-      detail.stale ? false : (detail.state.checks[i] ?? false),
-    ),
+    checks: detail.criteria.map((_, i) => detail.state.checks[i] ?? false),
   };
   dirty = false;
 }
@@ -159,10 +150,9 @@ function renderDetail() {
   const input = composer();
   $("#detail").innerHTML =
     `<div class="detail-heading"><div class="eyebrow">${esc(detail.id)} · ${esc(state.categories.find((c) => c.id === detail.category)?.label)}</div><h2>${esc(detail.title)}</h2><p class="question">${esc(detail.question)}</p><div id="detail-state">${badge(detail)}</div></div>
-    <div id="stale-warning" class="warning" ${detail.stale ? "" : "hidden"}>対象コードまたは判断基準が変わっています。この版で再確認して判断を記録してください。<button id="recheck" class="secondary">この版で再確認を始める</button></div>
     <section class="section"><h3><span class="step-number">1</span>判断基準</h3><div class="criteria">${detail.criteria.map((criterion, i) => `<label><input type="checkbox" data-criterion="${i}" ${draft.checks[i] ? "checked" : ""} /><span>${esc(criterion)}</span></label>`).join("")}</div><div class="sources">${detail.sources.map((path) => `<button class="source-link" data-source="${esc(path)}">↗ ${esc(path)}</button>`).join("")}</div></section>
     <section class="section conversation-section"><h3><span class="step-number">2</span>Codexと進める<span class="codex-pill">会話・修正・検証</span></h3><details class="preparation-hint"><summary>この項目の確認に役立つ準備案</summary><p>${esc(detail.preparation)}</p></details><div id="conversation" class="conversation" tabindex="0" aria-label="この項目の会話履歴"></div><div id="run"></div>
-    <div class="composer"><label for="instruction">メッセージ</label><textarea id="instruction" rows="4" maxlength="10000" placeholder="この項目を確認したいので準備して。／この挙動をこう修正して。／修正後のケースをもう一度確認して。">${esc(input.instruction)}</textarea><div class="message-suggestions"><button class="quiet" data-message="この項目を確認したいので準備してください。">確認の準備</button><button class="quiet" data-message="指摘した点を修正して、必要なテストも実行してください。">修正を依頼</button><button class="quiet" data-message="現在の修正を踏まえて、判断基準に沿ってもう一度確認してください。">修正後を再確認</button></div><div class="preparation-options"><label for="mode">実行範囲</label><select id="mode"><option value="workspace-write" ${input.mode === "workspace-write" ? "selected" : ""}>修正・コマンド実行可</option><option value="read-only" ${input.mode === "read-only" ? "selected" : ""}>読み取りのみ</option></select></div><label class="continue-option"><input type="checkbox" id="new-conversation" ${input.newConversation ? "checked" : ""} />新しい会話で始める（以前の記録は残ります）</label><div class="preparation-actions"><button id="send" class="primary">送信</button><button id="copy-prompt" class="secondary">依頼文をコピー</button><button id="workspace-diff" class="quiet">現在の変更を見る</button></div><p class="hint">この項目の会話を続けます。相談・調査・実装の修正・テストを依頼できます。Ctrl / ⌘ + Enterで送信。</p></div></section>
+    <div class="composer"><label for="instruction">メッセージ</label><textarea id="instruction" rows="4" maxlength="10000" placeholder="この項目を確認したいので準備して。／この挙動をこう修正して。／修正後のケースをもう一度確認して。">${esc(input.instruction)}</textarea><div class="message-suggestions"><button class="quiet" data-message="この項目を確認したいので準備してください。">確認の準備</button><button class="quiet" data-message="指摘した点を修正して、必要なテストも実行してください。">修正を依頼</button><button class="quiet" data-message="現在の修正を踏まえて、判断基準に沿ってもう一度確認してください。">修正後を再確認</button></div><div class="preparation-options"><label for="mode">実行範囲</label><select id="mode"><option value="workspace-write" ${input.mode === "workspace-write" ? "selected" : ""}>ローカル作業（承認なし）</option><option value="read-only" ${input.mode === "read-only" ? "selected" : ""}>読み取りのみ</option></select></div><label class="continue-option"><input type="checkbox" id="new-conversation" ${input.newConversation ? "checked" : ""} />新しい会話で始める（以前の記録は残ります）</label><div class="preparation-actions"><button id="send" class="primary">送信</button><button id="copy-prompt" class="secondary">依頼文をコピー</button><button id="workspace-diff" class="quiet">現在の変更を見る</button></div><p class="hint">この項目の会話を続けます。相談・調査・実装の修正・テストを依頼できます。Ctrl / ⌘ + Enterで送信。</p></div></section>
     <section class="section judgement"><h3><span class="step-number">3</span>人間の判断を記録</h3><div class="form-row"><label>進捗<select id="decision-status">${Object.entries(
       state.statuses,
     )
@@ -172,7 +162,7 @@ function renderDetail() {
       )
       .join(
         "",
-      )}</select></label><label>確認者<input id="reviewer" maxlength="200" value="${esc(draft.reviewer)}" placeholder="名前またはハンドル" /></label></div><label>判断メモ<textarea id="notes" rows="4" maxlength="20000" placeholder="何を確認し、なぜこの判断にしたか。保留・対象外の場合も理由を残します。">${esc(draft.notes)}</textarea></label><label>確認した根拠<textarea id="evidence" rows="3" maxlength="20000" placeholder="実行した手順と結果、ログの場所、画面を確認した環境など。秘密値は書かないでください。">${esc(draft.evidence)}</textarea></label><div class="save-row"><span id="save-state">${detail.state.updatedAt ? `保存済み · ${esc(new Date(detail.state.updatedAt).toLocaleString("ja-JP"))}` : "まだ判断は記録されていません"}</span><button id="save" class="primary">判断を保存</button></div><p class="hint">「確認済み」には全判断基準のチェック、確認者、判断メモ、根拠が必要です。修正やテストの完了後、人間が内容を確認して記録します。</p>
+      )}</select></label><label>確認者（任意）<input id="reviewer" maxlength="200" value="${esc(draft.reviewer)}" placeholder="名前またはハンドル" /></label></div><label>判断メモ（任意）<textarea id="notes" rows="4" maxlength="20000" placeholder="必要なら、確認したことや判断理由を残せます。">${esc(draft.notes)}</textarea></label><label>確認した根拠（任意）<textarea id="evidence" rows="3" maxlength="20000" placeholder="実行した手順と結果、ログの場所、画面を確認した環境など。秘密値は書かないでください。">${esc(draft.evidence)}</textarea></label><div class="save-row"><span id="save-state">${detail.state.updatedAt ? `保存済み · ${esc(new Date(detail.state.updatedAt).toLocaleString("ja-JP"))}` : "まだ判断は記録されていません"}</span><button id="save" class="primary">判断を保存</button></div><p class="hint">「確認済み」は判断基準をチェックして保存します。確認者・判断メモ・根拠は空欄でも保存できます。</p>
     <details class="history"><summary>判断履歴 (${detail.state.history.length})</summary>${[
       ...detail.state.history,
     ]
@@ -185,8 +175,6 @@ function renderDetail() {
   $("#save-state").textContent = dirty
     ? "未保存の変更があります"
     : $("#save-state").textContent;
-  $("#stale-warning").hidden =
-    !detail.stale && draft.fingerprint === detail.fingerprint;
   renderRun();
 }
 function preserveFocus(fn) {
@@ -273,7 +261,7 @@ function renderRun() {
   }
   preserveFocus(() => {
     $("#run").innerHTML =
-      `${detail.workStale ? '<p class="warning">最後の応答後にコードが変わっています。現在のコードで再確認を依頼できます。</p>' : ""}${active ? `<div class="run-header"><strong>${esc(runLabels[latest.status])}</strong><button class="quiet danger" id="interrupt" data-run-id="${latest.id}">中断</button></div>` : ""}${(latest?.requests || []).map(renderRequest).join("")}`;
+      `${active ? `<div class="run-header"><strong>${esc(runLabels[latest.status])}</strong><button class="quiet danger" id="interrupt" data-run-id="${latest.id}">中断</button></div>` : ""}${(latest?.requests || []).map(renderRequest).join("")}`;
   });
 }
 async function select(id) {
@@ -324,8 +312,6 @@ async function refresh() {
           initDraft();
           renderDetail();
         } else {
-          $("#stale-warning").hidden =
-            !detail.stale && draft.fingerprint === detail.fingerprint;
           $("#detail-state").innerHTML = badge(detail);
           renderRun();
         }
@@ -435,15 +421,6 @@ document.addEventListener("click", async (event) => {
       } finally {
         button.disabled = false;
       }
-    } else if (button.id === "recheck") {
-      const incoming = await api(`/api/items/${selected}`);
-      detail = incoming;
-      draft.fingerprint = incoming.fingerprint;
-      draft.version = incoming.state.version;
-      draft.status = "reviewing";
-      draft.checks = incoming.criteria.map(() => false);
-      changed();
-      renderDetail();
     } else if (button.dataset.message) {
       composer().instruction = button.dataset.message;
       $("#instruction").value = composer().instruction;
@@ -473,13 +450,11 @@ document.addEventListener("click", async (event) => {
       renderRun();
       try {
         // Chat is independent of saving or completing the human decision form.
-        const current = await api(`/api/items/${itemId}`);
         const result = await api(`/api/items/${itemId}/messages`, "POST", {
           instruction: input.instruction,
           mode: input.mode,
           continue: !input.newConversation,
           context,
-          fingerprint: current.fingerprint,
         });
         if (
           composer(itemId).instruction === input.instruction &&

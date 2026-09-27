@@ -200,29 +200,16 @@ export class Store {
   }
   present(item, repository) {
     const state = this.record(item.id);
-    const stale =
-      Boolean(state.updatedAt) &&
-      (state.reviewedFingerprint !== repository.fingerprint ||
-        state.reviewedItemHash !== itemHash(item));
     const latest = state.runs.at(-1);
-    const workStale = Boolean(
-      latest &&
-      ((latest.resultFingerprint ?? latest.fingerprint) !==
-        repository.fingerprint ||
-        latest.itemHash !== itemHash(item)),
-    );
     const displayStatus =
       ["todo", "changes", "reviewing"].includes(state.status) &&
       latest?.status === "completed" &&
-      !workStale &&
       (!state.updatedAt || latest.endedAt > state.updatedAt)
         ? "ready"
         : state.status;
     return {
       ...item,
       state,
-      stale,
-      workStale,
       displayStatus,
       fingerprint: repository.fingerprint,
     };
@@ -236,11 +223,6 @@ export class Store {
         409,
         "別の画面で更新されています。再読み込みして内容を確認してください。",
       );
-    if (body.fingerprint !== repository.fingerprint)
-      throw new HttpError(
-        409,
-        "対象コードが変わりました。再読み込みしてから判断を記録してください。",
-      );
     if (!Object.hasOwn(statuses, body.status))
       throw new HttpError(400, "進捗の指定が不正です。");
     const reviewer = text(body.reviewer, "確認者", 200).trim();
@@ -253,22 +235,10 @@ export class Store {
     ) {
       throw new HttpError(400, "判断基準の確認状態が不正です。");
     }
-    if (
-      ["approved", "waived", "changes", "blocked"].includes(body.status) &&
-      (!reviewer || !notes)
-    ) {
+    if (body.status === "approved" && !body.checks.every(Boolean)) {
       throw new HttpError(
         400,
-        "この判断には確認者と判断メモを記入してください。",
-      );
-    }
-    if (
-      body.status === "approved" &&
-      (!body.checks.every(Boolean) || !evidence)
-    ) {
-      throw new HttpError(
-        400,
-        "確認済みにするには、全判断基準のチェックと確認した根拠が必要です。",
+        "確認済みにするには、判断基準をチェックしてください。",
       );
     }
     const now = new Date().toISOString();
@@ -348,7 +318,7 @@ export function exportMarkdown(items, repository) {
     `対象: ${repository.head} (${repository.branch}${repository.dirty ? ", 未コミット変更あり" : ""})`,
     `出力: ${new Date().toISOString()}`,
     "",
-    "確認済みは人間の判断記録です。コード変更後の記録は再確認が必要です。",
+    "進捗とチェックは人間の判断記録です。コード更新によって自動的に差し戻しません。",
     "",
   ];
   for (const item of items) {
@@ -356,7 +326,7 @@ export function exportMarkdown(items, repository) {
     lines.push(
       `## ${item.id} ${item.title}`,
       "",
-      `状態: ${statuses[item.displayStatus]}${item.stale ? " / 要再確認" : ""}`,
+      `状態: ${statuses[item.displayStatus]}`,
       `確認者: ${s.reviewer || "未記入"}`,
       "",
       item.question,

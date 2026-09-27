@@ -6,7 +6,8 @@ const mode = process.argv[2] || "approval";
 let threadId = "thread-fixture",
   turnId = "turn-fixture",
   threadCount = 0,
-  turnCount = 0;
+  turnCount = 0,
+  sandbox;
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const notify = (method, params) =>
   send({
@@ -35,9 +36,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   else if (["thread/start", "thread/resume"].includes(message.method)) {
     if (
       message.params.approvalsReviewer !== "user" ||
-      message.params.approvalPolicy !== "on-request"
+      message.params.approvalPolicy !== "never"
     )
-      throw new Error("Approvals must remain human controlled");
+      throw new Error("Execution must not ask for approval");
+    sandbox = message.params.sandbox;
+    if (!["read-only", "danger-full-access"].includes(sandbox))
+      throw new Error("Unexpected sandbox");
     if (mode === "conversation") {
       if (message.method === "thread/start")
         threadId = `thread-${++threadCount}`;
@@ -48,8 +52,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     result({ thread: { id: threadId } });
   } else if (message.method === "turn/start") {
-    if (message.params.sandboxPolicy.networkAccess !== false)
-      throw new Error("Network must default to disabled");
+    if (message.params.approvalPolicy !== "never")
+      throw new Error("Turn must not ask for approval");
+    const policy = message.params.sandboxPolicy;
+    if (
+      sandbox === "read-only"
+        ? policy.type !== "readOnly" || policy.networkAccess !== false
+        : policy.type !== "dangerFullAccess"
+    )
+      throw new Error("Turn does not match requested access");
     if (mode === "conversation") {
       turnId = `turn-${++turnCount}`;
       result({ turn: { id: turnId } });
@@ -65,7 +76,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const before = readFileSync("review-fixture.txt", "utf8");
       if (!/^label=(old|fixed)\n$/.test(before))
         throw new Error("Not an isolated review fixture");
-      if (message.params.sandboxPolicy.type === "workspaceWrite") {
+      if (message.params.sandboxPolicy.type === "dangerFullAccess") {
         if (
           !message.params.input[0].text.includes("ソース・テスト・文書を修正")
         )
