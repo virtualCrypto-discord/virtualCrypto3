@@ -166,6 +166,9 @@ pub trait Transport: Send + Sync {
 /// Bound each delivery, including connection setup and reading the response body.
 const DELIVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Webhook responses only acknowledge delivery or return a small PING object.
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+
 /// Send a delivery, however this service reaches applications.
 pub async fn send(
     transport: &dyn Transport,
@@ -189,13 +192,36 @@ pub async fn send(
     let status = transport.status(&response);
     // A refusal needs only its status. A successful PING still has to carry
     // {"type": 1}; a missing or invalid JSON body cannot satisfy that check.
-    let body = match response.json::<Value>().await {
-        Ok(body) => body,
-        Err(error) if error.is_timeout() => return Err(error),
-        Err(_) => Value::Null,
-    };
+    let body = bounded_response_body(response).await?;
 
     Ok(status.map(|status| (status, body)))
+}
+
+/// Bound the streamed body too: Content-Length can be absent, and decoded
+/// chunks can be larger than the advertised compressed length.
+async fn bounded_response_body(mut response: reqwest::Response) -> Result<Value, reqwest::Error> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
+    {
+        tracing::warn!("webhook response exceeded the body size limit");
+        return Ok(Value::Null);
+    }
+    let mut bytes = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+                    tracing::warn!("webhook response exceeded the body size limit");
+                    return Ok(Value::Null);
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null)),
+            Err(error) if error.is_timeout() => return Err(error),
+            Err(_) => return Ok(Value::Null),
+        }
+    }
 }
 
 /// The event body for a claim update: type 2, with the events as its data.

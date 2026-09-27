@@ -94,3 +94,94 @@ async fn stalled_response_body_times_out() {
         .unwrap_err();
     assert!(error.is_timeout(), "{error}");
 }
+
+/// Test known-length and chunked responses, including a server that never ends
+/// its oversized body. The client must stop at the limit, not wait for EOF.
+#[tokio::test]
+async fn oversized_webhook_bodies_are_stopped_before_eof() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for chunked in [false, true] {
+        for status in [200, 400] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut connection, _) = listener.accept().await.unwrap();
+                let mut first_byte = [0u8; 1];
+                connection.read_exact(&mut first_byte).await.unwrap();
+                let framing = if chunked {
+                    "Transfer-Encoding: chunked"
+                } else {
+                    "Content-Length: 8388608"
+                };
+                let headers = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\n{framing}\r\n\r\n"
+                );
+                connection.write_all(headers.as_bytes()).await.unwrap();
+                if chunked {
+                    // Individually small chunks must still count towards one limit.
+                    let chunk = format!("4000\r\n{}\r\n", " ".repeat(16 * 1024));
+                    for _ in 0..5 {
+                        if connection.write_all(chunk.as_bytes()).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                std::future::pending::<()>().await;
+            });
+            let delivery =
+                vc_api::notification::delivery(&json!({"type": 1}), &[9; 32], &url, 1700000000);
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                vc_api::notification::send(&Direct::default(), &delivery),
+            )
+            .await;
+            server.abort();
+            let (actual_status, body) = result
+                .expect("must reject before the five-second delivery timeout")
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual_status, status);
+            assert_eq!(body, Value::Null);
+            assert_ne!(
+                vc_api::notification::handshake(
+                    Some((actual_status, &body)),
+                    Some((401, &Value::Null))
+                ),
+                Handshake::Passed
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn webhook_json_at_the_limit_is_accepted_and_one_byte_more_is_rejected() {
+    const LIMIT: usize = 64 * 1024;
+    for size in [LIMIT, LIMIT + 1] {
+        let app = Router::new().route(
+            "/",
+            post(move || async move {
+                let mut body = String::from("{\"type\":1}");
+                body.extend(std::iter::repeat_n(' ', size - body.len()));
+                body
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let delivery =
+            vc_api::notification::delivery(&json!({"type": 1}), &[9; 32], &url, 1700000000);
+        let (_, body) = vc_api::notification::send(&Direct::default(), &delivery)
+            .await
+            .unwrap()
+            .unwrap();
+        server.abort();
+        assert_eq!(
+            body,
+            if size == LIMIT {
+                json!({"type": 1})
+            } else {
+                Value::Null
+            }
+        );
+    }
+}

@@ -192,6 +192,11 @@ The v2 API also applies a 30-second request timeout before authentication and bo
 parsing. It returns `504 {"error":"request_timeout"}` on timeout; a committed
 write is not undone, so clients should retain their idempotency keys on retries.
 
+Webhook deliveries have a five-second timeout and a 64 KiB response-body limit,
+for both proxy and direct transports. The limit also applies while streaming
+responses without Content-Length. Oversized bodies are discarded and cannot
+satisfy a successful PING check; refusal status codes still retain their meaning.
+
 ## The frontend
 
 `web/dist` is not committed; CI builds it (`web` job) and a deployment packages the
