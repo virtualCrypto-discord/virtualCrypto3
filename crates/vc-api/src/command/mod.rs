@@ -240,7 +240,6 @@ pub async fn handle(
         "info" => info::handle(state, options, payload).await,
         "issue" => issue::handle(state, options, payload).await,
         "mute" => mute::handle(state, options, payload).await,
-        "unmute" => mute::unmute(state, options, payload).await,
         "pat" => pat::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),

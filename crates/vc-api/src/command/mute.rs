@@ -1,11 +1,7 @@
 //! `/mute`: what a person has chosen not to see.
 //!
 //! Two targets and a list. A mute is set by name — a currency's unit, or somebody Discord names
-//! for you — and taken away from the list it is visible on, because that is where a person can
-//! see what they are about to put back. `/unmute` is the same two targets without the walk
-//! through the screen, and not a subcommand of `/mute`: the file this was built from gives the
-//! two halves of one thing two commands, and a person who knows what they muted should not have
-//! to open a list to say so.
+//! for you — and removed with the corresponding button on `/mute list`.
 //!
 //! A filter rather than a lock, so nothing here answers with a refusal on somebody's behalf:
 //! [`vc_core::mute`] is where the lists' own statements ask what to leave out.
@@ -43,23 +39,6 @@ pub async fn handle(
         "currency" => currency(state, chosen, me).await,
         "user" => user(state, chosen, me).await,
         "list" => list(state, me, FIRST_PAGE, CHANNEL_MESSAGE_WITH_SOURCE).await,
-        _ => Err(CommandError::Unknown),
-    }
-}
-
-/// `Command.handle/4` for `unmute`: what [`handle`] sets, taken away.
-pub async fn unmute(
-    state: &AppState,
-    options: &Map<String, Value>,
-    payload: &Value,
-) -> Result<Value, CommandError> {
-    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
-    let subcommand = subcommand(options, "unmute")?;
-    let chosen = options.get("sub_options");
-
-    match subcommand {
-        "currency" => forget_currency(state, chosen, me).await,
-        "user" => forget_user(state, chosen, me).await,
         _ => Err(CommandError::Unknown),
     }
 }
@@ -122,8 +101,8 @@ async fn currency(
         Ok(true) => Ok(screen(
             vec![text(mentions(
                 &format!(
-                    "`{unit}` をミュートしました。この通貨の請求と契約は、あなたの一覧に出なくなります。\
-                     通貨の入力候補からも非表示になります（`/unmute currency` を除く）。\
+                    "`{unit}` をミュートしました。この通貨の残高・履歴・請求・契約は、あなたの一覧に出なくなります。\
+                     通貨と請求の入力候補からも非表示になります。\
                      解除は `/mute list` からできます。"
                 ),
                 state.command_ids().await,
@@ -162,7 +141,7 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
         Ok(true) => Ok(screen(
             vec![text(mentions(
                 &format!(
-                    "{} をミュートしました。その人の請求と契約は、あなたの一覧に出なくなります。\
+                    "{} をミュートしました。その人に関係する履歴・請求・契約は、あなたの一覧や請求の入力候補に出なくなります。\
                      解除は `/mute list` からできます。",
                     mention(target)
                 ),
@@ -188,84 +167,6 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
         )),
         Err(MuteError::Yourself) => Ok(screen(
             vec![text("自分自身はミュートできません。")],
-            COLOR_ERROR,
-        )),
-        Err(error) => Err(database(error)),
-    }
-}
-
-/// `/unmute currency unit:<単位>`.
-async fn forget_currency(
-    state: &AppState,
-    chosen: Option<&Value>,
-    me: i64,
-) -> Result<Value, CommandError> {
-    let unit = option(chosen, "unit", "unmute option unit")?;
-
-    let Some(account) = account(state, me).await? else {
-        return Ok(no_account(COLOR_ERROR));
-    };
-
-    match vc_core::mute::unmute_currency(state.pool(), account, &unit).await {
-        Ok(true) => Ok(screen(
-            vec![text(format!("`{unit}` のミュートを解除しました。"))],
-            COLOR_OK,
-        )),
-        Ok(false) => Ok(screen(
-            vec![text(mentions(
-                &format!("`{unit}` はミュートしていません。`/mute list` で確認できます。"),
-                state.command_ids().await,
-            ))],
-            COLOR_BRAND,
-        )),
-        Err(MuteError::NoSuchCurrency) => Ok(screen(
-            vec![text(format!("`{unit}` という通貨はありません。"))],
-            COLOR_ERROR,
-        )),
-        Err(error) => Err(database(error)),
-    }
-}
-
-/// `/unmute user user:<相手>`.
-async fn forget_user(
-    state: &AppState,
-    chosen: Option<&Value>,
-    me: i64,
-) -> Result<Value, CommandError> {
-    let Some(target) = chosen
-        .and_then(|options| options.get("user"))
-        .and_then(as_int)
-    else {
-        return Err(CommandError::missing("unmute option user"));
-    };
-
-    let Some(account) = account(state, me).await? else {
-        return Ok(no_account(COLOR_ERROR));
-    };
-
-    match vc_core::mute::unmute_user(state.pool(), account, target).await {
-        Ok(true) => Ok(screen(
-            vec![text(format!(
-                "{} のミュートを解除しました。",
-                mention(target)
-            ))],
-            COLOR_OK,
-        )),
-        Ok(false) => Ok(screen(
-            vec![text(mentions(
-                &format!(
-                    "{} はミュートしていません。`/mute list` で確認できます。",
-                    mention(target)
-                ),
-                state.command_ids().await,
-            ))],
-            COLOR_BRAND,
-        )),
-        Err(MuteError::NoSuchUser) => Ok(screen(
-            vec![text(format!(
-                "{} にはVirtualCryptoのアカウントがまだありません。",
-                mention(target)
-            ))],
             COLOR_ERROR,
         )),
         Err(error) => Err(database(error)),

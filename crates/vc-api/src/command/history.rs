@@ -171,12 +171,18 @@ async fn issued(
         return Ok(empty_answer(listing, kind));
     };
 
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+    let reader = vc_core::user::find_by_discord_id(state.pool(), me)
+        .await?
+        .map(|user| user.id);
+
     let page = vc_core::history::issuances(
         state.pool(),
         currency,
         listing.discord_id,
         listing.page,
         PER_PAGE,
+        reader,
     )
     .await?;
 
@@ -210,9 +216,11 @@ fn empty_answer(listing: &Listing, kind: i64) -> Value {
         "指定した条件に一致する履歴はありません。条件を変更して再実行してください。"
     } else {
         match listing.screen {
-            Screen::Paid => "入出金の履歴はありません。",
+            Screen::Paid => {
+                "表示できる入出金の履歴はありません。ミュート設定は `/mute list` で確認できます。"
+            }
             Screen::Issued => {
-                "発行の履歴はありません。このサーバーでは、まだ発行枠から発行されていません。"
+                "表示できる発行の履歴はありません。ミュート設定は `/mute list` で確認できます。"
             }
         }
     };

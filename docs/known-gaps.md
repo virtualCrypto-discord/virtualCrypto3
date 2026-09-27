@@ -294,21 +294,25 @@ so a PAT does all of it, and `crates/vc-api/tests/pat.rs` pins that it does.
 
 ### A list a reader can filter: the mute
 
-`/mute currency`, `/mute user`, `/mute list` and `/unmute` let an account leave a currency or
-somebody out of its own claim and contract lists, and it is an addition in the plain sense: the
-Elixir has no mute, no column that could hold one, and nothing that filters a list by its reader.
-`crates/vc-core/migrations/0019_mutes.sql` is the table, `vc_core::mute` is the domain, and
-`crates/vc-api/tests/interactions_mute.rs` is this tree's own suite.
+`/mute currency`, `/mute user` and `/mute list` hide selected currencies or people from the
+caller's lists and suggestions. Removal is a button on `/mute list`; there is no separate
+unmute command. `crates/vc-core/migrations/0019_mutes.sql` stores these personal preferences.
 
-What it is, in one sentence: a row of (who is looking, what they are not looking at), which the
-claim and contract lists ask before they answer a page — for that reader's lists only, in Discord
-and in the API both, because they are the same lists.
+Currency mutes filter balances, payment/issuance histories, claims, contracts, currency
+suggestions and claim-ID suggestions. User mutes filter histories, claims and claim-ID
+suggestions; contracts and their history also check participants, the fixed receiver and the
+application's linked bot. Counts, offsets, cursors and suggestion limits use the same filters.
 
-Currency autocomplete also excludes the caller's muted currencies, for both empty and typed
-queries, before applying the 25-choice limit. `/unmute currency` keeps them available so the
-caller can select a currency to restore. This affects suggestions only; typing a muted unit
-directly still permits payment. `crates/vc-api/tests/interactions_autocomplete.rs` covers this
-filter, caller isolation, and restoration after unmuting.
+The personal API lists apply the same preferences as Discord. The issuance API authenticated
+by a guild token and the application's own contract list have no human viewer; they continue
+to return their ledgers independently of the owner's personal mutes. Public currency search
+also has no personal viewer. Explicit currency/claim/contract detail and a contract's payment
+statement remain readable. Internal balance reads for these details return the real amount.
+Discord's native user picker is not a bot-provided autocomplete list.
+
+`crates/vc-api/tests/interactions_mute.rs`, `interactions_mute_surfaces.rs` and
+`interactions_autocomplete.rs` cover filtering, reader isolation, counts/cursors and restoration
+through the list buttons.
 
 Three things about it are decisions rather than details:
 
@@ -322,8 +326,8 @@ Three things about it are decisions rather than details:
   answer what they are asked for; only the lists leave rows out. A mute is a preference about a
   list, not a permission over a row.
 
-There is no end date. The row is deleted by the person who wrote it — from `/mute list`, or by
-`/unmute` — and no job would take it away; that is the whole of the lifetime, and it is why the
+There is no end date. The row is deleted by the person who wrote it — using the button on
+`/mute list` — and no job would take it away; that is the whole of the lifetime, and it is why the
 table has no `expires` column.
 
 ### A ledger a person can read: `/history`

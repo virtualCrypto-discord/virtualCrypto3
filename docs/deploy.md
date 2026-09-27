@@ -170,7 +170,7 @@ All these mutations start only after a successful acknowledgement, and result
 delivery failures never repeat them.
 
 The same ordering applies to `/create`, `/pat create|revoke`, `/mute` and
-`/unmute` changes, `/application register`, and currency deletion submissions.
+its removal buttons, `/application register`, and currency deletion submissions.
 They acknowledge privately and replace the message with the result. Grant
 approval/revocation, mute removal buttons, and application setting/bot selectors
 acknowledge with `type: 6` before updating their private screen. A separate private

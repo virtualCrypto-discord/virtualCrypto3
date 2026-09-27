@@ -156,8 +156,8 @@ findings.
 
 ### 1.3 The Discord surface
 
-Thirteen commands — `help`, `invite`, `application`, `issue`, `pat`, `grant`, `contract`,
-`pay`, `info`, `create`, `delete`, `bal`, `claim` — and each is four artefacts that
+Fifteen commands — `help`, `invite`, `application`, `issue`, `pat`, `grant`, `contract`,
+`pay`, `info`, `create`, `delete`, `bal`, `claim`, `mute`, `history` — and each is four artefacts that
 have to agree:
 
 | Artefact | Where | What to check |
@@ -539,11 +539,32 @@ registration or server version Discord is using.
 いずれでも、その2種類が候補から消え、残る1種類は表示されることを確認する。
 サーバー自身の通貨もミュート対象に含め、サーバー内とDMの両方で確認する。
 別の利用者の候補には影響しないこと、`/info name` の通貨名候補からも消えることを確認する。
-`/unmute currency` ではミュートした通貨を選べることを確認し、1種類だけ解除する。
+`/mute list` で対象を確認し、「解除」で1種類だけ解除する。
 その通貨だけが候補に戻り、もう1種類は非表示のままであることを確認する。
 続いて `/mute list` の「解除」で残りを戻し、候補に再表示されることを確認する。
 候補の選択だけでは送金されない。ミュートは送金の禁止ではなく、単位を直接指定した
 送金は可能。ローカル回帰テストは `cargo test -p vc-api --test interactions_autocomplete`。
+
+**UX-11: ミュートの適用範囲の再確認。** テスト用データで次を確認する。
+
+| 対象 | 通貨ミュート | 相手ミュート |
+| --- | --- | --- |
+| `/bal`、本人の残高API | 該当通貨の行を非表示 | 残高は通貨単位なので対象外 |
+| `/history pay`、本人の入出金API | 発行・送金・契約の行を非表示 | 通常送金の相手、契約の参加者・固定支払先・連携Botに関する行を非表示 |
+| `/history issue` | 実行者の設定で非表示 | 実行者がミュートした発行先を非表示 |
+| `/claim list`、本人の請求API、請求ID補完 | 該当通貨を非表示 | 請求元・請求先を非表示 |
+| `/contract list`、本人の契約API | 該当通貨を非表示 | 参加者・固定支払先・連携Botを非表示 |
+| 通貨名・単位の補完 | 該当通貨を非表示 | 通貨と利用者は別の対象 |
+
+ミュート前後の件数とページ移動、複数対象のうち1件だけ解除した際の復帰を確認する。
+全件非表示になった残高・履歴では、資金や記録がなくなったと誤認させない表示か確認する。
+履歴の取引後残高は保存された実額のままで、非表示の行を飛ばすと金額が連続しないことがある。
+`/info` やIDで開く請求・契約の詳細は読み取れ、送金・発行・承認・返金は引き続き実行できる。
+サーバートークンの発行履歴API、アプリ自身の契約一覧、公開通貨検索には、所有者個人の
+ミュートを転用しない。Discord標準のユーザー選択欄もアプリのミュートでは絞り込まれない。
+コマンド一覧と `/help` に独立した解除コマンドがなく、解除を `/mute list` から行えることを確認する。
+コマンド登録の更新は別途必要。このローカル確認ではDiscordへの登録は実施しない。
+回帰テスト: `cargo test -p vc-api --test interactions_mute_surfaces --test interactions_mute --test interactions_autocomplete`。
 
 - [ ] **`/help` and the site's command list** against what the commands do.
 - [ ] **`/contract list`**: five rows, the count in the first line, the arrows

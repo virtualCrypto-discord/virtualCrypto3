@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod discord_schema;
+pub mod mute_ui;
 
 use std::sync::Arc;
 use std::sync::Mutex;

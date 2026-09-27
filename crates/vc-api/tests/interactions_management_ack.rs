@@ -18,8 +18,6 @@ enum Operation {
     GrantRevoke,
     MuteCurrency,
     MuteUser,
-    UnmuteCurrency,
-    UnmuteUser,
     UnmuteCurrencyButton,
     UnmuteUserButton,
     Register,
@@ -29,7 +27,7 @@ enum Operation {
     Connect,
     Delete,
 }
-const OPERATIONS: [Operation; 17] = [
+const OPERATIONS: [Operation; 15] = [
     Operation::Create,
     Operation::PatCreate,
     Operation::PatRevoke,
@@ -37,8 +35,6 @@ const OPERATIONS: [Operation; 17] = [
     Operation::GrantRevoke,
     Operation::MuteCurrency,
     Operation::MuteUser,
-    Operation::UnmuteCurrency,
-    Operation::UnmuteUser,
     Operation::UnmuteCurrencyButton,
     Operation::UnmuteUserButton,
     Operation::Register,
@@ -145,12 +141,8 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             payload["guild_id"] = json!(money.guild.to_string());
             payload
         }
-        MuteCurrency | MuteUser | UnmuteCurrency | UnmuteUser | UnmuteCurrencyButton
-        | UnmuteUserButton => {
-            let currency = matches!(
-                operation,
-                MuteCurrency | UnmuteCurrency | UnmuteCurrencyButton
-            );
+        MuteCurrency | MuteUser | UnmuteCurrencyButton | UnmuteUserButton => {
+            let currency = matches!(operation, MuteCurrency | UnmuteCurrencyButton);
             let removing = !matches!(operation, MuteCurrency | MuteUser);
             if removing {
                 if currency {
@@ -182,7 +174,7 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             } else {
                 command(
                     money,
-                    if removing { "unmute" } else { "mute" },
+                    "mute",
                     if currency { "currency" } else { "user" },
                     json!([{"name":if currency {"unit"} else {"user"},
                         "value":if currency {money.unit.clone()} else {money.user2.to_string()}}]),

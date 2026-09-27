@@ -200,6 +200,8 @@ pub struct Page<T> {
 /// two filters the claim list has, for the reason it has them: a ledger grows, and a person
 /// looks at it for one thing at a time. A counterparty narrows an issuance out, because an
 /// issuance is the pool's and has no other person in it to be the one asked about.
+/// Personal currency/user mutes apply before counting, paging or resuming a cursor.
+/// Contract rows also respect mutes of participants, the fixed receiver and linked bot.
 pub async fn payments(
     pool: &PgPool,
     user_id: i32,
@@ -219,7 +221,7 @@ pub async fn payments(
         // Out of the issuance ledger it is every row, because the pool paid this account.
         "SELECT count(*) AS \"count!\"
            FROM (
-                   SELECT history.currency_id, history.sender_id, history.receiver_id
+                   SELECT history.currency_id, history.sender_id, history.receiver_id, history.contract_id
                      FROM currency_payment_histories history
                     WHERE (history.sender_id = $1 OR history.receiver_id = $1)
                       AND (history.contract_id IS NULL
@@ -227,7 +229,7 @@ pub async fn payments(
                            OR history.receiver_id IS NULL
                            OR history.receiver_id = $1)
                    UNION ALL
-                   SELECT given.currency_id, NULL::bigint, given.receiver_id
+                   SELECT given.currency_id, NULL::bigint, given.receiver_id, NULL::bigint
                      FROM currency_given_histories given
                     WHERE given.receiver_id = $1
                       AND $3::bigint IS NULL
@@ -235,9 +237,23 @@ pub async fn payments(
            JOIN currencies ON currencies.id = movement.currency_id
            LEFT JOIN users sender ON sender.id = movement.sender_id
            LEFT JOIN users receiver ON receiver.id = movement.receiver_id
+           LEFT JOIN contracts ON contracts.id = movement.contract_id
           WHERE ($2::text IS NULL OR currencies.unit = $2)
             AND ($3::bigint IS NULL
-                 OR sender.discord_id = $3 OR receiver.discord_id = $3)",
+                 OR sender.discord_id = $3 OR receiver.discord_id = $3)
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $1
+                   AND (mu.currency_id = movement.currency_id
+                        OR mu.muted_user_id = movement.sender_id
+                        OR mu.muted_user_id = movement.receiver_id
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = contracts.application_id
+                                           OR mut.discord_id = contracts.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = contracts.id
+                                                         AND q.discord_id = mut.discord_id)))))",
         i64::from(user_id),
         unit,
         counterparty
@@ -280,13 +296,15 @@ pub async fn payments_after(
 ///
 /// The filter is the currency rather than the guild: `currency_given_histories` has no guild
 /// column, a currency belongs to one guild, and the guild is what a Discord screen has to look
-/// up. `receiver` narrows it to what one person was given.
+/// up. `receiver` narrows it to what one person was given. `reader_id` applies
+/// the Discord viewer's mutes; the guild-token API has no personal reader.
 pub async fn issuances(
     pool: &PgPool,
     currency_id: i64,
     receiver: Option<i64>,
     page: i64,
     limit: i64,
+    reader_id: Option<i32>,
 ) -> Result<Page<Issuance>> {
     let page = page.max(1);
 
@@ -295,9 +313,15 @@ pub async fn issuances(
            FROM currency_given_histories given
            JOIN users receiver ON receiver.id = given.receiver_id
           WHERE given.currency_id = $1
-            AND ($2::bigint IS NULL OR receiver.discord_id = $2)",
+            AND ($2::bigint IS NULL OR receiver.discord_id = $2)
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $3
+                   AND (mu.currency_id = given.currency_id
+                        OR mu.muted_user_id = given.receiver_id))",
         currency_id,
-        receiver
+        receiver,
+        reader_id
     )
     .fetch_one(pool)
     .await?;
@@ -310,6 +334,7 @@ pub async fn issuances(
         None,
         Some(limit),
         limit * (page - 1),
+        reader_id,
     )
     .await?;
 
@@ -326,7 +351,7 @@ pub async fn issuances_after(
 ) -> Result<Vec<Issuance>> {
     let (next, on_next) = cursors(cursor);
 
-    query_issuances(pool, currency_id, receiver, next, on_next, limit, 0).await
+    query_issuances(pool, currency_id, receiver, next, on_next, limit, 0, None).await
 }
 
 /// The currency whose pool belongs to one guild, which is what a Discord screen has to resolve
@@ -415,6 +440,19 @@ async fn query_payments(
           WHERE ($5::text IS NULL OR currencies.unit = $5)
             AND ($4::bigint IS NULL
                  OR sender.discord_id = $4 OR receiver.discord_id = $4)
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $3
+                   AND (mu.currency_id = movement.currency_id
+                        OR mu.muted_user_id = movement.sender_id
+                        OR mu.muted_user_id = movement.receiver_id
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = contracts.application_id
+                                           OR mut.discord_id = contracts.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = contracts.id
+                                                         AND q.discord_id = mut.discord_id)))))
             AND ($6::timestamp IS NULL
                  OR (movement.\"time\", movement.kind, movement.id)
                         < ($6, $7::smallint, $8::bigint)
@@ -490,6 +528,7 @@ fn event(contract: bool, sender_unset: bool, receiver_unset: bool) -> Option<&'s
 }
 
 /// The issuance query itself, for the same reason.
+#[allow(clippy::too_many_arguments)]
 async fn query_issuances(
     pool: &PgPool,
     currency_id: i64,
@@ -498,6 +537,7 @@ async fn query_issuances(
     on_next: Option<i64>,
     limit: Option<i64>,
     offset: i64,
+    reader_id: Option<i32>,
 ) -> Result<Vec<Issuance>> {
     let rows = sqlx::query!(
         "SELECT given.id, given.amount AS \"amount!\",
@@ -511,6 +551,11 @@ async fn query_issuances(
            JOIN users receiver ON receiver.id = given.receiver_id
           WHERE given.currency_id = $1
             AND ($2::bigint IS NULL OR receiver.discord_id = $2)
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $7
+                   AND (mu.currency_id = given.currency_id
+                        OR mu.muted_user_id = given.receiver_id))
             AND ($3::bigint IS NULL OR given.id < $3)
             AND ($4::bigint IS NULL OR given.id <= $4)
           ORDER BY given.id DESC
@@ -521,7 +566,8 @@ async fn query_issuances(
         next,
         on_next,
         limit,
-        offset
+        offset,
+        reader_id
     )
     .fetch_all(pool)
     .await?;

@@ -306,17 +306,19 @@ pub async fn open_of_party(
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')
             -- What the reader has chosen not to see: a muted currency's contracts, and the
-            -- contracts a muted person is named in. The count and the page below are the same
+            -- contracts involving a muted participant, receiver or linked bot. The count and the page below are the same
             -- rows, and a page that hides fewer of them is an arrow that opens an empty page.
             AND NOT EXISTS (
                 SELECT 1 FROM mutes mu
                  WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
                    AND (mu.currency_id = c.currency_id
-                        OR EXISTS (SELECT 1
-                                     FROM contract_parties q
-                                     JOIN users mut ON mut.id = mu.muted_user_id
-                                    WHERE q.contract_id = c.id
-                                      AND q.discord_id = mut.discord_id)))",
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = c.application_id
+                                           OR mut.discord_id = c.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = c.id
+                                                         AND q.discord_id = mut.discord_id)))))",
         discord_id
     )
     .fetch_one(pool)
@@ -338,11 +340,13 @@ pub async fn open_of_party(
                 SELECT 1 FROM mutes mu
                  WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
                    AND (mu.currency_id = c.currency_id
-                        OR EXISTS (SELECT 1
-                                     FROM contract_parties q
-                                     JOIN users mut ON mut.id = mu.muted_user_id
-                                    WHERE q.contract_id = c.id
-                                      AND q.discord_id = mut.discord_id)))
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = c.application_id
+                                           OR mut.discord_id = c.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = c.id
+                                                         AND q.discord_id = mut.discord_id)))))
           ORDER BY c.id DESC
           LIMIT $2
          OFFSET $3",
@@ -411,11 +415,13 @@ pub async fn of_party_in(
                 SELECT 1 FROM mutes mu
                  WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
                    AND (mu.currency_id = c.currency_id
-                        OR EXISTS (SELECT 1
-                                     FROM contract_parties q
-                                     JOIN users mut ON mut.id = mu.muted_user_id
-                                    WHERE q.contract_id = c.id
-                                      AND q.discord_id = mut.discord_id)))
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = c.application_id
+                                           OR mut.discord_id = c.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = c.id
+                                                         AND q.discord_id = mut.discord_id)))))
             AND ($2::bigint IS NULL OR c.id < $2)
             AND ($3::bigint IS NULL OR c.id <= $3)
           ORDER BY c.id DESC

@@ -36,12 +36,10 @@ pub async fn handle(
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // The removal command must still offer the currencies the caller hid.
-    let include_muted = path == ["unmute", "currency"];
 
     let choices = match (name, path) {
-        ("unit", _) => currencies(state, &query, guild_id, me, Field::Unit, include_muted).await?,
-        ("name", _) => currencies(state, &query, guild_id, me, Field::Name, include_muted).await?,
+        ("unit", _) => currencies(state, &query, guild_id, me, Field::Unit).await?,
+        ("name", _) => currencies(state, &query, guild_id, me, Field::Name).await?,
         ("id", ["claim", subcommand]) if ["approve", "deny", "cancel"].contains(subcommand) => {
             // Approving and denying are the payer's, cancelling the claimant's,
             // and either way only a pending claim can still move.
@@ -156,44 +154,22 @@ async fn currencies(
     guild_id: Option<i64>,
     me: i64,
     field: Field,
-    include_muted: bool,
 ) -> Result<Vec<Value>, CommandError> {
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
 
     // An empty query is the whole of what the caller could pick from, which is
     // their own currencies and their guild's.
     let candidates = if query.is_empty() {
-        vc_core::currency::search_by_guild_and_user(
-            state.pool(),
-            guild_id,
-            account,
-            LIMIT,
-            include_muted,
-        )
-        .await?
+        vc_core::currency::search_by_guild_and_user(state.pool(), guild_id, account, LIMIT).await?
     } else {
         match field {
             Field::Unit => {
-                vc_core::currency::search_by_unit(
-                    state.pool(),
-                    query,
-                    guild_id,
-                    account,
-                    LIMIT,
-                    include_muted,
-                )
-                .await?
+                vc_core::currency::search_by_unit(state.pool(), query, guild_id, account, LIMIT)
+                    .await?
             }
             Field::Name => {
-                vc_core::currency::search_by_name(
-                    state.pool(),
-                    query,
-                    guild_id,
-                    account,
-                    LIMIT,
-                    include_muted,
-                )
-                .await?
+                vc_core::currency::search_by_name(state.pool(), query, guild_id, account, LIMIT)
+                    .await?
             }
         }
     };

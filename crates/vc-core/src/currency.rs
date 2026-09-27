@@ -419,14 +419,13 @@ fn like_prefix(value: &str) -> String {
 /// `Money.search_currencies_with_asset_by_unit/3`: the units starting with
 /// `unit`, the caller's own guild first and their holdings next — the order the
 /// command's suggestions appear in. Muted currencies are excluded before the
-/// limit unless the caller is choosing a currency to unmute.
+/// limit.
 pub async fn search_by_unit(
     pool: &PgPool,
     unit: &str,
     guild_id: Option<i64>,
     operator_id: i32,
     limit: i64,
-    include_muted: bool,
 ) -> Result<Vec<CurrencyCandidate>> {
     let candidates = sqlx::query_as!(
         CurrencyCandidate,
@@ -436,10 +435,10 @@ pub async fn search_by_unit(
            LEFT JOIN assets
                   ON assets.currency_id = currencies.id AND assets.user_id = $1
           WHERE currencies.unit ILIKE $2
-            AND ($5 OR NOT EXISTS (
+            AND NOT EXISTS (
                 SELECT 1 FROM mutes
                  WHERE mutes.user_id = $1 AND mutes.currency_id = currencies.id
-            ))
+            )
           ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,
                    (COALESCE(assets.amount, 0) != 0) DESC,
                    char_length(currencies.unit) ASC,
@@ -448,8 +447,7 @@ pub async fn search_by_unit(
         i64::from(operator_id),
         like_prefix(unit),
         guild_id,
-        limit,
-        include_muted
+        limit
     )
     .fetch_all(pool)
     .await?;
@@ -466,7 +464,6 @@ pub async fn search_by_name(
     guild_id: Option<i64>,
     operator_id: i32,
     limit: i64,
-    include_muted: bool,
 ) -> Result<Vec<CurrencyCandidate>> {
     let candidates = sqlx::query_as!(
         CurrencyCandidate,
@@ -476,10 +473,10 @@ pub async fn search_by_name(
            LEFT JOIN assets
                   ON assets.currency_id = currencies.id AND assets.user_id = $1
           WHERE currencies.name ILIKE $2
-            AND ($5 OR NOT EXISTS (
+            AND NOT EXISTS (
                 SELECT 1 FROM mutes
                  WHERE mutes.user_id = $1 AND mutes.currency_id = currencies.id
-            ))
+            )
           ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,
                    (COALESCE(assets.amount, 0) != 0) DESC,
                    char_length(currencies.name) ASC,
@@ -488,8 +485,7 @@ pub async fn search_by_name(
         i64::from(operator_id),
         like_prefix(name),
         guild_id,
-        limit,
-        include_muted
+        limit
     )
     .fetch_all(pool)
     .await?;
@@ -505,7 +501,6 @@ pub async fn search_by_guild_and_user(
     guild_id: Option<i64>,
     operator_id: i32,
     limit: i64,
-    include_muted: bool,
 ) -> Result<Vec<CurrencyCandidate>> {
     let candidates = sqlx::query_as!(
         CurrencyCandidate,
@@ -515,18 +510,17 @@ pub async fn search_by_guild_and_user(
            LEFT JOIN assets
                   ON assets.currency_id = currencies.id AND assets.user_id = $1
           WHERE (assets.user_id = $1 OR currencies.guild_id = $2)
-            AND ($4 OR NOT EXISTS (
+            AND NOT EXISTS (
                 SELECT 1 FROM mutes
                  WHERE mutes.user_id = $1 AND mutes.currency_id = currencies.id
-            ))
+            )
           ORDER BY (currencies.guild_id = $2) DESC NULLS LAST,
                    (COALESCE(assets.amount, 0) != 0) DESC,
                    currencies.id ASC
           LIMIT $3",
         i64::from(operator_id),
         guild_id,
-        limit,
-        include_muted
+        limit
     )
     .fetch_all(pool)
     .await?;

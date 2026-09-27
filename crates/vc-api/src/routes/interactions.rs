@@ -422,7 +422,7 @@ async fn command(state: &AppState, payload: &Value, received_at: Instant) -> Res
     let management = match name {
         "create" => true,
         "pat" => subcommand == Some("create"),
-        "mute" | "unmute" => matches!(subcommand, Some("currency" | "user")),
+        "mute" => matches!(subcommand, Some("currency" | "user")),
         "application" => subcommand == Some("register"),
         _ => false,
     };

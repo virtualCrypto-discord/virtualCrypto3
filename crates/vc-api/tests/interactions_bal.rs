@@ -78,7 +78,10 @@ async fn bal_for_an_unknown_user_says_there_is_nothing(pool: PgPool) {
     let response = interaction(router(pool), execute_from_guild(bal_data(), -1)).await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(texts(&response.body), ["通貨を持っていません。"]);
+    assert_eq!(
+        texts(&response.body),
+        ["表示できる通貨はありません。ミュート設定は `/mute list` で確認できます。"]
+    );
 
     assert_eq!(response.body["data"]["flags"], json!(32832),);
 }

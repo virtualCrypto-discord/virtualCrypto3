@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT assets.amount,\n                currencies.guild_id AS guild,\n                currencies.name,\n                currencies.pool_amount,\n                currencies.unit\n           FROM assets\n           JOIN currencies ON currencies.id = assets.currency_id\n          WHERE assets.user_id = $1\n          ORDER BY currencies.unit",
+  "query": "SELECT assets.amount,\n                currencies.guild_id AS guild,\n                currencies.name,\n                currencies.pool_amount,\n                currencies.unit\n           FROM assets\n           JOIN currencies ON currencies.id = assets.currency_id\n          WHERE assets.user_id = $1\n            AND NOT EXISTS (\n                SELECT 1 FROM mutes mu\n                 WHERE mu.user_id = $1 AND mu.currency_id = assets.currency_id)\n          ORDER BY currencies.unit",
   "describe": {
     "columns": [
       {
@@ -72,5 +72,5 @@
       true
     ]
   },
-  "hash": "610cd185f2840dc5488ba113a983ce22f613d880ca5cb1306092ba03decbd011"
+  "hash": "d5c8ff4b6c4bd06a8f7b660831e5f6c96b20dc09121202c82775d21b02c3192b"
 }

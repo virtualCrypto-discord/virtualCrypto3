@@ -32,7 +32,7 @@ fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router
     vc_api::router(state(pool, discord))
 }
 
-/// A `/mute` or `/unmute` interaction, typed in a direct message by the person it belongs to:
+/// A `/mute` interaction, typed in a direct message by the person it belongs to:
 /// both commands are personal, so there is no guild and no administrator anywhere in these.
 fn command(name: &str, user: i64, subcommand: &str, option: Option<(&str, Value)>) -> Value {
     let options: Vec<Value> = match option {
@@ -51,10 +51,6 @@ fn command(name: &str, user: i64, subcommand: &str, option: Option<(&str, Value)
 
 fn mute(user: i64, subcommand: &str, option: Option<(&str, Value)>) -> Value {
     command("mute", user, subcommand, option)
-}
-
-fn unmute(user: i64, subcommand: &str, option: Option<(&str, Value)>) -> Value {
-    command("unmute", user, subcommand, option)
 }
 
 /// `/claim list`, as the command opens it: pending claims, first page, both positions.
@@ -211,10 +207,15 @@ async fn the_api_answers_the_list_the_reader_can_see(pool: PgPool) {
     assert_eq!(rows.len(), 1, "body: {}", muting.body);
     assert_eq!(rows[0]["amount"], "700");
 
-    interaction(
+    support::mute_ui::remove(
         discord.clone(),
         router(discord.clone(), pool.clone()),
-        unmute(MONEY_USER2, "currency", Some(("unit", json!(&money.unit)))),
+        MONEY_USER2,
+        &vc_core::mute::Target::Currency {
+            id: money.currency,
+            unit: money.unit.clone(),
+            name: money.name.clone(),
+        },
     )
     .await;
 

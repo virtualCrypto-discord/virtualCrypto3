@@ -16,6 +16,8 @@ pub struct Balance {
 ///
 /// The join on `users` is what makes this take a discord id, and it also means a
 /// discord id with no account simply has no rows — nothing is created here.
+/// This internal reader is unfiltered: explicit /info and claim detail must show
+/// the real balance even when the currency is muted in lists.
 pub async fn for_discord_user(pool: &PgPool, discord_user_id: i64) -> Result<Vec<Balance>> {
     let rows = sqlx::query!(
         "SELECT assets.amount, currencies.name, currencies.unit
@@ -56,7 +58,7 @@ pub struct Balances {
     pub last: Option<i64>,
 }
 
-/// One page of what a discord user holds, in unit order, and the count behind it.
+/// One page of the caller's unmuted holdings, in unit order, and the filtered count.
 ///
 /// The join on `users` is what makes this take a discord id, and it also means a discord id
 /// with no account simply has no rows — nothing is created here, and an empty page is a page
@@ -73,7 +75,10 @@ pub async fn page_for_discord_user(
         "SELECT count(*) AS \"count!\"
            FROM assets
            JOIN users ON users.id = assets.user_id
-          WHERE users.discord_id = $1",
+          WHERE users.discord_id = $1
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = users.id AND mu.currency_id = assets.currency_id)",
         discord_user_id
     )
     .fetch_one(pool)
@@ -85,6 +90,9 @@ pub async fn page_for_discord_user(
            JOIN currencies ON currencies.id = assets.currency_id
            JOIN users ON users.id = assets.user_id
           WHERE users.discord_id = $1
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = users.id AND mu.currency_id = assets.currency_id)
           ORDER BY currencies.unit
           LIMIT $2
          OFFSET $3",
@@ -142,6 +150,9 @@ pub async fn holdings_for_user(pool: &PgPool, user_id: i32) -> Result<Vec<Holdin
            FROM assets
            JOIN currencies ON currencies.id = assets.currency_id
           WHERE assets.user_id = $1
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = $1 AND mu.currency_id = assets.currency_id)
           ORDER BY currencies.unit",
         i64::from(user_id)
     )

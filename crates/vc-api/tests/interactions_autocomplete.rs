@@ -183,10 +183,24 @@ async fn currency_mutes_hide_pay_choices_and_unmuting_restores_them(pool: PgPool
     for (changes, visible) in [
         (vec![], vec!["n", "na", "w"]),
         (vec![("mute", "n"), ("mute", "na")], vec!["w"]),
-        (vec![("unmute", "n")], vec!["n", "w"]),
-        (vec![("unmute", "na")], vec!["n", "na", "w"]),
+        (vec![("remove", "n")], vec!["n", "w"]),
+        (vec![("remove", "na")], vec!["n", "na", "w"]),
     ] {
         for (command, unit) in changes {
+            if command == "remove" {
+                support::mute_ui::remove(
+                    discord.clone(),
+                    app.clone(),
+                    money.user2,
+                    &vc_core::mute::Target::Currency {
+                        id: if unit == "n" { money.currency } else { 3 },
+                        unit: unit.into(),
+                        name: String::new(),
+                    },
+                )
+                .await;
+                continue;
+            }
             let response = support::rendered_interaction(
                 discord.clone(),
                 app.clone(),
@@ -202,11 +216,7 @@ async fn currency_mutes_hide_pay_choices_and_unmuting_restores_them(pool: PgPool
             .await;
             assert_eq!(response.status, 202, "{}", response.body);
             assert!(
-                response.body.to_string().contains(if command == "mute" {
-                    "ミュートしました"
-                } else {
-                    "解除しました"
-                }),
+                response.body.to_string().contains("ミュートしました"),
                 "{}",
                 response.body
             );
@@ -245,7 +255,7 @@ async fn currency_mutes_hide_pay_choices_and_unmuting_restores_them(pool: PgPool
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn currency_mutes_apply_to_name_choices_but_remain_available_for_unmute(pool: PgPool) {
+async fn currency_mutes_apply_to_name_choices(pool: PgPool) {
     let money = setup_money(&pool).await;
     vc_core::mute::mute_currency(&pool, 2, &money.unit, time::OffsetDateTime::now_utc())
         .await
@@ -260,20 +270,6 @@ async fn currency_mutes_apply_to_name_choices_but_remain_available_for_unmute(po
         .await;
         assert_eq!(response.status, 200, "{}", response.body);
         assert_eq!(values(&response), expected);
-    }
-
-    for query in ["", "n"] {
-        let response = interaction(
-            app.clone(),
-            autocomplete_payload(
-                "unmute",
-                focused_subcommand("currency", "unit", query),
-                money.user2,
-            ),
-        )
-        .await;
-        assert_eq!(response.status, 200, "{}", response.body);
-        assert!(values(&response).contains(&money.unit));
     }
 }
 
