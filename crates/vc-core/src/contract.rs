@@ -155,11 +155,16 @@ pub async fn create(
 
     let mut tx = pool.begin().await.map_err(ContractError::Database)?;
 
-    let currency_id = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(ContractError::Database)?
-        .ok_or(ContractError::NotFoundCurrency)?;
+    // Keep the currency alive through the insert. If deletion wins the lock,
+    // report a missing currency instead of a foreign-key violation.
+    let currency_id = sqlx::query_scalar!(
+        "SELECT id FROM currencies WHERE unit = $1 FOR KEY SHARE",
+        unit
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ContractError::Database)?
+    .ok_or(ContractError::NotFoundCurrency)?;
 
     let contract_id = sqlx::query_scalar!(
         "INSERT INTO contracts
