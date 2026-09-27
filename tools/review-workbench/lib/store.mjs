@@ -145,6 +145,9 @@ export class Store {
     ) {
       throw new Error("保存データの形式が不正です。上書きせず停止します。");
     }
+    this.data.queue ??= [];
+    if (!Array.isArray(this.data.queue))
+      throw new Error("送信待ちデータの形式が不正です。上書きせず停止します。");
     // A server restart cannot silently report an unfinished preparation as ready.
     let recovered = false;
     for (const record of Object.values(this.data.records)) {
@@ -307,6 +310,23 @@ export class Store {
     if (position < 0) state.runs.push(structuredClone(run));
     else state.runs[position] = structuredClone(run);
     next.records[id] = state;
+    // Claim a queued message and record its start in a single atomic write.
+    next.queue = next.queue.filter((entry) => entry.id !== run.id);
+    this.persist(next);
+  }
+  queued() {
+    return structuredClone(this.data.queue);
+  }
+  enqueue(message) {
+    const next = structuredClone(this.data);
+    next.queue.push(structuredClone(message));
+    this.persist(next);
+  }
+  cancelQueued(id) {
+    if (!this.data.queue.some((entry) => entry.id === id))
+      throw new HttpError(409, "このメッセージは送信待ちではありません。");
+    const next = structuredClone(this.data);
+    next.queue = next.queue.filter((entry) => entry.id !== id);
     this.persist(next);
   }
 }

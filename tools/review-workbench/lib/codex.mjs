@@ -200,6 +200,9 @@ export class ReviewManager extends EventEmitter {
     this.root = root;
     this.snapshot = snapshot;
     this.active = null;
+    this.closed = false;
+    this.draining = false;
+    this.drainTimer = null;
     this.flushTimer = null;
     this.filePreviews = new Map();
     client.on("notification", (message) =>
@@ -213,6 +216,7 @@ export class ReviewManager extends EventEmitter {
       this.emit("change");
     });
     client.on("status", () => this.emit("change"));
+    this.scheduleDrain();
   }
   guard(fn) {
     try {
@@ -230,14 +234,8 @@ export class ReviewManager extends EventEmitter {
     }
   }
   async start(id, body) {
-    if (this.active)
-      throw new HttpError(
-        409,
-        `${this.active.itemId}の作業が進行中です。完了または中断してから送信してください。`,
-      );
-    const item = this.store.item(id),
-      record = this.store.record(id),
-      repository = this.snapshot();
+    if (this.closed) throw new HttpError(503, "アプリを終了しています。");
+    this.store.item(id);
     const instruction =
       text(body.instruction ?? "", "メッセージ", 10000).trim() ||
       "この項目を確認したいので準備してください。";
@@ -245,15 +243,54 @@ export class ReviewManager extends EventEmitter {
     const mode = body.mode ?? "workspace-write";
     if (!["read-only", "workspace-write"].includes(mode))
       throw new HttpError(400, "実行範囲が不正です。");
-    const run = {
+    const message = {
       id: randomUUID(),
       itemId: id,
       mode,
+      instruction,
+      context,
+      continued: body.continue !== false,
+      status: "queued",
+      queuedAt: new Date().toISOString(),
+    };
+    this.store.enqueue(message);
+    this.emit("change");
+    const run = await this.drain();
+    return run?.id === message.id ? run : message;
+  }
+  cancelQueued(id) {
+    this.store.cancelQueued(id);
+    this.emit("change");
+  }
+  scheduleDrain() {
+    if (this.closed || this.drainTimer) return;
+    this.drainTimer = setImmediate(() => {
+      this.drainTimer = null;
+      this.drain().catch((error) =>
+        this.guard(() => {
+          throw error;
+        }),
+      );
+    });
+  }
+  async drain() {
+    if (this.closed || this.active || this.draining) return;
+    const message = this.store.queued()[0];
+    if (!message) return;
+    this.draining = true;
+    try {
+      return await this.execute(message);
+    } finally {
+      this.draining = false;
+      if (!this.active && this.store.queued().length) this.scheduleDrain();
+    }
+  }
+  async execute(message) {
+    const { itemId: id, mode, instruction, context } = message;
+    const run = {
+      ...message,
       status: "starting",
       startedAt: new Date().toISOString(),
-      head: repository.head,
-      fingerprint: repository.fingerprint,
-      itemHash: itemHash(item),
       threadId: null,
       turnId: null,
       report: "",
@@ -261,14 +298,22 @@ export class ReviewManager extends EventEmitter {
       events: [],
       requests: [],
       error: null,
-      instruction,
-      context,
-      continued: body.continue !== false,
     };
     this.filePreviews.clear();
     this.active = run;
     this.flush();
     try {
+      // Resolve the code, saved notes and previous conversation when execution
+      // actually starts, after all earlier queued changes have finished.
+      const item = this.store.item(id),
+        record = this.store.record(id),
+        repository = this.snapshot();
+      Object.assign(run, {
+        head: repository.head,
+        fingerprint: repository.fingerprint,
+        itemHash: itemHash(item),
+      });
+      this.flush();
       const info = await this.client.connect();
       if (this.active !== run) return run;
       if (!info.authenticated)
@@ -285,7 +330,7 @@ export class ReviewManager extends EventEmitter {
           "人間とレビューを進める継続的な会話。依頼に応じて調査・準備・ソース修正・検証・再確認を実行する。作業範囲内の修正を依頼されたら、提案だけで止めない。最終的なレビュー判断は人間が行う。判断データの書き換え、本番デプロイ、外部への書き込み、秘密値の読み出しは行わない。",
       };
       let result;
-      if (body.continue !== false && previous?.threadId) {
+      if (run.continued && previous?.threadId) {
         // A failed resume is reported; silently starting a new conversation would
         // hide the loss of context from the reviewer.
         result = await this.client.request("thread/resume", {
@@ -358,10 +403,11 @@ export class ReviewManager extends EventEmitter {
   }
   notification({ method, params: p = {} }) {
     const run = this.active;
+    const turnId = p.turnId ?? p.turn?.id;
     if (
       !run ||
       (p.threadId && p.threadId !== run.threadId) ||
-      (p.turnId && run.turnId && p.turnId !== run.turnId)
+      (turnId && run.turnId && turnId !== run.turnId)
     )
       return;
     if (method === "turn/started") {
@@ -555,6 +601,7 @@ export class ReviewManager extends EventEmitter {
     this.flush();
     this.active = null;
     this.emit("change");
+    this.scheduleDrain();
   }
   async interrupt() {
     const run = this.active;
@@ -571,6 +618,9 @@ export class ReviewManager extends EventEmitter {
     }
   }
   close() {
+    this.closed = true;
+    clearImmediate(this.drainTimer);
+    this.drainTimer = null;
     try {
       if (this.active) this.finish("interrupted", "アプリを終了しました。");
     } finally {

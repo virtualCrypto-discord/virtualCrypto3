@@ -426,10 +426,9 @@ for (const [scenario, access, expected] of [
       const request = manager.active.requests[0];
       assert.equal(manager.active.status, "waiting");
       assert.equal(store.record("UX-01").status, "todo");
-      await assert.rejects(
-        manager.start("UX-02", { mode: access }),
-        (e) => e.status === 409,
-      );
+      const queued = await manager.start("UX-02", { mode: access });
+      assert.equal(queued.status, "queued");
+      manager.cancelQueued(queued.id);
       manager.answer(request.key, { answers: { environment: "ローカル" } });
       assert.throws(
         () =>

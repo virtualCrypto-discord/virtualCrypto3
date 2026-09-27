@@ -69,6 +69,10 @@ async function api(path, method = "GET", body) {
 }
 function label(item) {
   if (state.active?.itemId === item.id) return runLabels[state.active.status];
+  const waiting = (state.queue || []).filter(
+    (entry) => entry.itemId === item.id,
+  ).length;
+  if (waiting) return `送信待ち ${waiting}件`;
   return state.statuses[item.displayStatus];
 }
 function badge(item) {
@@ -102,6 +106,18 @@ function renderOverview() {
   active.innerHTML = state.active
     ? `<span class="pulse"></span><span><strong>${esc(state.active.itemId)}</strong> ${esc(runLabels[state.active.status])}</span><button class="quiet" data-select="${esc(state.active.itemId)}">この項目を表示 →</button>`
     : "";
+  const queue = state.queue || [];
+  $("#message-queue").hidden = !queue.length;
+  $("#message-queue-title").textContent =
+    `送信待ち (${queue.length}件) · 送信した順に実行`;
+  const queuedHTML = queue
+    .map(
+      (message, index) =>
+        `<li data-queued="${esc(message.id)}"><div class="queued-heading"><span>${index + 1}.</span><button class="quiet" data-select="${esc(message.itemId)}">${esc(message.itemId)} · ${esc(state.items.find((item) => item.id === message.itemId)?.title)}</button><span>${message.mode === "read-only" ? "読み取りのみ" : "修正・実行可"}${message.continued === false ? " · 新しい会話" : ""}</span><button class="quiet danger" data-cancel-queued="${esc(message.id)}">取り消す</button></div><pre>${esc(message.instruction)}</pre></li>`,
+    )
+    .join("");
+  if ($("#queued-messages").innerHTML !== queuedHTML)
+    $("#queued-messages").innerHTML = queuedHTML;
 }
 function renderList() {
   const query = $("#search").value.toLowerCase(),
@@ -220,11 +236,11 @@ function renderRun() {
   if (!detail || !$("#run")) return;
   const latest = detail.state.runs.at(-1),
     active = state.active?.itemId === selected;
-  $("#send").disabled = sending || Boolean(state.active);
+  $("#send").disabled = sending;
   $("#send").textContent = sending
     ? "送信中…"
-    : state.active
-      ? "作業中（中断して追加依頼可）"
+    : state.active || state.queue?.length
+      ? "キューに追加"
       : "送信";
   const pane = $("#conversation");
   const html =
@@ -440,7 +456,7 @@ document.addEventListener("click", async (event) => {
       await navigator.clipboard.writeText(result.prompt);
       notice("依頼文をコピーしました。別のハーネスにも貼り付けられます。");
     } else if (button.id === "send") {
-      if (sending || state.active) return;
+      if (sending) return;
       const itemId = selected,
         input = { ...composer() },
         context = draftContext();
@@ -468,11 +484,17 @@ document.addEventListener("click", async (event) => {
           }
         }
         if (result.error) error(result.error);
+        else if (result.status === "queued")
+          notice("送信待ちに追加しました。順番に実行します。");
         await refresh();
       } finally {
         sending = false;
         renderRun();
       }
+    } else if (button.dataset.cancelQueued) {
+      await api(`/api/queue/${button.dataset.cancelQueued}/cancel`, "POST", {});
+      notice("送信待ちのメッセージを取り消しました。");
+      await refresh();
     } else if (button.id === "interrupt") {
       await api("/api/interrupt", "POST", { runId: button.dataset.runId });
       notice("中断を依頼しました。実行記録を確認してください。");

@@ -874,6 +874,39 @@ dialog::backdrop {
 #add-dialog {
   width: 570px;
 }
+.message-queue {
+  margin: 12px 0;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.message-queue ol {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+.message-queue li + li {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.queued-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.queued-heading [data-cancel-queued] {
+  margin-left: auto;
+}
+.message-queue pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13px;
+}
 .conversation {
   max-height: 640px;
   overflow-y: auto;

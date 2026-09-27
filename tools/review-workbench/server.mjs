@@ -216,6 +216,7 @@ export function createWorkbench({
             .items()
             .map((item) => summarize(store.present(item, repository))),
           codex: client.info,
+          queue: store.queued(),
           active: manager.active
             ? {
                 id: manager.active.id,
@@ -294,6 +295,14 @@ export function createWorkbench({
         const item = store.add(body);
         broadcast();
         json(item, 201);
+        return;
+      }
+      const cancelMatch = url.pathname.match(
+        /^\/api\/queue\/([a-f0-9-]+)\/cancel$/,
+      );
+      if (req.method === "POST" && cancelMatch) {
+        manager.cancelQueued(cancelMatch[1]);
+        json({ ok: true });
         return;
       }
       const itemMatch = url.pathname.match(
