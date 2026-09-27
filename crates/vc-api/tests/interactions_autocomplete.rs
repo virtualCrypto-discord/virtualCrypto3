@@ -51,6 +51,255 @@ fn values(response: &support::Response) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn grant_code_is_registered_for_autocomplete() {
+    let commands = vc_api::discord_commands::commands();
+    let grant = commands
+        .iter()
+        .find(|command| command["name"] == "grant")
+        .unwrap();
+    let approve = grant["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "approve")
+        .unwrap();
+    let code = approve["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "code")
+        .unwrap();
+    assert_eq!(code["autocomplete"], true);
+    assert_eq!(code["type"], 3);
+    assert_eq!(code["required"], true);
+}
+
+async fn grant_request(
+    pool: &PgPool,
+    application: i64,
+    target: vc_core::grant::Target,
+) -> vc_core::grant::GrantRequest {
+    let scope = match target {
+        vc_core::grant::Target::Guild(_) => "vc.issue",
+        vc_core::grant::Target::User(_) => "vc.delegate.profile.read",
+    };
+    vc_core::grant::request_grant(
+        pool,
+        application,
+        target,
+        &[scope.to_owned()],
+        &[],
+        600,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn grant_codes_only_offer_live_requests_the_actor_can_review(pool: PgPool) {
+    use vc_core::grant::Target;
+    const ME: i64 = 123;
+    let guild = support::DEFAULT_GUILD;
+    let application = insert_application(&pool, 900_001, "申請元").await;
+    let other_app = insert_application(&pool, 900_002, "決定済み・期限切れ").await;
+    let server = grant_request(&pool, application, Target::Guild(guild)).await;
+    let other_server = grant_request(&pool, application, Target::Guild(guild + 1)).await;
+    let personal = grant_request(&pool, application, Target::User(ME)).await;
+    let other_person = grant_request(&pool, application, Target::User(ME + 1)).await;
+    let approved = grant_request(&pool, other_app, Target::Guild(guild)).await;
+    let now = time::OffsetDateTime::now_utc();
+    let review = vc_core::grant::review_requests(
+        &pool,
+        Some(&approved.user_code),
+        None,
+        ME,
+        Some(guild),
+        now,
+    )
+    .await
+    .unwrap();
+    vc_core::grant::approve_review(&pool, &review[0], now)
+        .await
+        .unwrap()
+        .unwrap();
+    let expired = grant_request(&pool, other_app, Target::Guild(guild)).await;
+    sqlx::query(
+        "UPDATE grant_requests SET inserted_at = inserted_at - interval '1 hour' WHERE id = $1",
+    )
+    .bind(expired.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for (location, permissions, actor, mut expected) in [
+        (
+            Some(guild),
+            Some("8"),
+            ME,
+            vec![server.user_code.clone(), personal.user_code.clone()],
+        ),
+        (
+            Some(guild + 1),
+            Some("8"),
+            ME,
+            vec![other_server.user_code.clone(), personal.user_code.clone()],
+        ),
+        (Some(guild), Some("0"), ME, vec![personal.user_code.clone()]),
+        (Some(guild), None, ME, vec![personal.user_code.clone()]),
+        (None, None, ME, vec![personal.user_code.clone()]),
+        (None, None, ME + 1, vec![other_person.user_code.clone()]),
+        (None, None, ME + 2, vec![]),
+    ] {
+        let mut payload =
+            autocomplete_payload("grant", focused_subcommand("approve", "code", ""), actor);
+        match location {
+            Some(id) => {
+                payload["guild_id"] = json!(id.to_string());
+                payload["member"]["permissions"] = json!(permissions);
+            }
+            None => {
+                payload["user"] = payload["member"]["user"].clone();
+                payload.as_object_mut().unwrap().remove("member");
+                payload.as_object_mut().unwrap().remove("guild_id");
+            }
+        }
+        let response = interaction(router(pool.clone()), payload).await;
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(response.body["type"], 8);
+        let mut actual = values(&response);
+        actual.sort();
+        expected.sort();
+        assert_eq!(
+            actual, expected,
+            "guild={location:?}, permissions={permissions:?}, actor={actor}"
+        );
+    }
+
+    // Choosing a code still opens the review; it does not grant access.
+    let command = execute_from_guild(
+        json!({"name": "grant", "options": [{
+            "name": "approve", "type": 1,
+            "options": [{"name": "code", "type": 3, "value": server.user_code}]
+        }]}),
+        ME,
+    );
+    let review = interaction(router(pool.clone()), command.clone()).await;
+    assert_eq!(review.status, 200, "{}", review.body);
+    assert!(
+        review
+            .body
+            .to_string()
+            .contains("アプリケーションの権限申請の確認")
+    );
+    assert!(review.body.to_string().contains("申請元"));
+    assert!(review.body.to_string().contains("承認する"));
+
+    // A code offered while authorized cannot be used after losing that permission.
+    let mut denied = command;
+    denied["member"]["permissions"] = json!("0");
+    let denied = interaction(router(pool.clone()), denied).await;
+    assert_eq!(denied.status, 200);
+    assert!(!denied.body.to_string().contains("承認する"));
+    let state: (String, Option<i64>) =
+        sqlx::query_as("SELECT status, grant_id FROM grant_requests WHERE id = $1")
+            .bind(server.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, ("pending".to_owned(), None));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn grant_code_prefixes_filter_before_the_limit_and_keep_labels_readable(pool: PgPool) {
+    let guild = support::DEFAULT_GUILD;
+    let mut requests = Vec::new();
+    for index in 0..27 {
+        let name = if index == 0 {
+            String::new()
+        } else {
+            format!("\n{}\r", "長い名前".repeat(20))
+        };
+        let application = insert_application(&pool, 910_000 + index, &name).await;
+        let request = grant_request(&pool, application, vc_core::grant::Target::Guild(guild)).await;
+        let code = if index == 0 {
+            "ab120001".to_owned()
+        } else {
+            format!("c{index:07}")
+        };
+        sqlx::query("UPDATE grant_requests SET user_code = $1 WHERE id = $2")
+            .bind(&code)
+            .bind(request.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        requests.push((code, client_id_of(&pool, application).await));
+        if index == 26 {
+            let account = account_of(&pool, application).await;
+            vc_core::user::bind_bot(&pool, account, 920_001)
+                .await
+                .unwrap();
+        }
+    }
+
+    let response = interaction(
+        router(pool.clone()),
+        autocomplete_payload("grant", focused_subcommand("approve", "code", ""), 123),
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(choices(&response).len(), 25);
+    let expected = requests
+        .iter()
+        .rev()
+        .take(25)
+        .map(|(code, _)| code.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(values(&response), expected);
+    assert!(
+        choices(&response)[0]["name"]
+            .as_str()
+            .unwrap()
+            .contains("ボット 920001")
+    );
+    for (choice, (_, client_id)) in choices(&response)
+        .iter()
+        .skip(1)
+        .zip(requests.iter().rev().skip(1))
+    {
+        let label = choice["name"].as_str().unwrap();
+        assert_eq!(label.chars().count(), 100);
+        assert!(label.starts_with(choice["value"].as_str().unwrap()));
+        assert!(label.contains("サーバー / ボット未連携:"));
+        assert!(label.contains(client_id));
+        assert!(!label.contains(['\r', '\n']));
+    }
+
+    for (prefix, expected) in [
+        ("ab12", vec!["ab120001"]),
+        (" AB12 ", vec!["ab120001"]),
+        ("ab120001", vec!["ab120001"]),
+        ("1200", vec![]),
+        ("missing", vec![]),
+        ("%", vec![]),
+        ("_", vec![]),
+    ] {
+        let response = interaction(
+            router(pool.clone()),
+            autocomplete_payload("grant", focused_subcommand("approve", "code", prefix), 123),
+        )
+        .await;
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(values(&response), expected, "prefix={prefix}");
+        if !expected.is_empty() {
+            let label = choices(&response)[0]["name"].as_str().unwrap().to_owned();
+            assert!(label.contains("（名前なし）"));
+            assert!(label.contains(&requests[0].1));
+        }
+    }
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_empty_unit_query_offers_what_the_caller_holds(pool: PgPool) {
     let claims = setup_claim(&pool).await;

@@ -210,6 +210,7 @@ fn grant() -> Value {
                         "description": "アプリケーションが表示する申請コードです。",
                         "type": 3,
                         "required": true,
+                        "autocomplete": true,
                     },
                 ],
             },

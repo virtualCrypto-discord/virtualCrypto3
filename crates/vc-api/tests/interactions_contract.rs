@@ -150,7 +150,7 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
     assert_eq!(
         said[1],
         format!(
-            "Bot未連携: `an application`\nclient_id: `{client_id}`\n\
+            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\n\
          （nyan） — 承認待ち\n\
          あなたの分: 100／未回答 ・ 承認 0/1 ・ 残り 0\n\
          送金先: 制限なし\n\
@@ -235,8 +235,8 @@ async fn same_named_applications_use_their_own_client_id_or_bound_bot(pool: PgPo
     );
     let response = interaction(router(&pool, recorded.clone()), command.clone()).await;
     let said = texts(&response);
-    assert!(said[1].contains(&format!("client_id: `{other_client_id}`")));
-    assert!(said[2].contains(&format!("client_id: `{client_id}`")));
+    assert!(said[1].contains(&format!("アプリケーションID: `{other_client_id}`")));
+    assert!(said[2].contains(&format!("アプリケーションID: `{client_id}`")));
     assert_ne!(said[1], said[2]);
 
     let bot = 700_000_000_000_000_001_i64;
@@ -248,7 +248,7 @@ async fn same_named_applications_use_their_own_client_id_or_bound_bot(pool: PgPo
         .unwrap();
     let response = interaction(router(&pool, recorded.clone()), command.clone()).await;
     let said = texts(&response);
-    assert!(said[1].starts_with("Bot未連携: `an application`\n"));
+    assert!(said[1].starts_with("ボット未連携: `an application`\n"));
     assert!(said[2].starts_with(&format!("<@{bot}>\n")));
     assert!(!said[2].contains("an application"));
     assert!(!said[2].contains(&client_id));
@@ -266,7 +266,7 @@ async fn same_named_applications_use_their_own_client_id_or_bound_bot(pool: PgPo
         .unwrap();
     let response = interaction(router(&pool, recorded), command).await;
     assert!(texts(&response)[2].starts_with(&format!(
-        "Bot未連携: `an application`\nclient_id: `{client_id}`\n"
+        "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\n"
     )));
 }
 
@@ -288,10 +288,9 @@ async fn an_unbound_name_cannot_render_a_bot_mention_or_another_heading(pool: Pg
         ),
     )
     .await;
-    assert!(
-        texts(&response)[1]
-            .starts_with("Bot未連携: `｀ <@700000000000000001>  **bound bot**`\nclient_id: `")
-    );
+    assert!(texts(&response)[1].starts_with(
+        "ボット未連携: `｀ <@700000000000000001>  **bound bot**`\nアプリケーションID: `"
+    ));
 }
 
 /// A user who is named in nothing is told so, and told where such a thing would
@@ -355,7 +354,7 @@ async fn approving_from_the_button_locks_it(pool: PgPool) {
     assert_eq!(
         said[1],
         format!(
-            "Bot未連携: `an application`\nclient_id: `{client_id}`\n\
+            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\n\
          （nyan） — 全員承認済み\n\
          あなたの分: 100／承認済み ・ 承認 1/1 ・ 残り 100\n\
          送金先: 制限なし\n\

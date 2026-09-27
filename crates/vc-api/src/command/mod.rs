@@ -116,7 +116,7 @@ pub(super) fn application_identity(
                 .unwrap_or("（名前なし）")
                 .replace('`', "｀")
                 .replace(['\r', '\n'], " ");
-            format!("Bot未連携: `{name}`\nclient_id: `{client_id}`")
+            format!("ボット未連携: `{name}`\nアプリケーションID: `{client_id}`")
         }
     }
 }

@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.user_code AS \"user_code!\", a.client_id::text AS \"client_id!\",\n                  a.client_name, bot.discord_id AS bot_discord_id, r.guild_id, r.discord_id\n             FROM grant_requests r JOIN applications a ON a.id = r.application_id\n             LEFT JOIN users bot ON bot.application_id = a.id\n            WHERE (r.discord_id = $1 OR r.guild_id = $2)\n              AND r.status = 'pending'\n              AND r.inserted_at + make_interval(secs => r.expires_in) > $3\n              AND starts_with(lower(r.user_code), lower($4))\n            ORDER BY r.id DESC\n            LIMIT $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_code!",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "user_code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "client_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "bot_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "guild_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "guild_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grant_requests",
+            "name": "discord_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamp",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c84297492e6cee3e2a173d9f17aec86d46d57435c0339d74160f7bd97df8a26a"
+}

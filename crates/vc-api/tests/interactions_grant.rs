@@ -224,13 +224,16 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
             format!("<@{BOT}>")
         } else {
             format!(
-                "Bot未連携: `｀ <@987654321987654321>  **trusted** @everyone <@&123>`\nclient_id: `{client_id}`"
+                "ボット未連携: `｀ <@987654321987654321>  **trusted** @everyone <@&123>`\nアプリケーションID: `{client_id}`"
             )
         };
         let check = |response: &Response| {
             assert_eq!(response.status, 200, "{}", response.body);
             let text = texts(response).join("\n");
             assert!(text.contains(&expected), "{text}");
+            assert!(!text.contains("client_id:"), "{text}");
+            assert!(!text.contains("vc.delegate."), "{text}");
+            assert!(!text.contains("vc.issue"), "{text}");
             // Mentions in code are literal text; outside code only the verified
             // binding may be rendered. Name-supplied backticks cannot escape it.
             let outside_code = text.split('`').step_by(2).collect::<String>();
@@ -335,7 +338,7 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
              取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
-                "Bot未連携: `an application`\nclient_id: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
+                "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
             ),
         ]
     );
@@ -380,7 +383,7 @@ async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
     assert_eq!(
         texts(&response)[1],
         format!(
-            "Bot未連携: `an application`\nclient_id: `{client_id}`\nこの申請は、通貨 nyan だけを操作できます。"
+            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\nこの申請は、通貨 nyan だけを操作できます。"
         )
     );
 }
@@ -480,7 +483,7 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
     assert_eq!(
         texts(&response)[1],
         format!(
-            "Bot未連携: `an application`\nclient_id: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
+            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
         )
     );
     assert_eq!(
@@ -659,7 +662,7 @@ async fn the_list_pages(pool: PgPool) {
              取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
-                "Bot未連携: `an application 0`\nclient_id: `{}`\nこの申請は、すべての通貨を操作できます。",
+                "ボット未連携: `an application 0`\nアプリケーションID: `{}`\nこの申請は、すべての通貨を操作できます。",
                 client_ids[0]
             ),
         ]
@@ -723,7 +726,7 @@ async fn the_list_pages(pool: PgPool) {
              取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
                 .to_string(),
             format!(
-                "Bot未連携: `an application 0`\nclient_id: `{}`\nこの申請は、すべての通貨を操作できます。",
+                "ボット未連携: `an application 0`\nアプリケーションID: `{}`\nこの申請は、すべての通貨を操作できます。",
                 client_ids[0]
             ),
         ]
@@ -886,7 +889,7 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     let description = texts(&review).join("\n");
     assert!(description.contains("personal app"));
     assert!(description.contains("あなたのアカウント"));
-    assert!(description.contains("vc.delegate.claims.approve"));
+    assert!(!description.contains("vc.delegate."));
     assert!(description.contains("あなたのアカウントから支払う"));
     assert_eq!(grant_count(&pool).await, 0);
     assert!(notified.personal_grant_decisions().is_empty());
@@ -931,11 +934,7 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
         from_dm(ADMIN, json!([{"name":"user","type":1}])),
     )
     .await;
-    assert!(
-        texts(&list)
-            .join("\n")
-            .contains("vc.delegate.balances.read")
-    );
+    assert!(texts(&list).join("\n").contains("あなたの残高を閲覧する"));
     let revoke = buttons(&list)[0].clone();
     interaction(
         discord.clone(),
@@ -1063,9 +1062,9 @@ async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool)
     let description = texts(&review).join("\n");
     for expected in [
         "アプリケーションの権限申請の確認",
-        "申請元のアプリケーション: Bot未連携: `an application`",
+        "申請元のアプリケーション: ボット未連携: `an application`",
         &format!("対象: このサーバー ({DEFAULT_GUILD})"),
-        "このサーバーの発行枠から通貨を発行する (`vc.issue`)",
+        "このサーバーの発行枠から通貨を発行する",
         "対象の通貨（すべて・ページ 1/1）",
         "承認の対象は、全ページに表示されているすべての通貨です。",
     ] {
@@ -1528,6 +1527,15 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
     for id in [legacy, ga, gb] {
         assert!(buttons(&list).contains(&ids::revoke_one_custom_id(id)));
     }
+    let labels: Vec<&str> = list.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["type"] == 1)
+        .flat_map(|row| row["components"].as_array().unwrap())
+        .map(|button| button["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["取り消す", "取り消す", "取り消す"]);
     let revoke = ids::revoke_one_custom_id(ga);
     let mut other_guild = button_from_guild(json!({"custom_id":revoke}), ADMIN);
     other_guild["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());

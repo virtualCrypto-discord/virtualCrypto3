@@ -7,7 +7,9 @@ use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
     as_int, as_permissions, get_user, is_administrator, value_text,
 };
-use crate::components::{ButtonStyle, action_row, button, container, ephemeral, icon_button, text};
+use crate::components::{
+    ButtonStyle, action_row, button, container, ephemeral, icon_button, separator, text,
+};
 use crate::custom_id::ui::grant::{self as ids, Page, Pressed, page_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -90,7 +92,7 @@ fn actor(payload: &Value) -> Result<i64, CommandError> {
     get_user(payload).ok_or_else(|| CommandError::missing("grant has no user"))
 }
 
-fn authorized_guild(payload: &Value) -> Option<i64> {
+pub(super) fn authorized_guild(payload: &Value) -> Option<i64> {
     let guild = payload.get("guild_id").and_then(as_int)?;
     let permissions = payload
         .get("member")?
@@ -244,7 +246,7 @@ fn permissions(scopes: &[String]) -> String {
                     .map(|scope| scope.description())
                     .unwrap_or("未対応の権限です。新しい申請を依頼してください")
             };
-            format!("- {description} (`{scope}`)")
+            format!("- {description}")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -266,6 +268,7 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
     }
     for app in apps {
         let (label, needs_details) = currency_label(state, &app.resources).await?;
+        children.push(separator());
         children.push(text(format!(
             "{}\n{}\n対象の通貨: {}",
             super::application_identity(
@@ -278,7 +281,7 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
         )));
         let mut actions = vec![button(
             &ids::revoke_one_custom_id(app.grant_id),
-            &format!("取り消す #{}", app.grant_id),
+            "取り消す",
             ButtonStyle::Danger,
         )];
         if needs_details {
@@ -291,6 +294,7 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
         children.push(action_row(actions));
     }
     if last > 1 {
+        children.push(separator());
         children.push(action_row(vec![
             icon_button(
                 &crate::custom_id::ui::grant::user_page_custom_id(user, 1),
@@ -365,6 +369,7 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
             // knows, so a grant for one currency and one for all of them have to
             // read differently.
 
+            children.push(separator());
             children.push(text(format!(
                 "{}\nこの申請は、{}を操作できます。",
                 super::application_identity(
@@ -376,7 +381,7 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
             )));
             let mut actions = vec![button(
                 &ids::revoke_one_custom_id(application.grant_id),
-                &format!("取り消す #{}", application.grant_id),
+                "取り消す",
                 ButtonStyle::Danger,
             )];
             if needs_details {
@@ -390,6 +395,7 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
         }
 
         if authorized.next.is_some() || authorized.page > 1 {
+            children.push(separator());
             children.push(pagination_row(&authorized));
         }
     }
