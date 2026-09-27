@@ -101,16 +101,14 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
 
     match create(state, account, &new).await {
-        Ok(created) => {
-            let token = crate::routes::connect::token_url(state.links(), &created.client_id);
-
-            Ok(message(ephemeral(vec![developer::application(
+        Ok(created) => Ok(message(ephemeral(vec![developer::saved(
+            developer::application(
                 &created.client_id,
                 new.client_name.as_deref(),
-                false,
+                None,
                 None,
                 Some(&created.client_secret),
-                Some(&token),
+                &crate::routes::connect::token_url(state.links(), &created.client_id),
                 developer::Fields {
                     client_name: new.client_name.as_deref(),
                     redirect_uris: &new.redirect_uris,
@@ -125,8 +123,9 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
                     response_types: &new.response_types,
                     subscribed_events: &new.subscribed_events,
                 },
-            )])))
-        }
+            ),
+            "アプリケーションを登録しました。Bot の接続は任意です。",
+        )]))),
         Err(refusal) => Ok(message(ephemeral(vec![developer::refusal(
             "登録",
             refusal.description.as_deref(),
@@ -178,10 +177,7 @@ async fn connect_bot(
     payload: &Value,
 ) -> Result<Value, CommandError> {
     let Some(guild) = payload.get("guild_id").and_then(Value::as_str) else {
-        return Ok(developer::error(&crate::docs::discord::mentions(
-            "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application show` を開き、Bot を選んでください。",
-            state.command_ids().await,
-        )));
+        return Ok(guild_required(state).await);
     };
 
     // Discord sends every id as text and this is the same single parse the route makes. The
@@ -207,6 +203,13 @@ async fn connect_bot(
     }
 }
 
+async fn guild_required(state: &AppState) -> Value {
+    developer::error(&crate::docs::discord::mentions(
+        "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application show` を開き、Bot を選んでください。",
+        state.command_ids().await,
+    ))
+}
+
 /// One application, with its secret on the screen.
 ///
 /// The ownership check is the one the connect route makes, and in the same order: the
@@ -222,19 +225,17 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
         )]));
     };
 
-    // The token the description has to carry, composed from what this screen already
-    // shows: there is nothing to connect while a bot is connected, so there is nothing to
-    // paste then either.
-    let token = (!found.discord_user_id.is_some())
-        .then(|| crate::routes::connect::token_url(state.links(), &found.client_id));
+    Ok(ephemeral(vec![application_screen(state, &found)]))
+}
 
-    Ok(ephemeral(vec![developer::application(
+fn application_screen(state: &AppState, found: &crate::routes::oauth2_clients::Details) -> Value {
+    developer::application(
         &found.client_id,
         found.client_name.as_deref(),
-        found.discord_user_id.is_some(),
+        found.discord_user_id,
         found.logo_uri.as_deref(),
         found.client_secret.as_deref(),
-        token.as_deref(),
+        &crate::routes::connect::token_url(state.links(), &found.client_id),
         developer::Fields {
             client_name: found.client_name.as_deref(),
             redirect_uris: &found.redirect_uris,
@@ -247,7 +248,7 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
             response_types: &found.response_types,
             subscribed_events: &found.subscribed_events,
         },
-    )]))
+    )
 }
 
 /// The `client_id` a subcommand was given, which autocomplete filled from the caller's own.
@@ -297,11 +298,10 @@ async fn list_page(state: &AppState, payload: &Value, page: usize) -> Result<Val
     )]))
 }
 
-/// A submitted form: `dev:register` or `dev:edit`.
+/// A submitted settings form.
 ///
 /// The values arrive as the modal's components, each keyed by the `custom_id` its input was
-/// built with, and `body` is what the flows take. The edit form's flow is not extracted yet,
-/// so that one still says so rather than pretending.
+/// built with, and `body` is what the shared settings flow takes.
 pub async fn modal(
     state: &AppState,
     screen: crate::custom_id::ui::developer::Screen,
@@ -432,33 +432,14 @@ async fn edit_form(
 
     match apply(state, application_id, &key, &changes).await {
         Ok(()) => match details(state.pool(), application_id).await {
-            Ok(Some(now)) => {
-                let token = (!now.discord_user_id.is_some())
-                    .then(|| crate::routes::connect::token_url(state.links(), &now.client_id));
-
-                Ok(registered(developer::application(
-                    &now.client_id,
-                    now.client_name.as_deref(),
-                    now.discord_user_id.is_some(),
-                    now.logo_uri.as_deref(),
-                    now.client_secret.as_deref(),
-                    token.as_deref(),
-                    developer::Fields {
-                        client_name: now.client_name.as_deref(),
-                        redirect_uris: &now.redirect_uris,
-                        client_uri: now.client_uri.as_deref(),
-                        logo_uri: now.logo_uri.as_deref(),
-                        webhook_url: now.webhook_url.as_deref(),
-                        discord_support_server_invite_slug: now
-                            .discord_support_server_invite_slug
-                            .as_deref(),
-                        application_type: &now.application_type,
-                        grant_types: &now.grant_types,
-                        response_types: &now.response_types,
-                        subscribed_events: &now.subscribed_events,
-                    },
-                )))
-            }
+            Ok(Some(now)) => Ok(registered(developer::saved(
+                application_screen(state, &now),
+                if changes.rotate_client_secret {
+                    "client_secret を再生成しました。旧 secret は使えません。利用中のサービスの設定を更新してください。"
+                } else {
+                    "設定を保存しました。"
+                },
+            ))),
             _ => Ok(registered(developer::refusal("変更", None))),
         },
         Err(refusal) => Ok(registered(developer::refusal(
@@ -475,11 +456,6 @@ async fn edit_form(
 /// *update*, so pressing 戻る replaces the panel rather than stacking another one in the DM,
 /// which is what a person pressing 戻る means.
 ///
-/// The screens that are not here are the ones whose data this does not have: `home` says
-/// 接続しています to a person by name and links to a page, and neither the name nor the page is
-/// in the interaction or in [`crate::state::Links`]; `connect` is the HTTP route's flow, which
-/// is not extracted yet. They answer `Unknown`, which the dispatcher turns into the refusal an
-/// unhandled component already gets, rather than a screen that pretends.
 pub async fn component(
     state: &AppState,
     custom_id: &str,
@@ -504,10 +480,6 @@ pub async fn component(
         (Some(3), Screen::Edit) => {
             let (client_id, field) = crate::custom_id::ui::developer::field_of(&client_id);
 
-            let Some((application_id, found)) = owned(state, client_id, payload).await? else {
-                return Err(CommandError::Unknown);
-            };
-
             let values = data
                 .and_then(|data| data.get("values"))
                 .and_then(Value::as_array)
@@ -521,40 +493,73 @@ pub async fn component(
             let mut body = Map::new();
             body.insert(field, value);
 
-            let changes = match changes(&body) {
-                Ok(changes) => changes,
-                Err(refusal) => {
-                    return Ok(update(ephemeral(vec![developer::refusal(
-                        "変更",
-                        refusal.description.as_deref(),
-                    )])));
-                }
-            };
-
-            // The application's own account, which is what the endpoint's token subject is, so
-            // the handshake budget is the application's either way.
-            let key = found.user_id.to_string();
-
-            match apply(state, application_id, &key, &changes).await {
-                // The screen again, so the person sees the set they now have rather than the one
-                // they chose — which is the same thing only when the write agreed with them.
-                Ok(()) => Ok(update(show(state, client_id, payload).await?)),
-                Err(refusal) => Ok(update(ephemeral(vec![developer::refusal(
-                    "変更",
-                    refusal.description.as_deref(),
-                )]))),
-            }
+            let response = edit_form(state, client_id, body, payload).await?;
+            Ok(update(response["data"].clone()))
         }
-        // The list's menu, whose value is the application to look at.
-        (Some(3), _) => Ok(update(show(state, chosen(data)?, payload).await?)),
-        // The bot picker on an application's screen, whose value is the bot that was chosen.
         (Some(5), Screen::Connect) => {
-            let bot = chosen(data)?;
-
+            let bot = chosen(data)?
+                .parse::<i64>()
+                .map_err(|_| CommandError::Unknown)?;
+            let Some((_, found)) = owned(state, &client_id, payload).await? else {
+                return Ok(update(ephemeral(vec![developer::refusal(
+                    "接続",
+                    Some("そのアプリケーションはありません。"),
+                )])));
+            };
+            if payload.get("guild_id").and_then(Value::as_str).is_none() {
+                return Ok(update(ephemeral(vec![guild_required(state).await])));
+            }
+            if data
+                .and_then(|data| data.get("resolved"))
+                .and_then(|resolved| resolved.get("users"))
+                .and_then(|users| users.get(bot.to_string()))
+                .is_some_and(|user| user.get("bot") != Some(&Value::Bool(true)))
+            {
+                return Ok(update(ephemeral(vec![developer::refusal(
+                    "接続",
+                    Some("選択したユーザーは Bot ではありません。Bot を選んでください。"),
+                )])));
+            }
+            Ok(update(ephemeral(vec![developer::connect_confirmation(
+                &client_id,
+                found.discord_user_id,
+                bot,
+            )])))
+        }
+        (Some(2), Screen::ConfirmConnect) => {
+            let (client_id, bot) = crate::custom_id::ui::developer::field_of(&client_id);
             Ok(update(ephemeral(vec![
-                connect_bot(state, &client_id, bot, payload).await?,
+                connect_bot(state, client_id, bot, payload).await?,
             ])))
         }
+        (Some(2), Screen::RotateSecret) => {
+            let (client_id, action) = crate::custom_id::ui::developer::field_of(&client_id);
+            if action == "confirm" {
+                let response = edit_form(
+                    state,
+                    client_id,
+                    Map::from_iter([("client_secret".to_owned(), json!(true))]),
+                    payload,
+                )
+                .await?;
+                return Ok(update(response["data"].clone()));
+            }
+            if !action.is_empty() {
+                return Err(CommandError::Unknown);
+            }
+            if owned(state, client_id, payload).await?.is_none() {
+                return Ok(update(ephemeral(vec![developer::refusal(
+                    "再生成",
+                    Some("そのアプリケーションはありません。"),
+                )])));
+            }
+            Ok(update(ephemeral(vec![
+                developer::rotate_secret_confirmation(client_id),
+            ])))
+        }
+        (Some(2), Screen::Show) => Ok(update(show(state, &client_id, payload).await?)),
+        // Only the application's list menu accepts an application id as its value.
+        (Some(3), Screen::Back) => Ok(update(show(state, chosen(data)?, payload).await?)),
         // The list, from a screen that is not it: the one button left that goes anywhere.
         // 編集, which opens the form for the one field the id names.
         (Some(2), Screen::Edit) => {

@@ -47,6 +47,8 @@ pub struct FakeDiscord {
     /// What `get_guild_member` reports, and the guild's roles. Only the consent
     /// screen asks for either, so they are empty unless a test sets them.
     member: Map<String, Value>,
+    member_status: u16,
+    raw_user: Option<Map<String, Value>>,
     roles: Vec<Map<String, Value>>,
     /// What `get_guild_integrations_with_status` reports. Empty unless a test sets it,
     /// and an empty list is a guild with nothing installed rather than a guild that
@@ -129,6 +131,8 @@ impl FakeDiscord {
             payload: golden_discord_payload(),
             guild,
             member: Map::new(),
+            member_status: 200,
+            raw_user: None,
             roles: Vec::new(),
             integrations: Vec::new(),
             commands: Vec::new(),
@@ -231,6 +235,19 @@ impl FakeDiscord {
             })
             .collect();
 
+        fake
+    }
+
+    /// A selected Bot exists, but its integration was omitted by Discord.
+    pub fn with_missing_integration(bot_id: i64, member_status: u16) -> Self {
+        let mut fake = Self::new();
+        fake.raw_user = Some(
+            json!({"id":bot_id.to_string(), "username":"VirtualCrypto", "bot":true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        fake.member_status = member_status;
         fake
     }
 
@@ -356,10 +373,7 @@ impl DiscordApi for FakeDiscord {
     // own fields, so a test says which guild it is asking about rather than being
     // answered a made-up one.
     //
-    // The user lookup answers 404 instead: the fake does not know any user beyond the
-    // ones its other calls report, and "no such user" is a refusal where an empty 200
-    // would be a claim that the id exists and is not a bot. A test that needs the other
-    // answers should give the fake the field to say so.
+    // User lookups default to 404; omitted-integration tests provide an explicit Bot.
 
     async fn get_guild_integrations_with_status(
         &self,
@@ -379,7 +393,10 @@ impl DiscordApi for FakeDiscord {
         &self,
         _user_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
-        Ok((404, Map::new()))
+        Ok(self
+            .raw_user
+            .clone()
+            .map_or((404, Map::new()), |user| (200, user)))
     }
 
     async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
@@ -416,7 +433,11 @@ impl DiscordApi for FakeDiscord {
         _guild_id: i64,
         _user_id: i64,
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
-        Ok(Some(self.member.clone()))
+        match self.member_status {
+            200 => Ok(Some(self.member.clone())),
+            404 => Ok(None),
+            _ => Err(DiscordError::Request("member lookup failed".to_owned())),
+        }
     }
 
     async fn get_roles(&self, _guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {

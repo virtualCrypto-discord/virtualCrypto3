@@ -70,6 +70,55 @@ fn token() -> Value {
 }
 
 #[tokio::test]
+async fn integrations_use_v10_and_preserve_bot_descriptions() {
+    let integration = json!({"application":{
+        "id":"500000000000000002", "description":"verification-url",
+        "bot":{"id":"500000000000000002", "username":"VirtualCrypto", "bot":true}
+    }});
+    let (client, server) = server(vec![(200, json!([integration.clone()]))]).await;
+    let (status, found) = client
+        .get_guild_integrations_with_status(123)
+        .await
+        .unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(found, [integration.as_object().unwrap().clone()]);
+    assert_eq!(
+        server.wire.requests.lock().unwrap()[0].0,
+        "/api/v10/guilds/123/integrations"
+    );
+}
+
+#[tokio::test]
+async fn malformed_integration_lists_are_not_treated_as_empty() {
+    let (client, _server) = server(vec![
+        (200, json!({})),
+        (200, json!([null])),
+        (200, json!([])),
+    ])
+    .await;
+    assert!(
+        client
+            .get_guild_integrations_with_status(123)
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .get_guild_integrations_with_status(123)
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .get_guild_integrations_with_status(123)
+            .await
+            .unwrap()
+            .1
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn refresh_and_code_exchange_read_discords_wire_format() {
     let (client, server) = server(vec![(200, token()), (200, token())]).await;
     let refreshed = client.refresh_token("old-refresh").await.unwrap();
@@ -83,8 +132,8 @@ async fn refresh_and_code_exchange_read_discords_wire_format() {
         assert_eq!(result.expires_in, 604800);
     }
     let requests = server.wire.requests.lock().unwrap();
-    assert_eq!(requests[0].0, "/api/oauth2/token");
-    assert_eq!(requests[1].0, "/api/oauth2/token");
+    assert_eq!(requests[0].0, "/api/v10/oauth2/token");
+    assert_eq!(requests[1].0, "/api/v10/oauth2/token");
     assert!(requests[0].1.contains("grant_type=refresh_token"));
     assert!(requests[0].1.contains("refresh_token=old-refresh"));
     assert!(requests[1].1.contains("grant_type=authorization_code"));
@@ -221,7 +270,10 @@ async fn interaction_callback_accepts_empty_204_and_rejects_errors() {
     );
     let requests = server.wire.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].0, "/api/interactions/123/test-token/callback");
+    assert_eq!(
+        requests[0].0,
+        "/api/v10/interactions/123/test-token/callback"
+    );
     assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);
 }
 
@@ -253,7 +305,7 @@ async fn followup_returns_the_created_message_for_guild_and_dm_links() {
     );
     let requests = server.wire.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].0, "/api/webhooks/123/test-token");
+    assert_eq!(requests[0].0, "/api/v10/webhooks/123/test-token");
     assert_eq!(requests[0].2, axum::http::Method::POST);
     assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);
 }
@@ -302,7 +354,7 @@ async fn original_interaction_response_is_patched_and_errors_are_sanitized() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].0,
-        "/api/webhooks/123/test-token/messages/@original"
+        "/api/v10/webhooks/123/test-token/messages/@original"
     );
     assert_eq!(requests[0].2, axum::http::Method::PATCH);
     assert_eq!(serde_json::from_str::<Value>(&requests[0].1).unwrap(), body);

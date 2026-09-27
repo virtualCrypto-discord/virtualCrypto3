@@ -185,6 +185,37 @@ have to agree:
       guild's currency. `discord_commands.rs`'s header says that is the whole of
       what the deprecated `dm_permission` said, and its unit test asserts the four.
 
+#### UX-09 アプリ登録・設定変更の再確認
+
+テスト用のアカウント・アプリ・Bot・残高だけで確認する。秘密値は証跡に残さない。
+
+1. `/application register` で、緑色の「登録しました」と Bot 未接続の表示を確認する。
+   `client_secret` の用途が説明され、他のチャンネル参加者には応答が見えないことを確認する。
+   `/application list` に秘密値がなく、所有者の `show` だけで再確認できることも確認する。
+2. 名前・リダイレクト URI・選択式の設定を変更し、「設定を保存しました」と再表示後の値を確認する。
+   アプリケーションの種類・グラントタイプ・レスポンスタイプ・通知イベントは、見出しの下の
+   セレクトメニューだけに選択状態が表示され、同じ値が別のテキストとして重複しないことを確認する。
+   不正 URI、検証に失敗する Webhook を指定すると赤い失敗表示になり、保存済みの値が維持される。
+3. 「client_secret を再生成」を押す。旧 secret の無効化とサービス側設定更新の説明を確認する。
+   キャンセルでは変わらず、確定後は新 secret だけで認証できることを確認する。
+   作成画面・再生成結果・認証ヘッダーは撮影・記録しない。
+4. 「Bot の接続」の説明・確認用 URL の直下にユーザー選択メニューがあることを確認する。
+   Bot の Description に確認用 URL を記入する。直下のメニューで Bot を選び、
+   現在の接続先・選択した ID・残高合算の説明を確認して「接続する」を押す。
+   人間を選ぶと拒否される。DM ではサーバー内での操作を案内する。
+5. 別のテスト Bot へ再連携し、アプリの既存残高と接続先 Bot の連携前の残高が合算されること、
+   旧 Bot からアプリの残高へアクセスできなくなることを確認する。他アプリに接続済みなら拒否される。
+6. 在籍中なのにエラーになる場合は、表示されたエラー種別と Bot ID を確認する。
+   在籍確認済みでも連携情報が取得できない場合はその旨が表示される。
+   一覧の取得上限は50件であり、不在とは別の状態として扱う。
+   必要なら両 Bot が参加する連携数の少ないテストサーバーで再試行する。
+
+実装では Discord REST API を v10 に固定する。一覧に対象がない場合はメンバー取得で在籍を確認し、
+説明を検証できるまで接続・残高変更を行わない。
+仕様: [API のバージョン指定](https://docs.discord.com/developers/reference#api-versioning)、
+[連携一覧の上限](https://docs.discord.com/developers/resources/guild#get-guild-integrations)。
+証跡には操作・結果・秘密値を含まない画面だけを残し、レビュー判断は確認者が別途記録する。
+
 #### UX-10 PAT recheck
 
 Use a test account and test PATs only. After the changed command registration and

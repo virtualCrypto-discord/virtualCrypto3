@@ -308,6 +308,9 @@ pub mod ui {
             /// The form that changes one, as opposed to `Connect`, which is the call.
             Edit,
             Back,
+            Show,
+            RotateSecret,
+            ConfirmConnect,
         }
 
         fn id(screen: Screen) -> u8 {
@@ -318,6 +321,9 @@ pub mod ui {
                 Screen::Register => 4,
                 Screen::Edit => 5,
                 Screen::Back => 6,
+                Screen::Show => 7,
+                Screen::RotateSecret => 8,
+                Screen::ConfirmConnect => 10,
             }
         }
 
@@ -392,6 +398,9 @@ pub mod ui {
                 4 => Screen::Register,
                 5 => Screen::Edit,
                 6 => Screen::Back,
+                7 => Screen::Show,
+                8 => Screen::RotateSecret,
+                10 => Screen::ConfirmConnect,
                 _ => return Err(UiError::Unknown(u16::from(id))),
             };
 

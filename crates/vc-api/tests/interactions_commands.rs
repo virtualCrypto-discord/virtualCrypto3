@@ -1044,6 +1044,7 @@ async fn a_submitted_edit_changes_the_application(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(rendered.contains("あと"), "{rendered}");
+    assert!(rendered.contains("設定を保存しました"));
     assert!(rendered.contains(&client_id), "{rendered}");
 }
 
@@ -1174,7 +1175,7 @@ async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
     let response = interaction(
         discord.clone(),
         vc_api::router(support::state(pool.clone(), discord)),
-        chose_bot(&client_id, BOT, DISCORD),
+        confirm_bot(&client_id, BOT, DISCORD),
     )
     .await;
 
@@ -1221,7 +1222,7 @@ async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
     let response = interaction(
         discord.clone(),
         vc_api::router(support::state(pool.clone(), discord)),
-        chose_bot(&client_id, BOT, DISCORD),
+        confirm_bot(&client_id, BOT, DISCORD),
     )
     .await;
 
@@ -1279,6 +1280,16 @@ async fn application_show_of_something_else_says_nothing_is_there(pool: PgPool) 
         "{rendered}"
     );
     assert!(!rendered.contains("ひとつ"), "{rendered}");
+}
+
+fn confirm_bot(client_id: &str, bot: i64, user: i64) -> Value {
+    let mut payload = chose_bot(client_id, bot, user);
+    payload["data"] = json!({
+        "custom_id":vc_api::custom_id::ui::developer::custom_id_for_field(
+            vc_api::custom_id::ui::developer::Screen::ConfirmConnect, client_id, &bot.to_string()),
+        "component_type":2,
+    });
+    payload
 }
 
 /// Choosing a bot from the menu on an application's screen, which is the only way to connect
@@ -1453,6 +1464,22 @@ async fn application_register_makes_one_with_defaults(pool: PgPool) {
     assert_eq!(response.body["type"], 4);
     assert_eq!(response.body["data"]["flags"], 32832, "ephemeral");
 
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0x1ABC9C
+    );
+    assert!(
+        response
+            .body
+            .to_string()
+            .contains("アプリケーションを登録しました")
+    );
+    assert!(
+        !response
+            .body
+            .to_string()
+            .contains("registration_access_token")
+    );
     let owned = vc_core::application::owned_by(&pool, USER)
         .await
         .expect("the caller's applications");
@@ -1582,4 +1609,162 @@ async fn optional_application_fields_can_be_cleared_through_the_modal(pool: PgPo
         .unwrap()
         .unwrap();
     assert!(details.webhook_url.is_none());
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_secret_rotation_requires_confirmation_and_ownership(pool: PgPool) {
+    use vc_api::custom_id::ui::developer::{Screen, custom_id_for, custom_id_for_field};
+    const OWNER: i64 = 100_000_000_000_000_001;
+    const STRANGER: i64 = 100_000_000_000_000_002;
+    support::insert_user(&pool, 1, OWNER).await;
+    let app = support::insert_application(&pool, OWNER, "rotation test").await;
+    let client_id = support::client_id_of(&pool, app).await;
+    let before = support::client_secret_of(&pool, app).await;
+    let discord = fake();
+    let press = |id: String, actor| support::button_from_guild(json!({"custom_id":id}), actor);
+    for screen in [Screen::RotateSecret, Screen::Show] {
+        let response = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            press(custom_id_for(screen, &client_id), OWNER),
+        )
+        .await;
+        assert_eq!(response.body["data"]["flags"], 32832);
+        assert!(
+            vc_core::application::verify_secret(&pool, &client_id, &before)
+                .await
+                .unwrap()
+                .is_some(),
+            "preview/cancel must not rotate"
+        );
+        if screen == Screen::RotateSecret {
+            let rendered = response.body.to_string();
+            assert!(rendered.contains("旧 secret"));
+            assert!(rendered.contains("キャンセル"));
+            assert!(!rendered.contains(&before));
+        }
+    }
+    for id in [
+        custom_id_for(Screen::RotateSecret, &client_id),
+        custom_id_for_field(Screen::RotateSecret, &client_id, "confirm"),
+    ] {
+        let response = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            press(id, STRANGER),
+        )
+        .await;
+        assert!(
+            response
+                .body
+                .to_string()
+                .contains("そのアプリケーションはありません")
+        );
+        assert!(!response.body.to_string().contains(&before));
+        assert!(
+            vc_core::application::verify_secret(&pool, &client_id, &before)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        press(
+            custom_id_for_field(Screen::RotateSecret, &client_id, "confirm"),
+            OWNER,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 202);
+    assert_eq!(response.body["data"]["flags"], 32832);
+    assert!(
+        response
+            .body
+            .to_string()
+            .contains("client_secret を再生成しました")
+    );
+    let now = vc_api::routes::oauth2_clients::details(&pool, app)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = now.client_secret.unwrap();
+    assert_ne!(before, after);
+    assert!(!response.body.to_string().contains(&before));
+    assert!(response.body.to_string().contains(&after));
+    assert!(
+        vc_core::application::verify_secret(&pool, &client_id, &before)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        vc_core::application::verify_secret(&pool, &client_id, &after)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(now.client_name.as_deref(), Some("rotation test"));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn bot_selection_previews_reconnection_and_refuses_a_person(pool: PgPool) {
+    const OWNER: i64 = 100_000_000_000_000_001;
+    const OLD_BOT: i64 = 200_000_000_000_000_001;
+    const NEW_BOT: i64 = 200_000_000_000_000_002;
+    support::insert_user(&pool, 1, OWNER).await;
+    let app = support::insert_application(&pool, OWNER, "reconnection test").await;
+    let client_id = support::client_id_of(&pool, app).await;
+    let found = vc_api::routes::oauth2_clients::details(&pool, app)
+        .await
+        .unwrap()
+        .unwrap();
+    vc_core::user::bind_bot(&pool, found.user_id, OLD_BOT)
+        .await
+        .unwrap();
+    let discord = fake();
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        chose_bot(&client_id, NEW_BOT, OWNER),
+    )
+    .await;
+    let rendered = response.body.to_string();
+    for text in [
+        OLD_BOT.to_string(),
+        NEW_BOT.to_string(),
+        "残高が合算".to_owned(),
+        "キャンセル".to_owned(),
+    ] {
+        assert!(rendered.contains(&text));
+    }
+    let mut person = chose_bot(&client_id, OWNER, OWNER);
+    person["data"]["resolved"] = json!({"users":{OWNER.to_string():{"id":OWNER.to_string()}}});
+    let response = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        person,
+    )
+    .await;
+    assert!(response.body.to_string().contains("Bot ではありません"));
+    let now = vc_api::routes::oauth2_clients::details(&pool, app)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(now.discord_user_id, Some(OLD_BOT));
+    let response = interaction(
+        discord.clone(),
+        router(discord, pool),
+        application_payload("show", &client_id, OWNER),
+    )
+    .await;
+    assert!(response.body.to_string().contains(&OLD_BOT.to_string()));
+    assert!(
+        response
+            .body
+            .to_string()
+            .contains(&format!("verification?q={client_id}")),
+        "reconnection must still expose the proof URL"
+    );
 }

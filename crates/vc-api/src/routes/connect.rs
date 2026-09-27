@@ -237,25 +237,36 @@ pub async fn connect_application(
     });
 
     let Some(integration) = integration else {
-        // Why there is no such integration, which needs the id looked up and then the
-        // guild, because the answer names it.
+        // A missing integration alone does not establish that the Bot is absent.
         return match state.discord().get_user_with_status(bot_id).await {
             Ok((200, user)) if user.get("bot") == Some(&Value::Bool(true)) => {
-                let guild = state.discord().get_guild_with_status(guild_id).await;
-
-                match guild {
-                    Ok((200, guild)) => Err(refusal(
+                // Integration lists are capped at 50 and can omit an installed Bot.
+                // Only a member lookup can support a claim that the Bot is absent.
+                match state.discord().get_guild_member(guild_id, bot_id).await {
+                    Ok(Some(_)) => Err(refusal(
+                        StatusCode::CONFLICT,
+                        "integration_unavailable",
+                        format!(
+                            "{}（Bot ID: {}）はサーバーに参加していますが、Discord の連携一覧から説明を取得できませんでした。\
+                             一覧は最大 50 件です。VirtualCrypto と対象 Bot が参加している、連携数の少ない別のサーバーで再試行してください。",
+                            text(&user, "username"),
+                            bot
+                        ),
+                    )),
+                    Ok(None) => Err(refusal(
                         StatusCode::NOT_FOUND,
                         "invalid_bot",
                         format!(
-                            "{} is not in {}",
+                            "{}（Bot ID: {}）はこのサーバーに参加していません。",
                             text(&user, "username"),
-                            text(&guild, "name")
+                            bot
                         ),
                     )),
-                    _ => Err(Box::new(internal(
-                        "the guild could not be read while explaining a missing bot",
-                    ))),
+                    Err(_) => Err(refusal(
+                        StatusCode::BAD_GATEWAY,
+                        "discord_error",
+                        "Discord で Bot の在籍を確認できませんでした。時間をおいてもう一度試してください。",
+                    )),
                 }
             }
             Ok((200, user)) => Err(refusal(

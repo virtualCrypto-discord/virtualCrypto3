@@ -234,7 +234,9 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         use crate::custom_id::ui::developer::Screen;
         if matches!(
             (component_type, screen),
-            (Some(3), Screen::Edit) | (Some(5), Screen::Connect)
+            (Some(3), Screen::Edit)
+                | (Some(5), Screen::Connect)
+                | (Some(2), Screen::RotateSecret | Screen::ConfirmConnect)
         ) {
             let custom_id = custom_id.to_owned();
             return management_response(

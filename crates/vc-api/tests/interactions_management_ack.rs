@@ -25,10 +25,11 @@ enum Operation {
     Register,
     EditForm,
     EditSelect,
+    RotateSecret,
     Connect,
     Delete,
 }
-const OPERATIONS: [Operation; 16] = [
+const OPERATIONS: [Operation; 17] = [
     Operation::Create,
     Operation::PatCreate,
     Operation::PatRevoke,
@@ -43,6 +44,7 @@ const OPERATIONS: [Operation; 16] = [
     Operation::Register,
     Operation::EditForm,
     Operation::EditSelect,
+    Operation::RotateSecret,
     Operation::Connect,
     Operation::Delete,
 ];
@@ -188,7 +190,7 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             }
         }
         Register => command(money, "application", "register", json!([])),
-        EditForm | EditSelect | Connect => {
+        EditForm | EditSelect | RotateSecret | Connect => {
             let application = insert_application(pool, money.user1, "ack application").await;
             let client = client_id_of(pool, application).await;
             if matches!(operation, EditForm) {
@@ -196,6 +198,11 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
                     "custom_id":developer::custom_id_for_field(developer::Screen::Edit,&client,"client_name"),
                     "components":[{"type":18,"component":{"type":4,"custom_id":"client_name","value":"changed"}}]
                 }})
+            } else if matches!(operation, RotateSecret) {
+                button_from_guild(
+                    json!({"custom_id":developer::custom_id_for_field(developer::Screen::RotateSecret,&client,"confirm")}),
+                    money.user1,
+                )
             } else if matches!(operation, EditSelect) {
                 let mut payload = button_from_guild(
                     json!({
@@ -211,15 +218,12 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
                     "{}/applications/verification?q={client}",
                     links().site_url
                 ));
-                let mut payload = button_from_guild(
+                button_from_guild(
                     json!({
-                        "custom_id":developer::custom_id_for(developer::Screen::Connect,&client),
-                        "values":[BOT.to_string()]
+                        "custom_id":developer::custom_id_for_field(developer::Screen::ConfirmConnect,&client,&BOT.to_string())
                     }),
                     money.user1,
-                );
-                payload["data"]["component_type"] = json!(5);
-                payload
+                )
             }
         }
         Delete => json!({"type":5,"guild_id":money.guild.to_string(),
@@ -371,6 +375,7 @@ async fn failed_management_result_delivery_does_not_repeat_the_mutation(pool: Pg
         Operation::PatCreate,
         Operation::GrantApprove,
         Operation::EditForm,
+        Operation::RotateSecret,
         Operation::Delete,
     ]
     .into_iter()

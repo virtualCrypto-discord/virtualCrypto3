@@ -467,7 +467,9 @@ impl HttpDiscordApi {
     }
 
     fn endpoint(&self, path: &str) -> String {
-        format!("{}{path}", self.api_base)
+        // Unversioned routes can retain legacy integration-list behavior. Use the
+        // same current API contract for commands, components and resource reads.
+        format!("{}/v10{path}", self.api_base)
     }
 }
 
@@ -531,15 +533,13 @@ impl DiscordApi for HttpDiscordApi {
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let integrations = body
-            .as_array()
-            .map(|integrations| {
-                integrations
-                    .iter()
-                    .filter_map(|integration| integration.as_object().cloned())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let integrations = if status == 200 {
+            serde_json::from_value::<Vec<Map<String, Value>>>(body).map_err(|_| {
+                DiscordError::Request("integrations is not an array of objects".into())
+            })?
+        } else {
+            Vec::new()
+        };
 
         Ok((status, integrations))
     }

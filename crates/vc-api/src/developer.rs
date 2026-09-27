@@ -31,7 +31,7 @@ use vc_core::application::{APPLICATION_TYPES, EVENT_TYPES, GRANT_TYPES, RESPONSE
 
 use crate::components::{
     ButtonStyle, action_row, button, container, icon_button, section, select, select_many,
-    select_option, separator, text, thumbnail, user_select,
+    select_option, text, thumbnail, user_select,
 };
 
 /// The accent each state carries, since the colour is the fastest thing a person reads.
@@ -139,43 +139,31 @@ pub struct Fields<'a> {
 
 /// One application, with what can be done to it.
 ///
-/// `token` is what has to be in the bot's description before the picker below connects
-/// anything, shown exactly as it has to be pasted: the Elixir's page said the same thing
-/// over an input holding the same string, and without it there is nothing to copy.
+/// The bot identity is informational; an unconnected application is not an error.
 pub fn application(
     client_id: &str,
     name: Option<&str>,
-    connected: bool,
+    connected_bot: Option<i64>,
     logo_uri: Option<&str>,
     secret: Option<&str>,
-    token: Option<&str>,
+    token: &str,
     fields: Fields<'_>,
 ) -> Value {
     let name = name.unwrap_or("（名前なし）");
-    let state = if connected {
-        "Bot が接続されています。"
-    } else {
-        "Bot はまだ接続されていません。"
+    let state = match connected_bot {
+        Some(bot) => format!("接続中の Bot: <@{bot}>（ID: `{bot}`）"),
+        None => "Bot はまだ接続されていません。".to_owned(),
     };
 
+    let title = format!("**{name}**\n{state}\n`{client_id}`");
     let heading = match logo_uri {
-        Some(url) if !url.is_empty() => section(
-            vec![text(format!("**{name}**\n{state}\n`{client_id}`"))],
-            thumbnail(url),
-        ),
+        Some(url) if !url.is_empty() => section(vec![text(&title)], thumbnail(url)),
         // Without a logo a section has nothing for its accessory, and the button that was there
         // went to the connect screen with no bot to connect with.
-        _ => text(format!("**{name}**\n{state}\n`{client_id}`")),
+        _ => text(&title),
     };
 
-    let mut children = vec![heading, separator()];
-
-    if let Some(token) = token {
-        children.push(text(format!(
-            "**Bot の接続**\nBot のアプリケーションのDescriptionに、下のトークンを\
-             追記してください。\n`{token}`"
-        )));
-    }
+    let mut children = vec![heading];
 
     children.extend([
         // The six fields that are free text, each beside the value it edits and with its own
@@ -213,10 +201,7 @@ pub fn application(
         // menu and nothing behind a button: a string select is the one select a message may
         // carry with options we choose, which is exactly what an enumerated field is, and
         // the set that comes back is the set that is sent.
-        text(format!(
-            "**アプリケーションの種類**（`application_type`）\n{}",
-            fields.application_type
-        )),
+        text("**アプリケーションの種類**（`application_type`）"),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
@@ -231,10 +216,7 @@ pub fn application(
             1,
             1,
         )]),
-        text(format!(
-            "**グラントタイプ**（`grant_types`）\n{}",
-            listing(fields.grant_types)
-        )),
+        text("**グラントタイプ**（`grant_types`）"),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
@@ -255,10 +237,7 @@ pub fn application(
             0,
             GRANT_TYPES.len() as u8,
         )]),
-        text(format!(
-            "**レスポンスタイプ**（`response_types`）\n{}",
-            listing(fields.response_types)
-        )),
+        text("**レスポンスタイプ**（`response_types`）"),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
@@ -287,10 +266,7 @@ pub fn application(
         // that comes back is the set that is stored: checked is sent,
         // unchecked is not, and empty is nothing — which needs no
         // enforcement, because Discord lets the menu come back empty.
-        text(format!(
-            "**通知イベント**（`subscribed_events`）\n{}",
-            event_listing(fields.subscribed_events)
-        )),
+        text("**通知イベント**（`subscribed_events`）"),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
@@ -311,13 +287,18 @@ pub fn application(
             0,
             EVENT_TYPES.len() as u8,
         )]),
-        // The secret is written on the screen rather than behind a button. The
-        // button was mine, not the page's: every response here is ephemeral, so
-        // revealing it on request shows it to the person already reading.
         secret_block(secret),
-        // A row holds either buttons or one select, so the picker is on its own. It is a
-        // picker rather than a button because a button has no bot to connect with, and a bot
-        // is a user — Discord has the menu for that, so nobody types a snowflake.
+        action_row(vec![button(
+            &crate::custom_id::ui::developer::custom_id_for(
+                crate::custom_id::ui::developer::Screen::RotateSecret,
+                client_id,
+            ),
+            "client_secret を再生成",
+            ButtonStyle::Secondary,
+        )]),
+        text(format!(
+            "**Bot の接続**\nBot のアプリケーションの Description に、次の確認用 URL を追記してください。\n`{token}`"
+        )),
         action_row(vec![user_select(
             &crate::custom_id::ui::developer::custom_id_for(
                 crate::custom_id::ui::developer::Screen::Connect,
@@ -327,7 +308,7 @@ pub fn application(
         )]),
     ]);
 
-    container(Some(if connected { WORKING } else { REFUSED }), children)
+    container(Some(WORKING), children)
 }
 
 /// Editing a set starts with its saved values checked, so adding a choice retains the others.
@@ -359,7 +340,7 @@ fn editing(client_id: &str, field: &str, label: &str, now: Option<&str>) -> Valu
     )
 }
 
-/// A set as a line of text, which is what the screen shows above its menu.
+/// Redirect URIs as text beside their edit button.
 fn listing(values: &[String]) -> String {
     if values.is_empty() {
         "（なし）".to_owned()
@@ -375,8 +356,7 @@ pub fn all_events() -> &'static [i64] {
     EVENT_TYPES
 }
 
-/// The name a `type` value goes by on the screen, which is what the menu shows
-/// and what the line above it repeats back.
+/// The name a notification `type` value goes by in the menu.
 fn event_name(kind: i64) -> &'static str {
     match kind {
         2 => "請求の更新",
@@ -386,34 +366,89 @@ fn event_name(kind: i64) -> &'static str {
     }
 }
 
-/// The subscription as a line of text. Checked is sent and unchecked is not,
-/// and empty is nothing — so the screen shows the set as it is, with no
-/// special case for everything.
-fn event_listing(subscribed: &[i64]) -> String {
-    if subscribed.is_empty() {
-        "（なし）".to_owned()
-    } else {
-        subscribed
-            .iter()
-            .map(|kind| event_name(*kind))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
 /// The secret as it appears on the application's screen.
 ///
-/// The sentence about the `registration_access_token` is the point rather than decoration:
-/// the secret can be read here and the token cannot be read anywhere, and the page that
-/// hands the token out said the opposite about both until it was checked.
 fn secret_block(secret: Option<&str>) -> Value {
     match secret {
         Some(secret) => text(format!(
             "**client_secret**\n```\n{secret}\n```\nこの返信はあなたにだけ見えています。\
-             \n`registration_access_token` は登録時にしか表示されず、ここからは読めません。"
+             \nAPI の認証に使う秘密情報です。所有者はこの画面で再確認できます。他人に共有しないでください。"
         )),
         None => text("client_secret は記録されていません。"),
     }
+}
+
+/// Add the outcome without replacing the saved settings or exceeding the component limit.
+pub fn saved(mut screen: Value, notice: &str) -> Value {
+    let heading = if screen["components"][0]["type"] == 9 {
+        &mut screen["components"][0]["components"][0]["content"]
+    } else {
+        &mut screen["components"][0]["content"]
+    };
+    *heading = Value::String(format!(
+        "**{notice}**\n\n{}",
+        heading.as_str().unwrap_or_default()
+    ));
+    screen
+}
+
+fn return_to_application(client_id: &str, label: &str) -> Value {
+    use crate::custom_id::ui::developer::{Screen, custom_id_for};
+    button(
+        &custom_id_for(Screen::Show, client_id),
+        label,
+        ButtonStyle::Secondary,
+    )
+}
+
+pub fn rotate_secret_confirmation(client_id: &str) -> Value {
+    use crate::custom_id::ui::developer::{Screen, custom_id_for_field};
+    container(
+        Some(WORKING),
+        vec![
+            text(format!(
+                "**client_secret を再生成しますか？**\nclient_id: `{client_id}`\n\
+             再生成すると旧 secret での認証は直ちにできなくなります。\
+             利用中のサービスの設定を新しい secret に更新してください。\
+             発行済みのアクセストークンや残高は変更しません。"
+            )),
+            action_row(vec![
+                button(
+                    &custom_id_for_field(Screen::RotateSecret, client_id, "confirm"),
+                    "再生成する",
+                    ButtonStyle::Danger,
+                ),
+                return_to_application(client_id, "キャンセル"),
+            ]),
+        ],
+    )
+}
+
+pub fn connect_confirmation(client_id: &str, current: Option<i64>, bot: i64) -> Value {
+    use crate::custom_id::ui::developer::{Screen, custom_id_for_field};
+    let current = current.map_or_else(
+        || "未接続".to_owned(),
+        |id| format!("<@{id}>（ID: `{id}`）"),
+    );
+    container(
+        Some(WORKING),
+        vec![
+            text(format!(
+                "**Bot の接続を確認**\nclient_id: `{client_id}`\n現在: {current}\n接続先: <@{bot}>（ID: `{bot}`）\n\
+             このアプリケーションの既存残高は維持され、接続先 Bot が連携前に持っていた残高が合算されます。\
+             再連携すると、旧 Bot はこのアプリケーションの残高にアクセスできなくなります。\
+             他のアプリケーションに接続済みの Bot は接続できません。"
+            )),
+            action_row(vec![
+                button(
+                    &custom_id_for_field(Screen::ConfirmConnect, client_id, &bot.to_string()),
+                    "接続する",
+                    ButtonStyle::Primary,
+                ),
+                return_to_application(client_id, "キャンセル"),
+            ]),
+        ],
+    )
 }
 
 /// A form that was refused, in the service's own words.
@@ -607,10 +642,10 @@ mod tests {
             application(
                 "id",
                 None,
-                false,
+                None,
                 None,
                 Some("the-secret"),
-                Some("https://example.test/applications/verification?q=id"),
+                "https://example.test/applications/verification?q=id",
                 Fields {
                     client_name: None,
                     redirect_uris: &[],
@@ -655,10 +690,10 @@ mod tests {
             application(
                 "id",
                 None,
-                true,
+                Some(123),
                 Some("https://example.test/logo.png"),
                 None,
-                None,
+                "https://example.test/applications/verification?q=id",
                 Fields {
                     client_name: None,
                     redirect_uris: &[],
