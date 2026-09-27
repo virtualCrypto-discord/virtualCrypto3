@@ -10,14 +10,17 @@
 //! For commands acknowledged through Discord's callback, the saved 202 records
 //! acceptance, not completion; replay must not restart their background work.
 
+use std::time::Duration;
+
 use axum::body::{Body, to_bytes};
 use axum::http::{StatusCode, header::CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
+use tokio::time::{Instant, timeout_at};
 
 use crate::state::AppState;
 
-pub(super) async fn run(state: AppState, payload: Value) -> Response {
+pub(super) async fn run(state: AppState, payload: Value, received_at: Instant) -> Response {
     let Some(id) = payload.get("id").and_then(Value::as_str).filter(|id| {
         !id.is_empty() && id.len() <= 20 && id.bytes().all(|byte| byte.is_ascii_digit())
     }) else {
@@ -27,7 +30,7 @@ pub(super) async fn run(state: AppState, payload: Value) -> Response {
 
     // Disconnecting the HTTP request must not cancel the handler after its
     // receipt or one of its writes has committed.
-    match tokio::spawn(async move { dispatch(&state, &payload, &id).await }).await {
+    match tokio::spawn(async move { dispatch(&state, &payload, &id, received_at).await }).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             tracing::error!(%error, "interaction receipt failed");
@@ -40,13 +43,30 @@ pub(super) async fn run(state: AppState, payload: Value) -> Response {
     }
 }
 
-async fn dispatch(state: &AppState, payload: &Value, id: &str) -> Result<Response, sqlx::Error> {
-    let claimed = sqlx::query!(
+async fn dispatch(
+    state: &AppState,
+    payload: &Value,
+    id: &str,
+    received_at: Instant,
+) -> Result<Response, sqlx::Error> {
+    let direct_payment = payload["type"] == 2 && payload["data"]["name"] == "pay";
+    let claim = sqlx::query!(
         "INSERT INTO discord_interactions (id) VALUES ($1) ON CONFLICT DO NOTHING",
         id
     )
-    .execute(state.pool())
-    .await?
+    .execute(state.pool());
+    let claimed = if direct_payment {
+        match timeout_at(received_at + Duration::from_secs(1), claim).await {
+            Ok(result) => result?,
+            // This attempt has not started a payment, but a previous delivery
+            // of the same ID may have. Do not call an unknown receipt unpaid.
+            Err(_) => {
+                return Ok(axum::Json(crate::command::pay::uncertain_result()).into_response());
+            }
+        }
+    } else {
+        claim.await?
+    }
     .rows_affected();
 
     if claimed == 0 {
@@ -83,7 +103,7 @@ async fn dispatch(state: &AppState, payload: &Value, id: &str) -> Result<Respons
         return Ok(response);
     }
 
-    let response = super::interactions::dispatch(state, payload).await;
+    let response = super::interactions::dispatch(state, payload, received_at).await;
     let (parts, body) = response.into_parts();
     let body = to_bytes(body, usize::MAX)
         .await
@@ -93,14 +113,24 @@ async fn dispatch(state: &AppState, payload: &Value, id: &str) -> Result<Respons
         .headers
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
-    sqlx::query!(
+    let save = sqlx::query!(
         "UPDATE discord_interactions SET status = $2, content_type = $3, body = $4 WHERE id = $1",
         id,
         status,
         content_type,
         body.as_ref()
     )
-    .execute(state.pool())
-    .await?;
+    .execute(state.pool());
+    if direct_payment {
+        // The receipt already prevents a second mutation. A failed save leaves
+        // it pending; still return the actual result before Discord's deadline.
+        match timeout_at(received_at + Duration::from_millis(2500), save).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "payment response receipt save failed"),
+            Err(_) => tracing::warn!("payment response receipt save timed out"),
+        }
+    } else {
+        save.await?;
+    }
     Ok(Response::from_parts(parts, Body::from(body)))
 }

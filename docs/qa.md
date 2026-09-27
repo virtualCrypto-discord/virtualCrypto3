@@ -420,6 +420,35 @@ belief into a fact, and each of these was run while the code was written:
 
 Nothing here can be settled from a terminal.
 
+**UX-03: `/pay` answers directly with its outcome.** The initial type-4 reply
+shows the sender, recipient, amount and unit publicly on success. Errors are
+initial ephemeral replies. There is no processing/deferred response, follow-up,
+private completion link, or deletion of an original response.
+
+Preparation has a one-second budget from request receipt; a timeout rolls back
+balances, newly created accounts and history before COMMIT and answers privately
+that no payment was made. Once COMMIT starts, a timeout or lost connection is
+ambiguous: the private reply asks the caller to check `/history` without retrying.
+A receipt lookup timeout is also ambiguous because an earlier delivery may have
+paid already. Result receipt storage is bounded separately so a slow save does
+not hide a known result. The durable receipt still prevents repeated execution.
+Delivery failure does not undo a committed payment, so a Discord interaction
+failure is not proof that no payment was made.
+
+For a human recheck in a test guild, note both balances, send 1 unit, and expect
+sender −1 / recipient +1 and one public result as the command reply. Check the
+same behavior in a thread and a DM. Request more than the sender's balance and
+expect only a private error with both balances unchanged. Check there is no
+extra `処理中…`, completion receipt or `Original message was deleted` placeholder.
+Discord's own transient display before receiving our response remains client
+behavior; the bot does not send a deferred/thinking response.
+
+Local tests in `crates/vc-api/tests/interactions_pay.rs` cover DB locks,
+preparation rollback, delayed COMMIT, disconnects and concurrent/replayed
+interactions. The source audit found `/pay` was the sole caller of original-response
+deletion; that API remains removed. Other commands' private screen updates are
+unchanged by the direct payment response.
+
 **UX-03: `/pay unit` autocomplete recheck.** In a test guild, open `/pay`
 and focus `unit` before submitting. With the field empty, expect the caller's
 currencies and the guild's currency; enter a unit prefix to narrow the list

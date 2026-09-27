@@ -16,7 +16,7 @@ use time::{OffsetDateTime, PrimitiveDateTime};
 use tower::ServiceExt;
 use uuid::Uuid;
 use vc_api::AppState;
-use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
+use vc_api::discord::{DiscordApi, DiscordError, FollowupMessage, RefreshedToken};
 use vc_api::rate_limit::RateLimiter;
 use vc_api::state::Links;
 use vc_core::claim::Transition;
@@ -74,9 +74,6 @@ pub struct FakeDiscord {
     response_edits: Mutex<Vec<(String, Value)>>,
     response_edit_finished: tokio::sync::Notify,
     response_edit_error: bool,
-    response_deletions: AtomicUsize,
-    response_delete_finished: tokio::sync::Notify,
-    response_delete_error: bool,
     followup_gate: Option<Arc<tokio::sync::Semaphore>>,
     followup_error: bool,
     callback_error: bool,
@@ -149,9 +146,6 @@ impl FakeDiscord {
             response_edits: Mutex::new(Vec::new()),
             response_edit_finished: tokio::sync::Notify::new(),
             response_edit_error: false,
-            response_deletions: AtomicUsize::new(0),
-            response_delete_finished: tokio::sync::Notify::new(),
-            response_delete_error: false,
             followup_gate: None,
             followup_error: false,
             callback_error: false,
@@ -293,29 +287,17 @@ impl FakeDiscord {
         Arc::new(api)
     }
 
-    pub fn with_response_delete_error() -> Arc<Self> {
-        let mut api = Self::new();
-        api.response_delete_error = true;
-        Arc::new(api)
-    }
-
     pub fn with_response_edit_error() -> Arc<Self> {
         let mut api = Self::new();
         api.response_edit_error = true;
         Arc::new(api)
     }
 
-    pub fn response_deletions(&self) -> usize {
-        self.response_deletions.load(Ordering::SeqCst)
-    }
-
     pub async fn payment_finished(&self) {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::select! {
-                () = self.response_edit_finished.notified() => {},
-                () = self.response_delete_finished.notified() => {},
-            }
-        })
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.response_edit_finished.notified(),
+        )
         .await
         .expect("payment delivered its final response");
     }
@@ -508,7 +490,7 @@ impl DiscordApi for FakeDiscord {
         _application_id: &str,
         token: &str,
         body: &Value,
-    ) -> Result<(), DiscordError> {
+    ) -> Result<FollowupMessage, DiscordError> {
         assert!(
             !self.callbacks().is_empty(),
             "follow-up sent before initial response"
@@ -528,28 +510,10 @@ impl DiscordApi for FakeDiscord {
             .push((token.to_owned(), body.clone()));
         self.followup_finished.notify_one();
 
-        Ok(())
-    }
-
-    async fn delete_original_interaction_response(
-        &self,
-        application_id: &str,
-        token: &str,
-    ) -> Result<(), DiscordError> {
-        assert!(!application_id.is_empty());
-        assert!(!token.is_empty());
-        assert!(
-            !self.webhooks().is_empty(),
-            "deleted before public success was sent"
-        );
-        if self.response_delete_error {
-            return Err(DiscordError::Request(
-                "simulated response deletion failure".into(),
-            ));
-        }
-        self.response_deletions.fetch_add(1, Ordering::SeqCst);
-        self.response_delete_finished.notify_one();
-        Ok(())
+        Ok(FollowupMessage {
+            id: 900_719_925_474_099_301,
+            channel_id: 900_719_925_474_099_302,
+        })
     }
 
     async fn refresh_token(&self, _refresh_token: &str) -> Result<RefreshedToken, DiscordError> {

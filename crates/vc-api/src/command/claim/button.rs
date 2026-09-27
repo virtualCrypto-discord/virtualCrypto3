@@ -50,7 +50,7 @@ pub async fn handle(
                     .unwrap_or_else(super::failed);
                 let body = response["data"].clone();
                 if response["type"] == crate::command::UPDATE_MESSAGE
-                    || !reply.followup(&body).await
+                    || reply.followup(&body).await.is_none()
                 {
                     reply.edit(body).await;
                 }
@@ -78,7 +78,7 @@ pub async fn handle(
             }
             Err(error) => tracing::warn!(?error, "claim list redraw failed"),
         }
-        if !reply.followup(&body).await {
+        if reply.followup(&body).await.is_none() {
             reply.edit(body).await;
         }
     });

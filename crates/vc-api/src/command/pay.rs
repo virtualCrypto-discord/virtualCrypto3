@@ -1,8 +1,9 @@
 use std::time::Duration;
 
-use axum::http::StatusCode;
+use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
+use tokio::time::{Instant, timeout_at};
 use vc_core::payment::PayError;
 
 use super::{
@@ -11,107 +12,31 @@ use super::{
 };
 use crate::state::AppState;
 
-/// Acknowledge privately before touching balances. Type 4 makes a later follow-up
-/// a new message with its own visibility; the first follow-up after type 5 would
-/// instead inherit the original response's ephemeral state.
+/// Decide visibility only after the outcome is known. The initial response is
+/// the result itself: no processing message, deferred reply or follow-up.
 pub async fn respond(
     state: &AppState,
     options: &Map<String, Value>,
     payload: &Value,
+    received_at: Instant,
 ) -> Result<Response, CommandError> {
-    let field = |name| {
-        payload
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| CommandError::missing(&format!("interaction has no {name}")))
-    };
-    let interaction_id = field("id")?;
-    let application_id = field("application_id")?.to_owned();
-    let token = field("token")?.to_owned();
-    let acknowledgement = json!({
-        "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": {
-            "flags": crate::components::EPHEMERAL,
-            "content": "処理中…",
-            "allowed_mentions": { "parse": [] },
-        },
-    });
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        state
-            .discord()
-            .create_interaction_response(interaction_id, &token, &acknowledgement),
-    )
-    .await
-    .map_err(|_| CommandError::missing("the payment acknowledgement timed out"))??;
-
-    let state = state.clone();
-    let options = options.clone();
-    let payload = payload.clone();
-    tokio::spawn(async move {
-        let response = match handle(&state, &options, &payload).await {
-            Ok(response) => response,
-            Err(error) => {
-                tracing::warn!(?error, "Discord payment failed");
-                render_error("送金結果を確認できませんでした。送金履歴を確認してください。")
-            }
-        };
-        let mut body = response["data"].clone();
-        let public = body["flags"].as_u64().unwrap_or_default() & crate::components::EPHEMERAL == 0;
-        if public {
-            match tokio::time::timeout(
-                Duration::from_secs(10),
-                state
-                    .discord()
-                    .post_webhook_message(&application_id, &token, &body),
-            )
-            .await
-            {
-                Ok(Ok(())) => {
-                    // Only remove the private acknowledgement once the public
-                    // success message exists. Notification failures never retry payment.
-                    match tokio::time::timeout(
-                        Duration::from_secs(10),
-                        state
-                            .discord()
-                            .delete_original_interaction_response(&application_id, &token),
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => return,
-                        Ok(Err(error)) => {
-                            tracing::warn!(%error, "payment acknowledgement deletion failed")
-                        }
-                        Err(_) => tracing::warn!("payment acknowledgement deletion timed out"),
-                    }
-                }
-                Ok(Err(error)) => tracing::warn!(%error, "payment public response failed"),
-                Err(_) => tracing::warn!("payment public response timed out"),
-            }
-            // Preserve the known success privately if publishing or cleaning up
-            // failed, rather than leaving the sender looking at "processing".
-        }
-        // The original message is already ephemeral. Clear its text to enable
-        // components, without trying to change the original message's visibility.
-        body["flags"] = json!(crate::components::IS_COMPONENTS_V2);
-        body["content"] = Value::Null;
-        body["embeds"] = json!([]);
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            state
-                .discord()
-                .edit_original_interaction_response(&application_id, &token, &body),
-        )
+    let response = handle_until(state, options, payload, received_at)
         .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::warn!(%error, "payment private response failed"),
-            Err(_) => tracing::warn!("payment private response timed out"),
-        }
-    });
+        .unwrap_or_else(|error| {
+            tracing::warn!(?error, "Discord payment failed");
+            uncertain_result()
+        });
+    Ok(Json(response).into_response())
+}
 
-    Ok(StatusCode::ACCEPTED.into_response())
+pub(crate) fn busy_response() -> Value {
+    render_error("処理が混み合っているため、送金しませんでした。時間をおいてやり直してください。")
+}
+
+pub(crate) fn uncertain_result() -> Value {
+    render_error(
+        "送金結果を確認できませんでした。再送せず、/history で送金履歴を確認してください。",
+    )
 }
 
 /// `Command.handle/4` for `pay`, rendered by `InteractionsJSON.pay/1` through
@@ -123,6 +48,15 @@ pub async fn handle(
     state: &AppState,
     options: &Map<String, Value>,
     payload: &Value,
+) -> Result<Value, CommandError> {
+    handle_until(state, options, payload, Instant::now()).await
+}
+
+async fn handle_until(
+    state: &AppState,
+    options: &Map<String, Value>,
+    payload: &Value,
+    received_at: Instant,
 ) -> Result<Value, CommandError> {
     let sender =
         get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
@@ -138,22 +72,57 @@ pub async fn handle(
     let amount_value =
         as_int(amount).ok_or_else(|| CommandError::missing("pay amount is not a number"))?;
 
-    let result = vc_core::payment::pay_from_discord(
-        state.pool(),
-        sender,
-        receiver_discord_id,
-        &unit,
-        amount_value,
-    )
+    // Cancel only preparation when it takes too long: dropping its uncommitted
+    // transaction rolls back accounts, balances and history together. Include
+    // time spent acquiring the interaction receipt in this budget.
+    let prepared = timeout_at(received_at + Duration::from_secs(1), async {
+        let mut tx = state.pool().begin().await.map_err(PayError::Database)?;
+        vc_core::payment::pay_from_discord_in(
+            &mut tx,
+            sender,
+            receiver_discord_id,
+            &unit,
+            amount_value,
+        )
+        .await?;
+        Ok::<_, PayError>(tx)
+    })
     .await;
 
-    match result {
-        Ok(()) => Ok(render_ok(sender, &receiver, amount, &unit)),
-        Err(PayError::Database(error)) => Err(CommandError::from(error)),
-        Err(PayError::NotFoundCurrency) => Ok(render_error("エラー: 通貨は存在しません。")),
-        Err(PayError::InvalidAmount) => Ok(render_error("エラー: 不正な金額です。")),
-        Err(PayError::NotFoundSenderAsset | PayError::NotEnoughAmount) => {
-            Ok(render_error("エラー: 通貨が不足しています。"))
+    let tx = match prepared {
+        Err(_) => return Ok(busy_response()),
+        Ok(Ok(tx)) => tx,
+        Ok(Err(PayError::Database(error))) => {
+            tracing::warn!(%error, "Discord payment preparation failed");
+            return Ok(render_error(
+                "送金できませんでした。時間をおいてやり直してください。",
+            ));
+        }
+        Ok(Err(PayError::NotFoundCurrency)) => {
+            return Ok(render_error("エラー: 通貨は存在しません。"));
+        }
+        Ok(Err(PayError::InvalidAmount)) => return Ok(render_error("エラー: 不正な金額です。")),
+        Ok(Err(PayError::NotFoundSenderAsset | PayError::NotEnoughAmount)) => {
+            return Ok(render_error("エラー: 通貨が不足しています。"));
+        }
+    };
+
+    let commit_deadline = received_at + Duration::from_secs(2);
+    if Instant::now() >= commit_deadline {
+        return Ok(busy_response()); // No COMMIT has been sent.
+    }
+    // Once COMMIT starts, a timeout or lost connection has an uncertain outcome.
+    // Never label it as unpaid or retry it. The durable interaction receipt
+    // prevents a replay from executing the payment again.
+    match timeout_at(commit_deadline, tx.commit()).await {
+        Ok(Ok(())) => Ok(render_ok(sender, &receiver, amount, &unit)),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "Discord payment commit failed");
+            Ok(uncertain_result())
+        }
+        Err(_) => {
+            tracing::warn!("Discord payment commit timed out");
+            Ok(uncertain_result())
         }
     }
 }
@@ -173,7 +142,7 @@ fn render_ok(sender: i64, receiver: &str, amount: &Value, unit: &str) -> Value {
                 // The command's colours are `i64` and a container's accent is the 24 bits.
                 Some(COLOR_OK as u32),
                 vec![crate::components::text(format!(
-                    "{}から{}へ**{}** `{}`送金されました。",
+                    "{} から {} に **{}** `{}` を送金しました。",
                     mention(sender),
                     mention(receiver),
                     value_text(amount),
