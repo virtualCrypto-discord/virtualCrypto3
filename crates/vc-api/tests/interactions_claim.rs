@@ -908,6 +908,26 @@ fn claims_on(rendered: &str) -> usize {
     rendered.matches("状態　:").count()
 }
 
+fn list_component_types(response: &support::Response) -> Vec<u64> {
+    response.body["data"]["components"][0]["components"]
+        .as_array()
+        .expect("the list's components")
+        .iter()
+        .map(|child| child["type"].as_u64().expect("a component type"))
+        .collect()
+}
+
+fn component_count(components: &[Value]) -> usize {
+    components
+        .iter()
+        .map(|component| {
+            1 + component["components"]
+                .as_array()
+                .map_or(0, |children| component_count(children))
+        })
+        .sum()
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn list_reports_an_empty_page(pool: PgPool) {
     setup_claim(&pool).await;
@@ -927,7 +947,9 @@ async fn list_reports_an_empty_page(pool: PgPool) {
             "accent_color": COLOR_BRAND,
             "components": [
                 { "type": 10, "content": "**請求一覧(all)**" },
+                { "type": 14 },
                 { "type": 10, "content": "表示する内容がありません。" },
+                { "type": 14 },
                 {
                     "type": 1,
                     "components": [
@@ -1015,7 +1037,8 @@ async fn list_renders_the_first_page(pool: PgPool) {
     let mut offered = children.iter().filter(|child| child["type"] == json!(1));
 
     for claim in &page.claims {
-        let row = children.get(read + 1).expect("the claim's own row").clone();
+        assert_eq!(children[read], json!({ "type": 14 }));
+        let row = children.get(read + 2).expect("the claim's own row").clone();
 
         assert_eq!(row["type"], json!(1), "after its claim: {container}");
         assert_eq!(&row, offered.next().expect("a row"));
@@ -1045,8 +1068,15 @@ async fn list_renders_the_first_page(pool: PgPool) {
         assert_eq!(buttons[2]["emoji"]["name"], json!("🗑️"));
         assert_eq!(buttons[2]["disabled"], json!(!claimant));
 
-        read += 2;
+        read += 3;
     }
+
+    assert_eq!(children[read], json!({ "type": 14 }));
+    assert_eq!(
+        children.len(),
+        read + 2,
+        "the divider and pagination end the list"
+    );
 
     let options = list_options(Position::All);
 
@@ -1167,7 +1197,7 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
 
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を承諾し、支払いました。") }] }])
+        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を承諾し、支払いました。") }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 
@@ -1184,6 +1214,7 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     let remaining = first_page(&pool, 2).await;
     assert_eq!(remaining.claims.len(), 1);
     assert_eq!(remaining.claims[0].id, claims.id(1));
+    assert_eq!(list_component_types(&response), vec![10, 14, 10, 1, 14, 1]);
     // The pagination row is the last thing on the screen: the claim above carries its own
     // buttons, and nothing follows them.
     let children = response.body["data"]["components"][0]["components"]
@@ -1404,7 +1435,7 @@ async fn pressing_deny_leaves_the_money_where_it_is(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を拒否しました。") }] }])
+        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を拒否しました。") }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 
@@ -1584,7 +1615,7 @@ async fn pressing_cancel_is_the_claimants_move(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求をキャンセルしました。") }] }])
+        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求をキャンセルしました。") }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 
@@ -1767,6 +1798,10 @@ async fn pressing_the_reload_button_draws_the_page_again(pool: PgPool) {
     // The caller's three pending claims, which is the page a reload of page one is.
     assert_eq!(claims_on(response.body["data"].to_string().as_str()), 3);
     assert_eq!(
+        list_component_types(&response),
+        vec![10, 14, 10, 1, 14, 10, 1, 14, 10, 1, 14, 1]
+    );
+    assert_eq!(
         response.body["data"]["components"][0]["components"][0]["content"],
         json!("**請求一覧(all)**")
     );
@@ -1807,6 +1842,10 @@ async fn pressing_the_next_arrow_draws_the_next_page(pool: PgPool) {
         "the two the first page left: {}",
         response.body
     );
+    assert_eq!(
+        list_component_types(&response),
+        vec![10, 14, 10, 1, 14, 10, 1, 14, 1]
+    );
 
     // The row follows the page it drew: ⏪ has somewhere to go and ⏭️ does not.
     let children = response.body["data"]["components"][0]["components"]
@@ -1836,6 +1875,16 @@ async fn pressing_the_next_arrow_draws_the_next_page(pool: PgPool) {
             5,
             "page one holds five: {}",
             back.body
+        );
+        assert_eq!(
+            list_component_types(&back),
+            vec![
+                10, 14, 10, 1, 14, 10, 1, 14, 10, 1, 14, 10, 1, 14, 10, 1, 14, 1
+            ]
+        );
+        assert!(
+            component_count(back.body["data"]["components"].as_array().unwrap()) <= 40,
+            "a full page with dividers and buttons must fit Discord's component limit"
         );
     }
 }

@@ -488,6 +488,22 @@ attempt in a DM should also show the red bar. Error text and privacy must remain
 unchanged. Success replies, ordinary help and empty history lists retain their
 normal colours; an empty list alone is not an error.
 
+**UX-05: 請求一覧の区切り線。** `/claim list`・`/claim received`・`/claim sent` で、
+履歴と同じ区切り線が見出しの下、各請求の間、ページ操作ボタンの上に表示されることを確認する。
+各請求の本文と承諾・拒否・キャンセルボタンは、同じ区切りの中にまとまっていることを確認する。
+0件では「表示する内容がありません。」の上下に線があり、矢印は無効、更新は操作できる。
+1件・6件以上でも確認し、ページ移動・更新・請求の操作後も区切りとボタンの対応が崩れないことを確認する。
+処理済み請求を表示したときは、操作ボタンがなくても請求ごとの区切りがあることを確認する。
+
+**UX-05: 請求一覧の操作結果の色。** テスト用の未処理請求を使い、請求先の利用者が
+`/claim received` の承諾ボタンを押す。本人だけに表示される
+「id: `…` の請求を承諾し、支払いました。」の通知に緑のアクセントが付き、
+一覧が更新されることを確認する。別の未処理請求で拒否、請求元の利用者で
+`/claim sent` からキャンセルした際も、成功通知が緑になることを確認する。
+残高不足による承諾失敗は赤、一覧自体は通常の紫のままであることを確認する。
+支払い済みの請求を再承諾して確認せず、新しいテスト用請求を使う。
+ローカル回帰テストは `cargo test -p vc-api --test interactions_claim`。
+
 **UX-03: `/pay` answers directly with its outcome.** The initial type-4 reply
 shows the sender, recipient, amount and unit publicly on success. Errors are
 initial ephemeral replies. There is no processing/deferred response, follow-up,
