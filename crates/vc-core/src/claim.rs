@@ -937,14 +937,12 @@ pub async fn set_metadata(
 ) -> std::result::Result<(), TransitionError> {
     let mut tx = pool.begin().await.map_err(TransitionError::Database)?;
 
-    let claim = sqlx::query!(
-        "SELECT claimant_user_id AS \"claimant_id!\", payer_user_id AS \"payer_id!\"
-           FROM claims WHERE id = $1",
-        claim_id
-    )
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(TransitionError::Database)?;
+    // Share the transition lock order (currency, claim, metadata). Inserting a
+    // new metadata row checks its claim foreign key; doing that after taking
+    // the metadata lock can deadlock with a transition updating the same row.
+    let claim = lock(&mut tx, claim_id)
+        .await
+        .map_err(TransitionError::Database)?;
 
     let Some(claim) = claim else {
         return Err(TransitionError::NotFound);
