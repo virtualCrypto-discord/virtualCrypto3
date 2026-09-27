@@ -177,18 +177,22 @@ async fn currencies(
     Ok(candidates
         .into_iter()
         .map(|candidate| {
-            let unit = candidate.unit.clone().unwrap_or_default();
+            let unit = candidate.unit.unwrap_or_default();
+            let name = candidate.name.unwrap_or_default();
+            let prefix = "通貨名: ";
+            let balance = format!(" 所持量: {}{unit}", candidate.amount);
+            // Older currencies can have names longer than today's creation limit.
+            // Keep the balance and unit visible, and shorten only the displayed
+            // name. The value must remain the exact name/unit the command accepts.
+            let name_limit =
+                100_usize.saturating_sub(prefix.chars().count() + balance.chars().count());
+            let label = format!("{prefix}{}{balance}", truncate(&name, name_limit));
 
             json!({
-                "name": format!(
-                    "通貨名: {} 所持量: {}{}",
-                    candidate.name.clone().unwrap_or_default(),
-                    candidate.amount,
-                    unit,
-                ),
+                "name": truncate(&label, 100),
                 "value": match field {
                     Field::Unit => unit,
-                    Field::Name => candidate.name.unwrap_or_default(),
+                    Field::Name => name,
                 },
             })
         })

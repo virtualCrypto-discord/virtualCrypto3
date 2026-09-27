@@ -420,6 +420,22 @@ belief into a fact, and each of these was run while the code was written:
 
 Nothing here can be settled from a terminal.
 
+**UX-03: `/pay unit` autocomplete recheck.** In a test guild, open `/pay`
+and focus `unit` before submitting. With the field empty, expect the caller's
+currencies and the guild's currency; enter a unit prefix to narrow the list
+(case-insensitive), and a nonmatching prefix to get no choices. Repeat in a DM,
+where the empty field offers only the caller's currencies. Labels show the
+currency name, balance and unit. Long legacy names are shortened to keep labels
+within 100 characters; selecting a suggestion must still fill the exact unit.
+Selecting a suggestion alone does not transfer currency. The local regression
+suite is `cargo test -p vc-api --test interactions_autocomplete`; it checks the
+response against the vendored Discord schema, including long ASCII/Japanese
+names, guild/DM payloads, a caller with no holdings and the 25-choice limit.
+If no choices appear even for a short known unit, record whether the field was
+empty or typed, guild or DM, and the endpoint's status and elapsed time without
+recording interaction tokens. A local schema test cannot confirm which command
+registration or server version Discord is using.
+
 - [ ] **`/help` and the site's command list** against what the commands do.
 - [ ] **`/contract list`**: five rows, the count in the first line, the arrows
       (⏪ ⏮️ ⏭️ ⏩) and their disabled states, the four states a caller's own part can

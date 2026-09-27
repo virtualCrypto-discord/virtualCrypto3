@@ -10,8 +10,8 @@ use axum::Router;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::{
-    account_of, client_id_of, execute_from_guild, fake, insert_application, insert_claim,
-    insert_user, interaction, setup_claim, state,
+    account_of, client_id_of, execute_from_guild, fake, insert_application, insert_asset,
+    insert_claim, insert_currency, insert_user, interaction, setup_claim, setup_money, state,
 };
 
 fn router(pool: PgPool) -> Router {
@@ -95,6 +95,125 @@ async fn a_typed_unit_query_narrows_to_the_prefix(pool: PgPool) {
     .await;
 
     assert!(values(&response).is_empty());
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pay_unit_choices_follow_the_focused_option_in_guilds_and_dms(pool: PgPool) {
+    let money = setup_money(&pool).await;
+
+    for in_guild in [true, false] {
+        for (query, expected) in [
+            ("", vec![money.unit.clone()]),
+            ("N", vec![money.unit.clone()]),
+            ("w", vec![money.unit2.clone()]),
+            ("missing", vec![]),
+        ] {
+            let mut payload = autocomplete_payload(
+                "pay",
+                json!([
+                    {"name": "user", "type": 6, "value": money.user2.to_string()},
+                    {"name": "amount", "type": 4, "value": 1},
+                    {"name": "unit", "type": 3, "value": query, "focused": true},
+                ]),
+                money.user1,
+            );
+            if !in_guild {
+                payload["user"] = payload["member"]["user"].clone();
+                payload.as_object_mut().unwrap().remove("member");
+                payload.as_object_mut().unwrap().remove("guild_id");
+            }
+            let response = interaction(router(pool.clone()), payload).await;
+
+            assert_eq!(response.status, 200, "body: {}", response.body);
+            assert_eq!(response.body["type"], 8);
+            assert_eq!(
+                values(&response),
+                expected,
+                "guild={in_guild}, query={query}"
+            );
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pay_offers_the_guild_currency_to_a_user_without_holdings(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let mut payload = autocomplete_payload("pay", json!([focused("unit", "")]), 123);
+    payload["guild_id"] = json!(money.guild.to_string());
+
+    let response = interaction(router(pool), payload).await;
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(values(&response), [money.unit.as_str()]);
+    assert_eq!(
+        choices(&response)[0]["name"],
+        format!("通貨名: {} 所持量: 0{}", money.name, money.unit),
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pay_limits_unit_choices_and_prioritizes_the_guild_currency(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    for id in 3..=28 {
+        let unit = format!("n{}", char::from(b'a' + (id - 3) as u8));
+        insert_currency(&pool, id, &format!("Currency{id}"), &unit, id, 0).await;
+        insert_asset(&pool, 1, id, 1).await;
+    }
+
+    for query in ["", "n"] {
+        let mut payload = autocomplete_payload("pay", json!([focused("unit", query)]), money.user1);
+        payload["guild_id"] = json!("25");
+        let response = interaction(router(pool.clone()), payload).await;
+
+        assert_eq!(response.status, 200, "body: {}", response.body);
+        assert_eq!(choices(&response).len(), 25);
+        assert_eq!(values(&response)[0], "nw");
+    }
+}
+
+/// Older currency names can exceed today's creation limit. One long label must
+/// not make Discord reject every suggestion, and the selected unit stays exact.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn long_currency_names_fit_choices_without_changing_the_selected_unit(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    for (id, name, unit) in [(3, "a".repeat(100), "na"), (4, "猫".repeat(100), "nb")] {
+        insert_currency(&pool, id, &name, unit, id, 0).await;
+        insert_asset(&pool, 1, id, 100).await;
+    }
+
+    for query in ["", "n"] {
+        let response = interaction(
+            router(pool.clone()),
+            autocomplete_payload("pay", json!([focused("unit", query)]), money.user1),
+        )
+        .await;
+
+        assert_eq!(response.status, 200, "body: {}", response.body);
+        let mut units = values(&response);
+        units.sort();
+        assert_eq!(units, ["n", "na", "nb"]);
+        for choice in choices(&response) {
+            let length = choice["name"].as_str().unwrap().chars().count();
+            assert!((1..=100).contains(&length));
+            if choice["value"] != money.unit {
+                assert_eq!(length, 100);
+                assert!(choice["name"].as_str().unwrap().ends_with(&format!(
+                    " 所持量: 100{}",
+                    choice["value"].as_str().unwrap()
+                )));
+            }
+        }
+    }
+
+    // The same renderer serves /info name; shortening its label must not
+    // change the currency name submitted when the user selects it.
+    let response = interaction(
+        router(pool),
+        autocomplete_payload("info", json!([focused("name", "猫")]), money.user1),
+    )
+    .await;
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(values(&response), ["猫".repeat(100)]);
 }
 
 /// Approving is the payer's move, and only a pending claim can still be
