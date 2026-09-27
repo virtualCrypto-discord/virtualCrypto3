@@ -360,7 +360,7 @@ async fn a_code_is_exchanged_once(pool: PgPool) {
     .await
     .expect("a code");
 
-    let exchanged = exchange_code(&pool, &client_id, callback, &code, now)
+    let exchanged = exchange_code(&pool, &client_id, callback, &code, || now)
         .await
         .expect("an exchange");
 
@@ -390,7 +390,7 @@ async fn a_code_is_exchanged_once(pool: PgPool) {
     assert_eq!(grants.count, Some(1));
 
     // And the code is spent: `used_code`, not `invalid_code`.
-    let again = exchange_code(&pool, &client_id, callback, &code, now).await;
+    let again = exchange_code(&pool, &client_id, callback, &code, || now).await;
 
     assert_eq!(again, Err(ExchangeError::UsedCode));
 }
@@ -405,7 +405,7 @@ async fn a_code_that_was_never_issued_is_not_a_reuse(pool: PgPool) {
         &client_id,
         "https://app.example/callback",
         "not-a-code-we-made",
-        now,
+        || now,
     )
     .await;
 
@@ -423,7 +423,7 @@ async fn a_refresh_retires_the_token_that_was_presented(pool: PgPool) {
         .await
         .expect("a refresh token");
 
-    let refreshed = exchange_refresh_token(&pool, &presented, now)
+    let refreshed = exchange_refresh_token(&pool, &presented, || now)
         .await
         .expect("a refresh");
 
@@ -444,7 +444,7 @@ async fn a_refresh_retires_the_token_that_was_presented(pool: PgPool) {
     assert_eq!(stored.grant_id, Some(grant_id));
 
     // And presenting it again is not a refresh any more.
-    let again = exchange_refresh_token(&pool, &presented, now).await;
+    let again = exchange_refresh_token(&pool, &presented, || now).await;
 
     assert_eq!(again, Err(ExchangeError::InvalidRefreshToken));
 }
@@ -453,7 +453,7 @@ async fn a_refresh_retires_the_token_that_was_presented(pool: PgPool) {
 /// rather than a database error.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_refresh_token_that_is_not_a_uuid_is_not_a_token(pool: PgPool) {
-    let refreshed = exchange_refresh_token(&pool, "not-a-uuid", OffsetDateTime::now_utc()).await;
+    let refreshed = exchange_refresh_token(&pool, "not-a-uuid", OffsetDateTime::now_utc).await;
 
     assert_eq!(refreshed, Err(ExchangeError::InvalidRefreshToken));
 }
@@ -495,7 +495,7 @@ async fn revoking_a_refresh_token_stops_it_refreshing(pool: PgPool) {
 
     assert!(revoke_refresh_token(&pool, &token).await.expect("revoked"));
 
-    let refreshed = exchange_refresh_token(&pool, &token, now).await;
+    let refreshed = exchange_refresh_token(&pool, &token, || now).await;
 
     assert_eq!(refreshed, Err(ExchangeError::InvalidRefreshToken));
 }
@@ -566,10 +566,10 @@ async fn failed_code_exchange_preserves_code(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(
-        exchange_code(&pool, &client, "https://wrong.example/", &code, now).await,
+        exchange_code(&pool, &client, "https://wrong.example/", &code, || now).await,
         Err(ExchangeError::RedirectUriMismatch)
     );
-    let retry = exchange_code(&pool, &client, callback, &code, now).await;
+    let retry = exchange_code(&pool, &client, callback, &code, || now).await;
     assert!(
         retry.is_ok(),
         "a rejected request must not consume the code: {retry:?}"
@@ -593,11 +593,11 @@ async fn replayed_code_revokes_issued_tokens(pool: PgPool) {
     )
     .await
     .unwrap();
-    let tokens = exchange_code(&pool, &client, callback, &code, now)
+    let tokens = exchange_code(&pool, &client, callback, &code, || now)
         .await
         .unwrap();
     assert_eq!(
-        exchange_code(&pool, &client, callback, &code, now).await,
+        exchange_code(&pool, &client, callback, &code, || now).await,
         Err(ExchangeError::UsedCode)
     );
     let surviving: i64 = sqlx::query_scalar("SELECT count(*) FROM access_tokens WHERE token_id=$1")
@@ -627,12 +627,12 @@ async fn failed_refresh_preserves_presented_token(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(exchange_refresh_token(&pool, &token, now).await.is_err());
+    assert!(exchange_refresh_token(&pool, &token, || now).await.is_err());
     sqlx::query("ALTER TABLE access_tokens DROP CONSTRAINT injected_failure")
         .execute(&pool)
         .await
         .unwrap();
-    let retry = exchange_refresh_token(&pool, &token, now).await;
+    let retry = exchange_refresh_token(&pool, &token, || now).await;
     assert!(
         retry.is_ok(),
         "rotation must roll back when issuing fails: {retry:?}"
@@ -698,7 +698,7 @@ async fn failed_code_token_write_rolls_back_the_grant_and_code(pool: PgPool) {
         .await
         .unwrap();
     assert!(
-        exchange_code(&pool, &client, callback, &code, now)
+        exchange_code(&pool, &client, callback, &code, || now)
             .await
             .is_err()
     );
@@ -712,7 +712,7 @@ async fn failed_code_token_write_rolls_back_the_grant_and_code(pool: PgPool) {
         .await
         .unwrap();
     assert!(
-        exchange_code(&pool, &client, callback, &code, now)
+        exchange_code(&pool, &client, callback, &code, || now)
             .await
             .is_ok()
     );
@@ -735,8 +735,8 @@ async fn simultaneous_code_exchanges_detect_reuse_and_revoke(pool: PgPool) {
     .await
     .unwrap();
     let (first, second) = tokio::join!(
-        exchange_code(&pool, &client, callback, &code, now),
-        exchange_code(&pool, &client, callback, &code, now)
+        exchange_code(&pool, &client, callback, &code, || now),
+        exchange_code(&pool, &client, callback, &code, || now)
     );
     assert!(
         matches!(
@@ -815,7 +815,7 @@ async fn v3_browser_approvals_have_independent_grants_and_refresh_tokens(pool: P
         .await
         .unwrap();
         tokens.push(
-            exchange_code(&pool, &client, callback, &code, now)
+            exchange_code(&pool, &client, callback, &code, || now)
                 .await
                 .unwrap(),
         );
@@ -838,7 +838,7 @@ async fn v3_browser_approvals_have_independent_grants_and_refresh_tokens(pool: P
             .unwrap();
     assert_eq!(resources, [1]);
     // The second approval must not rotate away the first grant's refresh token.
-    let first = exchange_refresh_token(&pool, tokens[0].refresh_token.as_deref().unwrap(), now)
+    let first = exchange_refresh_token(&pool, tokens[0].refresh_token.as_deref().unwrap(), || now)
         .await
         .unwrap();
     assert!(
@@ -847,12 +847,12 @@ async fn v3_browser_approvals_have_independent_grants_and_refresh_tokens(pool: P
             .unwrap()
     );
     assert!(
-        exchange_refresh_token(&pool, &first.refresh_token, now)
+        exchange_refresh_token(&pool, &first.refresh_token, || now)
             .await
             .is_err()
     );
     assert!(
-        exchange_refresh_token(&pool, tokens[1].refresh_token.as_deref().unwrap(), now)
+        exchange_refresh_token(&pool, tokens[1].refresh_token.as_deref().unwrap(), || now)
             .await
             .is_ok()
     );
@@ -862,7 +862,7 @@ async fn v3_browser_approvals_have_independent_grants_and_refresh_tokens(pool: P
         let code = authorize(&pool, 42, &[], &[], callback, &client, now)
             .await
             .unwrap();
-        let token = exchange_code(&pool, &client, callback, &code, now)
+        let token = exchange_code(&pool, &client, callback, &code, || now)
             .await
             .unwrap();
         let id: i64 = sqlx::query_scalar("SELECT grant_id FROM access_tokens WHERE token_id = $1")

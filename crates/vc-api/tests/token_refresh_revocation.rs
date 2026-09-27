@@ -83,7 +83,7 @@ async fn competing(pool: PgPool, revocation_first: bool) {
     let refresh = || {
         let pool = pool.clone();
         let token = old_refresh.clone();
-        tokio::spawn(async move { grant::exchange_refresh_token(&pool, &token, now).await })
+        tokio::spawn(async move { grant::exchange_refresh_token(&pool, &token, || now).await })
     };
     let revoke = || {
         let pool = pool.clone();
@@ -125,7 +125,7 @@ async fn competing(pool: PgPool, revocation_first: bool) {
                 .is_none()
         );
         assert_eq!(
-            grant::exchange_refresh_token(&pool, &refreshed.refresh_token, now).await,
+            grant::exchange_refresh_token(&pool, &refreshed.refresh_token, || now).await,
             Err(ExchangeError::InvalidRefreshToken)
         );
     }
@@ -136,7 +136,7 @@ async fn competing(pool: PgPool, revocation_first: bool) {
             .is_none()
     );
     assert_eq!(
-        grant::exchange_refresh_token(&pool, &old_refresh, now).await,
+        grant::exchange_refresh_token(&pool, &old_refresh, || now).await,
         Err(ExchangeError::InvalidRefreshToken)
     );
     for query in [

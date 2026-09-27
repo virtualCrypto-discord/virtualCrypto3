@@ -201,7 +201,7 @@ async fn refreshed_grant_token_replays_without_issuing_twice(pool: PgPool) {
     let refresh = vc_core::grant::create_refresh_token(&pool, grant.grant_id, now)
         .await
         .unwrap();
-    let refreshed = vc_core::grant::exchange_refresh_token(&pool, &refresh, now)
+    let refreshed = vc_core::grant::exchange_refresh_token(&pool, &refresh, || now)
         .await
         .unwrap();
     assert_ne!(token, refreshed.access_token);

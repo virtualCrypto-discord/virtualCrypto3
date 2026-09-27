@@ -269,7 +269,7 @@ async fn exchange(state: &AppState, form: TokenForm) -> Response {
         &client_id,
         &redirect_uri,
         &code,
-        OffsetDateTime::now_utc(),
+        OffsetDateTime::now_utc,
     )
     .await;
 
@@ -299,7 +299,7 @@ async fn refresh(state: &AppState, form: TokenForm) -> Response {
     };
 
     let refreshed =
-        exchange_refresh_token(state.pool(), &refresh_token, OffsetDateTime::now_utc()).await;
+        exchange_refresh_token(state.pool(), &refresh_token, OffsetDateTime::now_utc).await;
 
     match refreshed {
         Ok(refreshed) => Json(json!({

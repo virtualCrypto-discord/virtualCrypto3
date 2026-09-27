@@ -637,6 +637,12 @@ body — which is most of them, and which is what this endpoint exists for — r
 the Elixir's answer as a success. The refresh and `client_credentials` paths in
 the same controller do set `400`, so the code exchange was the odd one out.
 
+Code and refresh-token exchanges read the clock after locking the credential,
+including the grant lock taken before a refresh. A credential that expires while
+waiting is refused without consuming the code or rotating the token. This is a
+boundary-condition change for delayed exchanges; the existing second-precision
+comparisons and token lifetimes are unchanged.
+
 ## The notification transport, as far as it is specified
 
 `docs/api/Webhook.md` and `notification/webhook/cloudflare-workers.ex` together

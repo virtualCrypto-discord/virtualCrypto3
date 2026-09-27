@@ -1655,12 +1655,12 @@ async fn independent_approvals_do_not_mix_scopes_resources_or_tokens(pool: PgPoo
         401
     );
     assert!(
-        vc_core::grant::exchange_refresh_token(&pool, &ra, now)
+        vc_core::grant::exchange_refresh_token(&pool, &ra, || now)
             .await
             .is_err()
     );
     assert!(
-        vc_core::grant::exchange_refresh_token(&pool, &rb, now)
+        vc_core::grant::exchange_refresh_token(&pool, &rb, || now)
             .await
             .is_ok()
     );

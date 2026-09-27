@@ -313,18 +313,19 @@ pub struct Exchanged {
 /// Exchange a code atomically. Ordinary refusals roll back consumption of the
 /// code; reuse commits revocation of the grant and all its tokens, as Elixir's
 /// `Auth.run/1` does for `{:commit, {:error, ...}}`.
+/// Read the clock after taking the code, so a lock wait cannot extend its expiry.
 pub async fn exchange_code(
     pool: &PgPool,
     client_id: &str,
     redirect_uri: &str,
     code: &str,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Exchanged, ExchangeError> {
     let mut tx = pool
         .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
-    let result = exchange_code_in(&mut tx, client_id, redirect_uri, code, now).await;
+    let result = exchange_code_in(&mut tx, client_id, redirect_uri, code, clock).await;
     if result.is_ok() || result == Err(ExchangeError::UsedCode) {
         tx.commit().await.map_err(|_| ExchangeError::InvalidCode)?;
     } else {
@@ -340,7 +341,7 @@ async fn exchange_code_in(
     client_id: &str,
     redirect_uri: &str,
     code: &str,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Exchanged, ExchangeError> {
     let taken = match take_code(&mut *connection, code).await {
         Ok(Some(taken)) => taken,
@@ -358,6 +359,7 @@ async fn exchange_code_in(
         Err(_) => return Err(ExchangeError::InvalidCode),
     };
 
+    let now = clock();
     let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
 
     if taken.expires.is_none_or(|expires| expires <= at) {
@@ -455,7 +457,7 @@ pub struct Refreshed {
 pub async fn exchange_refresh_token(
     pool: &PgPool,
     refresh_token: &str,
-    now: OffsetDateTime,
+    clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Refreshed, ExchangeError> {
     // The token is a row's `token_id`, so anything that is not a UUID is not a
     // token rather than a database error.
@@ -468,8 +470,8 @@ pub async fn exchange_refresh_token(
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?;
     // Revocation locks the grant before cascading to its tokens. Take the same
-    // order, locking only the grant here; rotation rechecks the presented token
-    // and its expiry after any lock wait.
+    // order, locking the grant before the refresh token. Read the clock only
+    // after both locks; either wait can cross the token's expiry.
     sqlx::query_scalar!(
         "SELECT g.id FROM grants g JOIN refresh_tokens r ON r.grant_id = g.id
           WHERE r.token_id = $1 FOR KEY SHARE OF g",
@@ -480,6 +482,16 @@ pub async fn exchange_refresh_token(
     .map_err(|_| ExchangeError::InvalidRefreshToken)?
     .ok_or(ExchangeError::InvalidRefreshToken)?;
 
+    sqlx::query_scalar!(
+        "SELECT id FROM refresh_tokens WHERE token_id = $1 FOR UPDATE",
+        presented
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ExchangeError::InvalidRefreshToken)?
+    .ok_or(ExchangeError::InvalidRefreshToken)?;
+
+    let now = clock();
     let replaced = replace_refresh_token(&mut *tx, presented, now)
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?

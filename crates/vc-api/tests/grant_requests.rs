@@ -1068,7 +1068,7 @@ async fn a_device_code_is_exchanged_once_without_invalidating_issued_tokens(pool
                     vc_core::grant::exchange_refresh_token(
                         &pool,
                         first["refresh_token"].as_str().unwrap(),
-                        time::OffsetDateTime::now_utc()
+                        time::OffsetDateTime::now_utc
                     )
                     .await
                     .is_ok()
@@ -1107,7 +1107,7 @@ async fn concurrent_device_exchanges_have_only_one_winner(pool: PgPool) {
         vc_core::grant::exchange_refresh_token(
             &pool,
             winner.1["refresh_token"].as_str().unwrap(),
-            time::OffsetDateTime::now_utc()
+            time::OffsetDateTime::now_utc
         )
         .await
         .is_ok()
