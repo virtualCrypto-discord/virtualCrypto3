@@ -77,7 +77,7 @@ async fn an_unknown_unit_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨は存在しません。");
+    assert_error(&response, "エラー: 通貨が存在しません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

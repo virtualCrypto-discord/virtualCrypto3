@@ -99,7 +99,7 @@ async fn handle_until(
             ));
         }
         Ok(Err(PayError::NotFoundCurrency)) => {
-            return Ok(render_error("エラー: 通貨は存在しません。"));
+            return Ok(render_error("エラー: 通貨が存在しません。"));
         }
         Ok(Err(PayError::InvalidAmount)) => return Ok(render_error("エラー: 不正な金額です。")),
         Ok(Err(PayError::NotFoundSenderAsset | PayError::NotEnoughAmount)) => {
