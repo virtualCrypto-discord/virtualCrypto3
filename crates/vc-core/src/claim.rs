@@ -615,10 +615,30 @@ pub struct LockedClaim {
     pub payer_id: i64,
 }
 
+// Currency deletion takes the currency before assets and claims. Hold currency
+// references before locking claims so neither side can wait on the other in
+// reverse order. Batches acquire currencies in ID order, including duplicates
+// only once, and KEY SHARE remains compatible with issuance.
+async fn lock_currencies(
+    conn: &mut PgConnection,
+    claim_ids: &[i64],
+) -> std::result::Result<(), sqlx::Error> {
+    sqlx::query!(
+        "SELECT id FROM currencies
+          WHERE id IN (SELECT currency_id FROM claims WHERE id = ANY($1))
+          ORDER BY id FOR KEY SHARE",
+        claim_ids
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(())
+}
+
 async fn lock(
     conn: &mut PgConnection,
     claim_id: i64,
 ) -> std::result::Result<Option<LockedClaim>, sqlx::Error> {
+    lock_currencies(conn, &[claim_id]).await?;
     let row = sqlx::query!(
         "SELECT c.status::text AS status,
                 c.amount AS amount,
@@ -1071,12 +1091,16 @@ pub async fn update_claims(
     let mut tx = pool.begin().await.map_err(UpdateClaimsError::Database)?;
 
     let ids: Vec<i64> = partial_claims.iter().map(|partial| partial.id).collect();
+    lock_currencies(&mut tx, &ids)
+        .await
+        .map_err(UpdateClaimsError::Database)?;
     let rows = sqlx::query!(
         "SELECT c.id, c.status::text AS status, c.amount, cur.unit AS currency_unit,
                 c.claimant_user_id AS \"claimant_id!\", c.payer_user_id AS \"payer_id!\"
            FROM claims c
            JOIN currencies cur ON c.currency_id = cur.id
           WHERE c.id = ANY($1)
+          ORDER BY c.id
             FOR UPDATE OF c",
         &ids
     )
