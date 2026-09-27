@@ -11,11 +11,13 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use serde_json::json;
 use sqlx::PgPool;
 use support::{fake, insert_application, state};
 use time::PrimitiveDateTime;
+use tokio::sync::Semaphore;
 
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
 
@@ -71,47 +73,12 @@ async fn recorded(
 async fn honest_hook() -> (String, Arc<AtomicUsize>) {
     let asked = Arc::new(AtomicUsize::new(0));
     let counting = asked.clone();
-    let signing = ed25519_dalek::SigningKey::from_bytes(&SEED);
-    let public = signing.verifying_key();
-
     let hook = move |headers: axum::http::HeaderMap, body: String| {
         let asked = counting.clone();
 
         async move {
             asked.fetch_add(1, Ordering::SeqCst);
-
-            let header = |name: &str| {
-                headers
-                    .get(name)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or_default()
-                    .to_owned()
-            };
-
-            let signature = header("X-Signature-Ed25519");
-            let timestamp = header("X-Signature-Timestamp");
-
-            let bytes: Option<[u8; 64]> = (0..signature.len() / 2)
-                .map(|pair| u8::from_str_radix(&signature[pair * 2..pair * 2 + 2], 16).ok())
-                .collect::<Option<Vec<_>>>()
-                .and_then(|bytes| bytes.try_into().ok());
-
-            let believed = bytes
-                .map(|bytes| ed25519_dalek::Signature::from_bytes(&bytes))
-                .is_some_and(|signature| {
-                    ed25519_dalek::Verifier::verify(
-                        &public,
-                        format!("{timestamp}{body}").as_bytes(),
-                        &signature,
-                    )
-                    .is_ok()
-                });
-
-            if believed {
-                (axum::http::StatusCode::OK, axum::Json(json!({ "type": 1 })))
-            } else {
-                (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({})))
-            }
+            honest_reply(&headers, &body)
         }
     };
 
@@ -119,6 +86,80 @@ async fn honest_hook() -> (String, Arc<AtomicUsize>) {
         serve(axum::Router::new().route("/hook", axum::routing::post(hook))).await,
         asked,
     )
+}
+
+fn honest_reply(
+    headers: &axum::http::HeaderMap,
+    body: &str,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    let public = ed25519_dalek::SigningKey::from_bytes(&SEED).verifying_key();
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    };
+    let signature = header("X-Signature-Ed25519");
+    let timestamp = header("X-Signature-Timestamp");
+    let bytes: Option<[u8; 64]> = (0..signature.len() / 2)
+        .map(|pair| u8::from_str_radix(&signature[pair * 2..pair * 2 + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()
+        .and_then(|bytes| bytes.try_into().ok());
+    let believed = bytes
+        .map(|bytes| ed25519_dalek::Signature::from_bytes(&bytes))
+        .is_some_and(|signature| {
+            ed25519_dalek::Verifier::verify(
+                &public,
+                format!("{timestamp}{body}").as_bytes(),
+                &signature,
+            )
+            .is_ok()
+        });
+    if believed {
+        (axum::http::StatusCode::OK, axum::Json(json!({"type": 1})))
+    } else {
+        (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({})))
+    }
+}
+
+/// Let a settings edit finish while the old endpoint is still answering its check.
+async fn paused_hook(passes: bool) -> (String, Arc<Semaphore>, Arc<Semaphore>) {
+    let entered = Arc::new(Semaphore::new(0));
+    let release = Arc::new(Semaphore::new(0));
+    let seen = entered.clone();
+    let gate = release.clone();
+    let hook = move |headers: axum::http::HeaderMap, body: String| {
+        let seen = seen.clone();
+        let gate = gate.clone();
+        async move {
+            seen.add_permits(1);
+            gate.acquire().await.unwrap().forget();
+            if passes {
+                honest_reply(&headers, &body)
+            } else {
+                (axum::http::StatusCode::OK, axum::Json(json!({})))
+            }
+        }
+    };
+    let url = serve(axum::Router::new().route("/hook", axum::routing::post(hook))).await;
+    (url, entered, release)
+}
+
+async fn schedule(pool: &PgPool, application: i64) -> Option<PrimitiveDateTime> {
+    sqlx::query_scalar("SELECT next_reverify_at FROM applications WHERE id=$1")
+        .bind(application)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn snapshot(pool: &PgPool, application: i64) -> vc_core::application::StaleWebhook {
+    vc_core::application::stale_webhooks(pool, vc_core::model::utc_now(), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|hook| hook.id == application)
+        .unwrap()
 }
 
 /// A webhook that answers everything with `200` and an empty body: it is there,
@@ -310,4 +351,172 @@ async fn a_pass_that_is_old_is_asked_again(pool: PgPool) {
         recorded(&pool, application).await.0.is_some(),
         "and it passed"
     );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_replaced_webhook_keeps_its_schedule_when_the_old_check_fails(pool: PgPool) {
+    let (old_url, entered, release) = paused_hook(false).await;
+    let (new_url, asked) = honest_hook().await;
+    let application = application_at(&pool, &old_url).await;
+    let state = state(pool.clone(), fake());
+    let sweep_state = state.clone();
+    let sweep =
+        tokio::spawn(async move { vc_api::scheduler::reverify_webhooks(&sweep_state).await });
+    tokio::time::timeout(Duration::from_secs(2), entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+
+    // Exercise the real update path, including the replacement's successful handshake.
+    let changes = vc_core::application::Changes {
+        webhook_url: Some(Some(new_url)),
+        ..Default::default()
+    };
+    assert!(
+        vc_api::routes::oauth2_clients::apply(&state, application, "replace", &changes)
+            .await
+            .is_ok()
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 2);
+    let due = schedule(&pool, application).await;
+    release.add_permits(2);
+    sweep.await.unwrap();
+    assert_eq!(recorded(&pool, application).await, (None, None));
+    assert_eq!(schedule(&pool, application).await, due);
+
+    vc_api::scheduler::reverify_webhooks(&state).await;
+    assert_eq!(
+        asked.load(Ordering::SeqCst),
+        4,
+        "the replacement is still due immediately"
+    );
+    assert!(recorded(&pool, application).await.0.is_some());
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn removing_a_webhook_discards_an_inflight_success(pool: PgPool) {
+    let (url, entered, release) = paused_hook(true).await;
+    let application = application_at(&pool, &url).await;
+    let state = state(pool.clone(), fake());
+    let sweep_state = state.clone();
+    let sweep =
+        tokio::spawn(async move { vc_api::scheduler::reverify_webhooks(&sweep_state).await });
+    tokio::time::timeout(Duration::from_secs(2), entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let changes = vc_core::application::Changes {
+        webhook_url: Some(None),
+        ..Default::default()
+    };
+    assert!(
+        vc_api::routes::oauth2_clients::apply(&state, application, "remove", &changes)
+            .await
+            .is_ok()
+    );
+    release.add_permits(2);
+    sweep.await.unwrap();
+    assert_eq!(recorded(&pool, application).await, (None, None));
+    assert_eq!(schedule(&pool, application).await, None);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn restoring_the_same_url_does_not_accept_its_previous_check(pool: PgPool) {
+    use vc_core::application::{Changes, patch, record_webhook_verification};
+    let url = "https://app.example/hook";
+    for intermediate in [Some("https://app.example/replacement"), None] {
+        let application = application_at(&pool, url).await;
+        let previous = snapshot(&pool, application).await;
+        let due = schedule(&pool, application).await;
+        for replacement in [intermediate, Some(url)] {
+            patch(
+                &pool,
+                application,
+                &Changes {
+                    webhook_url: Some(replacement.map(str::to_owned)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+        // Emulate edits sharing the schedule's timestamp(0) value. Neither the
+        // final URL nor that timestamp can distinguish the obsolete check.
+        sqlx::query("UPDATE applications SET next_reverify_at=$2 WHERE id=$1")
+            .bind(application)
+            .bind(due)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for passed in [true, false] {
+            assert!(
+                !record_webhook_verification(&pool, &previous, passed, vc_core::model::utc_now())
+                    .await
+                    .unwrap()
+            );
+        }
+        assert_eq!(recorded(&pool, application).await, (None, None));
+        assert_eq!(schedule(&pool, application).await, due);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn overlapping_checks_cannot_overwrite_the_first_completed_result(pool: PgPool) {
+    use vc_core::application::record_webhook_verification;
+    for passed in [true, false] {
+        let application = application_at(&pool, "https://app.example/hook").await;
+        let previous = snapshot(&pool, application).await;
+        let concurrent = snapshot(&pool, application).await;
+        let now = vc_core::model::utc_now();
+        assert!(
+            record_webhook_verification(&pool, &concurrent, passed, now)
+                .await
+                .unwrap()
+        );
+        let kept = recorded(&pool, application).await;
+        let due = schedule(&pool, application).await;
+        assert!(
+            !record_webhook_verification(
+                &pool,
+                &previous,
+                !passed,
+                now - time::Duration::seconds(1)
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(recorded(&pool, application).await, kept);
+        assert_eq!(schedule(&pool, application).await, due);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn metadata_edits_and_an_unchanged_url_preserve_the_pending_check(pool: PgPool) {
+    use vc_core::application::{Changes, patch, record_webhook_verification};
+    let url = "https://app.example/hook";
+    for unchanged_url in [None, Some(Some(url.to_owned()))] {
+        let application = application_at(&pool, url).await;
+        let previous = snapshot(&pool, application).await;
+        let due = schedule(&pool, application).await;
+        patch(
+            &pool,
+            application,
+            &Changes {
+                client_name: Some(Some("renamed application".to_owned())),
+                webhook_url: unchanged_url,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(schedule(&pool, application).await, due);
+        assert!(
+            record_webhook_verification(&pool, &previous, true, vc_core::model::utc_now())
+                .await
+                .unwrap()
+        );
+        assert!(recorded(&pool, application).await.0.is_some());
+    }
 }

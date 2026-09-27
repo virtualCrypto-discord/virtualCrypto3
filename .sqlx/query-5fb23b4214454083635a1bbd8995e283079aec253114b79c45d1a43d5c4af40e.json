@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n                SET webhook_verified_at = $2, next_reverify_at = $3,\n                    webhook_revision = webhook_revision + 1\n              WHERE id = $1 AND webhook_url = $4 AND private_key = $5 AND webhook_revision = $6",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamp",
+        "Timestamp",
+        "Text",
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5fb23b4214454083635a1bbd8995e283079aec253114b79c45d1a43d5c4af40e"
+}

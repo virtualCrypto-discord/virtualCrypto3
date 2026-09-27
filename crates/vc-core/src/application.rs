@@ -480,6 +480,8 @@ pub struct StaleWebhook {
     /// Never `None`: the row was selected because it names one.
     pub webhook_url: String,
     pub private_key: Vec<u8>,
+    /// Identifies the URL configuration and verification state read by this check.
+    pub revision: i64,
 }
 
 /// The applications whose webhook is due to be checked again — `next_reverify_at`
@@ -503,7 +505,7 @@ pub async fn stale_webhooks(
 ) -> std::result::Result<Vec<StaleWebhook>, sqlx::Error> {
     sqlx::query_as!(
         StaleWebhook,
-        "SELECT id, webhook_url AS \"webhook_url!\", private_key
+        "SELECT id, webhook_url AS \"webhook_url!\", private_key, webhook_revision AS revision
            FROM applications
           WHERE webhook_url IS NOT NULL
             AND next_reverify_at <= $1
@@ -533,35 +535,46 @@ pub const REVERIFY_AFTER: time::Duration = time::Duration::days(7);
 /// Either outcome also schedules the next check: `next_reverify_at` moves
 /// [`REVERIFY_AFTER`] out, which is what the sweep reads instead of recomputing a
 /// `GREATEST` over the two history columns (`0016`).
+/// Only the snapshot that was checked may be updated. A URL edit (even one
+/// changed back in the same second), a key change or another completed check
+/// makes a delayed result obsolete. `false` means that result was discarded.
 pub async fn record_webhook_verification(
     pool: &sqlx::PgPool,
-    application_id: i64,
+    webhook: &StaleWebhook,
     passed: bool,
     now: time::PrimitiveDateTime,
-) -> std::result::Result<(), sqlx::Error> {
+) -> std::result::Result<bool, sqlx::Error> {
     let due = now + REVERIFY_AFTER;
 
     match passed {
         true => sqlx::query!(
             "UPDATE applications
-                SET webhook_verified_at = $2, next_reverify_at = $3
-              WHERE id = $1",
-            application_id,
+                SET webhook_verified_at = $2, next_reverify_at = $3,
+                    webhook_revision = webhook_revision + 1
+              WHERE id = $1 AND webhook_url = $4 AND private_key = $5 AND webhook_revision = $6",
+            webhook.id,
             now,
-            due
+            due,
+            webhook.webhook_url,
+            webhook.private_key,
+            webhook.revision
         ),
         false => sqlx::query!(
             "UPDATE applications
-                SET webhook_failed_at = $2, next_reverify_at = $3
-              WHERE id = $1",
-            application_id,
+                SET webhook_failed_at = $2, next_reverify_at = $3,
+                    webhook_revision = webhook_revision + 1
+              WHERE id = $1 AND webhook_url = $4 AND private_key = $5 AND webhook_revision = $6",
+            webhook.id,
             now,
-            due
+            due,
+            webhook.webhook_url,
+            webhook.private_key,
+            webhook.revision
         ),
     }
     .execute(pool)
     .await
-    .map(|_| ())
+    .map(|result| result.rows_affected() == 1)
 }
 
 /// The free-text settings share these limits across registration, updates and
@@ -1021,6 +1034,8 @@ pub struct Changes {
 /// `apply` has just run its handshake and nothing writes that as a check. One that
 /// is removed leaves the column NULL, and an edit that does not name the webhook
 /// leaves the sweep's schedule alone (`0016`).
+/// Changing the URL advances its revision (`0027`), invalidating checks already
+/// in flight. Unrelated edits and an unchanged URL keep those checks valid.
 pub async fn patch(
     pool: &sqlx::PgPool,
     application_id: i64,
@@ -1072,14 +1087,15 @@ pub async fn patch(
 
     sqlx::query!(
         "UPDATE applications
-            SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5,
+            SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5::text,
                 discord_support_server_invite_slug = $6,
                 application_type = $7::text::openid_connect_application_type,
                 grant_types = $8::text[]::openid_connect_grant_types[],
                 response_types = $9::text[]::openid_connect_response_types[],
                 subscribed_events = $10,
                 client_secret = COALESCE($11, client_secret),
-                next_reverify_at = $12
+                next_reverify_at = $12,
+                webhook_revision = webhook_revision + CASE WHEN webhook_url IS DISTINCT FROM $5::text THEN 1 ELSE 0 END
           WHERE id = $1",
         application_id,
         applied(&changes.client_name, &current.client_name),

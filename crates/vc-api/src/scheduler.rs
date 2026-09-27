@@ -207,23 +207,22 @@ pub async fn reverify_webhooks(state: &AppState) {
 
         let passed = handshake == Handshake::Passed;
 
-        if !passed {
-            tracing::warn!(
+        match vc_core::application::record_webhook_verification(state.pool(), &webhook, passed, at)
+            .await
+        {
+            Ok(true) if !passed => tracing::warn!(
                 application_id = webhook.id,
                 ?handshake,
                 "an application's webhook did not answer the handshake"
-            );
-        }
-
-        if let Err(error) =
-            vc_core::application::record_webhook_verification(state.pool(), webhook.id, passed, at)
-                .await
-        {
-            tracing::warn!(
+            ),
+            // A changed URL or a completed competing check makes this result
+            // obsolete, including its warning about the application's state.
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
                 ?error,
                 application_id = webhook.id,
                 "the handshake's outcome could not be written"
-            );
+            ),
         }
     }
 }

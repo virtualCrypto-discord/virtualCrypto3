@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, webhook_url AS \"webhook_url!\", private_key\n           FROM applications\n          WHERE webhook_url IS NOT NULL\n            AND next_reverify_at <= $1\n          ORDER BY next_reverify_at, id\n          LIMIT $2",
+  "query": "SELECT id, webhook_url AS \"webhook_url!\", private_key, webhook_revision AS revision\n           FROM applications\n          WHERE webhook_url IS NOT NULL\n            AND next_reverify_at <= $1\n          ORDER BY next_reverify_at, id\n          LIMIT $2",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "private_key"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "webhook_revision"
+          }
+        }
       }
     ],
     "parameters": {
@@ -46,8 +57,9 @@
     "nullable": [
       false,
       true,
+      false,
       false
     ]
   },
-  "hash": "3226f4534646c21c1d40dde1c1376206824d224040536753238a7e5f38d2ec0f"
+  "hash": "25974be003d1cc51713a1c22689db025506d30757330c086721c91e78b526078"
 }

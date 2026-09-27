@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE applications\n            SET client_name = $2, client_uri = $3, logo_uri = $4, webhook_url = $5::text,\n                discord_support_server_invite_slug = $6,\n                application_type = $7::text::openid_connect_application_type,\n                grant_types = $8::text[]::openid_connect_grant_types[],\n                response_types = $9::text[]::openid_connect_response_types[],\n                subscribed_events = $10,\n                client_secret = COALESCE($11, client_secret),\n                next_reverify_at = $12,\n                webhook_revision = webhook_revision + CASE WHEN webhook_url IS DISTINCT FROM $5::text THEN 1 ELSE 0 END\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "Int8Array",
+        "Varchar",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e47ba9f94b33038439ee5beeffbe51e0bdbc6c02801edaa36c21c1859e09b381"
+}
