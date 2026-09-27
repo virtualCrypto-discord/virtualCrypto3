@@ -11,6 +11,9 @@
 <h1>VirtualCrypto</h1>
 <p>Discord のサーバーで使う通貨を扱うためのサービスです。</p>
 
+<p><a href="/invite">Discord サーバーに導入する</a></p>
+<p>導入後は、Discord で <code>/help</code> を入力すると使い方を確認できます。</p>
+
 <!-- OAuth consent verifies identity with Discord for each request; there is no site login. -->
 
 <!-- An ordinary link: it reloads, and the API answers it with this document.
