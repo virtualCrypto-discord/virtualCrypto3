@@ -78,7 +78,16 @@ pub async fn mute_currency(
     unit: &str,
     now: OffsetDateTime,
 ) -> Result<bool, MuteError> {
-    let Some(currency_id) = currency(pool, unit).await? else {
+    let mut tx = pool.begin().await?;
+    // Keep the currency alive through insertion, before the mute's foreign-key
+    // checks acquire account locks. Deletion takes the currency lock first too.
+    let Some(currency_id) = sqlx::query_scalar!(
+        "SELECT id FROM currencies WHERE unit = $1 FOR KEY SHARE",
+        unit
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
         return Err(MuteError::NoSuchCurrency);
     };
 
@@ -90,10 +99,11 @@ pub async fn mute_currency(
         currency_id,
         now
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
+    tx.commit().await?;
     Ok(inserted == 1)
 }
 

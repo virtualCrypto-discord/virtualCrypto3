@@ -467,6 +467,19 @@ pub async fn exchange_refresh_token(
         .begin()
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?;
+    // Revocation locks the grant before cascading to its tokens. Take the same
+    // order, locking only the grant here; rotation rechecks the presented token
+    // and its expiry after any lock wait.
+    sqlx::query_scalar!(
+        "SELECT g.id FROM grants g JOIN refresh_tokens r ON r.grant_id = g.id
+          WHERE r.token_id = $1 FOR KEY SHARE OF g",
+        presented
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ExchangeError::InvalidRefreshToken)?
+    .ok_or(ExchangeError::InvalidRefreshToken)?;
+
     let replaced = replace_refresh_token(&mut *tx, presented, now)
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?
