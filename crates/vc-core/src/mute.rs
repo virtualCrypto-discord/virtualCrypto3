@@ -15,7 +15,7 @@
 //! An addition rather than a port: the Elixir has no mute and nothing that filters a list by its
 //! reader, so this is this service's own shape — a table the Elixir neither reads nor writes.
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 
 /// How many mutes one screen shows. The claim list's own arithmetic: five rows, four arrows, and
@@ -114,7 +114,8 @@ pub async fn mute_user(
     discord_id: i64,
     now: OffsetDateTime,
 ) -> Result<bool, MuteError> {
-    let Some(target) = account(pool, discord_id).await? else {
+    let mut tx = pool.begin().await?;
+    let Some(target) = account(&mut tx, discord_id).await? else {
         return Err(MuteError::NoSuchUser);
     };
 
@@ -130,10 +131,11 @@ pub async fn mute_user(
         target,
         now
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
+    tx.commit().await?;
     Ok(inserted == 1)
 }
 
@@ -172,17 +174,20 @@ pub async fn unmute_currency_id(
 
 /// Forgetting somebody's mute, and answering like [`unmute_currency`].
 pub async fn unmute_user(pool: &PgPool, user_id: i32, discord_id: i64) -> Result<bool, MuteError> {
-    let Some(target) = account(pool, discord_id).await? else {
+    let mut tx = pool.begin().await?;
+    let Some(target) = account(&mut tx, discord_id).await? else {
         return Err(MuteError::NoSuchUser);
     };
 
-    remove(
-        pool,
+    let removed = remove(
+        &mut *tx,
         "DELETE FROM mutes WHERE user_id = $1 AND muted_user_id = $2",
         user_id,
         i64::from(target),
     )
-    .await
+    .await?;
+    tx.commit().await?;
+    Ok(removed)
 }
 
 /// One page of the caller's mutes, newest first.
@@ -245,8 +250,8 @@ pub async fn page(pool: &PgPool, user_id: i32, page: i64, limit: i64) -> Result<
 
 /// The one statement an unmute is: the two differ in the column they ask about, and nothing else
 /// about them does.
-async fn remove(
-    pool: &PgPool,
+async fn remove<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+    executor: E,
     statement: &'static str,
     user_id: i32,
     target: i64,
@@ -254,20 +259,37 @@ async fn remove(
     let removed = sqlx::query(statement)
         .bind(user_id)
         .bind(target)
-        .execute(pool)
+        .execute(executor)
         .await?
         .rows_affected();
 
     Ok(removed == 1)
 }
 
-/// The account a Discord id names, if it has one.
-async fn account(pool: &PgPool, discord_id: i64) -> Result<Option<i32>, MuteError> {
-    Ok(
-        sqlx::query_scalar!("SELECT id FROM users WHERE discord_id = $1", discord_id)
-            .fetch_optional(pool)
-            .await?,
-    )
+/// Keep the target's identity stable through the mute change. A bot binding may
+/// retire or reassign the candidate while its lock is awaited: resolve again
+/// with a fresh snapshot in that case, without creating an absent account.
+async fn account(conn: &mut PgConnection, discord_id: i64) -> Result<Option<i32>, MuteError> {
+    loop {
+        let Some(id) =
+            sqlx::query_scalar!("SELECT id FROM users WHERE discord_id = $1", discord_id)
+                .fetch_optional(&mut *conn)
+                .await?
+        else {
+            return Ok(None);
+        };
+        if sqlx::query_scalar!(
+            "SELECT id FROM users WHERE id = $1 AND discord_id = $2 FOR KEY SHARE",
+            id,
+            discord_id
+        )
+        .fetch_optional(&mut *conn)
+        .await?
+        .is_some()
+        {
+            return Ok(Some(id));
+        }
+    }
 }
 
 /// The currency a unit names, if there is one.

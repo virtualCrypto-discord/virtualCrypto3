@@ -391,11 +391,19 @@ belief into a fact, and each of these was run while the code was written:
       an unknown client route answers the index, and `/api/…` keeps its own routes.
 - [ ] **The demo without Discord**: `demo-billing` with a missing argument exits 2;
       with no server it fails with a message and exits 1.
+- [ ] **Browser authorization and webhook**: start `vc-demo-app` with
+      `--guild-id <snowflake>`. Its home page links to authorization with that
+      guild and `scope=vc.issue`. A correctly signed webhook PING receives
+      `200` with JSON `{"type":1}`; a signature from another key receives `401`.
 - [ ] **Billing retries and receipts**: `demo-billing --uses 120` with sufficient
       quota waits for `Retry-After` under the default rate limit and completes
       each charge once. With more than 200 charges, the receipt reads every page
       and totals only charges, excluding locks and refunds. Quota exhaustion
       still prints the receipt for the charges that succeeded.
+      Expire its token while waiting for approval, charging, or reading a
+      statement page: it obtains a new `client_credentials` token with
+      `scope=vc.contract` and resumes the same request and charge key. A failed
+      renewal or a second `401` on that request stops the run.
 - [ ] **`demo-issue` to a role**: neither `--receiver-id` nor `--role-id` exits 2, and
       `--role-id` without `--bot-token` exits 2; a guild Discord reports as past
       75,000 members (`approximate_member_count` from `GET /guilds/{id}?with_counts=true`)

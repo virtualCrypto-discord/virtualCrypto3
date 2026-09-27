@@ -14,6 +14,7 @@
 //!     --service http://127.0.0.1:4000 \
 //!     --client-id 00000000-0000-0000-0000-000000000000 \
 //!     --client-secret the-secret \
+//!     --guild-id 100000000000000001 \
 //!     --public-key the-hex-the-application-reads
 //! ```
 //!
@@ -22,11 +23,11 @@
 
 use std::sync::Arc;
 
-use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 
@@ -35,6 +36,7 @@ struct Application {
     service: String,
     client_id: String,
     client_secret: String,
+    guild_id: String,
     public: VerifyingKey,
     /// Where this application listens, which is also the redirect URI it must have registered.
     address: String,
@@ -62,6 +64,7 @@ async fn main() {
     let service = argument("--service").expect("--service is the address of the service");
     let client_id = argument("--client-id").expect("--client-id is what was registered");
     let client_secret = argument("--client-secret").expect("--client-secret is what was issued");
+    let guild_id = argument("--guild-id").expect("--guild-id is the guild whose pool is requested");
     let public =
         argument("--public-key").expect("--public-key is the hex the service answers with");
 
@@ -78,6 +81,7 @@ async fn main() {
         service: service.trim_end_matches('/').to_owned(),
         client_id,
         client_secret,
+        guild_id,
         public,
         address: address.clone(),
     });
@@ -101,12 +105,27 @@ async fn main() {
 /// The page a person opens: the address the service authorizes at, with this application's own
 /// callback as the place the code comes back to.
 async fn home(State(application): State<Arc<Application>>) -> impl IntoResponse {
-    let authorize = format!(
-        "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri=http://{}/callback",
-        application.service, application.client_id, application.address
-    );
-
-    format!("<a href=\"{authorize}\">{authorize}</a>")
+    let mut authorize = reqwest::Url::parse(&format!("{}/oauth2/authorize", application.service))
+        .expect("--service is an absolute URL");
+    authorize.query_pairs_mut().extend_pairs([
+        ("response_type", "code"),
+        ("client_id", application.client_id.as_str()),
+        (
+            "redirect_uri",
+            &format!("http://{}/callback", application.address),
+        ),
+        ("guild_id", application.guild_id.as_str()),
+        ("scope", "vc.issue"),
+    ]);
+    let authorize = authorize
+        .as_str()
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    Html(format!(
+        "<a href=\"{authorize}\">Authorize guild issuance</a>"
+    ))
 }
 
 /// Where the code comes back. It is exchanged at the token endpoint with the application's own
@@ -181,13 +200,15 @@ async fn webhook(
 
     if verified {
         println!("a webhook verified: {body}");
-
-        (StatusCode::OK, "verified".to_owned())
+        if serde_json::from_str::<serde_json::Value>(&body).is_ok_and(|event| event["type"] == 1) {
+            return Json(serde_json::json!({"type": 1})).into_response();
+        }
+        (StatusCode::OK, "verified".to_owned()).into_response()
     } else {
         // What the service is asking for: a signature it did not make is a signature this
         // application refuses.
         println!("a webhook did not verify: {body}");
 
-        (StatusCode::UNAUTHORIZED, "not verified".to_owned())
+        (StatusCode::UNAUTHORIZED, "not verified".to_owned()).into_response()
     }
 }

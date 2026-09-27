@@ -48,7 +48,8 @@
 //! back at the end** (`GET /api/v2/contracts/{id}/payments`), because a charge
 //! that cannot be read again is not a receipt.
 //! Rate-limited requests wait for `Retry-After` and retry the same request,
-//! including the same charge key. Statements are read in pages of 200 rows;
+//! including the same charge key. A 401 renews the application token and retries
+//! that request once, keeping its body and key. Statements are read in pages of 200 rows;
 //! only charge events count towards the billed total, not locks or refunds.
 //!
 //! No webhook, and deliberately none: the approval is observed by reading the
@@ -101,38 +102,82 @@ struct Statement {
 
 const STATEMENT_PAGE_SIZE: usize = 200;
 
-/// A 429 is refused before the API writes anything. Clone the complete request
-/// so a charge keeps its original body and idempotency key while it waits.
-async fn send(request: reqwest::RequestBuilder) -> Result<reqwest::Response, reqwest::Error> {
-    loop {
-        let response = request
-            .try_clone()
-            .expect("demo requests have replayable JSON or form bodies")
-            .send()
-            .await?;
-        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Ok(response);
-        }
+/// Share the current token across approval polling, charges and statement pages.
+struct Session<'a> {
+    client: &'a reqwest::Client,
+    service: &'a str,
+    client_id: &'a str,
+    client_secret: &'a str,
+    token: String,
+}
 
-        // The service sends a whole number of seconds. A missing or malformed
-        // header falls back to waiting past its normal one-minute window.
-        let seconds = response
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(61)
-            .max(1);
-        drop(response);
-        eprintln!("rate limited; waiting {seconds}s");
-        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+impl Session<'_> {
+    async fn renew(&mut self) -> Result<(), reqwest::Error> {
+        let token: Token = self
+            .client
+            .post(format!("{}/oauth2/token", self.service))
+            .basic_auth(self.client_id, Some(self.client_secret))
+            .form(&[
+                ("grant_type", "client_credentials"),
+                ("scope", "vc.contract"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(
+            token.token_type, "Bearer",
+            "the endpoint answers Bearer and nothing else"
+        );
+        self.token = token.access_token;
+        Ok(())
+    }
+
+    /// Clone the complete request so a retry keeps the body and idempotency key.
+    /// Retry authentication once: revoked credentials must terminate the run.
+    async fn send(
+        &mut self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let mut renewed = false;
+        loop {
+            let response = request
+                .try_clone()
+                .expect("demo requests have replayable JSON or form bodies")
+                .bearer_auth(&self.token)
+                .send()
+                .await?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && !renewed {
+                drop(response);
+                self.renew().await?;
+                renewed = true;
+                continue;
+            }
+            if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Ok(response);
+            }
+
+            // The service sends a whole number of seconds. A missing or malformed
+            // header falls back to waiting past its normal one-minute window.
+            let seconds = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(61)
+                .max(1);
+            drop(response);
+            eprintln!("rate limited; waiting {seconds}s");
+            tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+        }
     }
 }
 
 async fn read_statement(
     client: &reqwest::Client,
     service: &str,
-    token: &str,
+    session: &mut Session<'_>,
     contract: &str,
 ) -> Result<Statement, Box<dyn std::error::Error>> {
     let mut statement = Statement::default();
@@ -140,13 +185,17 @@ async fn read_statement(
     loop {
         let mut request = client
             .get(format!("{service}/api/v2/contracts/{contract}/payments"))
-            .bearer_auth(token)
             .header("Accept", "application/json")
             .query(&[("limit", STATEMENT_PAGE_SIZE.to_string())]);
         if let Some(id) = &next {
             request = request.query(&[("next", id)]);
         }
-        let entries: Vec<Entry> = send(request).await?.error_for_status()?.json().await?;
+        let entries: Vec<Entry> = session
+            .send(request)
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         let more = entries.len() == STATEMENT_PAGE_SIZE;
         next = entries.last().map(|entry| entry.id.clone());
         for entry in entries.into_iter().filter(|entry| entry.event == "charge") {
@@ -211,54 +260,42 @@ async fn main() {
 
     // The application signing in as itself. The scope is what it wants to be
     // able to ask for; the parties' approvals are what it will be able to spend.
-    let token: Token = client
-        .post(format!("{service}/oauth2/token"))
-        .basic_auth(&client_id, Some(&client_secret))
-        .form(&[
-            ("grant_type", "client_credentials"),
-            ("scope", "vc.contract"),
-        ])
-        .send()
+    let mut session = Session {
+        client: &client,
+        service: &service,
+        client_id: &client_id,
+        client_secret: &client_secret,
+        token: String::new(),
+    };
+    session.renew().await.unwrap_or_else(|error| {
+        eprintln!("the application could not sign in: {error}");
+        std::process::exit(1)
+    });
+
+    // The ask. Ids and amounts travel as strings — JSON's number cannot hold a
+    // snowflake exactly — and the period is a number of seconds.
+    let created: Contract = session
+        .send(
+            client
+                .post(format!("{service}/api/v2/contracts"))
+                .header("Accept", "application/json")
+                .json(&serde_json::json!({
+                    "unit": unit,
+                    "parties": [{ "discord_id": subscriber, "amount": quota }],
+                    "receiver_discord_id": receiver,
+                    "expires_in": period,
+                })),
+        )
         .await
-        .expect("the token endpoint answers")
+        .expect("the contract endpoint answers")
         .error_for_status()
         .unwrap_or_else(|error| {
-            eprintln!("the application could not sign in: {error}");
+            eprintln!("the contract could not be asked for: {error}");
             std::process::exit(1)
         })
         .json()
         .await
-        .expect("an application token");
-
-    assert_eq!(
-        token.token_type, "Bearer",
-        "the endpoint answers Bearer and nothing else"
-    );
-
-    // The ask. Ids and amounts travel as strings — JSON's number cannot hold a
-    // snowflake exactly — and the period is a number of seconds.
-    let created: Contract = send(
-        client
-            .post(format!("{service}/api/v2/contracts"))
-            .bearer_auth(&token.access_token)
-            .header("Accept", "application/json")
-            .json(&serde_json::json!({
-                "unit": unit,
-                "parties": [{ "discord_id": subscriber, "amount": quota }],
-                "receiver_discord_id": receiver,
-                "expires_in": period,
-            })),
-    )
-    .await
-    .expect("the contract endpoint answers")
-    .error_for_status()
-    .unwrap_or_else(|error| {
-        eprintln!("the contract could not be asked for: {error}");
-        std::process::exit(1)
-    })
-    .json()
-    .await
-    .expect("a contract");
+        .expect("a contract");
 
     println!(
         "asked; approve it with `/contract list` in Discord (contract {}, {quota} {unit} on approval)",
@@ -271,22 +308,22 @@ async fn main() {
     loop {
         tokio::time::sleep(POLL).await;
 
-        let contract: Contract = send(
-            client
-                .get(format!("{service}/api/v2/contracts/{}", created.id))
-                .bearer_auth(&token.access_token)
-                .header("Accept", "application/json"),
-        )
-        .await
-        .expect("the contract endpoint answers")
-        .error_for_status()
-        .unwrap_or_else(|error| {
-            eprintln!("the contract could not be read: {error}");
-            std::process::exit(1)
-        })
-        .json()
-        .await
-        .expect("a contract");
+        let contract: Contract = session
+            .send(
+                client
+                    .get(format!("{service}/api/v2/contracts/{}", created.id))
+                    .header("Accept", "application/json"),
+            )
+            .await
+            .expect("the contract endpoint answers")
+            .error_for_status()
+            .unwrap_or_else(|error| {
+                eprintln!("the contract could not be read: {error}");
+                std::process::exit(1)
+            })
+            .json()
+            .await
+            .expect("a contract");
 
         match contract.status.as_str() {
             "pending" => continue,
@@ -309,29 +346,29 @@ async fn main() {
     for use_number in 1..=uses {
         println!("use {use_number}: doing the work");
 
-        let answer = send(
-            client
-                .post(format!(
-                    "{service}/api/v2/contracts/{}/payments",
-                    created.id
-                ))
-                .bearer_auth(&token.access_token)
-                .header("Accept", "application/json")
-                // The contract and the use, which is a key no other charge of this
-                // run (or of the next one, whose contract is new) shares. The quotes
-                // are part of it: the header is a quoted string, and one that is not
-                // is refused before anything is charged.
-                .header(
-                    "Idempotency-Key",
-                    format!("\"{}-{use_number}\"", created.id),
-                )
-                .json(&serde_json::json!({
-                    "receiver_discord_id": receiver,
-                    "amount": price,
-                })),
-        )
-        .await
-        .expect("the payment endpoint answers");
+        let answer = session
+            .send(
+                client
+                    .post(format!(
+                        "{service}/api/v2/contracts/{}/payments",
+                        created.id
+                    ))
+                    .header("Accept", "application/json")
+                    // The contract and the use, which is a key no other charge of this
+                    // run (or of the next one, whose contract is new) shares. The quotes
+                    // are part of it: the header is a quoted string, and one that is not
+                    // is refused before anything is charged.
+                    .header(
+                        "Idempotency-Key",
+                        format!("\"{}-{use_number}\"", created.id),
+                    )
+                    .json(&serde_json::json!({
+                        "receiver_discord_id": receiver,
+                        "amount": price,
+                    })),
+            )
+            .await
+            .expect("the payment endpoint answers");
 
         // The status is read before `error_for_status`, which would consume the
         // answer: a refusal says which refusal it is, and that is in the body.
@@ -380,7 +417,7 @@ async fn main() {
 
     // The complete ledger includes the initial lock and any refunds. Read all
     // pages and count only charges, including when the quota ended the run.
-    let statement = read_statement(&client, &service, &token.access_token, &created.id)
+    let statement = read_statement(&client, &service, &mut session, &created.id)
         .await
         .unwrap_or_else(|error| {
             eprintln!("the statement could not be read: {error}");

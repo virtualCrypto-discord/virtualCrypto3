@@ -93,14 +93,16 @@ fn ledger(charges: i64, quota: i64) -> Vec<Value> {
     rows
 }
 
-async fn run(replies: Vec<Reply>, uses: i64, quota: i64) -> String {
+async fn execute(replies: Vec<Reply>, uses: i64, quota: i64) -> std::process::Output {
     struct Script {
         replies: VecDeque<Reply>,
         retry_at: Option<Instant>,
+        token: Option<String>,
     }
     let script = Arc::new(Mutex::new(Script {
         replies: replies.into(),
         retry_at: None,
+        token: None,
     }));
     let handler = script.clone();
     let app = Router::new().fallback(move |request: Request| {
@@ -112,13 +114,26 @@ async fn run(replies: Vec<Reply>, uses: i64, quota: i64) -> String {
                 .headers()
                 .get("idempotency-key")
                 .map(|key| key.to_str().unwrap().to_owned());
-            if uri.starts_with("/api/") {
-                assert_eq!(request.headers()["authorization"], "Bearer app-token");
-            }
+            let authorization = request.headers()["authorization"]
+                .to_str()
+                .unwrap()
+                .to_owned();
             let body = axum::body::to_bytes(request.into_body(), 4096)
                 .await
                 .unwrap();
             let mut script = script.lock().unwrap();
+            if uri.starts_with("/api/") {
+                assert_eq!(
+                    authorization,
+                    format!("Bearer {}", script.token.as_ref().unwrap())
+                );
+            } else if uri == "/oauth2/token" {
+                assert_eq!(authorization, "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ=");
+                assert_eq!(
+                    &body[..],
+                    b"grant_type=client_credentials&scope=vc.contract"
+                );
+            }
             if let Some(retry_at) = script.retry_at.take() {
                 assert!(Instant::now() >= retry_at, "client ignored Retry-After");
             }
@@ -128,6 +143,18 @@ async fn run(replies: Vec<Reply>, uses: i64, quota: i64) -> String {
                 (expected.method, expected.uri.as_str())
             );
             assert_eq!(key, expected.key);
+            if uri == "/oauth2/token" && expected.status == 200 {
+                script.token = Some(expected.body["access_token"].as_str().unwrap().to_owned());
+            }
+            if method == "POST" && uri == "/api/v2/contracts" {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap(),
+                    json!({
+                        "unit":"n", "parties":[{"discord_id":"1", "amount":quota.to_string()}],
+                        "receiver_discord_id":"2", "expires_in":2592000,
+                    })
+                );
+            }
             if method == "POST" && uri.ends_with("/payments") {
                 assert_eq!(
                     serde_json::from_slice::<Value>(&body).unwrap(),
@@ -183,16 +210,105 @@ async fn run(replies: Vec<Reply>, uses: i64, quota: i64) -> String {
         .unwrap();
     server.abort();
     assert!(
+        script.lock().unwrap().replies.is_empty(),
+        "the run stopped before completing its requests; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+async fn run(replies: Vec<Reply>, uses: i64, quota: i64) -> String {
+    let output = execute(replies, uses, quota).await;
+    assert!(
         output.status.success(),
         "stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        script.lock().unwrap().replies.is_empty(),
-        "the run stopped before completing its requests"
-    );
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn unauthorized(response: &Reply) -> Reply {
+    Reply {
+        method: response.method,
+        uri: response.uri.clone(),
+        key: response.key.clone(),
+        status: 401,
+        body: json!({"error":"invalid_token"}),
+    }
+}
+
+fn renewed(token: &str) -> Reply {
+    reply(
+        "POST",
+        "/oauth2/token",
+        200,
+        json!({"access_token":token,"token_type":"Bearer"}),
+    )
+}
+
+#[tokio::test]
+async fn expired_tokens_resume_creation_approval_charges_and_statement_pages() {
+    let mut requests = start(false);
+    requests.extend((1..=201).map(|use_number| charged(use_number, 1000)));
+    let entries = ledger(201, 1000);
+    requests.push(reply(
+        "GET",
+        "/api/v2/contracts/1/payments?limit=200",
+        200,
+        json!(&entries[..200]),
+    ));
+    requests.push(reply(
+        "GET",
+        "/api/v2/contracts/1/payments?limit=200&next=4",
+        200,
+        json!(&entries[200..]),
+    ));
+    let mut script = Vec::new();
+    for (index, response) in requests.into_iter().enumerate() {
+        // Force expiration at each kind of request, leaving subsequent charges
+        // to demonstrate that the replacement token is retained.
+        if index > 0
+            && (response.uri != "/api/v2/contracts/1/payments"
+                || response.key.as_deref() == Some("\"1-2\""))
+        {
+            script.push(unauthorized(&response));
+            script.push(renewed(&format!("new-token-{index}")));
+            append(&mut script, response, true);
+        } else {
+            script.push(response);
+        }
+    }
+    let output = run(script, 201, 1000).await;
+    assert_eq!(output.matches("doing the work").count(), 201);
+    assert!(output.contains("the statement has 201 entries, 201 n billed in total"));
+}
+
+#[tokio::test]
+async fn a_rejected_replacement_token_stops_after_one_renewal() {
+    let mut script = start(false);
+    let charge = charged(1, 1);
+    script.push(unauthorized(&charge));
+    script.push(renewed("replacement"));
+    script.push(unauthorized(&charge));
+    let output = execute(script, 1, 1).await;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("the charge was refused"));
+}
+
+#[tokio::test]
+async fn revoked_credentials_stop_without_replaying_a_charge() {
+    let mut script = start(false);
+    script.push(unauthorized(&charged(1, 1)));
+    script.push(reply(
+        "POST",
+        "/oauth2/token",
+        401,
+        json!({"error":"invalid_client"}),
+    ));
+    let output = execute(script, 1, 1).await;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("401"));
 }
 
 #[tokio::test]
