@@ -830,7 +830,7 @@ async fn empty_results_keep_the_filters_without_claiming_the_guild_never_issued(
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn both_ledgers_show_page_ranges_and_labelled_navigation_with_filters(pool: PgPool) {
+async fn both_ledgers_show_page_ranges_and_emoji_navigation_with_filters(pool: PgPool) {
     let money = setup_money(&pool).await;
     for _ in 0..6 {
         pay(&pool, MONEY_USER1, MONEY_USER2, &money.unit, 10).await;
@@ -865,10 +865,11 @@ async fn both_ledgers_show_page_ranges_and_labelled_navigation_with_filters(pool
         assert_eq!(
             buttons(&first)
                 .iter()
-                .map(|b| b["label"].as_str().unwrap())
+                .map(|b| b["emoji"]["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["最初", "前へ", "次へ", "最後"]
+            ["⏪", "⏮️", "⏭️", "⏩"]
         );
+        assert!(buttons(&first).iter().all(|b| b.get("label").is_none()));
         assert_eq!(
             buttons(&first)
                 .iter()

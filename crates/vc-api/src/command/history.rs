@@ -25,7 +25,9 @@ use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE, as_int,
     as_permissions, get_user, is_administrator, mention, value_text,
 };
-use crate::components::{ButtonStyle, action_row, button, container, ephemeral, separator, text};
+use crate::components::{
+    ButtonStyle, action_row, container, ephemeral, icon_button, separator, text,
+};
 use crate::custom_id::ui::history::{Listing, Screen, page_button_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -235,7 +237,7 @@ fn page_answer<T>(
     let pages = (page.total - 1) / PER_PAGE + 1;
     if page.rows.is_empty() {
         children.push(text(
-            "このページには何もありません。「最初」で先頭に戻ってください。",
+            "このページには何もありません。⏪ で先頭に戻ってください。",
         ));
         children.push(text(format!("ページ {}/{}", page.page, pages)));
     } else {
@@ -442,7 +444,7 @@ fn counterparty(discord_id: Option<i64>, payment: &Payment) -> String {
 /// Where the arrows move to, each disabled where there is nowhere to go — the balance list's
 /// row, over a page of the same shape.
 fn arrows<T>(listing: &Listing, page: &vc_core::history::Page<T>) -> Value {
-    let arrow = |at: u8, label: &str, target: Option<i64>| -> Value {
+    let arrow = |at: u8, emoji: &str, target: Option<i64>| -> Value {
         let id = match target {
             // A page that is not there is a button that says so, and one Discord will not send:
             // the id is a placeholder rather than this space's.
@@ -456,16 +458,14 @@ fn arrows<T>(listing: &Listing, page: &vc_core::history::Page<T>) -> Value {
             ),
         };
 
-        let mut button = button(&id, label, ButtonStyle::Secondary);
-        button["disabled"] = json!(target.is_none());
-        button
+        icon_button(&id, emoji, ButtonStyle::Secondary, Some(target.is_none()))
     };
 
     action_row(vec![
-        arrow(0, "最初", page.first),
-        arrow(1, "前へ", page.prev),
-        arrow(2, "次へ", page.next),
-        arrow(3, "最後", page.last),
+        arrow(0, "⏪", page.first),
+        arrow(1, "⏮️", page.prev),
+        arrow(2, "⏭️", page.next),
+        arrow(3, "⏩", page.last),
     ])
 }
 

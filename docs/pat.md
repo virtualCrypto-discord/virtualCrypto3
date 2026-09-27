@@ -42,8 +42,8 @@ Names contain 1–32 characters and must be unique within the account. A duplica
 or a twenty-sixth token is refused, with a link to `/pat list` to free a slot.
 Revoked names can be reused. Names are escaped when rendered as Markdown.
 
-The cap remains 25 tokens. The list displays 10 names per page, with 「前へ」 and
-「次へ」 buttons and the current page/count. A row uses a Section, Text Display,
+The cap remains 25 tokens. The list displays 10 names per page, with ⏮️ (previous) and
+⏭️ (next) buttons and the current page/count. A row uses a Section, Text Display,
 and Button; pagination keeps even a full page with a result notice within
 [Discord's 40-component limit](https://docs.discord.com/developers/components/reference).
 If revocation empties the final page, the list returns to the preceding page.

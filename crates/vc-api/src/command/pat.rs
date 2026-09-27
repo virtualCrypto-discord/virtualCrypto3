@@ -13,7 +13,9 @@ use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
     get_user,
 };
-use crate::components::{ButtonStyle, action_row, button, container, ephemeral, section, text};
+use crate::components::{
+    ButtonStyle, action_row, button, container, ephemeral, icon_button, section, text,
+};
 use crate::custom_id::ui::pat::{self as ids, Pressed};
 use crate::docs::discord::mentions;
 use crate::state::AppState;
@@ -181,18 +183,18 @@ async fn list(
             ));
         }
         if last > 1 {
-            let mut previous = button(
+            let previous = icon_button(
                 &ids::page(discord_id, number - 1),
-                "前へ",
+                "⏮️",
                 ButtonStyle::Secondary,
+                Some(number == 1),
             );
-            previous["disabled"] = json!(number == 1);
-            let mut next = button(
+            let next = icon_button(
                 &ids::page(discord_id, number + 1),
-                "次へ",
+                "⏭️",
                 ButtonStyle::Secondary,
+                Some(number == last),
             );
-            next["disabled"] = json!(number == last);
             children.push(action_row(vec![previous, next]));
         }
     }

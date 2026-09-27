@@ -110,8 +110,8 @@ fn revoke_button(response: &Response, name: &str) -> String {
         .to_owned()
 }
 
-fn navigation(response: &Response, label: &str) -> Value {
-    response.body["data"]["components"][0]["components"]
+fn navigation(response: &Response, emoji: &str) -> Value {
+    let button = response.body["data"]["components"][0]["components"]
         .as_array()
         .unwrap()
         .iter()
@@ -120,9 +120,10 @@ fn navigation(response: &Response, label: &str) -> Value {
         .as_array()
         .unwrap()
         .iter()
-        .find(|button| button["label"] == label)
-        .unwrap()
-        .clone()
+        .find(|button| button["emoji"]["name"] == emoji)
+        .unwrap();
+    assert!(button.get("label").is_none());
+    button.clone()
 }
 
 fn press(custom_id: &str, user: i64) -> Value {
@@ -558,7 +559,7 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
     )
     .await;
 
-    assert_eq!(navigation(&listed, "前へ")["disabled"], true);
+    assert_eq!(navigation(&listed, "⏮️")["disabled"], true);
     let mut seen = Vec::new();
     for expected in [10, 10, 5] {
         assert_private(&listed);
@@ -569,7 +570,7 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
                 .into_iter()
                 .map(|row| row["components"][0]["content"].as_str().unwrap().to_owned()),
         );
-        let next = navigation(&listed, "次へ");
+        let next = navigation(&listed, "⏭️");
         if next["disabled"] == true {
             break;
         }
@@ -585,7 +586,7 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
         seen,
         (0..25).map(|n| format!("**t{n:02}**")).collect::<Vec<_>>()
     );
-    assert_eq!(navigation(&listed, "次へ")["disabled"], true);
+    assert_eq!(navigation(&listed, "⏭️")["disabled"], true);
 
     // Shrinking away the last page returns to the preceding page automatically.
     for n in 20..25 {
@@ -604,7 +605,7 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
             .any(|line| line.contains("2 / 2ページ"))
     );
     assert_eq!(rows(&listed).len(), 10);
-    let previous = navigation(&listed, "前へ");
+    let previous = navigation(&listed, "⏮️");
     listed = interaction(
         discord.clone(),
         router(discord.clone(), pool.clone()),
