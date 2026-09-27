@@ -9,6 +9,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
 
+    env:
+      # This runner is disposable and does not persist mbx's cache. Keeping a
+      # second copy of build artifacts exhausts its disk while linking tests.
+      MBX_DISABLE: "1"
+      CARGO_INCREMENTAL: "0"
+
     services:
       # The same major version the baseline was generated from: `baseline-check`
       # compares a dump of the schema, and pg_dump is fussy about that.
@@ -44,6 +50,10 @@ jobs:
             just check
           '
 
+      - name: Disk usage
+        if: always()
+        run: df -h
+
   # The frontend, as its own job so that a type error and a compile error are both
   # reported in one run rather than one after the other.
   #
@@ -77,4 +87,3 @@ jobs:
             npm run check
             npm run build
           '
-
