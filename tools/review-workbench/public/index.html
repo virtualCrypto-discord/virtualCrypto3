@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>レビュー準備室 · virtualCrypto</title>
+    <title>レビュー作業室 · virtualCrypto</title>
     <link rel="stylesheet" href="/style.css" />
     <script type="module" src="/app.js"></script>
   </head>
@@ -12,7 +12,7 @@
       <a class="brand" href="/"
         ><span class="brand-mark">vC</span
         ><span
-          >レビュー準備室<small>virtualCrypto · human + Codex</small></span
+          >レビュー作業室<small>virtualCrypto · human + Codex</small></span
         ></a
       >
       <div id="repository" class="repository">読み込み中…</div>
@@ -28,7 +28,7 @@
         <div class="sidebar-heading">REVIEW SCOPE</div>
         <nav id="categories" aria-label="レビュー分野"></nav>
         <div class="sidebar-bottom">
-          <p>LLMが根拠と確認手順を用意し、<br />人間が判断を記録します。</p>
+          <p>LLMと調査・修正・再確認を進め、<br />人間が判断を記録します。</p>
           <button id="add-item" class="secondary full">
             ＋ レビュー項目を追加
           </button>
@@ -42,8 +42,8 @@
         <section class="overview" aria-label="全体の進捗">
           <div>
             <div class="eyebrow">RELEASE READINESS</div>
-            <h1>一つずつ、判断できる状態へ。</h1>
-            <p>確認の準備から、根拠のある判断までを記録します。</p>
+            <h1>確認して、直して、判断する。</h1>
+            <p>項目ごとの会話で調査・修正を進め、判断の根拠を残します。</p>
           </div>
           <div id="progress" class="progress-summary"></div>
         </section>
@@ -62,7 +62,7 @@
             <option value="open">未完了</option>
             <option value="stale">要再確認</option>
             <option value="todo">未着手</option>
-            <option value="ready">判断待ち</option>
+            <option value="ready">確認待ち</option>
             <option value="reviewing">確認中</option>
             <option value="approved">確認済み</option>
             <option value="changes">要修正</option>
@@ -83,7 +83,7 @@
           </section>
           <section id="detail" class="detail" aria-label="レビューの詳細">
             <div class="empty">
-              項目を選ぶと、判断基準と準備の依頼が表示されます。
+              項目を選ぶと、判断基準と会話が表示されます。
             </div>
           </section>
         </div>

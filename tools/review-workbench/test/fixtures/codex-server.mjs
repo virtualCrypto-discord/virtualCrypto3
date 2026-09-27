@@ -1,11 +1,17 @@
 // Exercises the real stdio bridge. Never invokes a model or executes a command.
+// The conversation scenario edits only a designated file in a test checkout.
 import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync } from "node:fs";
 const mode = process.argv[2] || "approval";
+let threadId = "thread-fixture",
+  turnId = "turn-fixture",
+  threadCount = 0,
+  turnCount = 0;
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const notify = (method, params) =>
   send({
     method,
-    params: { threadId: "thread-fixture", turnId: "turn-fixture", ...params },
+    params: { threadId, turnId, ...params },
   });
 function finish(report) {
   notify("item/completed", {
@@ -17,7 +23,7 @@ function finish(report) {
     },
   });
   notify("turn/completed", {
-    turn: { id: "turn-fixture", status: "completed", error: null },
+    turn: { id: turnId, status: "completed", error: null },
   });
 }
 createInterface({ input: process.stdin }).on("line", (line) => {
@@ -32,10 +38,60 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       message.params.approvalPolicy !== "on-request"
     )
       throw new Error("Approvals must remain human controlled");
-    result({ thread: { id: "thread-fixture" } });
+    if (mode === "conversation") {
+      if (message.method === "thread/start")
+        threadId = `thread-${++threadCount}`;
+      else if (message.params.threadId !== threadId)
+        throw new Error("Wrong conversation resumed");
+      if (!message.params.developerInstructions.includes("ソース修正"))
+        throw new Error("Source editing must be supported");
+    }
+    result({ thread: { id: threadId } });
   } else if (message.method === "turn/start") {
     if (message.params.sandboxPolicy.networkAccess !== false)
       throw new Error("Network must default to disabled");
+    if (mode === "conversation") {
+      turnId = `turn-${++turnCount}`;
+      result({ turn: { id: turnId } });
+      notify("turn/started", { turn: { id: turnId } });
+      notify("item/completed", {
+        item: {
+          id: `comment-${turnCount}`,
+          type: "agentMessage",
+          phase: "commentary",
+          text: "対象の実装を確認します。",
+        },
+      });
+      const before = readFileSync("review-fixture.txt", "utf8");
+      if (!/^label=(old|fixed)\n$/.test(before))
+        throw new Error("Not an isolated review fixture");
+      if (message.params.sandboxPolicy.type === "workspaceWrite") {
+        if (
+          !message.params.input[0].text.includes("ソース・テスト・文書を修正")
+        )
+          throw new Error("Prompt does not authorize source edits");
+        writeFileSync("review-fixture.txt", "label=fixed\n");
+        notify("turn/diff/updated", {
+          diff: "diff --git a/review-fixture.txt b/review-fixture.txt\n-label=old\n+label=fixed\n",
+        });
+        notify("item/completed", {
+          item: {
+            id: "validation",
+            type: "commandExecution",
+            command: "fixture validation",
+            exitCode: 0,
+            aggregatedOutput: "label=fixed: PASS",
+          },
+        });
+        finish(
+          "label=fixed に修正しました。検証結果: PASS。画面で再確認してください。",
+        );
+      } else
+        finish(
+          `確認結果: ${before.trim()}。${threadId} の会話を継続しています。`,
+        );
+      return;
+    }
     if (mode === "early") {
       finish("応答より先に完了した準備結果");
       result({ turn: { id: "turn-fixture" } });

@@ -15,14 +15,30 @@ let state,
   dirty = false,
   refreshing = false,
   refreshAgain = false,
-  preparing = false;
+  sending = false;
 const questionAnswers = new Map();
+const composers = new Map();
+const humanDrafts = new Map();
+function composer(id = selected) {
+  if (!composers.has(id))
+    composers.set(id, {
+      instruction: "",
+      mode: "workspace-write",
+      newConversation: false,
+    });
+  return composers.get(id);
+}
+function draftContext() {
+  return dirty
+    ? `進捗の編集中の値: ${draft.status}\n判断メモ: ${draft.notes}\n根拠: ${draft.evidence}`
+    : "";
+}
 let selectionRequest = 0;
 const runLabels = {
   starting: "接続中",
-  running: "準備中",
+  running: "作業中",
   waiting: "回答・承認待ち",
-  completed: "準備完了",
+  completed: "応答完了",
   failed: "失敗",
   interrupted: "中断",
 };
@@ -140,12 +156,13 @@ function initDraft() {
 }
 function renderDetail() {
   if (!detail) return;
-  const last = detail.state.runs.at(-1);
+  const input = composer();
   $("#detail").innerHTML =
     `<div class="detail-heading"><div class="eyebrow">${esc(detail.id)} · ${esc(state.categories.find((c) => c.id === detail.category)?.label)}</div><h2>${esc(detail.title)}</h2><p class="question">${esc(detail.question)}</p><div id="detail-state">${badge(detail)}</div></div>
-    <div id="stale-warning" class="warning" ${detail.stale ? "" : "hidden"}>対象コードまたは判断基準が変わっています。過去の判断は保持していますが、この版での再確認が必要です。</div>
+    <div id="stale-warning" class="warning" ${detail.stale ? "" : "hidden"}>対象コードまたは判断基準が変わっています。この版で再確認して判断を記録してください。<button id="recheck" class="secondary">この版で再確認を始める</button></div>
     <section class="section"><h3><span class="step-number">1</span>判断基準</h3><div class="criteria">${detail.criteria.map((criterion, i) => `<label><input type="checkbox" data-criterion="${i}" ${draft.checks[i] ? "checked" : ""} /><span>${esc(criterion)}</span></label>`).join("")}</div><div class="sources">${detail.sources.map((path) => `<button class="source-link" data-source="${esc(path)}">↗ ${esc(path)}</button>`).join("")}</div></section>
-    <section class="section preparation"><h3><span class="step-number">2</span>確認の準備<span class="codex-pill">Codex</span></h3><p>${esc(detail.preparation)}</p><label class="sr-only" for="instruction">LLMへの追加依頼</label><textarea id="instruction" rows="3" maxlength="10000" placeholder="これを確認したいので準備して。特に見たいケースや、利用するテスト環境を追記できます。"></textarea><div class="preparation-options"><label for="mode">実行範囲</label><select id="mode"><option value="read-only">読み取り・手順の準備</option><option value="workspace-write">ローカル準備（ファイル作成・テスト可）</option></select></div><div class="preparation-actions"><button id="prepare" class="primary">✦ 確認準備を依頼</button><button id="copy-prompt" class="secondary">依頼文をコピー</button></div><label class="continue-option"><input type="checkbox" id="continue-thread" ${last?.threadId ? "checked" : "disabled"} />前回の会話を続ける</label><p class="hint">既存のCodexログインを利用します。実行に確認が必要な場合、この画面に表示します。</p><div id="run"></div></section>
+    <section class="section conversation-section"><h3><span class="step-number">2</span>Codexと進める<span class="codex-pill">会話・修正・検証</span></h3><details class="preparation-hint"><summary>この項目の確認に役立つ準備案</summary><p>${esc(detail.preparation)}</p></details><div id="conversation" class="conversation" tabindex="0" aria-label="この項目の会話履歴"></div><div id="run"></div>
+    <div class="composer"><label for="instruction">メッセージ</label><textarea id="instruction" rows="4" maxlength="10000" placeholder="この項目を確認したいので準備して。／この挙動をこう修正して。／修正後のケースをもう一度確認して。">${esc(input.instruction)}</textarea><div class="message-suggestions"><button class="quiet" data-message="この項目を確認したいので準備してください。">確認の準備</button><button class="quiet" data-message="指摘した点を修正して、必要なテストも実行してください。">修正を依頼</button><button class="quiet" data-message="現在の修正を踏まえて、判断基準に沿ってもう一度確認してください。">修正後を再確認</button></div><div class="preparation-options"><label for="mode">実行範囲</label><select id="mode"><option value="workspace-write" ${input.mode === "workspace-write" ? "selected" : ""}>修正・コマンド実行可</option><option value="read-only" ${input.mode === "read-only" ? "selected" : ""}>読み取りのみ</option></select></div><label class="continue-option"><input type="checkbox" id="new-conversation" ${input.newConversation ? "checked" : ""} />新しい会話で始める（以前の記録は残ります）</label><div class="preparation-actions"><button id="send" class="primary">送信</button><button id="copy-prompt" class="secondary">依頼文をコピー</button><button id="workspace-diff" class="quiet">現在の変更を見る</button></div><p class="hint">この項目の会話を続けます。相談・調査・実装の修正・テストを依頼できます。Ctrl / ⌘ + Enterで送信。</p></div></section>
     <section class="section judgement"><h3><span class="step-number">3</span>人間の判断を記録</h3><div class="form-row"><label>進捗<select id="decision-status">${Object.entries(
       state.statuses,
     )
@@ -155,7 +172,7 @@ function renderDetail() {
       )
       .join(
         "",
-      )}</select></label><label>確認者<input id="reviewer" maxlength="200" value="${esc(draft.reviewer)}" placeholder="名前またはハンドル" /></label></div><label>判断メモ<textarea id="notes" rows="4" maxlength="20000" placeholder="何を確認し、なぜこの判断にしたか。保留・対象外の場合も理由を残します。">${esc(draft.notes)}</textarea></label><label>確認した根拠<textarea id="evidence" rows="3" maxlength="20000" placeholder="実行した手順と結果、ログの場所、画面を確認した環境など。秘密値は書かないでください。">${esc(draft.evidence)}</textarea></label><div class="save-row"><span id="save-state">${detail.state.updatedAt ? `保存済み · ${esc(new Date(detail.state.updatedAt).toLocaleString("ja-JP"))}` : "まだ判断は記録されていません"}</span><button id="save" class="primary">判断を保存</button></div><p class="hint">「確認済み」には全判断基準のチェック、確認者、判断メモ、根拠が必要です。LLMの準備完了だけでは確認済みになりません。</p>
+      )}</select></label><label>確認者<input id="reviewer" maxlength="200" value="${esc(draft.reviewer)}" placeholder="名前またはハンドル" /></label></div><label>判断メモ<textarea id="notes" rows="4" maxlength="20000" placeholder="何を確認し、なぜこの判断にしたか。保留・対象外の場合も理由を残します。">${esc(draft.notes)}</textarea></label><label>確認した根拠<textarea id="evidence" rows="3" maxlength="20000" placeholder="実行した手順と結果、ログの場所、画面を確認した環境など。秘密値は書かないでください。">${esc(draft.evidence)}</textarea></label><div class="save-row"><span id="save-state">${detail.state.updatedAt ? `保存済み · ${esc(new Date(detail.state.updatedAt).toLocaleString("ja-JP"))}` : "まだ判断は記録されていません"}</span><button id="save" class="primary">判断を保存</button></div><p class="hint">「確認済み」には全判断基準のチェック、確認者、判断メモ、根拠が必要です。修正やテストの完了後、人間が内容を確認して記録します。</p>
     <details class="history"><summary>判断履歴 (${detail.state.history.length})</summary>${[
       ...detail.state.history,
     ]
@@ -165,6 +182,11 @@ function renderDetail() {
           `<article><strong>${esc(state.statuses[h.status])} · ${esc(h.reviewer || "未記入")}</strong><small>${esc(new Date(h.at).toLocaleString("ja-JP"))} · ${esc(h.head.slice(0, 7))}${h.dirty ? " + 未コミット変更" : ""}</small><p>${esc(h.notes)}</p><pre>${esc(h.evidence)}</pre></article>`,
       )
       .join("")}</details></section>`;
+  $("#save-state").textContent = dirty
+    ? "未保存の変更があります"
+    : $("#save-state").textContent;
+  $("#stale-warning").hidden =
+    !detail.stale && draft.fingerprint === detail.fingerprint;
   renderRun();
 }
 function preserveFocus(fn) {
@@ -208,43 +230,73 @@ function renderRequest(request) {
 }
 function renderRun() {
   if (!detail || !$("#run")) return;
-  const run = detail.state.runs.at(-1),
+  const latest = detail.state.runs.at(-1),
     active = state.active?.itemId === selected;
-  $("#prepare").disabled = preparing || Boolean(state.active);
+  $("#send").disabled = sending || Boolean(state.active);
+  $("#send").textContent = sending
+    ? "送信中…"
+    : state.active
+      ? "作業中（中断して追加依頼可）"
+      : "送信";
+  const pane = $("#conversation");
+  const html =
+    detail.state.runs
+      .map((run) => {
+        const messages = run.messages?.length
+          ? run.messages
+          : run.report
+            ? [{ text: run.report }]
+            : [];
+        return `<article class="conversation-turn" data-turn="${esc(run.id)}"><div class="chat-message human-message"><div class="message-meta"><strong>あなた</strong><time>${esc(new Date(run.startedAt).toLocaleString("ja-JP"))}</time><span>${run.mode === "read-only" ? "読み取りのみ" : "修正・実行可"}${run.continued === false ? " · 新しい会話" : ""}</span></div><pre>${esc(run.instruction || "この項目の確認を準備してください。")}</pre>${run.context ? `<details><summary>添付した編集中のメモ</summary><pre>${esc(run.context)}</pre></details>` : ""}</div>${messages.map((message) => `<div class="chat-message ${message.role === "human" ? "human-message" : "agent-message"} ${message.phase === "commentary" ? "commentary-message" : ""}"><div class="message-meta"><strong>${message.role === "human" ? "あなた（質問への回答）" : "Codex"}</strong>${message.phase === "commentary" ? "<span>作業経過</span>" : ""}</div><pre>${esc(message.text)}</pre></div>`).join("")}${run.preview ? `<div class="chat-message agent-message live-report"><strong>Codex · 応答中</strong><pre>${esc(run.preview)}</pre></div>` : ""}${run.error ? `<p class="warning">${esc(run.error)}</p>` : ""}<div class="turn-footer">${esc(runLabels[run.status] || run.status)}${run.changedWorkspace ? " · 作業ツリーの変更あり" : ""}</div>${run.diff ? `<details class="turn-diff" data-detail="${esc(run.id)}:diff"><summary>この作業の変更差分</summary><pre class="activity">${esc(run.diff)}</pre></details>` : ""}<details class="activity-details" data-detail="${esc(run.id)}:events"><summary>実行・検証の記録 (${run.events.length})</summary><div class="activity">${
+          run.events
+            .filter((e) => e.kind !== "message")
+            .map(
+              (e) =>
+                `<article><small>${esc(new Date(e.at).toLocaleTimeString("ja-JP"))} · ${esc(e.kind)}</small><pre>${esc(e.detail)}</pre></article>`,
+            )
+            .join("") || "記録なし"
+        }</div></details></article>`;
+      })
+      .join("") ||
+    '<div class="run-empty">確認の準備、気になる点の相談、修正の依頼から始められます。</div>';
+  if (pane.innerHTML !== html) {
+    const bottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
+    const opened = new Set(
+      [...pane.querySelectorAll("details[open][data-detail]")].map(
+        (el) => el.dataset.detail,
+      ),
+    );
+    pane.innerHTML = html;
+    for (const el of pane.querySelectorAll("details[data-detail]"))
+      el.open = opened.has(el.dataset.detail);
+    if (bottom) pane.scrollTop = pane.scrollHeight;
+  }
   preserveFocus(() => {
-    $("#run").innerHTML = run
-      ? `<div class="run-header"><strong>${esc(runLabels[run.status] || run.status)}</strong><span>${esc(new Date(run.startedAt).toLocaleString("ja-JP"))}</span>${active ? `<button class="quiet danger" id="interrupt" data-run-id="${run.id}">中断</button>` : ""}</div>${detail.preparationStale ? '<p class="warning">この準備結果は現在のコードより古い可能性があります。根拠を再確認してください。</p>' : ""}${run.error ? `<p class="warning">${esc(run.error)}</p>` : ""}${(run.requests || []).map(renderRequest).join("")}${run.preview ? `<pre class="report live-report">${esc(run.preview)}</pre>` : ""}${run.report ? `<div class="report-heading">準備結果</div><pre class="report">${esc(run.report)}</pre>` : ""}${run.diff ? `<details><summary>準備中のファイル変更</summary><pre class="activity">${esc(run.diff)}</pre></details>` : ""}<details class="activity-details" ${run.status === "running" && !run.report ? "open" : ""}><summary>実行の記録 (${run.events.length})</summary><div class="activity">${run.events.map((event) => `<article><small>${esc(new Date(event.at).toLocaleTimeString("ja-JP"))} · ${esc(event.kind)}</small><pre>${esc(event.detail)}</pre></article>`).join("") || "記録を待っています。"}</div></details>${
-          detail.state.runs.length > 1
-            ? `<details><summary>過去の準備 (${detail.state.runs.length - 1})</summary>${detail.state.runs
-                .slice(0, -1)
-                .reverse()
-                .map(
-                  (past) =>
-                    `<article class="past-run"><strong>${esc(new Date(past.startedAt).toLocaleString("ja-JP"))} · ${esc(runLabels[past.status])}</strong><pre class="report">${esc(past.report || past.error || "結果なし")}</pre></article>`,
-                )
-                .join("")}</details>`
-            : ""
-        }`
-      : '<div class="run-empty">依頼すると、ここに準備状況と確認手順が表示されます。</div>';
+    $("#run").innerHTML =
+      `${detail.workStale ? '<p class="warning">最後の応答後にコードが変わっています。現在のコードで再確認を依頼できます。</p>' : ""}${active ? `<div class="run-header"><strong>${esc(runLabels[latest.status])}</strong><button class="quiet danger" id="interrupt" data-run-id="${latest.id}">中断</button></div>` : ""}${(latest?.requests || []).map(renderRequest).join("")}`;
   });
 }
 async function select(id) {
-  if (
-    dirty &&
-    !confirm("未保存の判断メモがあります。項目を移動して破棄しますか？")
-  )
-    return;
   const request = ++selectionRequest;
-  const incoming = await api(`/api/items/${id}`);
-  if (request !== selectionRequest) return;
-  selected = id;
-  sessionStorage.setItem("review:selected", id);
-  detail = incoming;
-  initDraft();
-  renderList();
-  renderDetail();
-  error("");
-  notice("");
+  $("#detail").inert = true;
+  try {
+    const incoming = await api(`/api/items/${id}`);
+    if (request !== selectionRequest) return;
+    selected = id;
+    sessionStorage.setItem("review:selected", id);
+    detail = incoming;
+    initDraft();
+    if (humanDrafts.has(id)) {
+      draft = structuredClone(humanDrafts.get(id));
+      dirty = true;
+    }
+    renderList();
+    renderDetail();
+    error("");
+    notice("");
+  } finally {
+    if (request === selectionRequest) $("#detail").inert = false;
+  }
 }
 async function refresh() {
   if (refreshing) {
@@ -291,11 +343,18 @@ async function refresh() {
 }
 async function save() {
   const id = selected;
-  const updated = await api(`/api/items/${id}`, "PATCH", draft);
-  localStorage.setItem("review:reviewer", draft.reviewer);
+  const submitted = structuredClone(draft);
+  const updated = await api(`/api/items/${id}`, "PATCH", submitted);
+  localStorage.setItem("review:reviewer", submitted.reviewer);
+  if (JSON.stringify(humanDrafts.get(id)) === JSON.stringify(submitted))
+    humanDrafts.delete(id);
   if (selected === id) {
     detail = updated;
-    initDraft();
+    if (JSON.stringify(draft) === JSON.stringify(submitted)) initDraft();
+    else {
+      draft.version = updated.state.version;
+      humanDrafts.set(id, structuredClone(draft));
+    }
     renderDetail();
   }
   notice("判断を保存しました。");
@@ -303,11 +362,15 @@ async function save() {
 }
 function changed() {
   dirty = true;
+  humanDrafts.set(selected, structuredClone(draft));
   $("#save-state").textContent = "未保存の変更があります";
 }
 document.addEventListener("input", (event) => {
   const el = event.target;
   if (el.id === "search") renderList();
+  if (el.id === "instruction") composer().instruction = el.value;
+  if (el.id === "mode") composer().mode = el.value;
+  if (el.id === "new-conversation") composer().newConversation = el.checked;
   if (el.matches("[data-criterion]")) {
     draft.checks[Number(el.dataset.criterion)] = el.checked;
     changed();
@@ -365,33 +428,74 @@ document.addEventListener("click", async (event) => {
       } finally {
         button.disabled = false;
       }
-    } else if (button.id === "save") await save();
-    else if (button.id === "copy-prompt") {
-      const result = await api(`/api/items/${selected}/prompt`);
-      const instruction = $("#instruction").value.trim();
-      await navigator.clipboard.writeText(
-        result.prompt + (instruction ? `\n追加依頼: ${instruction}` : ""),
-      );
+    } else if (button.id === "save") {
+      button.disabled = true;
+      try {
+        await save();
+      } finally {
+        button.disabled = false;
+      }
+    } else if (button.id === "recheck") {
+      const incoming = await api(`/api/items/${selected}`);
+      detail = incoming;
+      draft.fingerprint = incoming.fingerprint;
+      draft.version = incoming.state.version;
+      draft.status = "reviewing";
+      draft.checks = incoming.criteria.map(() => false);
+      changed();
+      renderDetail();
+    } else if (button.dataset.message) {
+      composer().instruction = button.dataset.message;
+      $("#instruction").value = composer().instruction;
+      $("#instruction").focus();
+    } else if (button.id === "workspace-diff") {
+      const result = await api("/api/diff");
+      $("#source-title").textContent =
+        `現在の作業ツリー全体の差分 · ${result.repository.head.slice(0, 7)} 以降`;
+      $("#source-content").textContent =
+        result.diff || "未コミットの変更はありません。";
+      $("#source-dialog").showModal();
+    } else if (button.id === "copy-prompt") {
+      const result = await api(`/api/items/${selected}/prompt`, "POST", {
+        ...composer(),
+        context: draftContext(),
+      });
+      await navigator.clipboard.writeText(result.prompt);
       notice("依頼文をコピーしました。別のハーネスにも貼り付けられます。");
-    } else if (button.id === "prepare") {
+    } else if (button.id === "send") {
+      if (sending || state.active) return;
       const itemId = selected,
-        fingerprint = detail.fingerprint,
-        instruction = $("#instruction").value,
-        mode = $("#mode").value,
-        continuation = $("#continue-thread").checked;
-      if (dirty) await save();
-      preparing = true;
+        input = { ...composer() },
+        context = draftContext();
+      if (!input.instruction.trim())
+        throw new Error("相談や作業の依頼を入力してください。");
+      sending = true;
       renderRun();
       try {
-        await api(`/api/items/${itemId}/prepare`, "POST", {
-          instruction,
-          mode,
-          continue: continuation,
-          fingerprint,
+        // Chat is independent of saving or completing the human decision form.
+        const current = await api(`/api/items/${itemId}`);
+        const result = await api(`/api/items/${itemId}/messages`, "POST", {
+          instruction: input.instruction,
+          mode: input.mode,
+          continue: !input.newConversation,
+          context,
+          fingerprint: current.fingerprint,
         });
+        if (
+          composer(itemId).instruction === input.instruction &&
+          !result.error
+        ) {
+          composer(itemId).instruction = "";
+          composer(itemId).newConversation = false;
+          if (selected === itemId) {
+            $("#instruction").value = "";
+            $("#new-conversation").checked = false;
+          }
+        }
+        if (result.error) error(result.error);
         await refresh();
       } finally {
-        preparing = false;
+        sending = false;
         renderRun();
       }
     } else if (button.id === "interrupt") {
@@ -439,9 +543,23 @@ document.addEventListener("submit", async (event) => {
   }
 });
 window.addEventListener("beforeunload", (event) => {
-  if (dirty) {
+  if (
+    dirty ||
+    humanDrafts.size ||
+    [...composers.values()].some((input) => input.instruction.trim())
+  ) {
     event.preventDefault();
     event.returnValue = "";
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (
+    event.target.id === "instruction" &&
+    (event.ctrlKey || event.metaKey) &&
+    event.key === "Enter"
+  ) {
+    event.preventDefault();
+    $("#send").click();
   }
 });
 await refresh();

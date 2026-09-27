@@ -19,11 +19,13 @@ import {
   exportMarkdown,
   hash,
   object,
+  text,
   statuses,
   workspaceSnapshot,
+  workspaceDiff,
 } from "./lib/store.mjs";
-import { CodexClient, PreparationManager } from "./lib/codex.mjs";
-import { preparationPrompt } from "./lib/prompt.mjs";
+import { CodexClient, ReviewManager } from "./lib/codex.mjs";
+import { reviewPrompt } from "./lib/prompt.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicFiles = {
@@ -59,7 +61,7 @@ function lock(directory) {
 async function bodyOf(req) {
   if (!/^application\/json(?:;|$)/i.test(req.headers["content-type"] ?? ""))
     throw new HttpError(415, "application/jsonが必要です。");
-  if (Number(req.headers["content-length"] ?? 0) > 128 * 1024)
+  if (Number(req.headers["content-length"] ?? 0) > 256 * 1024)
     throw new HttpError(413, "入力が大きすぎます。");
   const raw = await new Promise((resolveBody, reject) => {
     const chunks = [];
@@ -68,7 +70,7 @@ async function bodyOf(req) {
     req.on("data", (chunk) => {
       if (failed) return;
       length += chunk.length;
-      if (length > 128 * 1024) {
+      if (length > 256 * 1024) {
         failed = true;
         chunks.length = 0;
         reject(new HttpError(413, "入力が大きすぎます。"));
@@ -124,7 +126,7 @@ export function createWorkbench({
   };
   const token = randomBytes(32).toString("hex");
   client ??= new CodexClient({ cwd: root });
-  const manager = new PreparationManager({
+  const manager = new ReviewManager({
     client,
     store,
     root,
@@ -270,6 +272,10 @@ export function createWorkbench({
         });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/diff") {
+        json({ diff: workspaceDiff(root), repository: snapshot(true) });
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/connect") {
         json(await client.connect());
         return;
@@ -278,7 +284,7 @@ export function createWorkbench({
         if (manager.active?.id !== body.runId)
           throw new HttpError(
             409,
-            "実行中の準備が変わりました。画面を更新してください。",
+            "実行中の作業が変わりました。画面を更新してください。",
           );
         await manager.interrupt();
         json({ ok: true });
@@ -291,7 +297,7 @@ export function createWorkbench({
         return;
       }
       const itemMatch = url.pathname.match(
-        /^\/api\/items\/([A-Z0-9-]+)(?:\/(prepare|prompt))?$/,
+        /^\/api\/items\/([A-Z0-9-]+)(?:\/(messages|prompt))?$/,
       );
       if (itemMatch) {
         const [, id, action] = itemMatch,
@@ -300,9 +306,16 @@ export function createWorkbench({
           json(store.present(item, snapshot()));
           return;
         }
-        if (req.method === "GET" && action === "prompt") {
+        if (req.method === "POST" && action === "prompt") {
           json({
-            prompt: preparationPrompt(item, store.record(id), snapshot()),
+            prompt: reviewPrompt(
+              item,
+              store.record(id),
+              snapshot(),
+              text(body.instruction ?? "", "メッセージ", 10000),
+              body.mode === "read-only" ? "read-only" : "workspace-write",
+              text(body.context ?? "", "編集中のメモ", 45000),
+            ),
           });
           return;
         }
@@ -311,9 +324,9 @@ export function createWorkbench({
           broadcast();
           return;
         }
-        if (req.method === "POST" && action === "prepare") {
+        if (req.method === "POST" && action === "messages") {
           const run = await manager.start(id, body);
-          json({ id: run.id, status: run.status }, 202);
+          json({ id: run.id, status: run.status, error: run.error }, 202);
           return;
         }
       }
@@ -385,9 +398,9 @@ if (
       throw new Error("REVIEW_PORTが不正です。");
     app = createWorkbench();
     await app.listen(port);
-    console.log(`レビュー準備室: http://127.0.0.1:${port}`);
+    console.log(`レビュー作業室: http://127.0.0.1:${port}`);
     console.log(
-      "終了: Ctrl+C。Codexは「確認準備を依頼」または接続確認で起動します。",
+      "終了: Ctrl+C。Codexはメッセージの送信または接続確認で起動します。",
     );
     for (const signal of ["SIGINT", "SIGTERM"])
       process.once(signal, async () => {

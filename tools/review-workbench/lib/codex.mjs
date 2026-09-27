@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { HttpError, itemHash, text } from "./store.mjs";
-import { preparationPrompt } from "./prompt.mjs";
+import { reviewPrompt } from "./prompt.mjs";
 
 const MAX_TEXT = 150000;
 const limited = (value, max = MAX_TEXT) => {
@@ -192,7 +192,7 @@ export class CodexClient extends EventEmitter {
   }
 }
 
-export class PreparationManager extends EventEmitter {
+export class ReviewManager extends EventEmitter {
   constructor({ client, store, root, snapshot }) {
     super();
     this.client = client;
@@ -225,6 +225,7 @@ export class PreparationManager extends EventEmitter {
           this.active = null;
         }
       }
+      this.client.close();
       this.emit("change");
     }
   }
@@ -232,14 +233,18 @@ export class PreparationManager extends EventEmitter {
     if (this.active)
       throw new HttpError(
         409,
-        `${this.active.itemId}の準備が進行中です。完了または中断してから依頼してください。`,
+        `${this.active.itemId}の作業が進行中です。完了または中断してから送信してください。`,
       );
     const item = this.store.item(id),
       record = this.store.record(id),
       repository = this.snapshot();
-    const instruction = text(body.instruction ?? "", "追加依頼", 10000);
-    if (!["read-only", "workspace-write"].includes(body.mode))
-      throw new HttpError(400, "準備モードが不正です。");
+    const instruction =
+      text(body.instruction ?? "", "メッセージ", 10000).trim() ||
+      "この項目を確認したいので準備してください。";
+    const context = text(body.context ?? "", "編集中のメモ", 45000);
+    const mode = body.mode ?? "workspace-write";
+    if (!["read-only", "workspace-write"].includes(mode))
+      throw new HttpError(400, "実行範囲が不正です。");
     if (body.fingerprint !== repository.fingerprint)
       throw new HttpError(
         409,
@@ -248,7 +253,7 @@ export class PreparationManager extends EventEmitter {
     const run = {
       id: randomUUID(),
       itemId: id,
-      mode: body.mode,
+      mode,
       status: "starting",
       startedAt: new Date().toISOString(),
       head: repository.head,
@@ -257,10 +262,13 @@ export class PreparationManager extends EventEmitter {
       threadId: null,
       turnId: null,
       report: "",
+      messages: [],
       events: [],
       requests: [],
       error: null,
       instruction,
+      context,
+      continued: body.continue !== false,
     };
     this.filePreviews.clear();
     this.active = run;
@@ -272,17 +280,17 @@ export class PreparationManager extends EventEmitter {
         throw new Error(
           "Codexにログインしていません。ターミナルで codex login を実行してください。",
         );
-      const previous = record.runs.at(-1);
+      const previous = record.runs.findLast((entry) => entry.threadId);
       const options = {
         cwd: this.root,
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
-        sandbox: body.mode,
+        sandbox: mode,
         developerInstructions:
-          "このセッションはレビューの確認準備を支援する。人間の判断記録の変更、本番デプロイ、実環境への書き込み、秘密値の読み出しは行わない。",
+          "人間とレビューを進める継続的な会話。依頼に応じて調査・準備・ソース修正・検証・再確認を実行する。作業範囲内の修正を依頼されたら、提案だけで止めない。最終的なレビュー判断は人間が行う。判断データの書き換え、本番デプロイ、外部への書き込み、秘密値の読み出しは行わない。",
       };
       let result;
-      if (body.continue === true && previous?.threadId) {
+      if (body.continue !== false && previous?.threadId) {
         // A failed resume is reported; silently starting a new conversation would
         // hide the loss of context from the reviewer.
         result = await this.client.request("thread/resume", {
@@ -300,7 +308,7 @@ export class PreparationManager extends EventEmitter {
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
         sandboxPolicy:
-          body.mode === "read-only"
+          mode === "read-only"
             ? { type: "readOnly", networkAccess: false }
             : {
                 type: "workspaceWrite",
@@ -310,12 +318,13 @@ export class PreparationManager extends EventEmitter {
         input: [
           {
             type: "text",
-            text: preparationPrompt(
+            text: reviewPrompt(
               item,
               record,
               repository,
               instruction,
-              body.mode,
+              mode,
+              context,
             ),
           },
         ],
@@ -325,7 +334,14 @@ export class PreparationManager extends EventEmitter {
         this.flush();
       }
     } catch (error) {
-      if (this.active === run) this.finish("failed", error.message);
+      if (this.active === run) {
+        try {
+          this.finish("failed", error.message);
+        } finally {
+          this.active = null;
+          this.client.close();
+        }
+      }
     }
     return run;
   }
@@ -380,6 +396,12 @@ export class PreparationManager extends EventEmitter {
       const item = p.item;
       if (item.type === "agentMessage") {
         run.report = limited(item.text);
+        run.messages.push({
+          id: item.id,
+          at: new Date().toISOString(),
+          phase: item.phase ?? "final_answer",
+          text: limited(item.text),
+        });
         run.preview = "";
         this.log("message", item.text);
       } else if (item.type === "commandExecution")
@@ -414,7 +436,7 @@ export class PreparationManager extends EventEmitter {
             : "failed",
         p.turn.error?.message ??
           (status === "completed" && !run.report
-            ? "準備結果が返されませんでした。"
+            ? "回答が返されませんでした。"
             : null),
       );
     } else if (method === "error" || method === "warning")
@@ -486,6 +508,19 @@ export class PreparationManager extends EventEmitter {
           : { decision: body.decision };
     }
     this.client.send({ id: request.rpcId, result });
+    if (request.method.endsWith("requestUserInput")) {
+      run.messages.push({
+        id: `answer-${request.key}`,
+        at: new Date().toISOString(),
+        role: "human",
+        text: request.params.questions
+          .map(
+            (question) =>
+              `${question.question}\n回答: ${question.isSecret ? "（非表示）" : result.answers[question.id].answers.join("\n")}`,
+          )
+          .join("\n\n"),
+      });
+    }
     run.requests = run.requests.filter((r) => r !== request);
     if (!run.requests.length) run.status = "running";
     this.log(
@@ -498,12 +533,18 @@ export class PreparationManager extends EventEmitter {
   }
   finish(status, error = null) {
     if (!this.active) return;
+    // A result describes the workspace AFTER this turn's edits. Earlier human
+    // decisions still keep their own reviewed revision and require rechecking.
+    const result = this.snapshot();
     Object.assign(this.active, {
       status,
       error,
       endedAt: new Date().toISOString(),
       requests: [],
       preview: "",
+      resultFingerprint: result.fingerprint,
+      resultHead: result.head,
+      changedWorkspace: result.fingerprint !== this.active.fingerprint,
     });
     this.flush();
     this.active = null;
@@ -511,7 +552,7 @@ export class PreparationManager extends EventEmitter {
   }
   async interrupt() {
     const run = this.active;
-    if (!run) throw new HttpError(409, "実行中の準備はありません。");
+    if (!run) throw new HttpError(409, "実行中の作業はありません。");
     if (run.threadId && run.turnId) {
       await this.client.request("turn/interrupt", {
         threadId: run.threadId,
@@ -524,8 +565,12 @@ export class PreparationManager extends EventEmitter {
     }
   }
   close() {
-    if (this.active) this.finish("interrupted", "アプリを終了しました。");
-    this.client.close();
-    clearTimeout(this.flushTimer);
+    try {
+      if (this.active) this.finish("interrupted", "アプリを終了しました。");
+    } finally {
+      this.active = null;
+      this.client.close();
+      clearTimeout(this.flushTimer);
+    }
   }
 }

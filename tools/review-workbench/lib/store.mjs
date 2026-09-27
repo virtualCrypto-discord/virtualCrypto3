@@ -20,7 +20,7 @@ export class HttpError extends Error {
 }
 export const statuses = {
   todo: "未着手",
-  ready: "判断待ち",
+  ready: "確認待ち",
   reviewing: "確認中",
   approved: "確認済み",
   changes: "要修正",
@@ -81,6 +81,54 @@ export function workspaceSnapshot(root) {
   };
 }
 
+export function workspaceDiff(root) {
+  const git = (...args) => {
+    try {
+      return execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: 2 * 1024 * 1024,
+      });
+    } catch (error) {
+      // --no-index uses exit status 1 for an ordinary difference.
+      if (error.status === 1 || error.code === "ENOBUFS")
+        return (
+          String(error.stdout ?? "") +
+          (error.code === "ENOBUFS" ? "\n…（長い差分を省略）" : "")
+        );
+      throw error;
+    }
+  };
+  const parts = [
+    git("diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "."),
+  ];
+  let length = parts[0].length;
+  for (const file of git("ls-files", "--others", "--exclude-standard", "-z")
+    .split("\0")
+    .filter(Boolean)) {
+    if (length >= 200000) break;
+    const stat = lstatSync(join(root, file));
+    const part =
+      stat.isSymbolicLink() || !stat.isFile() || stat.size > 200000
+        ? `\n未追跡: ${file}（内容の表示対象外）\n`
+        : git(
+            "diff",
+            "--no-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            "/dev/null",
+            file,
+          );
+    parts.push(part);
+    length += part.length;
+  }
+  const diff = parts.join("\n");
+  return (
+    diff.slice(0, 200000) + (length >= 200000 ? "\n…（長い差分を省略）" : "")
+  );
+}
+
 export class Store {
   constructor(directory) {
     this.directory = directory;
@@ -106,7 +154,7 @@ export class Store {
             status: "interrupted",
             endedAt: new Date().toISOString(),
             error:
-              "アプリが終了したため準備を中断しました。続けるには再度依頼してください。",
+              "アプリが終了したため作業を中断しました。会話から続きを依頼してください。",
           });
           run.requests = [];
           recovered = true;
@@ -157,22 +205,24 @@ export class Store {
       (state.reviewedFingerprint !== repository.fingerprint ||
         state.reviewedItemHash !== itemHash(item));
     const latest = state.runs.at(-1);
-    const preparationStale = Boolean(
+    const workStale = Boolean(
       latest &&
-      (latest.fingerprint !== repository.fingerprint ||
+      ((latest.resultFingerprint ?? latest.fingerprint) !==
+        repository.fingerprint ||
         latest.itemHash !== itemHash(item)),
     );
     const displayStatus =
-      state.status === "todo" &&
+      ["todo", "changes", "reviewing"].includes(state.status) &&
       latest?.status === "completed" &&
-      !preparationStale
+      !workStale &&
+      (!state.updatedAt || latest.endedAt > state.updatedAt)
         ? "ready"
         : state.status;
     return {
       ...item,
       state,
       stale,
-      preparationStale,
+      workStale,
       displayStatus,
       fingerprint: repository.fingerprint,
     };
@@ -328,14 +378,25 @@ export function exportMarkdown(items, repository) {
       ...item.sources.map((source) => `- ${source}`),
       "",
     );
-    if (s.runs.at(-1)) {
-      const run = s.runs.at(-1);
+    for (const run of s.runs) {
       lines.push(
-        "### LLMの準備結果",
+        "### 会話・作業記録",
         "",
-        `状態: ${run.status}${item.preparationStale ? " / 対象コードが古い" : ""}`,
+        `日時: ${run.startedAt} / 状態: ${run.status} / 実行範囲: ${run.mode}`,
         "",
-        run.report || run.error || "結果なし",
+        "人間:",
+        run.instruction || "確認の準備を依頼",
+        "",
+        "応答:",
+        run.messages?.length
+          ? run.messages
+              .map(
+                (message) =>
+                  `${message.role === "human" ? "人間" : "Codex"}:\n${message.text}`,
+              )
+              .join("\n\n")
+          : run.report || run.error || "応答なし",
+        ...(run.diff ? ["", "変更差分:", run.diff] : []),
         "",
       );
     }

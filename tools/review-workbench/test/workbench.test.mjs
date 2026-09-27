@@ -16,9 +16,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { catalog, categories } from "../lib/catalog.mjs";
-import { Store, exportMarkdown, workspaceSnapshot } from "../lib/store.mjs";
-import { preparationPrompt } from "../lib/prompt.mjs";
-import { CodexClient, PreparationManager } from "../lib/codex.mjs";
+import {
+  Store,
+  exportMarkdown,
+  workspaceSnapshot,
+  workspaceDiff,
+} from "../lib/store.mjs";
+import { reviewPrompt } from "../lib/prompt.mjs";
+import { CodexClient, ReviewManager } from "../lib/codex.mjs";
 import { createWorkbench } from "../server.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -245,8 +250,8 @@ test("custom items and exports retain reasons, source revision and stale status"
   );
 });
 
-test("preparation prompt carries the concrete item, current revision and execution limits", () => {
-  const prompt = preparationPrompt(
+test("conversation prompt supports source changes, follow-ups and read-only consultation", () => {
+  const prompt = reviewPrompt(
     catalog[0],
     { notes: "注目する点", evidence: "参考" },
     repo,
@@ -262,15 +267,134 @@ test("preparation prompt carries the concrete item, current revision and executi
     ".review-artifacts/UX-01/",
     "本番デプロイ",
     "実行していない",
+    "ソース・テスト・文書を修正",
+    "回答の長さと形式は今回の依頼に合わせる",
   ])
     assert(prompt.includes(value));
+  const consultation = reviewPrompt(
+    catalog[0],
+    {},
+    repo,
+    "まず相談したい",
+    "read-only",
+    "未保存の指摘",
+  );
+  assert.match(consultation, /読み取りのみ/);
+  assert.match(consultation, /未保存の指摘/);
+  assert.doesNotMatch(consultation, /ソース・テスト・文書を修正し/);
+});
+
+test("review conversation investigates, edits source, rechecks and retains the human decision", async (t) => {
+  let manager;
+  t.after(() => manager?.close());
+  const { directory, workspace } = checkout(t);
+  writeFileSync(join(workspace, "review-fixture.txt"), "label=old\n");
+  const store = new Store(join(directory, "state"));
+  const snapshot = () => workspaceSnapshot(workspace);
+  const before = snapshot();
+  store.update(
+    "UX-01",
+    { ...validDecision(catalog[0], before.fingerprint), status: "changes" },
+    before,
+  );
+  const client = fixtureClient("conversation", workspace);
+  manager = new ReviewManager({ client, store, root: workspace, snapshot });
+  const send = async (instruction, options = {}) => {
+    await manager.start("UX-01", {
+      instruction,
+      fingerprint: snapshot().fingerprint,
+      ...options,
+    });
+    await until(() => !manager.active);
+    const run = store.record("UX-01").runs.at(-1);
+    assert.equal(run.status, "completed", run.error);
+    return run;
+  };
+  const investigation = await send("挙動を確認して", { mode: "read-only" });
+  assert.match(investigation.report, /label=old/);
+  const fix = await send("指摘したラベルを修正して、テストして", {
+    context: "編集中の指摘",
+  });
+  assert.equal(fix.mode, "workspace-write");
+  assert.equal(fix.threadId, investigation.threadId);
+  assert.equal(fix.messages.length, 2);
+  assert.equal(fix.context, "編集中の指摘");
+  assert.match(fix.diff, /\+label=fixed/);
+  assert.match(fix.events.find((e) => e.kind === "result").detail, /PASS/);
+  assert.notEqual(fix.resultFingerprint, fix.fingerprint);
+  assert.equal(fix.resultFingerprint, snapshot().fingerprint);
+  assert.equal(
+    readFileSync(join(workspace, "review-fixture.txt"), "utf8"),
+    "label=fixed\n",
+  );
+  const pending = store.present(catalog[0], snapshot());
+  assert.equal(pending.state.status, "changes");
+  assert.equal(pending.stale, true);
+  assert.equal(pending.workStale, false);
+  assert.equal(pending.displayStatus, "ready");
+  assert.throws(
+    () =>
+      store.update(
+        "UX-01",
+        { ...validDecision(catalog[0], before.fingerprint), version: 1 },
+        snapshot(),
+      ),
+    /対象コード/,
+  );
+  const recheck = await send("修正後をもう一度確認して", { mode: "read-only" });
+  assert.equal(recheck.threadId, fix.threadId);
+  assert.match(recheck.report, /label=fixed/);
+  const fresh = await send("別の観点で相談したい", {
+    mode: "read-only",
+    continue: false,
+  });
+  assert.notEqual(fresh.threadId, fix.threadId);
+  assert.equal(store.record("UX-01").runs.length, 4);
+  const exported = exportMarkdown(
+    [store.present(catalog[0], snapshot())],
+    snapshot(),
+  );
+  for (const value of [
+    "挙動を確認して",
+    "label=old",
+    "指摘したラベル",
+    "+label=fixed",
+    "もう一度確認して",
+  ])
+    assert(exported.includes(value));
+  store.update(
+    "UX-01",
+    { ...validDecision(catalog[0], snapshot().fingerprint), version: 1 },
+    snapshot(),
+  );
+  assert.equal(store.present(catalog[0], snapshot()).displayStatus, "approved");
+  assert.equal(
+    new Store(join(directory, "state")).record("UX-01").runs.length,
+    4,
+  );
+});
+
+test("current workspace diff includes staged and untracked edits, excluding ignored files and symlink targets", (t) => {
+  const { directory, workspace } = checkout(t);
+  writeFileSync(join(workspace, "README.md"), "tracked edit\n");
+  execFileSync("git", ["add", "README.md"], { cwd: workspace });
+  writeFileSync(join(workspace, "new.txt"), "new source\n");
+  writeFileSync(join(workspace, ".env"), "ignored value");
+  const external = join(directory, "outside");
+  writeFileSync(external, "external value");
+  symlinkSync(external, join(workspace, "external-link"));
+  const diff = workspaceDiff(workspace);
+  assert.match(diff, /tracked edit/);
+  assert.match(diff, /new source/);
+  assert.match(diff, /external-link/);
+  assert.doesNotMatch(diff, /ignored value|external value/);
 });
 
 for (const mode of ["approval", "question", "permissions", "early", "crash"]) {
   test(`stdio harness lifecycle: ${mode}`, async (t) => {
     const client = fixtureClient(mode),
       store = new Store(temporary(t));
-    const manager = new PreparationManager({
+    const manager = new ReviewManager({
       client,
       store,
       root,
@@ -325,7 +449,7 @@ for (const mode of ["approval", "question", "permissions", "early", "crash"]) {
 test("interrupting an approval does not approve it or leave a live request", async (t) => {
   const client = fixtureClient("approval"),
     store = new Store(temporary(t));
-  const manager = new PreparationManager({
+  const manager = new ReviewManager({
     client,
     store,
     root,
@@ -366,7 +490,7 @@ test("file approvals include the proposed diff and unrelated requests are refuse
   let manager;
   t.after(() => manager?.close());
   const store = new Store(temporary(t));
-  manager = new PreparationManager({
+  manager = new ReviewManager({
     client,
     store,
     root,

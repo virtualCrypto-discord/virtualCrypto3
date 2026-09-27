@@ -2,7 +2,7 @@
 
 - [Authorization model and legacy v2 compatibility](docs/authorization.md)
 - [Human + Codex review workbench](tools/review-workbench/README.md) — run `just review`
-  for the local review catalogue, preparation requests and decision records.
+  for review conversations, code changes, verification and human decision records.
 
 ## The build cache (mbx)
 
