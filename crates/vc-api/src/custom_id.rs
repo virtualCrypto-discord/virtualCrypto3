@@ -866,6 +866,12 @@ pub mod ui {
         /// The first two and last separators delimit the fields: imported units may contain
         /// colons themselves. An absent filter is an empty field.
         pub fn page_custom_id(listing: &Listing) -> String {
+            page_button_custom_id(listing, 0)
+        }
+
+        /// The ignored codec prefix distinguishes controls with the same destination.
+        /// Existing page IDs keep decoding exactly as before.
+        pub fn page_button_custom_id(listing: &Listing, button: u8) -> String {
             let kind = match listing.screen {
                 Screen::Paid => "paid",
                 Screen::Issued => "issued",
@@ -882,7 +888,7 @@ pub mod ui {
                 format!("{kind}:{}:{unit}:{discord_id}", listing.page).as_bytes(),
             );
 
-            crate::custom_id::encode(0, &data)
+            crate::custom_id::encode(button, &data)
         }
 
         pub fn parse(source: &[u8]) -> Result<Listing, UiError> {
@@ -1503,9 +1509,13 @@ mod tests {
                         unit: Some(unit.to_owned()),
                         discord_id,
                     };
-                    let encoded = ui::history::page_custom_id(&listing);
-                    assert_eq!(ui::history::parse(&parse(&encoded)), Ok(listing));
-                    assert!(encoded.chars().count() <= 100);
+                    let mut ids = std::collections::HashSet::new();
+                    for button in 0..4 {
+                        let encoded = ui::history::page_button_custom_id(&listing, button);
+                        assert_eq!(ui::history::parse(&parse(&encoded)), Ok(listing.clone()));
+                        assert!(encoded.encode_utf16().count() <= 100);
+                        assert!(ids.insert(encoded));
+                    }
                 }
             }
         }

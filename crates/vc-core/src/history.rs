@@ -29,14 +29,16 @@ use time::PrimitiveDateTime;
 use crate::Result;
 use crate::page::Cursor;
 
-/// How many rows one screen shows: the claim list's five, because these rows are two lines each
-/// and a screen somebody scrolls is a screen they scroll past.
+/// Five entries per screen leave room for the amount, counterparty, date and references.
 pub const PER_PAGE: i64 = 5;
 
 /// One payment, as a screen has to say it: who paid whom, how much, in what, and when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payment {
     pub id: i64,
+    /// This reader's balance immediately after this entry, never the counterparty's.
+    /// None for legacy records without a snapshot.
+    pub balance_after: Option<i64>,
     pub amount: i64,
     /// Nullable because the column is: an account made for an application has no Discord id, and
     /// one of those is who a contract's charge is paid to — and because a contract row names the
@@ -45,6 +47,8 @@ pub struct Payment {
     pub receiver_discord_id: Option<i64>,
     pub unit: String,
     pub time: PrimitiveDateTime,
+    /// Identifies the particular contract, even when one application has several.
+    pub contract_id: Option<i64>,
     /// The application whose contract this belongs to, when the row is a contract movement:
     /// `None` for `/pay` and for a claim's approval.
     pub contract_client_name: Option<String>,
@@ -62,6 +66,10 @@ pub struct Payment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issuance {
     pub id: i64,
+    /// The recipient's wallet balance; only the recipient's own screen may expose it.
+    pub balance_after: Option<i64>,
+    /// The guild's issuance pool after this issue, for its administrative ledger.
+    pub pool_balance_after: Option<i64>,
     pub amount: i64,
     pub receiver_discord_id: Option<i64>,
     pub unit: String,
@@ -363,6 +371,8 @@ async fn query_payments(
         "SELECT movement.id AS \"id!\",
                 movement.kind AS \"kind!\",
                 movement.amount AS \"amount!\",
+                movement.balance_after AS \"balance_after?\",
+                movement.pool_balance_after AS \"pool_balance_after?\",
                 movement.\"time\" AS \"time!\",
                 sender.discord_id AS sender_discord_id,
                 receiver.discord_id AS receiver_discord_id,
@@ -370,14 +380,17 @@ async fn query_payments(
                 applications.client_name AS client_name,
                 applications.client_id::text AS client_id,
                 bot.discord_id AS bot_discord_id,
-                movement.contract_id IS NOT NULL AS \"contract!\",
+                movement.contract_id AS \"contract_id?\",
                 movement.sender_id IS NULL AS \"sender_unset!\",
                 movement.receiver_id IS NULL AS \"receiver_unset!\"
            FROM (
                    SELECT history.id, $1::smallint AS kind, history.amount,
                           COALESCE(history.\"time\", history.inserted_at) AS \"time\",
                           history.currency_id, history.sender_id, history.receiver_id,
-                          history.contract_id
+                          history.contract_id,
+                          CASE WHEN history.receiver_id = $3 THEN history.receiver_balance_after
+                               ELSE history.sender_balance_after END AS balance_after,
+                          NULL::bigint AS pool_balance_after
                      FROM currency_payment_histories history
                     WHERE (history.sender_id = $3 OR history.receiver_id = $3)
                       AND (history.contract_id IS NULL
@@ -387,7 +400,8 @@ async fn query_payments(
                    UNION ALL
                    SELECT given.id, $2::smallint, given.amount,
                           COALESCE(given.\"time\", given.inserted_at),
-                          given.currency_id, NULL::bigint, given.receiver_id, NULL::bigint
+                          given.currency_id, NULL::bigint, given.receiver_id, NULL::bigint,
+                          given.receiver_balance_after, given.pool_balance_after
                      FROM currency_given_histories given
                     WHERE given.receiver_id = $3
                       AND $4::bigint IS NULL
@@ -433,6 +447,8 @@ async fn query_payments(
             if row.kind == ISSUANCE {
                 Movement::Issuance(Issuance {
                     id: row.id,
+                    balance_after: row.balance_after,
+                    pool_balance_after: row.pool_balance_after,
                     amount: row.amount,
                     receiver_discord_id: row.receiver_discord_id,
                     unit,
@@ -441,15 +457,21 @@ async fn query_payments(
             } else {
                 Movement::Payment(Payment {
                     id: row.id,
+                    balance_after: row.balance_after,
                     amount: row.amount,
                     sender_discord_id: row.sender_discord_id,
                     receiver_discord_id: row.receiver_discord_id,
                     unit,
                     time: row.time,
+                    contract_id: row.contract_id,
                     contract_client_name: row.client_name,
                     contract_client_id: row.client_id,
                     contract_bot_discord_id: row.bot_discord_id,
-                    event: event(row.contract, row.sender_unset, row.receiver_unset),
+                    event: event(
+                        row.contract_id.is_some(),
+                        row.sender_unset,
+                        row.receiver_unset,
+                    ),
                 })
             }
         })
@@ -481,6 +503,8 @@ async fn query_issuances(
         "SELECT given.id, given.amount AS \"amount!\",
                 COALESCE(given.\"time\", given.inserted_at) AS \"time!\",
                 receiver.discord_id AS receiver_discord_id,
+                given.receiver_balance_after AS \"balance_after?\",
+                given.pool_balance_after,
                 currencies.unit
            FROM currency_given_histories given
            JOIN currencies ON currencies.id = given.currency_id
@@ -506,6 +530,8 @@ async fn query_issuances(
         .into_iter()
         .map(|row| Issuance {
             id: row.id,
+            balance_after: row.balance_after,
+            pool_balance_after: row.pool_balance_after,
             amount: row.amount,
             receiver_discord_id: row.receiver_discord_id,
             unit: row.unit.unwrap_or_default(),

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency_payment_histories\n             (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,\n              updated_at, receiver_balance_after)\n         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6,\n                (SELECT amount FROM assets WHERE user_id = $3 AND currency_id = $4)\n                - COALESCE(SUM(t.amount) OVER (ORDER BY p.approval_order, p.id\n                           ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint\n           FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)\n           JOIN users u ON u.id = t.sender_id\n           JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id\n          ORDER BY p.approval_order, p.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "df48be97a23fe1279f58819d2e6277d5617f376f18f25079cfe44eb3a8fb0645"
+}

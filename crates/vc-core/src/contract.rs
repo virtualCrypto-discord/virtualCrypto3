@@ -675,13 +675,14 @@ pub async fn approve(
     sqlx::query!(
         "INSERT INTO currency_payment_histories
              (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-              updated_at)
-         VALUES ($1, $2, NULL, $3, $4, $5, $5, $5)",
+              updated_at, sender_balance_after)
+         VALUES ($1, $2, NULL, $3, $4, $5, $5, $5, $6)",
         party.amount,
         i64::from(user_id),
         contract.currency_id,
         contract_id,
-        now
+        now,
+        balance - party.amount
     )
     .execute(&mut *tx)
     .await
@@ -1048,8 +1049,11 @@ pub async fn pay_in(
     sqlx::query!(
         "INSERT INTO currency_payment_histories
              (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-              updated_at)
-         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6
+              updated_at, receiver_balance_after)
+         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6,
+                (SELECT amount FROM assets WHERE user_id = $3 AND currency_id = $4)
+                - COALESCE(SUM(t.amount) OVER (ORDER BY p.approval_order, p.id
+                           ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint
            FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)
            JOIN users u ON u.id = t.sender_id
            JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id
@@ -1365,8 +1369,9 @@ async fn end(
     sqlx::query!(
         "INSERT INTO currency_payment_histories
              (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-              updated_at)
-         SELECT p.remaining, NULL, u.id, $2, $1, $3, $3, $3
+              updated_at, receiver_balance_after)
+         SELECT p.remaining, NULL, u.id, $2, $1, $3, $3, $3,
+                (SELECT amount FROM assets WHERE user_id = u.id AND currency_id = $2)
            FROM contract_parties p
            JOIN users u ON u.discord_id = p.discord_id
           WHERE p.contract_id = $1 AND p.remaining > 0",

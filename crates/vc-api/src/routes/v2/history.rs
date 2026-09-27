@@ -140,6 +140,7 @@ fn render_movement(movement: &vc_core::history::Movement) -> Value {
             "id": payment.id.to_string(),
             "ledger": "payment",
             "amount": payment.amount.to_string(),
+            "balance_after": payment.balance_after.map(|amount| amount.to_string()),
             "unit": payment.unit,
             "sender_discord_id": payment.sender_discord_id.map(|id| id.to_string()),
             "receiver_discord_id": payment.receiver_discord_id.map(|id| id.to_string()),
@@ -152,6 +153,7 @@ fn render_movement(movement: &vc_core::history::Movement) -> Value {
             "id": issuance.id.to_string(),
             "ledger": "issuance",
             "amount": issuance.amount.to_string(),
+            "balance_after": issuance.balance_after.map(|amount| amount.to_string()),
             "unit": issuance.unit,
             "sender_discord_id": Value::Null,
             "receiver_discord_id": issuance.receiver_discord_id.map(|id| id.to_string()),
@@ -167,6 +169,7 @@ fn render_issuance(issuance: &vc_core::history::Issuance) -> Value {
     json!({
         "id": issuance.id.to_string(),
         "amount": issuance.amount.to_string(),
+        "pool_balance_after": issuance.pool_balance_after.map(|amount| amount.to_string()),
         "receiver_discord_id": issuance.receiver_discord_id.map(|id| id.to_string()),
         "time": format_timestamp(issuance.time),
     })

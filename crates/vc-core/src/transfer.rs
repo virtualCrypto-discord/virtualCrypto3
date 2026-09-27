@@ -113,8 +113,11 @@ pub async fn transfer(
 
     sqlx::query!(
         "INSERT INTO currency_payment_histories
-             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5, $5)",
+             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at,
+              sender_balance_after, receiver_balance_after)
+         VALUES ($1, $2, $3, $4, $5, $5, $5,
+                 COALESCE((SELECT amount FROM assets WHERE user_id = $2 AND currency_id = $4), 0),
+                 COALESCE((SELECT amount FROM assets WHERE user_id = $3 AND currency_id = $4), 0))",
         amount,
         i64::from(sender_id),
         i64::from(receiver_id),
@@ -265,7 +268,9 @@ pub async fn transfer_bulk(
     .await
     .map_err(TransferError::Database)?;
 
-    // Aggregate balance changes, but preserve each payment in the audit history.
+    // Aggregate writes, but record the running balance in input order for each entry.
+    // Starting from the final assets, undo only later movements. A self-transfer
+    // has no net movement and must not reduce either snapshot.
     let history_amounts: Vec<i64> = entries.iter().map(|(_, _, amount)| *amount).collect();
     let history_receivers: Vec<i64> = entries.iter().map(|(_, id, _)| i64::from(*id)).collect();
     let history_currencies: Vec<i64> = entries
@@ -274,11 +279,30 @@ pub async fn transfer_bulk(
         .collect();
 
     sqlx::query!(
-        "INSERT INTO currency_payment_histories
-             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at)
-         SELECT t.amount, $4, t.receiver_id, t.currency_id, $5, $5, $5
-           FROM UNNEST($1::bigint[], $2::bigint[], $3::bigint[])
-             AS t(amount, receiver_id, currency_id)",
+        "WITH entries AS (
+             SELECT t.*,
+                    COALESCE(SUM(CASE WHEN receiver_id = $4 THEN 0 ELSE amount END)
+                        OVER (PARTITION BY currency_id ORDER BY ordinal
+                              ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint
+                        AS sender_later,
+                    COALESCE(SUM(amount)
+                        OVER (PARTITION BY currency_id, receiver_id ORDER BY ordinal
+                              ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint
+                        AS receiver_later
+               FROM UNNEST($1::bigint[], $2::bigint[], $3::bigint[]) WITH ORDINALITY
+                    AS t(amount, receiver_id, currency_id, ordinal)
+         )
+         INSERT INTO currency_payment_histories
+             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at,
+              sender_balance_after, receiver_balance_after)
+         SELECT t.amount, $4, t.receiver_id, t.currency_id, $5, $5, $5,
+                COALESCE(sender.amount, 0) + t.sender_later,
+                CASE WHEN t.receiver_id = $4 THEN COALESCE(sender.amount, 0) + t.sender_later
+                     ELSE COALESCE(receiver.amount, 0) - t.receiver_later END
+           FROM entries t
+           LEFT JOIN assets sender ON sender.user_id = $4 AND sender.currency_id = t.currency_id
+           LEFT JOIN assets receiver ON receiver.user_id = t.receiver_id AND receiver.currency_id = t.currency_id
+          ORDER BY t.ordinal",
         &history_amounts,
         &history_receivers,
         &history_currencies,

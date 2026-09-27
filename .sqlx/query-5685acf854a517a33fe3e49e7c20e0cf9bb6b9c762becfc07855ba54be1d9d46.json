@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT given.id, given.amount AS \"amount!\",\n                COALESCE(given.\"time\", given.inserted_at) AS \"time!\",\n                receiver.discord_id AS receiver_discord_id,\n                given.receiver_balance_after AS \"balance_after?\",\n                given.pool_balance_after,\n                currencies.unit\n           FROM currency_given_histories given\n           JOIN currencies ON currencies.id = given.currency_id\n           JOIN users receiver ON receiver.id = given.receiver_id\n          WHERE given.currency_id = $1\n            AND ($2::bigint IS NULL OR receiver.discord_id = $2)\n            AND ($3::bigint IS NULL OR given.id < $3)\n            AND ($4::bigint IS NULL OR given.id <= $4)\n          ORDER BY given.id DESC\n          LIMIT $5\n         OFFSET $6",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_given_histories",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "amount!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_given_histories",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "time!",
+        "type_info": "Timestamp",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "receiver_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "balance_after?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_given_histories",
+            "name": "receiver_balance_after"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "pool_balance_after",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currency_given_histories",
+            "name": "pool_balance_after"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5685acf854a517a33fe3e49e7c20e0cf9bb6b9c762becfc07855ba54be1d9d46"
+}

@@ -322,6 +322,10 @@ table has no `expires` column.
 
 ### A ledger a person can read: `/history`
 
+The Discord layout, displayed fields, and manual recheck steps are described in
+[`docs/history.md`](history.md). Each entry includes a ledger-qualified transaction
+ID and, for contract movements, the contract ID; page controls retain the visible filters.
+
 `/history pay` and `/history issue` show back the two ledgers this service has been writing since
 the Elixir: what one account paid and was paid, and what one guild's pool issued. The person's is
 both ledgers at once, because an issuance to somebody is money arriving in their wallet like any
@@ -337,7 +341,11 @@ delete bal claim` — names no history; `lib/virtualCrypto_web/controllers/api/v
 and its v1 twin have a `post` and nothing else; and no web page reads either table. There is
 therefore nothing to port: `vc_core::history` is the read, `crates/vc-api/src/command/history.rs`
 is the screens, and `crates/vc-api/tests/interactions_history.rs` is this tree's own suite. The
-tables are the Elixir's, unchanged — no column was added for this.
+tables are the Elixir's. Migration `0028_history_balances.sql` adds nullable balance
+snapshots: wallet balances after payments and issuances, and the issuance pool after
+each issue. Writers save these in the same transaction as the movement; old rows stay
+NULL. A person's reader exposes only their own balance, and the guild reader exposes
+the pool's, not the recipient's wallet balance.
 
 The ledger gained two kinds of row, and they too needed no column. Locking money into a contract
 (`contract::approve`) and returning what was left of it (`contract::withdraw`, `contract::settle`,
