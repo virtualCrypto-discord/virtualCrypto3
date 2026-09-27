@@ -304,6 +304,12 @@ What it is, in one sentence: a row of (who is looking, what they are not looking
 claim and contract lists ask before they answer a page — for that reader's lists only, in Discord
 and in the API both, because they are the same lists.
 
+Currency autocomplete also excludes the caller's muted currencies, for both empty and typed
+queries, before applying the 25-choice limit. `/unmute currency` keeps them available so the
+caller can select a currency to restore. This affects suggestions only; typing a muted unit
+directly still permits payment. `crates/vc-api/tests/interactions_autocomplete.rs` covers this
+filter, caller isolation, and restoration after unmuting.
+
 Three things about it are decisions rather than details:
 
 - **Nothing is forbidden.** A muted currency can still be issued, claimed, paid and contracted

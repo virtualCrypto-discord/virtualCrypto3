@@ -123,6 +123,7 @@ async fn currency(
             vec![text(mentions(
                 &format!(
                     "`{unit}` をミュートしました。この通貨の請求と契約は、あなたの一覧に出なくなります。\
+                     通貨の入力候補からも非表示になります（`/unmute currency` を除く）。\
                      解除は `/mute list` からできます。"
                 ),
                 state.command_ids().await,

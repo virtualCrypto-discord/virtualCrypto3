@@ -533,6 +533,18 @@ empty or typed, guild or DM, and the endpoint's status and elapsed time without
 recording interaction tokens. A local schema test cannot confirm which command
 registration or server version Discord is using.
 
+**UX-11: 通貨ミュートと `/pay` の入力候補。** テスト用の通貨を3種類保有し、
+`/pay unit` の未入力時と単位の先頭文字を入力したときの候補を確認する。
+そのうち2種類を `/mute currency` でミュートし、未入力・先頭文字・単位の完全入力の
+いずれでも、その2種類が候補から消え、残る1種類は表示されることを確認する。
+サーバー自身の通貨もミュート対象に含め、サーバー内とDMの両方で確認する。
+別の利用者の候補には影響しないこと、`/info name` の通貨名候補からも消えることを確認する。
+`/unmute currency` ではミュートした通貨を選べることを確認し、1種類だけ解除する。
+その通貨だけが候補に戻り、もう1種類は非表示のままであることを確認する。
+続いて `/mute list` の「解除」で残りを戻し、候補に再表示されることを確認する。
+候補の選択だけでは送金されない。ミュートは送金の禁止ではなく、単位を直接指定した
+送金は可能。ローカル回帰テストは `cargo test -p vc-api --test interactions_autocomplete`。
+
 - [ ] **`/help` and the site's command list** against what the commands do.
 - [ ] **`/contract list`**: five rows, the count in the first line, the arrows
       (⏪ ⏮️ ⏭️ ⏩) and their disabled states, the four states a caller's own part can

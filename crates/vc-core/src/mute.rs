@@ -2,7 +2,8 @@
 //! appear in their lists.
 //!
 //! A mute is a filter and not a lock. Nothing here refuses a payment, blocks a claim or stops an
-//! issue: the claim and contract lists leave out the rows it names, for the person who set it,
+//! issue: the claim and contract lists and currency autocomplete leave out the rows it names,
+//! for the person who set it (except the suggestions for choosing a currency to unmute),
 //! and every other reader of that data — another person, an application, a single row fetched by
 //! id — sees what they always saw. That is why the pair a row holds is (who is looking, what
 //! they are not looking at) and why a mute cannot be aimed at somebody: being named in a row

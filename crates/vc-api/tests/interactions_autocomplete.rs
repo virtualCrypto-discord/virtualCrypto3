@@ -171,6 +171,140 @@ async fn pay_limits_unit_choices_and_prioritizes_the_guild_currency(pool: PgPool
     }
 }
 
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn currency_mutes_hide_pay_choices_and_unmuting_restores_them(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    insert_currency(&pool, 3, "nyanko", "na", 3, 0).await;
+    insert_asset(&pool, 2, 3, 10).await;
+    let discord = fake();
+    let app = vc_api::router(state(pool, discord.clone()));
+
+    // Keep a second mute when restoring n, so removal cannot accidentally clear both.
+    for (changes, visible) in [
+        (vec![], vec!["n", "na", "w"]),
+        (vec![("mute", "n"), ("mute", "na")], vec!["w"]),
+        (vec![("unmute", "n")], vec!["n", "w"]),
+        (vec![("unmute", "na")], vec!["n", "na", "w"]),
+    ] {
+        for (command, unit) in changes {
+            let response = support::rendered_interaction(
+                discord.clone(),
+                app.clone(),
+                support::execute_from_dm(
+                    json!({
+                        "name": command,
+                        "options": [{"name": "currency", "type": 1,
+                            "options": [{"name": "unit", "value": unit}]}],
+                    }),
+                    money.user2,
+                ),
+            )
+            .await;
+            assert_eq!(response.status, 202, "{}", response.body);
+            assert!(
+                response.body.to_string().contains(if command == "mute" {
+                    "ミュートしました"
+                } else {
+                    "解除しました"
+                }),
+                "{}",
+                response.body
+            );
+        }
+
+        for in_guild in [true, false] {
+            for query in ["", "N", "na", "w"] {
+                let mut payload =
+                    autocomplete_payload("pay", json!([focused("unit", query)]), money.user2);
+                payload["guild_id"] = json!(money.guild.to_string());
+                if !in_guild {
+                    payload["user"] = payload["member"]["user"].clone();
+                    payload.as_object_mut().unwrap().remove("member");
+                    payload.as_object_mut().unwrap().remove("guild_id");
+                }
+                let response = interaction(app.clone(), payload).await;
+                assert_eq!(response.status, 200, "{}", response.body);
+                assert_eq!(response.body["type"], 8);
+                let mut actual = values(&response);
+                actual.sort();
+                let expected: Vec<_> = visible
+                    .iter()
+                    .filter(|unit| unit.starts_with(&query.to_lowercase()))
+                    .copied()
+                    .collect();
+                assert_eq!(actual, expected, "guild={in_guild}, query={query}");
+            }
+        }
+
+        // The same guild and prefix still offer both currencies to another caller.
+        let mut payload = autocomplete_payload("pay", json!([focused("unit", "n")]), money.user1);
+        payload["guild_id"] = json!(money.guild.to_string());
+        let response = interaction(app.clone(), payload).await;
+        assert_eq!(values(&response), ["n", "na"]);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn currency_mutes_apply_to_name_choices_but_remain_available_for_unmute(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    vc_core::mute::mute_currency(&pool, 2, &money.unit, time::OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    let app = router(pool);
+
+    for (query, expected) in [("", vec!["wan"]), ("NY", vec![])] {
+        let response = interaction(
+            app.clone(),
+            autocomplete_payload("info", json!([focused("name", query)]), money.user2),
+        )
+        .await;
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(values(&response), expected);
+    }
+
+    for query in ["", "n"] {
+        let response = interaction(
+            app.clone(),
+            autocomplete_payload(
+                "unmute",
+                focused_subcommand("currency", "unit", query),
+                money.user2,
+            ),
+        )
+        .await;
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert!(values(&response).contains(&money.unit));
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pay_filters_mutes_before_limiting_choices(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    for id in 3..=28 {
+        let unit = format!("n{}", char::from(b'a' + (id - 3) as u8));
+        insert_currency(&pool, id, &format!("Currency{id}"), &unit, id, 0).await;
+        insert_asset(&pool, 1, id, 1).await;
+    }
+    for unit in ["n", "nw"] {
+        vc_core::mute::mute_currency(&pool, 1, unit, time::OffsetDateTime::now_utc())
+            .await
+            .unwrap();
+    }
+
+    for query in ["", "n"] {
+        let mut payload = autocomplete_payload("pay", json!([focused("unit", query)]), money.user1);
+        payload["guild_id"] = json!("25");
+        let response = interaction(router(pool.clone()), payload).await;
+        assert_eq!(response.status, 200, "{}", response.body);
+        assert_eq!(choices(&response).len(), 25);
+        assert!(
+            !values(&response)
+                .iter()
+                .any(|unit| unit == "n" || unit == "nw")
+        );
+    }
+}
+
 /// Older currency names can exceed today's creation limit. One long label must
 /// not make Discord reject every suggestion, and the selected unit stays exact.
 #[sqlx::test(migrations = "../vc-core/migrations")]
