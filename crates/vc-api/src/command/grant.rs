@@ -293,35 +293,33 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
         }
         children.push(action_row(actions));
     }
-    if last > 1 {
-        children.push(separator());
-        children.push(action_row(vec![
-            icon_button(
-                &crate::custom_id::ui::grant::user_page_custom_id(user, 1),
-                "⏪",
-                ButtonStyle::Secondary,
-                Some(page == 1),
-            ),
-            icon_button(
-                &crate::custom_id::ui::grant::user_page_custom_id(user, (page - 1).max(1)),
-                "⏮️",
-                ButtonStyle::Secondary,
-                Some(page == 1),
-            ),
-            icon_button(
-                &crate::custom_id::ui::grant::user_page_custom_id(user, (page + 1).min(last)),
-                "⏭️",
-                ButtonStyle::Secondary,
-                Some(page == last),
-            ),
-            icon_button(
-                &crate::custom_id::ui::grant::user_page_custom_id(user, last),
-                "⏩",
-                ButtonStyle::Secondary,
-                Some(page == last),
-            ),
-        ]));
-    }
+    children.push(separator());
+    children.push(action_row(vec![
+        icon_button(
+            &crate::custom_id::ui::grant::user_page_custom_id(user, 1),
+            "⏪",
+            ButtonStyle::Secondary,
+            Some(page == 1),
+        ),
+        icon_button(
+            &crate::custom_id::ui::grant::user_page_custom_id(user, (page - 1).max(1)),
+            "⏮️",
+            ButtonStyle::Secondary,
+            Some(page == 1),
+        ),
+        icon_button(
+            &crate::custom_id::ui::grant::user_page_custom_id(user, (page + 1).min(last)),
+            "⏭️",
+            ButtonStyle::Secondary,
+            Some(page == last),
+        ),
+        icon_button(
+            &crate::custom_id::ui::grant::user_page_custom_id(user, last),
+            "⏩",
+            ButtonStyle::Secondary,
+            Some(page == last),
+        ),
+    ]));
     Ok(container(Some(COLOR_BRAND as u32), children))
 }
 
@@ -393,12 +391,9 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
             }
             children.push(action_row(actions));
         }
-
-        if authorized.next.is_some() || authorized.page > 1 {
-            children.push(separator());
-            children.push(pagination_row(&authorized));
-        }
     }
+    children.push(separator());
+    children.push(pagination_row(&authorized));
 
     Ok(container(Some(COLOR_BRAND as u32), children))
 }
@@ -527,24 +522,22 @@ async fn review_screen(
             ids::details_custom_id(key, p)
         }
     };
-    if last > 1 {
-        children.push(action_row(vec![
-            icon_button(&id(1), "⏪", ButtonStyle::Secondary, Some(page == 1)),
-            icon_button(
-                &id((page - 1).max(1)),
-                "⏮️",
-                ButtonStyle::Secondary,
-                Some(page == 1),
-            ),
-            icon_button(
-                &id((page + 1).min(last)),
-                "⏭️",
-                ButtonStyle::Secondary,
-                Some(page == last),
-            ),
-            icon_button(&id(last), "⏩", ButtonStyle::Secondary, Some(page == last)),
-        ]));
-    }
+    children.push(action_row(vec![
+        icon_button(&id(1), "⏪", ButtonStyle::Secondary, Some(page == 1)),
+        icon_button(
+            &id((page - 1).max(1)),
+            "⏮️",
+            ButtonStyle::Secondary,
+            Some(page == 1),
+        ),
+        icon_button(
+            &id((page + 1).min(last)),
+            "⏭️",
+            ButtonStyle::Secondary,
+            Some(page == last),
+        ),
+        icon_button(&id(last), "⏩", ButtonStyle::Secondary, Some(page == last)),
+    ]));
     // Keep the action in a consistent position across currency pages.
     children.insert(
         1,

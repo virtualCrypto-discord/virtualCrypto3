@@ -148,6 +148,23 @@ fn buttons(response: &Response) -> Vec<String> {
         .collect()
 }
 
+fn assert_pagination(response: &Response, disabled: [bool; 4]) {
+    let rows: Vec<_> = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|child| child["type"] == 1)
+        .filter_map(|row| row["components"].as_array())
+        .filter(|buttons| buttons.len() == 4)
+        .collect();
+    assert_eq!(rows.len(), 1, "one pagination row: {}", response.body);
+    for ((button, emoji), disabled) in rows[0].iter().zip(["⏪", "⏮️", "⏭️", "⏩"]).zip(disabled)
+    {
+        assert_eq!(button["emoji"]["name"], emoji);
+        assert_eq!(button["disabled"], disabled, "{emoji}: {button}");
+    }
+}
+
 /// Whether the guild allows this application to issue: the grant and the scope
 /// together, which is what the issuing endpoint reads.
 async fn allowed(pool: &PgPool, application: i64, guild_id: i64) -> bool {
@@ -190,7 +207,8 @@ async fn an_ask_is_not_on_the_list(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(texts(&response), [EMPTY]);
-    assert!(buttons(&response).is_empty());
+    assert_eq!(buttons(&response).len(), 4);
+    assert_pagination(&response, [true; 4]);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -279,6 +297,7 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
             )
             .await;
             check(&review);
+            assert_pagination(&review, [true; 4]);
             let page = interaction(
                 discord.clone(),
                 http.clone(),
@@ -286,6 +305,7 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
             )
             .await;
             check(&page);
+            assert_pagination(&page, [true; 4]);
             interaction(
                 discord.clone(),
                 http.clone(),
@@ -310,6 +330,7 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
             )
             .await;
             check(&details);
+            assert_pagination(&details, [true; 4]);
         }
     }
 }
@@ -343,9 +364,11 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
         ]
     );
     assert_eq!(
-        buttons(&response),
+        buttons(&response)[..1],
         [vc_api::custom_id::ui::grant::revoke_one_custom_id(grant_id)]
     );
+    assert_eq!(buttons(&response).len(), 5);
+    assert_pagination(&response, [true; 4]);
 }
 
 /// A grant narrowed to one currency reads as such: the screen names it by unit,
@@ -487,9 +510,11 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
         )
     );
     assert_eq!(
-        buttons(&response),
+        buttons(&response)[..1],
         [vc_api::custom_id::ui::grant::revoke_one_custom_id(grant_id)]
     );
+    assert_eq!(buttons(&response).len(), 5);
+    assert_pagination(&response, [true; 4]);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -568,6 +593,7 @@ async fn pressing_revoke_takes_the_permission_back(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(response.body["type"], 7, "a redraw: {}", response.body);
     assert_eq!(texts(&response), [EMPTY]);
+    assert_pagination(&response, [true; 4]);
     assert!(!allowed(&pool, application, DEFAULT_GUILD).await);
     assert_eq!(
         notified.grant_decisions(),
@@ -620,6 +646,15 @@ async fn the_list_pages(pool: PgPool) {
         .await;
 
         client_ids.push(client_id);
+        if index < 5 {
+            let single_page = interaction(
+                discord.clone(),
+                router(discord.clone(), pool.clone()),
+                grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, list_options()),
+            )
+            .await;
+            assert_pagination(&single_page, [true; 4]);
+        }
     }
 
     let first = interaction(
@@ -654,6 +689,8 @@ async fn the_list_pages(pool: PgPool) {
     )
     .await;
 
+    assert_pagination(&first, [true, true, false, false]);
+    assert_pagination(&second, [false, false, true, true]);
     assert_eq!(second.body["type"], 7, "a redraw: {}", second.body);
     assert_eq!(
         texts(&second),
@@ -713,7 +750,7 @@ async fn the_list_pages(pool: PgPool) {
     // And ⏩ from the first screen: the end of the list, which is where ⏭️ went.
     let last = interaction(
         discord.clone(),
-        router(discord.clone(), pool),
+        router(discord.clone(), pool.clone()),
         button_from_guild(json!({ "custom_id": buttons(&first)[8] }), ADMIN),
     )
     .await;
@@ -731,6 +768,14 @@ async fn the_list_pages(pool: PgPool) {
             ),
         ]
     );
+    let after_revoke = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        button_from_guild(json!({ "custom_id": buttons(&last)[0] }), ADMIN),
+    )
+    .await;
+    assert!(texts(&after_revoke)[0].contains("(5件)"));
+    assert_pagination(&after_revoke, [true; 4]);
 }
 
 /// A decision is told to the application that asked, and the yes and the
@@ -884,6 +929,15 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     .await;
     let notified = Arc::new(Recorded::default());
     let http = router_with(discord.clone(), pool.clone(), notified.clone());
+    let empty = interaction(
+        discord.clone(),
+        http.clone(),
+        from_dm(ADMIN, json!([{"name":"user","type":1}])),
+    )
+    .await;
+    assert!(texts(&empty).join("\n").contains("ページ 1/1"));
+    assert_eq!(buttons(&empty).len(), 4);
+    assert_pagination(&empty, [true; 4]);
     let command = from_dm(ADMIN, approve_options(&asked.user_code));
     let review = interaction(discord.clone(), http.clone(), command.clone()).await;
     let description = texts(&review).join("\n");
@@ -935,6 +989,7 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     )
     .await;
     assert!(texts(&list).join("\n").contains("あなたの残高を閲覧する"));
+    assert_pagination(&list, [true; 4]);
     let revoke = buttons(&list)[0].clone();
     interaction(
         discord.clone(),
@@ -943,12 +998,14 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     )
     .await;
     assert_eq!(grant_count(&pool).await, 1);
-    interaction(
+    let revoked = interaction(
         discord.clone(),
         http.clone(),
         press_as(from_dm(ADMIN, json!([])), &revoke),
     )
     .await;
+    assert_pagination(&revoked, [true; 4]);
+    assert_eq!(buttons(&revoked).len(), 4);
     assert_eq!(grant_count(&pool).await, 0);
     assert_eq!(
         support::get(http, "/api/v2/users/@me/balances", Some(token))
@@ -1192,6 +1249,13 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
         )
         .await;
         apps.push(app);
+        let list = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            from_dm(ADMIN, json!([{"name":"user","type":1}])),
+        )
+        .await;
+        assert_pagination(&list, [true, true, index < 2, index < 2]);
     }
     let list = interaction(
         discord.clone(),
@@ -1208,6 +1272,7 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
     )
     .await;
     assert!(texts(&last_page).join("\n").contains("ページ 3/3"));
+    assert_pagination(&last_page, [false, false, true, true]);
     let requested = personal_request(&pool, apps[0], ADMIN, &["vc.delegate.profile.read"]).await;
     approve_and_confirm(
         discord.clone(),
@@ -1238,6 +1303,7 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
     )
     .await;
     assert!(texts(&clamped).join("\n").contains("ページ 1/1"));
+    assert_pagination(&clamped, [true; 4]);
 }
 
 async fn poll_personal(pool: &PgPool, application: i64, device_code: &str) -> (u16, Value) {
@@ -1311,6 +1377,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
     )
     .await;
     let mut displayed = texts(&first).join("\n");
+    assert_pagination(&first, [true, true, false, false]);
     let mut current = first;
     {
         let last = buttons(&current).last().cloned().unwrap();
@@ -1330,6 +1397,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
                 ),
             )
             .await;
+            assert_pagination(&current, [false, false, page == end, page == end]);
             displayed.push_str(&texts(&current).join("\n"));
         }
     }
@@ -1374,6 +1442,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
         ),
     )
     .await;
+    assert_pagination(&details, [false, false, true, true]);
     assert!(
         texts(&details)
             .join("\n")
@@ -1533,9 +1602,10 @@ async fn server_grants_coexist_with_legacy_and_revoke_individually(pool: PgPool)
         .iter()
         .filter(|row| row["type"] == 1)
         .flat_map(|row| row["components"].as_array().unwrap())
-        .map(|button| button["label"].as_str().unwrap())
+        .filter_map(|button| button["label"].as_str())
         .collect();
     assert_eq!(labels, ["取り消す", "取り消す", "取り消す"]);
+    assert_pagination(&list, [true; 4]);
     let revoke = ids::revoke_one_custom_id(ga);
     let mut other_guild = button_from_guild(json!({"custom_id":revoke}), ADMIN);
     other_guild["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());
