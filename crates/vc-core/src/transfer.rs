@@ -47,11 +47,16 @@ pub async fn transfer(
         return Err(TransferError::InvalidAmount);
     }
 
-    let currency_id = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(TransferError::Database)?
-        .ok_or(TransferError::NotFoundCurrency)?;
+    // Currency deletion locks the currency before removing balances. Take the
+    // same order, including the foreign-key checks when recording payments.
+    let currency_id = sqlx::query_scalar!(
+        "SELECT id FROM currencies WHERE unit = $1 FOR KEY SHARE",
+        unit
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(TransferError::Database)?
+    .ok_or(TransferError::NotFoundCurrency)?;
 
     lock_participants(conn, &[sender_id, receiver_id])
         .await
@@ -153,7 +158,7 @@ pub async fn transfer_bulk(
     units.dedup();
 
     let known = sqlx::query!(
-        "SELECT id, unit FROM currencies WHERE unit = ANY($1)",
+        "SELECT id, unit FROM currencies WHERE unit = ANY($1) ORDER BY id FOR KEY SHARE",
         &units
     )
     .fetch_all(&mut *conn)
