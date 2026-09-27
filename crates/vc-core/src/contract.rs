@@ -737,13 +737,14 @@ pub async fn refuse(
 
     let contract = lock_contract(&mut tx, contract_id).await?;
 
-    if contract.status != "pending" {
-        return Err(ContractError::InvalidStatus);
-    }
-
+    // Unrelated callers must not learn the contract state or deadline.
     let Some(party) = lock_party(&mut tx, contract_id, user_id).await? else {
         return Err(ContractError::NotFound);
     };
+
+    if contract.status != "pending" {
+        return Err(ContractError::InvalidStatus);
+    }
 
     if party.status != "pending" {
         return Err(ContractError::InvalidStatus);
@@ -789,6 +790,11 @@ pub async fn withdraw(
     let mut tx = pool.begin().await.map_err(ContractError::Database)?;
 
     let contract = lock_contract(&mut tx, contract_id).await?;
+
+    // Unrelated callers must not learn the contract state or deadline.
+    let Some(party) = lock_party(&mut tx, contract_id, user_id).await? else {
+        return Err(ContractError::NotFound);
+    };
     let now = at(clock());
 
     // One that is already over has nothing left to take back: a settled expiry has
@@ -800,10 +806,6 @@ pub async fn withdraw(
     if contract.expires_at.is_some_and(|expires| expires > now) {
         return Err(ContractError::InvalidStatus);
     }
-
-    let Some(party) = lock_party(&mut tx, contract_id, user_id).await? else {
-        return Err(ContractError::NotFound);
-    };
 
     if party.status != "approved" {
         return Err(ContractError::InvalidStatus);

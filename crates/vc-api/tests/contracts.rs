@@ -1003,3 +1003,68 @@ async fn unsorted_parties_keep_their_own_amounts(pool: PgPool) {
     assert!(response.status < 300, "{}", response.body);
     assert_eq!(balance(&pool, BOB, 1).await, 150);
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn unrelated_callers_cannot_distinguish_contract_states_or_deadlines(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let id = id_of(
+        &pool,
+        &fixture.token,
+        asked("nyan", json!([alice_party(100)])),
+    )
+    .await;
+    let token = user_token(&pool, STRANGER).await;
+    let app = vc_api::router(state(pool.clone(), fake()));
+    for status in ["pending", "active", "canceled", "expired"] {
+        for deadline in [None, Some(-3600_i64), Some(3600)] {
+            sqlx::query("UPDATE contracts SET status = $2, expires_at = CASE WHEN $3::bigint IS NULL THEN NULL ELSE now() + make_interval(secs => $3) END WHERE id = $1")
+                .bind(id).bind(status).bind(deadline).execute(&pool).await.unwrap();
+            for (method, action) in [
+                ("POST", "approval"),
+                ("POST", "refusal"),
+                ("DELETE", "approval"),
+            ] {
+                let existing = request(
+                    app.clone(),
+                    method,
+                    &format!("/api/v2/contracts/{id}/{action}"),
+                    Some(&token),
+                    Value::Null,
+                )
+                .await;
+                let absent = request(
+                    app.clone(),
+                    method,
+                    &format!("/api/v2/contracts/9223372036854775807/{action}"),
+                    Some(&token),
+                    Value::Null,
+                )
+                .await;
+                assert_eq!(
+                    existing.status, 404,
+                    "{method} {action}, {status}, {deadline:?}: {}",
+                    existing.body
+                );
+                assert_eq!(existing.status, absent.status);
+                assert_eq!(existing.body, absent.body);
+            }
+            assert_eq!(status_of(&pool, id).await, status);
+        }
+    }
+    assert_eq!(balance(&pool, ALICE, 1).await, 1_000);
+    let party: (String, i64) =
+        sqlx::query_as("SELECT status, remaining FROM contract_parties WHERE contract_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(party, ("pending".into(), 0));
+    let movements: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM currency_payment_histories WHERE contract_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(movements, 0);
+}
