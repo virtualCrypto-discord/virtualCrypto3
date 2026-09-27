@@ -42,7 +42,7 @@ const FIRST_OWNER: i64 = 910_000_000_000_000_001;
 /// sentence is in here, because a guild that has allowed nobody is the guild most
 /// likely to be looking for it.
 const EMPTY: &str = "発行を許可しているアプリケーションはありません。申請が来たときは、\
-                     アプリケーションが表示するコードを `/grant approve code:` に入れて承認します。";
+                     アプリケーションが表示するコードを `/grant approve code:` に入力し、内容を確認して「承認する」を押してください。";
 
 fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
     vc_api::router(state(pool, discord))
@@ -510,7 +510,7 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "No pending request is available for you here. Server requests require an administrator in that server."
+            "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。"
         ]
     );
 }
@@ -596,10 +596,7 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 202, "body: {}", response.body);
-    assert_eq!(
-        texts(&response),
-        ["エラー: This grant is no longer available."]
-    );
+    assert_eq!(texts(&response), ["エラー: この許可は現在確認できません。"]);
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
 }
 
@@ -795,7 +792,7 @@ async fn the_command_needs_the_administrator_bit(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "No pending request is available for you here. Server requests require an administrator in that server."
+            "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。"
         ]
     );
 }
@@ -888,9 +885,9 @@ async fn personal_review_confirmation_token_and_revocation(pool: PgPool) {
     let review = interaction(discord.clone(), http.clone(), command.clone()).await;
     let description = texts(&review).join("\n");
     assert!(description.contains("personal app"));
-    assert!(description.contains("Your account"));
+    assert!(description.contains("あなたのアカウント"));
     assert!(description.contains("vc.delegate.claims.approve"));
-    assert!(description.contains("pay from your account"));
+    assert!(description.contains("あなたのアカウントから支払う"));
     assert_eq!(grant_count(&pool).await, 0);
     assert!(notified.personal_grant_decisions().is_empty());
     let confirm = buttons(&review)[0].clone();
@@ -993,6 +990,69 @@ async fn personal_approval_in_a_guild_does_not_need_admin(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
+async fn server_requests_require_the_interactions_guild_to_match(pool: PgPool) {
+    use vc_api::custom_id::ui::grant as ids;
+
+    let discord = fake();
+    let (application, code) = fixture(&pool).await;
+    let notified = Arc::new(Recorded::default());
+    let http = router_with(discord.clone(), pool.clone(), notified.clone());
+    let target = grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&code));
+    // The same user is an administrator in both guilds. Only the location differs.
+    let mut other = target.clone();
+    other["guild_id"] = json!((DEFAULT_GUILD + 1).to_string());
+
+    let denied = interaction(discord.clone(), http.clone(), other.clone()).await;
+    assert_eq!(denied.status, 200);
+    assert_eq!(
+        denied.body["data"]["components"][0]["accent_color"],
+        vc_api::command::COLOR_ERROR
+    );
+    assert!(buttons(&denied).is_empty());
+    assert_eq!(request_status(&pool, application).await, "pending");
+    assert_eq!(grant_count(&pool).await, 0);
+    assert!(notified.grant_decisions().is_empty());
+
+    let review = interaction(discord.clone(), http.clone(), target.clone()).await;
+    assert_eq!(review.status, 200);
+    assert!(
+        texts(&review)
+            .join("\n")
+            .contains(&format!("このサーバー ({DEFAULT_GUILD})"))
+    );
+    let confirm = buttons(&review)[0].clone();
+    let ids::Pressed::Confirmed(request) = ids::parse(&vc_api::custom_id::parse(&confirm)).unwrap()
+    else {
+        panic!("the review must offer confirmation");
+    };
+
+    // A request id from a valid review cannot be used to view or approve it elsewhere.
+    for (id, status) in [
+        (ids::review_page_custom_id(request, 1), 200),
+        (confirm.clone(), 202),
+    ] {
+        let denied = interaction(discord.clone(), http.clone(), press_as(other.clone(), &id)).await;
+        assert_eq!(denied.status, status);
+        assert_eq!(
+            denied.body["data"]["components"][0]["accent_color"],
+            vc_api::command::COLOR_ERROR
+        );
+        assert!(buttons(&denied).is_empty());
+        assert_eq!(request_status(&pool, application).await, "pending");
+        assert_eq!(grant_count(&pool).await, 0);
+        assert!(notified.grant_decisions().is_empty());
+    }
+
+    let approved = interaction(discord.clone(), http, press_as(target, &confirm)).await;
+    assert_eq!(approved.status, 202);
+    assert_eq!(request_status(&pool, application).await, "approved");
+    assert_eq!(grant_count(&pool).await, 1);
+    assert!(allowed(&pool, application, DEFAULT_GUILD).await);
+    assert!(!allowed(&pool, application, DEFAULT_GUILD + 1).await);
+    assert_eq!(notified.grant_decisions(), [(application, DEFAULT_GUILD)]);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
 async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool) {
     let discord = fake();
     let (_, code) = fixture(&pool).await;
@@ -1000,7 +1060,34 @@ async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool)
     let payload = grant_from_guild(ADMIN, DEFAULT_PERMISSIONS, approve_options(&code));
     let review = interaction(discord.clone(), http.clone(), payload.clone()).await;
     assert_eq!(grant_count(&pool).await, 0);
-    assert!(texts(&review).join("\n").contains("This server"));
+    let description = texts(&review).join("\n");
+    for expected in [
+        "アプリケーションの権限申請の確認",
+        "申請元のアプリケーション: Bot未連携: `an application`",
+        &format!("対象: このサーバー ({DEFAULT_GUILD})"),
+        "このサーバーの発行枠から通貨を発行する (`vc.issue`)",
+        "対象の通貨（すべて・ページ 1/1）",
+        "承認の対象は、全ページに表示されているすべての通貨です。",
+    ] {
+        assert!(description.contains(expected), "{description}");
+    }
+    assert_eq!(
+        review.body["data"]["components"][0]["components"][1]["components"][0]["label"],
+        "承認する"
+    );
+    let dm = interaction(
+        discord.clone(),
+        http.clone(),
+        from_dm(ADMIN, approve_options(&code)),
+    )
+    .await;
+    assert_eq!(
+        texts(&dm),
+        [
+            "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。"
+        ]
+    );
+    assert!(buttons(&dm).is_empty());
     let confirm = buttons(&review)[0].clone();
     interaction(
         discord.clone(),
@@ -1113,7 +1200,7 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
         from_dm(ADMIN, json!([{"name":"user","type":1}])),
     )
     .await;
-    assert!(texts(&list).join("\n").contains("Page 1/3"));
+    assert!(texts(&list).join("\n").contains("ページ 1/3"));
     let last = vc_api::custom_id::ui::grant::user_page_custom_id(ADMIN, 3);
     let last_page = interaction(
         discord.clone(),
@@ -1121,7 +1208,7 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
         press_as(from_dm(ADMIN, json!([])), &last),
     )
     .await;
-    assert!(texts(&last_page).join("\n").contains("Page 3/3"));
+    assert!(texts(&last_page).join("\n").contains("ページ 3/3"));
     let requested = personal_request(&pool, apps[0], ADMIN, &["vc.delegate.profile.read"]).await;
     approve_and_confirm(
         discord.clone(),
@@ -1151,7 +1238,7 @@ async fn personal_list_paginates_and_approvals_remain_independent(pool: PgPool) 
         press_as(from_dm(ADMIN, json!([])), &last),
     )
     .await;
-    assert!(texts(&clamped).join("\n").contains("Page 1/1"));
+    assert!(texts(&clamped).join("\n").contains("ページ 1/1"));
 }
 
 async fn poll_personal(pool: &PgPool, application: i64, device_code: &str) -> (u16, Value) {
@@ -1277,7 +1364,7 @@ async fn many_currencies_can_be_reviewed_approved_and_individually_revoked(pool:
         from_dm(ADMIN, json!([{"name":"user","type":1}])),
     )
     .await;
-    assert!(texts(&list).join("\n").contains("400 currencies"));
+    assert!(texts(&list).join("\n").contains("400種類の通貨"));
     assert!(buttons(&list).contains(&ids::details_custom_id(grant, 1)));
     let details = interaction(
         discord.clone(),

@@ -180,10 +180,33 @@ have to agree:
 - [ ] The screens nobody clicks in a test: the empty list, "this page is empty", the
       error screens (`CommandError`), the ephemeral flags, the autocomplete lists
       (`crates/vc-api/src/command/autocomplete.rs`).
-- [ ] `contexts` in the registration: `[0, 1]` everywhere except `issue`, `grant`,
+- [ ] `contexts` in the registration: `[0, 1]` everywhere except `issue`,
       `create` and `delete`, which are `[0]` — guild only, because they act on a
       guild's currency. `discord_commands.rs`'s header says that is the whole of
-      what the deprecated `dm_permission` said, and its unit test asserts the four.
+      what the deprecated `dm_permission` said, and its unit test asserts the three.
+
+#### UX-07 サーバーへの権限申請の再確認
+
+変更後のコマンド定義とサーバー実装がテスト環境に反映された状態で確認する。
+コマンド候補の説明を更新するには、サーバー実装の更新に加えてコマンドの再登録が必要。
+テスト用のサーバー・アカウント・アプリケーションを使う。
+
+1. `/grant` と各サブコマンド・`code` の説明、`/help command:grant` が日本語で読めることを確認する。
+2. 管理者が申請先のサーバーで `/grant approve code:<user_code>` を実行する。
+   確認画面に申請元のアプリケーション、対象サーバー、発行権限、対象通貨が日本語で表示され、
+   「承認する」を押すまで許可されないことを確認する。対象通貨が複数ページに分かれる場合は、
+   矢印で全件を読めることと、承認が全ページの通貨を対象にする説明も確認する。
+3. 一般メンバーとDMから同じサーバー申請コードを入力し、申請先のサーバー内で管理者が確認するよう
+   日本語で案内され、承認ボタンが出ないことを確認する。
+   両方のサーバーで管理者権限を持つ同じユーザーでも、申請先と異なるサーバーから同じコードを
+   入力すると拒否されること、申請先のサーバーからは確認・承認できることを確認する。
+4. 複数アプリケーションへの許可を合計6件以上用意し、`/grant server` の矢印でページを移動する。
+   通貨が多い許可では「詳細」から内容を読み、「一覧に戻る」で戻れることを確認する。
+   「取り消す」で選んだ許可だけが消え、同じアプリケーションへの別の許可は残ることを確認する。
+
+ローカルでは `interactions_grant` が管理者・一般メンバー・DM、承認前の表示、複数ページ、
+個別取消を検証する。`documentation`、`interactions_commands`、`discord_schema` で
+コマンド説明とヘルプの整合性、表示、登録データの形式を検証する。実機での読みやすさは別途確認する。
 
 #### UX-09 アプリ登録・設定変更の再確認
 

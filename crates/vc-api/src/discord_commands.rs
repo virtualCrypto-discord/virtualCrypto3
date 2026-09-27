@@ -192,17 +192,17 @@ fn contract() -> Value {
 fn grant() -> Value {
     json!({
         "name": "grant",
-        "description": "Review application access and manage personal or server grants.",
+        "description": "アプリケーションからの権限申請を確認し、アカウントやサーバーへのアクセス許可を管理します。",
         "options": [
-            {"name": "user", "description": "List and revoke applications with access to your account.", "type": 1},
+            {"name": "user", "description": "あなたのアカウントへのアクセス許可を一覧表示し、取り消せます。", "type": 1},
             {
                 "name": "server",
-                "description": "発行を許可しているアプリケーションの一覧を表示します。",
+                "description": "このサーバーでの通貨発行の許可を一覧表示し、取り消せます。管理者権限が必要です。",
                 "type": 1,
             },
             {
                 "name": "approve",
-                "description": "Review a personal or server request before approving it.",
+                "description": "申請コードから、アカウントやサーバーへの権限申請の内容を確認して承認します。",
                 "type": 1,
                 "options": [
                     {

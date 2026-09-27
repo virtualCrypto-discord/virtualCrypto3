@@ -214,20 +214,22 @@ const ISSUE: &[Section] = &[
 
 const GRANT: &[Section] = &[
     section(
-        "Usage",
+        "使い方",
         &[
-            text("Review requests to access your account or issue currency in your server."),
+            text(
+                "あなたのアカウントへのアクセスや、サーバーでの通貨発行を求めるアプリケーションの申請を確認します。",
+            ),
             list(&[
-                "`approve code:` Review the application, target, permissions and currencies, then confirm with the Approve button. Nothing is granted by entering the code alone.",
-                "`user` List and revoke applications with access to your account. Available in servers and DMs.",
-                "`server` List and revoke applications allowed to issue in this server. Requires administrator permission in that server.",
+                "`approve code:` アプリケーションが表示する申請コードを入力します。申請元、対象、権限、通貨を確認し、「承認する」を押します。コードを入力しただけでは許可されません。",
+                "`user` あなたのアカウントへのアクセス許可を一覧表示し、取り消せます。サーバーでもDMでも使えます。",
+                "`server` このサーバーでの通貨発行の許可を一覧表示し、取り消せます。そのサーバーの管理者権限が必要です。",
             ]),
         ],
     ),
     section(
-        "Who may approve",
+        "承認できる人",
         &[text(
-            "Personal requests can only be approved by the requested user. Server requests require an administrator in the requested server. Every button rechecks these permissions.",
+            "アカウントへの申請を承認できるのは、申請先の本人だけです。サーバーへの申請は、申請先のサーバー内で管理者が承認します。",
         )],
     ),
 ];
