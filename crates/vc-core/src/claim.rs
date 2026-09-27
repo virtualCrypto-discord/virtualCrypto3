@@ -506,11 +506,16 @@ pub async fn create_in(
         return Err(CreateError::InvalidAmount);
     }
 
-    let currency_id = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(CreateError::Database)?
-        .ok_or(CreateError::NotFoundCurrency)?;
+    // Discord callers have no outer authorization lock. Keep the currency
+    // alive until the claim commits, before resolving and locking its payer.
+    let currency_id = sqlx::query_scalar!(
+        "SELECT id FROM currencies WHERE unit = $1 FOR KEY SHARE",
+        unit
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(CreateError::Database)?
+    .ok_or(CreateError::NotFoundCurrency)?;
 
     let payer = crate::user::insert_if_not_exists(&mut *tx, payer_discord_id)
         .await

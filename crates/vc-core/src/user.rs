@@ -358,10 +358,21 @@ async fn merge_bot_account(
 ) -> std::result::Result<(), sqlx::Error> {
     // Issuance locks a currency before resolving its receiver, and claim
     // transitions lock the claim before transferring money. Do not wait for
-    // either while holding the account locks they may still need.
+    // either while holding the account locks they may still need. Deletion
+    // also touches histories, claims and mutes after taking the currency lock:
+    // their references survive a zero balance, so assets alone are insufficient.
     sqlx::query!(
         "SELECT id FROM currencies WHERE id IN
-             (SELECT currency_id FROM assets WHERE user_id IN ($1, $2))
+             (SELECT currency_id FROM assets WHERE user_id IN ($1, $2)
+              UNION
+              SELECT currency_id FROM currency_given_histories WHERE receiver_id = $1
+              UNION
+              SELECT currency_id FROM currency_payment_histories
+               WHERE sender_id = $1 OR receiver_id = $1
+              UNION
+              SELECT currency_id FROM claims WHERE claimant_user_id = $1 OR payer_user_id = $1
+              UNION
+              SELECT currency_id FROM mutes WHERE user_id = $1 OR muted_user_id = $1)
          ORDER BY id FOR KEY SHARE NOWAIT",
         i64::from(source),
         i64::from(destination)
