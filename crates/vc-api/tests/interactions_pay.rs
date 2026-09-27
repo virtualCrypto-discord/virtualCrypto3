@@ -57,6 +57,7 @@ fn from_guild(receiver: i64, amount: Value, unit: &str, sender: i64) -> Value {
 
 /// `Interactions.Pay.render/2` for `:error`, which every failure shares.
 fn assert_error(response: &Value, content: &str) {
+    assert_eq!(response["components"][0]["accent_color"], 0xEA3875);
     assert_eq!(
         response["components"][0]["components"][0]["content"],
         json!(content),

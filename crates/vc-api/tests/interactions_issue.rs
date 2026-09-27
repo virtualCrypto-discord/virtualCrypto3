@@ -82,6 +82,7 @@ fn assert_error(response: &Value, content: &str) {
         response["components"],
         json!([{
             "type": 17,
+            "accent_color": 0xEA3875,
             "components": [{ "type": 10, "content": content }],
         }])
     );

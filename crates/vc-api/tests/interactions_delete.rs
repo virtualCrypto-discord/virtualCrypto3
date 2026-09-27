@@ -75,6 +75,10 @@ async fn delete_requires_current_administrator_permissions(pool: PgPool) {
         .await;
         assert_eq!(response.status, 200);
         assert_eq!(response.body["type"], 4, "no modal without permission");
+        assert_eq!(
+            response.body["data"]["components"][0]["accent_color"],
+            0xEA3875
+        );
         assert!(response.body.to_string().contains("管理者権限"));
 
         // The form was opened while the user was an administrator, but submitted after revocation.
@@ -103,6 +107,10 @@ async fn delete_requires_current_administrator_permissions(pool: PgPool) {
         )
         .await;
         assert_eq!(response.status, 202);
+        assert_eq!(
+            response.body["data"]["components"][0]["accent_color"],
+            0xEA3875
+        );
         assert!(response.body.to_string().contains("管理者権限"));
         assert!(
             support::currency_by_unit(&pool, &money.unit)
@@ -139,6 +147,7 @@ async fn delete_outside_the_window_is_refused(pool: PgPool) {
         response.body["data"]["components"],
         json!([{
             "type": 17,
+            "accent_color": 0xEA3875,
             "components": [{
                 "type": 10,
                 "content": "エラー: 作成から72時間以上経過しているため削除できません。",
@@ -247,6 +256,10 @@ async fn submit_confirmation(pool: PgPool, uppercase: bool, expired: bool, legac
         response.body
     );
     if expired {
+        assert_eq!(
+            response.body["data"]["components"][0]["accent_color"],
+            0xEA3875
+        );
         assert!(response.body.to_string().contains("72時間"));
         assert!(support::get_amount(&pool, money.user1, money.currency).await > 0);
     }

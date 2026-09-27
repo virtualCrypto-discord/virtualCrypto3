@@ -420,6 +420,15 @@ belief into a fact, and each of these was run while the code was written:
 
 Nothing here can be settled from a terminal.
 
+**Shared error display: red accent.** Error/refusal containers carry an explicit
+red `accent_color`, including initial replies, edits and follow-ups. Recheck
+insufficient funds in `/pay` and `/issue`, permission/window errors in `/delete`,
+permission errors in `/history issue`, invalid codes or permissions in `/grant`,
+and claim button failures. Unknown `/help command` values and a Bot connection
+attempt in a DM should also show the red bar. Error text and privacy must remain
+unchanged. Success replies, ordinary help and empty history lists retain their
+normal colours; an empty list alone is not an error.
+
 **UX-03: `/pay` answers directly with its outcome.** The initial type-4 reply
 shows the sender, recipient, amount and unit publicly on success. Errors are
 initial ephemeral replies. There is no processing/deferred response, follow-up,

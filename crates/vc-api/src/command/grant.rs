@@ -602,7 +602,7 @@ fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": ephemeral(vec![container(
-            None,
+            Some(COLOR_ERROR as u32),
             vec![text(content)],
         )]),
     })

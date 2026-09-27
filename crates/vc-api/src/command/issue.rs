@@ -6,8 +6,8 @@ use serde_json::{Map, Value, json};
 use vc_core::issue::{IssueError, Issued};
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, as_permissions, is_administrator,
-    mention, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, as_permissions,
+    is_administrator, mention, value_text,
 };
 use crate::state::AppState;
 
@@ -158,7 +158,7 @@ fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
-            None,
+            Some(COLOR_ERROR as u32),
             vec![crate::components::text(content)],
         )]),
     })

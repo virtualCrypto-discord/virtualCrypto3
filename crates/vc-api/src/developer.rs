@@ -443,15 +443,9 @@ pub fn refusal(action: &str, description: Option<&str>) -> Value {
     )
 }
 
-/// A sentence, as the one screen that has nothing else in it.
-///
-/// Every screen here is one container — that is the first rule this module is written to, for
-/// the accent and the grouping — and a screen that is only a sentence is a screen. I wrote
-/// this believing the schema rejected a bare Text Display at the top of a message and checked
-/// it by putting one back: it does not, so the rule is this module's rather than Discord's,
-/// and saying otherwise would have been a claim I had not tested.
-pub fn plain(sentence: &str) -> Value {
-    container(None, vec![text(sentence)])
+/// A short refusal without navigation, using the same red accent as other errors.
+pub fn error(sentence: &str) -> Value {
+    container(Some(REFUSED), vec![text(sentence)])
 }
 
 /// What the connect flow answered.

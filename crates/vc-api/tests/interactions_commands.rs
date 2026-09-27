@@ -43,6 +43,10 @@ async fn help(pool: PgPool) {
     assert_eq!(response.body["type"], 4, "a message: {}", response.body);
     assert_eq!(response.body["data"]["flags"], json!(32832));
 
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0x6221ED
+    );
     let rendered = response.body["data"].to_string();
 
     for command in vc_api::discord_commands::commands() {
@@ -138,6 +142,10 @@ async fn help_says_when_a_name_is_not_a_command(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
 
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0xEA3875
+    );
     let rendered = response.body["data"].to_string();
 
     assert!(
@@ -1172,6 +1180,10 @@ async fn application_connect_in_a_guild_binds_the_bot(pool: PgPool) {
 
     assert_eq!(response.status, 202, "body: {}", response.body);
 
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0x1ABC9C
+    );
     let rendered = response.body["data"].to_string();
 
     assert!(rendered.contains("接続しました"), "{rendered}");
@@ -1215,6 +1227,10 @@ async fn application_connect_says_why_a_bot_is_refused(pool: PgPool) {
 
     assert_eq!(response.status, 202, "body: {}", response.body);
 
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0xED4245
+    );
     let rendered = response.body["data"].to_string();
 
     assert!(
@@ -1495,6 +1511,10 @@ async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
 
     assert_eq!(response.status, 202, "body: {}", response.body);
 
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0xED4245
+    );
     let rendered = response.body["data"].to_string();
 
     assert!(

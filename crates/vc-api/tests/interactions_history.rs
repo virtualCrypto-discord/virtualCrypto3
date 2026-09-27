@@ -491,6 +491,14 @@ async fn issue_is_the_administrators(pool: PgPool) {
         direct.body
     );
 
+    for refusal in [&member, &direct] {
+        assert_eq!(
+            refusal.body["data"]["components"][0]["accent_color"],
+            0xEA3875
+        );
+        assert_eq!(refusal.body["data"]["flags"], 32832);
+    }
+
     // And the payments screen, which is nobody else's business, needs no permission at all.
     let own = interaction(
         router(pool.clone()),
@@ -523,6 +531,10 @@ async fn an_empty_ledger_says_so(pool: PgPool) {
         paid.body
     );
 
+    assert_eq!(
+        paid.body["data"]["components"][0]["accent_color"], 0x6221ED,
+        "an empty list is not an error"
+    );
     let issued = interaction(
         router(pool.clone()),
         issue_in_guild(MONEY_USER2, support::DEFAULT_PERMISSIONS, vec![]),

@@ -7,8 +7,8 @@ use tokio::time::{Instant, timeout_at};
 use vc_core::payment::PayError;
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_OK, CommandError, as_int, get_user, mention, option_text,
-    value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, get_user, mention,
+    option_text, value_text,
 };
 use crate::state::AppState;
 
@@ -156,14 +156,14 @@ fn render_ok(sender: i64, receiver: &str, amount: &Value, unit: &str) -> Value {
 
 /// `Interactions.Pay.render/2` for `:error`.
 ///
-/// Ephemeral, as it was, and no accent: the message it was is not an embed and carried no colour.
+/// Private, with the shared error accent for both refusals and uncertain results.
 fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
             "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
             "components": [crate::components::container(
-                None,
+                Some(COLOR_ERROR as u32),
                 vec![crate::components::text(content)],
             )],
             "allowed_mentions": { "parse": [] },

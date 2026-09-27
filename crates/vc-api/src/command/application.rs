@@ -178,7 +178,7 @@ async fn connect_bot(
     payload: &Value,
 ) -> Result<Value, CommandError> {
     let Some(guild) = payload.get("guild_id").and_then(Value::as_str) else {
-        return Ok(developer::plain(&crate::docs::discord::mentions(
+        return Ok(developer::error(&crate::docs::discord::mentions(
             "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application show` を開き、Bot を選んでください。",
             state.command_ids().await,
         )));
@@ -193,7 +193,7 @@ async fn connect_bot(
     };
 
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(developer::plain("そのアプリケーションはありません。"));
+        return Ok(developer::error("そのアプリケーションはありません。"));
     };
 
     match crate::routes::connect::connect_application(state, &found, bot, bot_id, guild_id).await {

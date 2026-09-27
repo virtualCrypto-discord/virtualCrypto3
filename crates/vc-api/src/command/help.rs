@@ -9,7 +9,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE};
+use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE};
 use crate::components::{container, ephemeral, text};
 use crate::custom_id::ui::help::Screen;
 use crate::docs::{self, discord};
@@ -26,12 +26,14 @@ pub async fn command(state: &AppState, options: &Map<String, Value>) -> Value {
     let links = state.links();
     let ids = state.command_ids().await;
 
+    let mut color = COLOR_BRAND;
     let children = match options.get("command").and_then(Value::as_str) {
         Some(name) => match docs::showing_of(name) {
             Some(showing) => discord::command(&showing, links, ids),
             // Autocomplete offers the names that exist, but a name can be typed
             // anyway: the list, with the one sentence that says so above it.
             None => {
+                color = COLOR_ERROR;
                 let mut children = vec![text(format!("`{name}` というコマンドはありません。"))];
                 children.extend(discord::index(links, ids));
 
@@ -41,7 +43,7 @@ pub async fn command(state: &AppState, options: &Map<String, Value>) -> Value {
         None => discord::index(links, ids),
     };
 
-    screen(children, CHANNEL_MESSAGE_WITH_SOURCE)
+    screen(children, CHANNEL_MESSAGE_WITH_SOURCE, color)
 }
 
 /// `verified/2` for `type` 3: the menu's choice, and the button that goes back.
@@ -86,14 +88,13 @@ pub async fn component(
         Screen::Index => discord::index(links, ids),
     };
 
-    Ok(screen(children, UPDATE_MESSAGE))
+    Ok(screen(children, UPDATE_MESSAGE, COLOR_BRAND))
 }
 
-/// A screen as a response: ephemeral, and the brand's colour, as every other
-/// command's answer is.
-fn screen(children: Vec<Value>, kind: i64) -> Value {
+/// A private screen with the normal or error accent selected by the outcome.
+fn screen(children: Vec<Value>, kind: i64, color: i64) -> Value {
     json!({
         "type": kind,
-        "data": ephemeral(vec![container(Some(COLOR_BRAND as u32), children)]),
+        "data": ephemeral(vec![container(Some(color as u32), children)]),
     })
 }

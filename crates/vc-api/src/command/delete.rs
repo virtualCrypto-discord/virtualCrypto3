@@ -1,7 +1,10 @@
 use serde_json::{Map, Value, json};
 use vc_core::currency::DeleteCheck;
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, CommandError, as_int, as_permissions, is_administrator};
+use super::{
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError, as_int, as_permissions,
+    is_administrator,
+};
 use crate::state::AppState;
 
 /// `Command.handle/4` for `delete`, rendered by `InteractionsJSON.delete/1`
@@ -131,7 +134,7 @@ fn render_error(content: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
-            None,
+            Some(COLOR_ERROR as u32),
             vec![crate::components::text(content)],
         )]),
     })

@@ -503,6 +503,11 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0xEA3875
+    );
+    assert_eq!(response.body["data"]["flags"], 32832);
+    assert_eq!(
         texts(&response),
         [
             "No pending request is available for you here. Server requests require an administrator in that server."
@@ -783,6 +788,11 @@ async fn the_command_needs_the_administrator_bit(pool: PgPool) {
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0xEA3875
+    );
+    assert_eq!(response.body["data"]["flags"], 32832);
+    assert_eq!(
         texts(&response),
         [
             "No pending request is available for you here. Server requests require an administrator in that server."
@@ -804,6 +814,11 @@ async fn the_command_is_refused_in_a_direct_message(pool: PgPool) {
     let response = interaction(discord.clone(), router(discord.clone(), pool), payload).await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.body["data"]["components"][0]["accent_color"],
+        0xEA3875
+    );
+    assert_eq!(response.body["data"]["flags"], 32832);
     assert_eq!(texts(&response), ["エラー: DMでは実行できません。"]);
 }
 

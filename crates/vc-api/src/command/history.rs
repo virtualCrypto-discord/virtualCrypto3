@@ -22,8 +22,8 @@ use serde_json::{Map, Value, json};
 
 use super::claim::format_date_time;
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, as_permissions,
-    get_user, is_administrator, mention, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE, as_int,
+    as_permissions, get_user, is_administrator, mention, value_text,
 };
 use crate::components::{ButtonStyle, action_row, container, ephemeral, icon_button, text};
 use crate::custom_id::ui::history::{Listing, Screen, page_custom_id};
@@ -372,11 +372,10 @@ fn answer(children: Vec<Value>, kind: i64) -> Value {
     })
 }
 
-/// The refusal a person reads, in the shape `/issue`'s own refusals arrive in: ephemeral, no
-/// accent, and the sentence.
+/// Refusals are private and carry the shared error accent.
 fn refused(sentence: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": ephemeral(vec![container(None, vec![text(sentence)])]),
+        "data": ephemeral(vec![container(Some(COLOR_ERROR as u32), vec![text(sentence)])]),
     })
 }

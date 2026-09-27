@@ -1139,7 +1139,7 @@ async fn assert_action_error(pool: PgPool, action: Action, claim: i64, user: i64
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "components": [{ "type": 10, "content": content }] }])
+        json!([{ "type": 17, "accent_color": COLOR_ERROR, "components": [{ "type": 10, "content": content }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 }
