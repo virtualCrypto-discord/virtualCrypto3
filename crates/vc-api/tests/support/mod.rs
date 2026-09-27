@@ -311,15 +311,6 @@ impl FakeDiscord {
         Arc::new(api)
     }
 
-    pub async fn payment_finished(&self) {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.response_edit_finished.notified(),
-        )
-        .await
-        .expect("payment delivered its final response");
-    }
-
     pub fn callbacks(&self) -> Vec<Value> {
         self.callbacks
             .lock()
