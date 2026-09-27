@@ -22,11 +22,13 @@ use serde_json::{Map, Value, json};
 
 use super::claim::format_date_time;
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, as_permissions,
-    get_user, is_administrator, mention, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE, as_int,
+    as_permissions, get_user, is_administrator, mention, value_text,
 };
-use crate::components::{ButtonStyle, action_row, container, ephemeral, icon_button, text};
-use crate::custom_id::ui::history::{Listing, Screen, page_custom_id};
+use crate::components::{
+    ButtonStyle, action_row, container, ephemeral, icon_button, separator, text,
+};
+use crate::custom_id::ui::history::{Listing, Screen, page_button_custom_id};
 use crate::error::ApiError;
 use crate::state::AppState;
 use vc_core::history::{Issuance, Movement, PER_PAGE, Payment};
@@ -115,7 +117,7 @@ async fn paid(
         .await?
         .map(|user| user.id)
     else {
-        return Ok(answer(vec![text("送金の履歴はありません。")], kind));
+        return Ok(empty_answer(listing, kind));
     };
 
     let page = vc_core::history::payments(
@@ -128,33 +130,12 @@ async fn paid(
     )
     .await?;
 
-    let mut children = Vec::new();
-
-    if page.total == 0 {
-        children.push(text("送金の履歴はありません。"));
-    } else {
-        // The count is everything the person sent, received and was issued, not what this page
-        // shows: that is the number they are looking for, as it is in every list here.
-        children.push(text(format!("**送金の履歴** ({}件)", page.total)));
-
-        if page.rows.is_empty() {
-            // A page an arrow led to that the list has since shrunk past: the arrows are the way
-            // back, and saying where the rows are beats saying there are none.
-            children.push(text(
-                "このページには何もありません。前のページに戻ってください。",
-            ));
-        }
-
-        for movement in &page.rows {
-            children.push(text(movement_line(movement, me)));
-        }
-
-        if page.next.is_some() || page.page > 1 {
-            children.push(arrows(listing, &page));
-        }
-    }
-
-    Ok(answer(children, kind))
+    Ok(page_answer(
+        listing,
+        &page,
+        |row| movement_line(row, me),
+        kind,
+    ))
 }
 
 /// `/history issue`: what the guild's pool has issued, newest first.
@@ -187,13 +168,13 @@ async fn issued(
     // screen has, so the currency is looked up. A guild whose pool has never paid anybody — and
     // one that has no currency at all — reads as the empty ledger rather than as an error.
     let Some(currency) = vc_core::history::guild_currency(state.pool(), guild_id).await? else {
-        return Ok(answer(
-            vec![text(
-                "発行の履歴はありません。このサーバーでは、まだ発行枠から発行されていません。",
-            )],
-            kind,
-        ));
+        return Ok(empty_answer(listing, kind));
     };
+
+    let me = get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+    let reader = vc_core::user::find_by_discord_id(state.pool(), me)
+        .await?
+        .map(|user| user.id);
 
     let page = vc_core::history::issuances(
         state.pool(),
@@ -201,34 +182,84 @@ async fn issued(
         listing.discord_id,
         listing.page,
         PER_PAGE,
+        reader,
     )
     .await?;
 
-    let mut children = Vec::new();
+    Ok(page_answer(listing, &page, issued_line, kind))
+}
 
-    if page.total == 0 {
-        children.push(text(
-            "発行の履歴はありません。このサーバーでは、まだ発行枠から発行されていません。",
-        ));
+fn heading(listing: &Listing, total: i64) -> Value {
+    let person = listing
+        .discord_id
+        .map(mention)
+        .unwrap_or_else(|| "すべて".into());
+    let (title, filters) = match listing.screen {
+        Screen::Paid => (
+            "入出金の履歴",
+            format!(
+                "通貨: {} / 相手: {person}",
+                listing
+                    .unit
+                    .as_deref()
+                    .map(unit_text)
+                    .unwrap_or_else(|| "すべて".into())
+            ),
+        ),
+        Screen::Issued => ("発行の履歴", format!("発行先: {person}")),
+    };
+    text(format!("## {title}\n全{total}件 ・ 新しい順\n{filters}"))
+}
+
+fn empty_answer(listing: &Listing, kind: i64) -> Value {
+    let message = if listing.unit.is_some() || listing.discord_id.is_some() {
+        "指定した条件に一致する履歴はありません。条件を変更して再実行してください。"
     } else {
-        children.push(text(format!("**発行の履歴** ({}件)", page.total)));
-
-        if page.rows.is_empty() {
-            children.push(text(
-                "このページには何もありません。前のページに戻ってください。",
-            ));
+        match listing.screen {
+            Screen::Paid => {
+                "表示できる入出金の履歴はありません。ミュート設定は `/mute list` で確認できます。"
+            }
+            Screen::Issued => {
+                "表示できる発行の履歴はありません。ミュート設定は `/mute list` で確認できます。"
+            }
         }
+    };
+    answer(vec![heading(listing, 0), separator(), text(message)], kind)
+}
 
-        for issuance in &page.rows {
-            children.push(text(issued_line(issuance)));
-        }
-
-        if page.next.is_some() || page.page > 1 {
-            children.push(arrows(listing, &page));
-        }
+fn page_answer<T>(
+    listing: &Listing,
+    page: &vc_core::history::Page<T>,
+    render: impl Fn(&T) -> String,
+    kind: i64,
+) -> Value {
+    if page.total == 0 {
+        return empty_answer(listing, kind);
     }
-
-    Ok(answer(children, kind))
+    let mut children = vec![heading(listing, page.total)];
+    for row in &page.rows {
+        children.push(separator());
+        children.push(text(render(row)));
+    }
+    children.push(separator());
+    let pages = (page.total - 1) / PER_PAGE + 1;
+    if page.rows.is_empty() {
+        children.push(text(
+            "このページには何もありません。⏪ で先頭に戻ってください。",
+        ));
+        children.push(text(format!("ページ {}/{}", page.page, pages)));
+    } else {
+        let start = (page.page - 1) * PER_PAGE + 1;
+        let end = start + page.rows.len() as i64 - 1;
+        children.push(text(format!(
+            "ページ {}/{} ・ {}–{}件 / 全{}件",
+            page.page, pages, start, end, page.total
+        )));
+    }
+    if page.next.is_some() || page.page > 1 {
+        children.push(arrows(listing, page));
+    }
+    answer(children, kind)
 }
 
 /// One row of the caller's own ledger, whichever ledger wrote it.
@@ -246,11 +277,17 @@ fn movement_line(movement: &Movement, me: i64) -> String {
 /// Money the pool issued to the reader: it arrived in the wallet, so it reads as money coming in,
 /// and what it came from is the issuance pool rather than a person to mention.
 fn issued_to_me(issuance: &Issuance) -> String {
-    format!(
-        "発行: **{}** `{}` ← 発行枠 ・ {}",
-        issuance.amount,
-        issuance.unit,
-        format_date_time(issuance.time)
+    entry(
+        format!(
+            "**発行　+{}** {}",
+            amount_text(issuance.amount),
+            unit_text(&issuance.unit)
+        ),
+        "発行元: 発行枠".into(),
+        issuance.time,
+        format!("I{}", issuance.id),
+        None,
+        balance_line("取引後残高", issuance.balance_after, &issuance.unit),
     )
 }
 
@@ -264,38 +301,105 @@ fn issued_to_me(issuance: &Issuance) -> String {
 /// the other side is the contract rather than a person — the escrow is nobody's account — so
 /// identifying the contract's application tells the reader where the money was delegated.
 fn paid_line(payment: &Payment, me: i64) -> String {
-    let amount = format!("**{}** `{}`", payment.amount, payment.unit);
-    let time = format_date_time(payment.time);
-
-    match payment.event {
-        Some("lock") => format!(
-            "契約にロック: {amount} → {} ・ {time}",
-            contract_identity(payment)
+    let (label, sign, party) = match payment.event {
+        Some("lock") => (
+            "契約にロック",
+            "−",
+            format!("預け先: {}", contract_identity(payment)),
         ),
-        Some("return") => format!(
-            "契約から返却: {amount} ← {} ・ {time}",
-            contract_identity(payment)
+        Some("return") => (
+            "契約から返却",
+            "+",
+            format!("返却元: {}", contract_identity(payment)),
         ),
-        Some("charge") => format!(
-            "契約から受取: {amount} ← {} ・ {time}",
-            contract_identity(payment)
+        Some("charge") => (
+            "契約から受取",
+            "+",
+            format!("支払元: {}", contract_identity(payment)),
         ),
         _ => match (
             payment.sender_discord_id == Some(me),
             payment.receiver_discord_id == Some(me),
         ) {
-            (true, false) => format!(
-                "送金: {amount} → {} ・ {time}",
-                counterparty(payment.receiver_discord_id, payment)
+            (true, false) => (
+                "送金",
+                "−",
+                format!(
+                    "送金先: {}",
+                    counterparty(payment.receiver_discord_id, payment)
+                ),
             ),
-            (false, true) => format!(
-                "受取: {amount} ← {} ・ {time}",
-                counterparty(payment.sender_discord_id, payment)
+            (false, true) => (
+                "受取",
+                "+",
+                format!(
+                    "送金元: {}",
+                    counterparty(payment.sender_discord_id, payment)
+                ),
             ),
-            // To themselves, which an account may do: the claim list's own fixture holds one.
-            _ => format!("{amount} ・ {time}"),
+            (true, true) => ("自己送金", "", "相手: 自分（残高変動なし）".into()),
+            _ => ("送金記録", "", "相手: 不明".into()),
         },
+    };
+    entry(
+        format!(
+            "**{label}　{sign}{}** {}",
+            amount_text(payment.amount),
+            unit_text(&payment.unit)
+        ),
+        party,
+        payment.time,
+        format!("P{}", payment.id),
+        payment.contract_id,
+        balance_line("取引後残高", payment.balance_after, &payment.unit),
+    )
+}
+
+/// P and I distinguish the two ledgers, whose numeric IDs may overlap.
+fn entry(
+    heading: String,
+    party: String,
+    time: time::PrimitiveDateTime,
+    reference: String,
+    contract_id: Option<i64>,
+    balance: String,
+) -> String {
+    let mut row = format!(
+        "{heading}\n{party}\n{balance}\n日時: {}\n取引ID: `{reference}`",
+        format_date_time(time)
+    );
+    if let Some(id) = contract_id {
+        row.push_str(&format!(" / 契約ID: `{id}`"));
     }
+    row
+}
+
+fn balance_line(label: &str, balance: Option<i64>, unit: &str) -> String {
+    match balance {
+        Some(balance) => format!("{label}: **{}** {}", amount_text(balance), unit_text(unit)),
+        None => format!("{label}: 未記録"),
+    }
+}
+
+fn amount_text(amount: i64) -> String {
+    let digits = amount.unsigned_abs().to_string();
+    let mut grouped = if amount < 0 {
+        "-".to_owned()
+    } else {
+        String::new()
+    };
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+/// Imported currency units and filter text must stay on their own line.
+fn unit_text(unit: &str) -> String {
+    format!("`{}`", unit.replace('`', "｀").replace(['\r', '\n'], " "))
 }
 
 /// Use the same identity as the approval screen. A later name edit must not
@@ -318,11 +422,17 @@ fn issued_line(issuance: &Issuance) -> String {
         None => "アプリケーション".to_owned(),
     };
 
-    format!(
-        "発行: **{}** `{}` → {to} ・ {}",
-        issuance.amount,
-        issuance.unit,
-        format_date_time(issuance.time)
+    entry(
+        format!(
+            "**発行　+{}** {}",
+            amount_text(issuance.amount),
+            unit_text(&issuance.unit)
+        ),
+        format!("発行先: {to}"),
+        issuance.time,
+        format!("I{}", issuance.id),
+        None,
+        balance_line("発行枠残高", issuance.pool_balance_after, &issuance.unit),
     )
 }
 
@@ -347,10 +457,13 @@ fn arrows<T>(listing: &Listing, page: &vc_core::history::Page<T>) -> Value {
             // A page that is not there is a button that says so, and one Discord will not send:
             // the id is a placeholder rather than this space's.
             None => format!("disabled-{at}"),
-            Some(number) => page_custom_id(&Listing {
-                page: number,
-                ..listing.clone()
-            }),
+            Some(number) => page_button_custom_id(
+                &Listing {
+                    page: number,
+                    ..listing.clone()
+                },
+                at,
+            ),
         };
 
         icon_button(&id, emoji, ButtonStyle::Secondary, Some(target.is_none()))
@@ -372,11 +485,10 @@ fn answer(children: Vec<Value>, kind: i64) -> Value {
     })
 }
 
-/// The refusal a person reads, in the shape `/issue`'s own refusals arrive in: ephemeral, no
-/// accent, and the sentence.
+/// Refusals are private and carry the shared error accent.
 fn refused(sentence: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": ephemeral(vec![container(None, vec![text(sentence)])]),
+        "data": ephemeral(vec![container(Some(COLOR_ERROR as u32), vec![text(sentence)])]),
     })
 }

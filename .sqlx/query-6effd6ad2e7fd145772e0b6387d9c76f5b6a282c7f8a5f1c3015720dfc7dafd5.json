@@ -1,0 +1,156 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT movement.id AS \"id!\",\n                movement.kind AS \"kind!\",\n                movement.amount AS \"amount!\",\n                movement.balance_after AS \"balance_after?\",\n                movement.pool_balance_after AS \"pool_balance_after?\",\n                movement.\"time\" AS \"time!\",\n                sender.discord_id AS sender_discord_id,\n                receiver.discord_id AS receiver_discord_id,\n                currencies.unit,\n                applications.client_name AS client_name,\n                applications.client_id::text AS client_id,\n                bot.discord_id AS bot_discord_id,\n                movement.contract_id AS \"contract_id?\",\n                movement.sender_id IS NULL AS \"sender_unset!\",\n                movement.receiver_id IS NULL AS \"receiver_unset!\"\n           FROM (\n                   SELECT history.id, $1::smallint AS kind, history.amount,\n                          COALESCE(history.\"time\", history.inserted_at) AS \"time\",\n                          history.currency_id, history.sender_id, history.receiver_id,\n                          history.contract_id,\n                          CASE WHEN history.receiver_id = $3 THEN history.receiver_balance_after\n                               ELSE history.sender_balance_after END AS balance_after,\n                          NULL::bigint AS pool_balance_after\n                     FROM currency_payment_histories history\n                    WHERE (history.sender_id = $3 OR history.receiver_id = $3)\n                      AND (history.contract_id IS NULL\n                           OR history.sender_id IS NULL\n                           OR history.receiver_id IS NULL\n                           OR history.receiver_id = $3)\n                   UNION ALL\n                   SELECT given.id, $2::smallint, given.amount,\n                          COALESCE(given.\"time\", given.inserted_at),\n                          given.currency_id, NULL::bigint, given.receiver_id, NULL::bigint,\n                          given.receiver_balance_after, given.pool_balance_after\n                     FROM currency_given_histories given\n                    WHERE given.receiver_id = $3\n                      AND $4::bigint IS NULL\n                 ) movement\n           JOIN currencies ON currencies.id = movement.currency_id\n           LEFT JOIN users sender ON sender.id = movement.sender_id\n           LEFT JOIN users receiver ON receiver.id = movement.receiver_id\n           LEFT JOIN contracts ON contracts.id = movement.contract_id\n           LEFT JOIN applications ON applications.id = contracts.application_id\n           LEFT JOIN users bot ON bot.application_id = applications.id\n          WHERE ($5::text IS NULL OR currencies.unit = $5)\n            AND ($4::bigint IS NULL\n                 OR sender.discord_id = $4 OR receiver.discord_id = $4)\n            AND NOT EXISTS (\n                SELECT 1 FROM mutes mu\n                 WHERE mu.user_id = $3\n                   AND (mu.currency_id = movement.currency_id\n                        OR mu.muted_user_id = movement.sender_id\n                        OR mu.muted_user_id = movement.receiver_id\n                        OR EXISTS (SELECT 1 FROM users mut\n                                    WHERE mut.id = mu.muted_user_id\n                                      AND (mut.application_id = contracts.application_id\n                                           OR mut.discord_id = contracts.receiver_discord_id\n                                           OR EXISTS (SELECT 1 FROM contract_parties q\n                                                       WHERE q.contract_id = contracts.id\n                                                         AND q.discord_id = mut.discord_id)))))\n            AND ($6::timestamp IS NULL\n                 OR (movement.\"time\", movement.kind, movement.id)\n                        < ($6, $7::smallint, $8::bigint)\n                 OR ($9::boolean\n                     AND (movement.\"time\", movement.kind, movement.id)\n                            = ($6, $7::smallint, $8::bigint)))\n          ORDER BY movement.\"time\" DESC, movement.kind DESC, movement.id DESC\n          LIMIT $10\n         OFFSET $11",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind!",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "amount!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "balance_after?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "pool_balance_after?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "time!",
+        "type_info": "Timestamp",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "sender_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "receiver_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "client_name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "applications",
+            "name": "client_name"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "client_id",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "bot_discord_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "discord_id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "contract_id?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "sender_unset!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "receiver_unset!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int2",
+        "Int8",
+        "Int8",
+        "Text",
+        "Timestamp",
+        "Int2",
+        "Int8",
+        "Bool",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true,
+      true,
+      true,
+      true,
+      null,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "6effd6ad2e7fd145772e0b6387d9c76f5b6a282c7f8a5f1c3015720dfc7dafd5"
+}

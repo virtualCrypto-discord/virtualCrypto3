@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT assets.amount, currencies.name, currencies.unit\n           FROM assets\n           JOIN currencies ON currencies.id = assets.currency_id\n           JOIN users ON users.id = assets.user_id\n          WHERE users.discord_id = $1\n            AND NOT EXISTS (\n                SELECT 1 FROM mutes mu\n                 WHERE mu.user_id = users.id AND mu.currency_id = assets.currency_id)\n          ORDER BY currencies.unit\n          LIMIT $2\n         OFFSET $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assets",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "unit",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "unit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7416332a63a882be38ac7a91b467643371e503c8baa139db4fbd1524c51d045e"
+}

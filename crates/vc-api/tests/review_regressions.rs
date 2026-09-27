@@ -197,17 +197,18 @@ async fn identical_signed_payment_is_replayed_across_app_instances(pool: PgPool)
             .body(Body::from(body.clone()))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), 202);
+        assert_eq!(response.status(), 200);
         responses.push((
             response.headers().get("content-type").cloned(),
             to_bytes(response.into_body(), usize::MAX).await.unwrap(),
         ));
     }
     assert_eq!(responses[0], responses[1]);
-    assert!(responses[0].1.is_empty());
-    discord.payment_finished().await;
-    assert_eq!(discord.callbacks().len(), 1);
-    assert_eq!(discord.webhooks().len(), 1);
+    let result: Value = serde_json::from_slice(&responses[0].1).unwrap();
+    assert_eq!(result["type"], 4);
+    assert_eq!(result["data"]["flags"], 32768);
+    assert!(discord.callbacks().is_empty());
+    assert!(discord.webhooks().is_empty());
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         20
@@ -224,8 +225,7 @@ async fn identical_signed_payment_is_replayed_across_app_instances(pool: PgPool)
         payment_payload(&money, "900000000000000002"),
     )
     .await;
-    assert_eq!(response.status, 202);
-    discord.payment_finished().await;
+    assert_eq!(response.status, 200);
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         40
@@ -242,8 +242,7 @@ async fn simultaneous_duplicate_does_not_dispatch_or_cancel_the_owner(pool: PgPo
         .execute(&mut *gate)
         .await
         .unwrap();
-    let callback_gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let discord = FakeDiscord::with_callback_gate(callback_gate.clone());
+    let discord = fake();
     let owner = tokio::spawn(interaction(
         vc_api::router(state(pool.clone(), discord.clone())),
         payload.clone(),
@@ -255,13 +254,12 @@ async fn simultaneous_duplicate_does_not_dispatch_or_cancel_the_owner(pool: PgPo
 
     // Dropping the HTTP waiter must not cancel a claimed financial operation.
     owner.abort();
-    callback_gate.add_permits(1);
     gate.rollback().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let response =
                 interaction(vc_api::router(state(pool.clone(), fake())), payload.clone()).await;
-            if response.status == 202 {
+            if response.status == 200 {
                 break;
             }
             assert_eq!(response.status, 409);
@@ -270,8 +268,7 @@ async fn simultaneous_duplicate_does_not_dispatch_or_cancel_the_owner(pool: PgPo
     })
     .await
     .unwrap();
-    discord.payment_finished().await;
-    assert_eq!(discord.callbacks().len(), 1);
+    assert!(discord.callbacks().is_empty());
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         20
@@ -895,8 +892,7 @@ async fn receipts_and_response_bodies_expire_without_allowing_old_signed_payment
         payment_payload(&money, "900000000000000016"),
     )
     .await;
-    assert_eq!(fresh.status, 202);
-    discord.payment_finished().await;
+    assert_eq!(fresh.status, 200);
     assert_eq!(
         before - get_amount(&pool, money.user1, money.currency).await,
         20

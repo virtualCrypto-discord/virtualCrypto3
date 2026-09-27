@@ -19,3 +19,7 @@ scripts/
 flake.nix
 flake.lock
 justfile
+
+# Local human/LLM review application and its preparation outputs.
+tools/review-workbench/
+.review-artifacts/

@@ -198,6 +198,7 @@ fn render(
     let mut children = vec![crate::components::text(format!("**{}**", title(position)))];
 
     if page.claims.is_empty() {
+        children.push(crate::components::separator());
         children.push(crate::components::text("表示する内容がありません。"));
     } else {
         children.extend(rows(position, &page.claims, me, options, balances));
@@ -205,6 +206,7 @@ fn render(
 
     // The rows first: pagination changes what is on the page rather than saying anything
     // about it.
+    children.push(crate::components::separator());
     children.push(pagination_row(position, page, options));
 
     json!({
@@ -242,6 +244,8 @@ fn rows(
     let mut children = Vec::new();
 
     for claim in claims {
+        // Keep the claim and its actions together, with the same dividers as history.
+        children.push(crate::components::separator());
         children.push(field(position, claim, me));
 
         if let Some(row) = claim_row(claim, me, options, balances) {

@@ -4,8 +4,7 @@
 //! column that could hold one — so nothing here has an Elixir case behind it: `docs/pat.md` is the
 //! design and this file is what holds it to that.
 //!
-//! What the token *is* matters more than what the command says: a `kind: user` token carrying the
-//! browser session's scopes, which is why the two tests that matter are the ones asking the API —
+//! A `kind: user` token with fixed account scopes. The API checks are essential:
 //! `oauth2.register` is the scope the registration surface checks, and revocation is the row.
 
 mod support;
@@ -92,6 +91,50 @@ fn lines(response: &Response) -> Vec<String> {
         .collect()
 }
 
+fn rows(response: &Response) -> Vec<&Value> {
+    response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|component| component["type"] == 9)
+        .collect()
+}
+
+fn revoke_button(response: &Response, name: &str) -> String {
+    rows(response)
+        .into_iter()
+        .find(|row| row["components"][0]["content"] == format!("**{name}**"))
+        .expect("the named row")["accessory"]["custom_id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn navigation(response: &Response, emoji: &str) -> Value {
+    let button = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["type"] == 1)
+        .unwrap()["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|button| button["emoji"]["name"] == emoji)
+        .unwrap();
+    assert!(button.get("label").is_none());
+    button.clone()
+}
+
+fn press(custom_id: &str, user: i64) -> Value {
+    json!({"type":3,"user":{"id":user.to_string()},
+        "data":{"component_type":2,"custom_id":custom_id}})
+}
+
+fn assert_private(response: &Response) {
+    assert_eq!(response.body["data"]["flags"].as_u64().unwrap() & 64, 64);
+}
+
 /// The accent the screen carries, which is how the command says whether it worked.
 fn accent(response: &Response) -> i64 {
     response.body["data"]["components"][0]["accent_color"]
@@ -140,7 +183,7 @@ async fn names_of(pool: &PgPool) -> Vec<String> {
     .expect("the token rows")
 }
 
-/// The headline: what the command makes is a session token with no end but revocation. It reaches
+/// The command makes an account token with no end but revocation. It reaches
 /// `oauth2.register`, the scope the registration surface is gated on, and one that was not issued
 /// with it does not.
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -197,7 +240,9 @@ async fn a_token_is_named_and_lives_until_it_is_revoked(pool: PgPool) {
     assert!(
         lines(&created)
             .iter()
-            .any(|line| line == "期限はありません。`/pat revoke` で失効させるまで使えます。"),
+            .any(|line| line.contains("有効期限はありません")
+                && line.contains("/pat list")
+                && line.contains("失効")),
         "{:?}",
         lines(&created)
     );
@@ -222,9 +267,9 @@ async fn a_token_is_named_and_lives_until_it_is_revoked(pool: PgPool) {
 }
 
 /// Revocation is the row: the signature stays valid and the `jti` stops resolving, so the token
-/// that answered 200 answers 401 the moment the name is revoked.
+/// that answered 200 answers 401 the moment its list button is pressed.
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn revoking_a_name_kills_the_token(pool: PgPool) {
+async fn revoking_from_the_list_kills_the_token(pool: PgPool) {
     let discord = fake();
     insert_user(&pool, USER, DISCORD_ID).await;
 
@@ -247,14 +292,28 @@ async fn revoking_a_name_kills_the_token(pool: PgPool) {
         200
     );
 
+    let listed = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        pat("list", None),
+    )
+    .await;
     let revoked = interaction(
         discord.clone(),
         router(discord.clone(), pool.clone()),
-        pat("revoke", Some("agent")),
+        press(&revoke_button(&listed, "agent"), DISCORD_ID),
     )
     .await;
 
     assert_eq!(accent(&revoked), COLOR_OK, "{:?}", revoked.body);
+    assert_eq!(revoked.body["type"], 7, "updates the same private list");
+    assert_private(&revoked);
+    assert!(rows(&revoked).is_empty());
+    assert!(
+        lines(&revoked)
+            .iter()
+            .any(|line| line.contains("/pat create"))
+    );
     assert_eq!(
         get(
             router(discord.clone(), pool.clone()),
@@ -334,8 +393,7 @@ async fn a_pat_answers_as_a_party_to_a_contract(pool: PgPool) {
     assert_eq!(mine.body.as_array().map(Vec::len), Some(1));
 }
 
-/// A name is how a token is revoked, so two of them on one account could not be told apart: the
-/// second is refused rather than made, and the first keeps working.
+/// Duplicate names are refused so a user can distinguish the list's revocation targets.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_name_can_only_be_used_once(pool: PgPool) {
     let discord = fake();
@@ -355,6 +413,8 @@ async fn a_name_can_only_be_used_once(pool: PgPool) {
     .await;
 
     assert_eq!(accent(&again), COLOR_ERROR, "{:?}", again.body);
+    assert!(lines(&again)[0].contains("/pat list"));
+    assert!(lines(&again)[0].contains("失効"));
     assert_eq!(names_of(&pool).await.len(), 1, "the first one is still it");
     assert_eq!(
         get(
@@ -395,7 +455,7 @@ async fn a_name_longer_than_the_option_allows_is_refused(pool: PgPool) {
 }
 
 /// A list is for recognising a credential, not for reading it back: it answers with the name and
-/// nothing else, and the token itself is one place only — the message that made it.
+/// revocation buttons, and the token itself is one place only — the message that made it.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
     let discord = fake();
@@ -438,19 +498,26 @@ async fn the_list_names_tokens_and_never_shows_one(pool: PgPool) {
     .await;
 
     assert_eq!(
-        lines(&listed),
+        rows(&listed)
+            .iter()
+            .map(|row| row["components"][0]["content"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         ["**agent**", "**claude code**"],
         "the names, in name order, and nothing else"
     );
     assert!(
-        !lines(&listed).join("\n").contains(&token),
+        !listed.body.to_string().contains(&token),
         "the token is not in a list"
     );
+    assert_private(&created);
+    assert_private(&listed);
+    for row in rows(&listed) {
+        assert_eq!(row["accessory"]["label"], "失効");
+        assert_eq!(row["accessory"]["style"], 4);
+    }
 }
 
-/// The list is one message and nothing pages it, so the count is bounded: the twenty-sixth token
-/// is refused, the refusal says where to look and what to do instead, and the list the person is
-/// sent to still holds every name.
+/// The cap and every page of revocation buttons remain usable together.
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
     let discord = fake();
@@ -480,28 +547,83 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
 
     assert!(sentence.contains("25個まで"), "{sentence}");
     assert!(
-        sentence.contains("/pat list") && sentence.contains("/pat revoke"),
+        sentence.contains("/pat list") && sentence.contains("「失効」ボタン"),
         "the way to find what to give up, and what to do about it: {sentence}"
     );
     assert_eq!(names_of(&pool).await.len(), 25, "and nothing more was made");
 
-    let listed = interaction(
+    let mut listed = interaction(
         discord.clone(),
-        router(discord.clone(), pool),
+        router(discord.clone(), pool.clone()),
         pat("list", None),
     )
     .await;
 
+    assert_eq!(navigation(&listed, "⏮️")["disabled"], true);
+    let mut seen = Vec::new();
+    for expected in [10, 10, 5] {
+        assert_private(&listed);
+        assert_eq!(rows(&listed).len(), expected);
+        assert!(components(&listed) <= 40);
+        seen.extend(
+            rows(&listed)
+                .into_iter()
+                .map(|row| row["components"][0]["content"].as_str().unwrap().to_owned()),
+        );
+        let next = navigation(&listed, "⏭️");
+        if next["disabled"] == true {
+            break;
+        }
+        listed = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            press(next["custom_id"].as_str().unwrap(), DISCORD_ID),
+        )
+        .await;
+        assert_eq!(listed.body["type"], 7);
+    }
     assert_eq!(
-        lines(&listed).len(),
-        25,
-        "all of them, on the one screen that is why there is a limit"
+        seen,
+        (0..25).map(|n| format!("**t{n:02}**")).collect::<Vec<_>>()
     );
+    assert_eq!(navigation(&listed, "⏭️")["disabled"], true);
+
+    // Shrinking away the last page returns to the preceding page automatically.
+    for n in 20..25 {
+        listed = interaction(
+            discord.clone(),
+            router(discord.clone(), pool.clone()),
+            press(&revoke_button(&listed, &format!("t{n:02}")), DISCORD_ID),
+        )
+        .await;
+        assert_eq!(accent(&listed), COLOR_OK);
+        assert!(components(&listed) <= 40);
+    }
     assert!(
-        components(&listed) <= 40,
-        "the whole list has to fit one message, and Discord allows forty components: {}",
-        components(&listed)
+        lines(&listed)
+            .iter()
+            .any(|line| line.contains("2 / 2ページ"))
     );
+    assert_eq!(rows(&listed).len(), 10);
+    let previous = navigation(&listed, "⏮️");
+    listed = interaction(
+        discord.clone(),
+        router(discord.clone(), pool.clone()),
+        press(previous["custom_id"].as_str().unwrap(), DISCORD_ID),
+    )
+    .await;
+    assert!(
+        lines(&listed)
+            .iter()
+            .any(|line| line.contains("1 / 2ページ"))
+    );
+    let created = interaction(
+        discord.clone(),
+        router(discord.clone(), pool),
+        pat("create", Some("replacement")),
+    )
+    .await;
+    assert_eq!(accent(&created), COLOR_OK, "a revoked token frees a slot");
 }
 
 /// A token belongs to an account, so a caller who has none is told which step makes one rather
@@ -523,6 +645,183 @@ async fn a_caller_without_an_account_is_told_so(pool: PgPool) {
         lines(&created)
     );
     assert!(names_of(&pool).await.is_empty());
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn old_buttons_cannot_revoke_a_replacement_with_the_same_name(pool: PgPool) {
+    let discord = fake();
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let app = router(discord.clone(), pool.clone());
+    interaction(discord.clone(), app.clone(), pat("create", Some("agent"))).await;
+    let listed = interaction(discord.clone(), app.clone(), pat("list", None)).await;
+    let old_button = revoke_button(&listed, "agent");
+    let revoked = interaction(discord.clone(), app.clone(), press(&old_button, DISCORD_ID)).await;
+    assert_eq!(accent(&revoked), COLOR_OK);
+    let repeated = interaction(discord.clone(), app.clone(), press(&old_button, DISCORD_ID)).await;
+    assert_eq!(accent(&repeated), COLOR_ERROR);
+    let replacement = interaction(discord.clone(), app.clone(), pat("create", Some("agent"))).await;
+    let stale = interaction(discord.clone(), app.clone(), press(&old_button, DISCORD_ID)).await;
+    assert_eq!(accent(&stale), COLOR_ERROR);
+    assert_eq!(rows(&stale).len(), 1);
+    assert_ne!(revoke_button(&stale, "agent"), old_button);
+    assert_eq!(
+        get(app, LIST_URI, Some(&token_of(&replacement)))
+            .await
+            .status,
+        200
+    );
+    assert_eq!(names_of(&pool).await, ["agent"]);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn buttons_cannot_revoke_another_accounts_or_an_unnamed_token(pool: PgPool) {
+    use vc_api::custom_id::ui::pat as ids;
+    let discord = fake();
+    insert_user(&pool, USER, DISCORD_ID).await;
+    insert_user(&pool, 2, OWNER_DISCORD_ID).await;
+    let app = router(discord.clone(), pool.clone());
+    let made = interaction(discord.clone(), app.clone(), pat("create", Some("agent"))).await;
+    let listed = interaction(discord.clone(), app.clone(), pat("list", None)).await;
+    let token_id = vc_auth::issue::personal_tokens(&pool, i64::from(USER))
+        .await
+        .unwrap()[0]
+        .token_id;
+    // Both a copied button and one forged to name the attacker's own Discord id fail.
+    for id in [
+        revoke_button(&listed, "agent"),
+        ids::revoke(OWNER_DISCORD_ID, 1, token_id),
+    ] {
+        let response =
+            interaction(discord.clone(), app.clone(), press(&id, OWNER_DISCORD_ID)).await;
+        assert_eq!(accent(&response), COLOR_ERROR);
+        assert_private(&response);
+        assert!(!response.body.to_string().contains("**agent**"));
+    }
+    let other_page = interaction(
+        discord.clone(),
+        app.clone(),
+        press(&ids::page(DISCORD_ID, 1), OWNER_DISCORD_ID),
+    )
+    .await;
+    assert_eq!(accent(&other_page), COLOR_ERROR);
+    assert!(!other_page.body.to_string().contains("**agent**"));
+    assert_eq!(
+        get(app.clone(), LIST_URI, Some(&token_of(&made)))
+            .await
+            .status,
+        200
+    );
+
+    let unnamed = mint(&pool, USER, &["oauth2.register"]).await;
+    let claims = vc_auth::jwt::verify(&unnamed, support::JWT_SECRET.as_bytes()).unwrap();
+    let response = interaction(
+        discord.clone(),
+        app.clone(),
+        press(
+            &ids::revoke(DISCORD_ID, 1, claims.jti.parse().unwrap()),
+            DISCORD_ID,
+        ),
+    )
+    .await;
+    assert_eq!(accent(&response), COLOR_ERROR);
+    assert_eq!(get(app, LIST_URI, Some(&unnamed)).await.status, 200);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn unicode_names_at_the_boundary_can_be_revoked_from_the_list(pool: PgPool) {
+    let discord = fake();
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let app = router(discord.clone(), pool.clone());
+    let name = "名".repeat(32);
+    let made = interaction(discord.clone(), app.clone(), pat("create", Some(&name))).await;
+    assert_eq!(accent(&made), COLOR_OK);
+    let listed = interaction(discord.clone(), app.clone(), pat("list", None)).await;
+    let id = revoke_button(&listed, &name);
+    assert!(id.encode_utf16().count() <= 100);
+    let revoked = interaction(discord.clone(), app.clone(), press(&id, DISCORD_ID)).await;
+    assert_eq!(accent(&revoked), COLOR_OK);
+    for name in ["名".repeat(33), "   ".to_owned()] {
+        let refused = interaction(discord.clone(), app.clone(), pat("create", Some(&name))).await;
+        assert_eq!(accent(&refused), COLOR_ERROR);
+    }
+    assert!(names_of(&pool).await.is_empty());
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn guild_creation_is_private_and_explains_the_authority_and_one_time_display(pool: PgPool) {
+    let discord = fake();
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let app = router(discord.clone(), pool);
+    let mut payload = pat("create", Some("**tool**"));
+    payload["member"] = json!({"user":{"id":DISCORD_ID.to_string()}});
+    payload["guild_id"] = json!(GUILD.to_string());
+    payload.as_object_mut().unwrap().remove("user");
+    let made = interaction(discord.clone(), app.clone(), payload).await;
+    assert_eq!(accent(&made), COLOR_OK);
+    assert_private(&made);
+    let prose = lines(&made).join("\n");
+    for meaning in [
+        "本人だけ",
+        "一度だけ",
+        "有効期限はありません",
+        "あなたとして",
+        "送金",
+        "権限は絞れません",
+        "/pat list",
+    ] {
+        assert!(prose.contains(meaning), "missing explanation: {meaning}");
+    }
+    assert!(!prose.contains("ブラウザ"));
+    let listed = interaction(discord.clone(), app, pat("list", None)).await;
+    assert_private(&listed);
+    assert!(!listed.body.to_string().contains(&token_of(&made)));
+    assert_eq!(
+        rows(&listed)[0]["components"][0]["content"],
+        "**\\*\\*tool\\*\\***"
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn obsolete_commands_and_invalid_component_payloads_do_not_revoke(pool: PgPool) {
+    use vc_api::custom_id::ui::pat as ids;
+    let discord = fake();
+    insert_user(&pool, USER, DISCORD_ID).await;
+    let app = router(discord.clone(), pool.clone());
+    interaction(discord.clone(), app.clone(), pat("create", Some("agent"))).await;
+    let listed = interaction(discord.clone(), app.clone(), pat("list", None)).await;
+    let mut wrong_type = press(&revoke_button(&listed, "agent"), DISCORD_ID);
+    wrong_type["data"]["component_type"] = json!(3);
+    for payload in [
+        pat("revoke", Some("agent")),
+        wrong_type,
+        press(&ids::page(DISCORD_ID, 0), DISCORD_ID),
+    ] {
+        let refused = interaction(discord.clone(), app.clone(), payload).await;
+        assert_eq!(refused.status, 400);
+    }
+    assert_eq!(names_of(&pool).await, ["agent"]);
+}
+
+#[test]
+fn pat_registration_and_help_offer_create_and_list() {
+    let registered = vc_api::discord_commands::commands()
+        .into_iter()
+        .find(|command| command["name"] == "pat")
+        .unwrap();
+    assert_eq!(
+        registered["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["create", "list"]
+    );
+    let doc = vc_api::docs::commands::all()
+        .iter()
+        .find(|command| command.name == "pat")
+        .unwrap();
+    assert_eq!(doc.usage, ["/pat create name:<名前>", "/pat list"]);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

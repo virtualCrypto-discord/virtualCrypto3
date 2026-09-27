@@ -50,8 +50,9 @@ async fn unbound_claimants_are_identifiable_before_and_after_payment(pool: PgPoo
     fixture(&pool).await;
     let (_, account, claim, client_id) = asking(&pool, "same name").await;
     let (_, _, other_claim, other_client_id) = asking(&pool, "same name").await;
-    let identity = format!("請求元: Bot未連携: `same name`\nclient_id: `{client_id}`");
-    let other_identity = format!("請求元: Bot未連携: `same name`\nclient_id: `{other_client_id}`");
+    let identity = format!("請求元: ボット未連携: `same name`\nアプリケーションID: `{client_id}`");
+    let other_identity =
+        format!("請求元: ボット未連携: `same name`\nアプリケーションID: `{other_client_id}`");
 
     for subcommand in ["list", "received"] {
         let listed = command(&pool, subcommand, None).await;
@@ -139,7 +140,7 @@ async fn bound_claimants_show_the_bot_and_unbinding_restores_the_application(poo
             .as_str()
             .unwrap()
             .contains(&format!(
-                "請求元: Bot未連携: `（名前なし）`\nclient_id: `{client_id}`"
+                "請求元: ボット未連携: `（名前なし）`\nアプリケーションID: `{client_id}`"
             ))
     );
 }

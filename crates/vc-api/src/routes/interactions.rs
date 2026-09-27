@@ -5,6 +5,7 @@ use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 use crate::command::CommandError;
 use crate::state::AppState;
@@ -15,6 +16,7 @@ use crate::state::AppState;
 /// anything else, and only then does the body's `type` select a handler. The
 /// request signature is the whole of the authentication — there is no token.
 pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let received_at = Instant::now();
     let signature = single_header(&headers, "x-signature-ed25519");
     let timestamp = single_header(&headers, "x-signature-timestamp");
 
@@ -82,16 +84,16 @@ pub async fn index(State(state): State<AppState>, headers: HeaderMap, body: Byte
         payload.get("type").and_then(crate::json_number::as_i64),
         Some(2 | 3 | 5)
     ) {
-        return super::interaction_receipts::run(state, payload).await;
+        return super::interaction_receipts::run(state, payload, received_at).await;
     }
-    dispatch(&state, &payload).await
+    dispatch(&state, &payload, received_at).await
 }
 
-pub(super) async fn dispatch(state: &AppState, payload: &Value) -> Response {
+pub(super) async fn dispatch(state: &AppState, payload: &Value, received_at: Instant) -> Response {
     match payload.get("type").and_then(crate::json_number::as_i64) {
         // 1: PING, answered with a PONG.
         Some(1) => (StatusCode::OK, Json(json!({ "type": 1 }))).into_response(),
-        Some(2) => command(state, payload).await,
+        Some(2) => command(state, payload, received_at).await,
         Some(3) => component(state, payload).await,
         Some(4) => autocomplete(state, payload).await,
         Some(5) => modal(state, payload).await,
@@ -232,7 +234,9 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         use crate::custom_id::ui::developer::Screen;
         if matches!(
             (component_type, screen),
-            (Some(3), Screen::Edit) | (Some(5), Screen::Connect)
+            (Some(3), Screen::Edit)
+                | (Some(5), Screen::Connect)
+                | (Some(2), Screen::RotateSecret | Screen::ConfirmConnect)
         ) {
             let custom_id = custom_id.to_owned();
             return management_response(
@@ -290,6 +294,32 @@ async fn component(state: &AppState, payload: &Value) -> Response {
             );
         }
         return match crate::command::grant::component(state, custom_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
+    if let Some(custom_id) = custom_id
+        && crate::custom_id::parse(custom_id).first() == Some(&crate::custom_id::ui::pat::head())
+    {
+        if component_type != Some(2) {
+            return text(StatusCode::BAD_REQUEST, "Type Not Found");
+        }
+        let Ok(pressed) = crate::custom_id::ui::pat::parse(&crate::custom_id::parse(custom_id))
+        else {
+            return text(StatusCode::BAD_REQUEST, "Type Not Found");
+        };
+        if matches!(pressed, crate::custom_id::ui::pat::Pressed::Revoke { .. }) {
+            let custom_id = custom_id.to_owned();
+            return management_response(
+                crate::command::response::run(state, payload, true, |state, payload| async move {
+                    crate::command::pat::component(&state, &custom_id, &payload).await
+                })
+                .await,
+            );
+        }
+        return match crate::command::pat::component(state, custom_id, payload).await {
             Ok(body) => (StatusCode::OK, Json(body)).into_response(),
             Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
             Err(CommandError::Internal(error)) => error.into_response(),
@@ -354,7 +384,7 @@ async fn component(state: &AppState, payload: &Value) -> Response {
 
 /// `verified/2` for `type` 2: the command name picks a handler, and a payload
 /// without one falls through to `Type Not Found`.
-async fn command(state: &AppState, payload: &Value) -> Response {
+async fn command(state: &AppState, payload: &Value, received_at: Instant) -> Response {
     let data = payload.get("data");
 
     let Some(name) = data
@@ -377,7 +407,7 @@ async fn command(state: &AppState, payload: &Value) -> Response {
         );
     if matches!(name, "pay" | "issue") || mutating_claim {
         let response = match name {
-            "pay" => crate::command::pay::respond(state, &options, payload).await,
+            "pay" => crate::command::pay::respond(state, &options, payload, received_at).await,
             "issue" => crate::command::issue::respond(state, &options, payload).await,
             _ => crate::command::claim::respond(state, &options, payload).await,
         };
@@ -391,8 +421,8 @@ async fn command(state: &AppState, payload: &Value) -> Response {
     let subcommand = options.get("subcommand").and_then(Value::as_str);
     let management = match name {
         "create" => true,
-        "pat" => matches!(subcommand, Some("create" | "revoke")),
-        "mute" | "unmute" => matches!(subcommand, Some("currency" | "user")),
+        "pat" => subcommand == Some("create"),
+        "mute" => matches!(subcommand, Some("currency" | "user")),
         "application" => subcommand == Some("register"),
         _ => false,
     };

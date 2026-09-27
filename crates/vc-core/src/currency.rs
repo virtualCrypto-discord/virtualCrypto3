@@ -418,7 +418,8 @@ fn like_prefix(value: &str) -> String {
 
 /// `Money.search_currencies_with_asset_by_unit/3`: the units starting with
 /// `unit`, the caller's own guild first and their holdings next — the order the
-/// command's suggestions appear in.
+/// command's suggestions appear in. Muted currencies are excluded before the
+/// limit.
 pub async fn search_by_unit(
     pool: &PgPool,
     unit: &str,
@@ -434,6 +435,10 @@ pub async fn search_by_unit(
            LEFT JOIN assets
                   ON assets.currency_id = currencies.id AND assets.user_id = $1
           WHERE currencies.unit ILIKE $2
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes
+                 WHERE mutes.user_id = $1 AND mutes.currency_id = currencies.id
+            )
           ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,
                    (COALESCE(assets.amount, 0) != 0) DESC,
                    char_length(currencies.unit) ASC,
@@ -452,7 +457,7 @@ pub async fn search_by_unit(
 
 /// `Money.search_currencies_with_asset_by_name/3`, which orders by the name's
 /// length and then by the currency's id rather than by anything stored on the
-/// asset.
+/// asset. Mute filtering follows [`search_by_unit`].
 pub async fn search_by_name(
     pool: &PgPool,
     name: &str,
@@ -468,6 +473,10 @@ pub async fn search_by_name(
            LEFT JOIN assets
                   ON assets.currency_id = currencies.id AND assets.user_id = $1
           WHERE currencies.name ILIKE $2
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes
+                 WHERE mutes.user_id = $1 AND mutes.currency_id = currencies.id
+            )
           ORDER BY (currencies.guild_id = $3) DESC NULLS LAST,
                    (COALESCE(assets.amount, 0) != 0) DESC,
                    char_length(currencies.name) ASC,
@@ -486,6 +495,7 @@ pub async fn search_by_name(
 
 /// `Money.search_currencies_with_asset_by_guild_and_user/2`, which is what an
 /// empty query offers: the caller's own currencies and their guild's.
+/// Mute filtering follows [`search_by_unit`], including the guild's currency.
 pub async fn search_by_guild_and_user(
     pool: &PgPool,
     guild_id: Option<i64>,
@@ -499,7 +509,11 @@ pub async fn search_by_guild_and_user(
            FROM currencies
            LEFT JOIN assets
                   ON assets.currency_id = currencies.id AND assets.user_id = $1
-          WHERE assets.user_id = $1 OR currencies.guild_id = $2
+          WHERE (assets.user_id = $1 OR currencies.guild_id = $2)
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes
+                 WHERE mutes.user_id = $1 AND mutes.currency_id = currencies.id
+            )
           ORDER BY (currencies.guild_id = $2) DESC NULLS LAST,
                    (COALESCE(assets.amount, 0) != 0) DESC,
                    currencies.id ASC

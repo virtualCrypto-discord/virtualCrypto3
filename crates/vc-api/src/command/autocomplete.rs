@@ -66,6 +66,9 @@ pub async fn handle(
         // there is no autocomplete to port. The path is the command and its subcommand, so
         // every `/application` subcommand that takes a `client_id` comes through here.
         ("client_id", ["application", _]) => applications(state, &query, me).await?,
+        ("code", ["grant", "approve"]) => {
+            grant_codes(state, &query, me, super::grant::authorized_guild(payload)).await?
+        }
         // `/help command:<名前>`: the commands that exist, which is the list the
         // screens are built from rather than a second copy of the names.
         ("command", ["help"]) => commands(&query),
@@ -146,6 +149,51 @@ fn truncate(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
+async fn grant_codes(
+    state: &AppState,
+    query: &str,
+    me: i64,
+    guild: Option<i64>,
+) -> Result<Vec<Value>, CommandError> {
+    let candidates = vc_core::grant::request_candidates(
+        state.pool(),
+        me,
+        guild,
+        query.trim(),
+        LIMIT,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await?;
+
+    Ok(candidates
+        .into_iter()
+        .map(|candidate| {
+            let target = match candidate.target {
+                vc_core::grant::Target::Guild(_) => "サーバー",
+                vc_core::grant::Target::User(_) => "アカウント",
+            };
+            let prefix = format!("{} / {target} / ", candidate.user_code);
+            let label = match candidate.bot_discord_id {
+                Some(bot) => format!("{prefix}ボット {bot}"),
+                None => {
+                    let prefix = format!("{prefix}ボット未連携: ");
+                    let suffix = format!(" ({})", candidate.client_id);
+                    let name = candidate
+                        .client_name
+                        .as_deref()
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("（名前なし）")
+                        .replace(['\r', '\n'], " ");
+                    let budget =
+                        100_usize.saturating_sub(prefix.chars().count() + suffix.chars().count());
+                    format!("{prefix}{}{suffix}", truncate(&name, budget))
+                }
+            };
+            json!({"name": label, "value": candidate.user_code})
+        })
+        .collect())
+}
+
 /// `CurrencyUnit` and `CurrencyName`, which differ only in the field they match
 /// and offer back.
 async fn currencies(
@@ -177,18 +225,22 @@ async fn currencies(
     Ok(candidates
         .into_iter()
         .map(|candidate| {
-            let unit = candidate.unit.clone().unwrap_or_default();
+            let unit = candidate.unit.unwrap_or_default();
+            let name = candidate.name.unwrap_or_default();
+            let prefix = "通貨名: ";
+            let balance = format!(" 所持量: {}{unit}", candidate.amount);
+            // Older currencies can have names longer than today's creation limit.
+            // Keep the balance and unit visible, and shorten only the displayed
+            // name. The value must remain the exact name/unit the command accepts.
+            let name_limit =
+                100_usize.saturating_sub(prefix.chars().count() + balance.chars().count());
+            let label = format!("{prefix}{}{balance}", truncate(&name, name_limit));
 
             json!({
-                "name": format!(
-                    "通貨名: {} 所持量: {}{}",
-                    candidate.name.clone().unwrap_or_default(),
-                    candidate.amount,
-                    unit,
-                ),
+                "name": truncate(&label, 100),
                 "value": match field {
                     Field::Unit => unit,
-                    Field::Name => candidate.name.unwrap_or_default(),
+                    Field::Name => name,
                 },
             })
         })

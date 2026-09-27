@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 use support::*;
-use vc_api::custom_id::ui::{developer, grant, modal, mute};
+use vc_api::custom_id::ui::{developer, grant, modal, mute, pat};
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -18,17 +18,16 @@ enum Operation {
     GrantRevoke,
     MuteCurrency,
     MuteUser,
-    UnmuteCurrency,
-    UnmuteUser,
     UnmuteCurrencyButton,
     UnmuteUserButton,
     Register,
     EditForm,
     EditSelect,
+    RotateSecret,
     Connect,
     Delete,
 }
-const OPERATIONS: [Operation; 16] = [
+const OPERATIONS: [Operation; 15] = [
     Operation::Create,
     Operation::PatCreate,
     Operation::PatRevoke,
@@ -36,13 +35,12 @@ const OPERATIONS: [Operation; 16] = [
     Operation::GrantRevoke,
     Operation::MuteCurrency,
     Operation::MuteUser,
-    Operation::UnmuteCurrency,
-    Operation::UnmuteUser,
     Operation::UnmuteCurrencyButton,
     Operation::UnmuteUserButton,
     Operation::Register,
     Operation::EditForm,
     Operation::EditSelect,
+    Operation::RotateSecret,
     Operation::Connect,
     Operation::Delete,
 ];
@@ -85,21 +83,26 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             ]}),
             money.user1,
         ),
-        PatCreate | PatRevoke => {
-            if matches!(operation, PatRevoke) {
-                vc_auth::issue::personal_token(pool, JWT_SECRET.as_bytes(), 1, "revoked", now)
-                    .await
-                    .unwrap();
-            }
-            command(
-                money,
-                "pat",
-                if matches!(operation, PatCreate) {
-                    "create"
-                } else {
-                    "revoke"
-                },
-                json!([{"name":"name","value":if matches!(operation, PatCreate) {"created"} else {"revoked"}}]),
+        PatCreate => command(
+            money,
+            "pat",
+            "create",
+            json!([{"name":"name","value":"created"}]),
+        ),
+        PatRevoke => {
+            vc_auth::issue::personal_token(pool, JWT_SECRET.as_bytes(), 1, "revoked", now)
+                .await
+                .unwrap();
+            let token_id = vc_auth::issue::personal_tokens(pool, 1)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|token| token.name == "revoked")
+                .unwrap()
+                .token_id;
+            button_from_guild(
+                json!({"custom_id":pat::revoke(money.user1, 1, token_id)}),
+                money.user1,
             )
         }
         GrantApprove | GrantRevoke => {
@@ -138,12 +141,8 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             payload["guild_id"] = json!(money.guild.to_string());
             payload
         }
-        MuteCurrency | MuteUser | UnmuteCurrency | UnmuteUser | UnmuteCurrencyButton
-        | UnmuteUserButton => {
-            let currency = matches!(
-                operation,
-                MuteCurrency | UnmuteCurrency | UnmuteCurrencyButton
-            );
+        MuteCurrency | MuteUser | UnmuteCurrencyButton | UnmuteUserButton => {
+            let currency = matches!(operation, MuteCurrency | UnmuteCurrencyButton);
             let removing = !matches!(operation, MuteCurrency | MuteUser);
             if removing {
                 if currency {
@@ -175,7 +174,7 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             } else {
                 command(
                     money,
-                    if removing { "unmute" } else { "mute" },
+                    "mute",
                     if currency { "currency" } else { "user" },
                     json!([{"name":if currency {"unit"} else {"user"},
                         "value":if currency {money.unit.clone()} else {money.user2.to_string()}}]),
@@ -183,7 +182,7 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             }
         }
         Register => command(money, "application", "register", json!([])),
-        EditForm | EditSelect | Connect => {
+        EditForm | EditSelect | RotateSecret | Connect => {
             let application = insert_application(pool, money.user1, "ack application").await;
             let client = client_id_of(pool, application).await;
             if matches!(operation, EditForm) {
@@ -191,6 +190,11 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
                     "custom_id":developer::custom_id_for_field(developer::Screen::Edit,&client,"client_name"),
                     "components":[{"type":18,"component":{"type":4,"custom_id":"client_name","value":"changed"}}]
                 }})
+            } else if matches!(operation, RotateSecret) {
+                button_from_guild(
+                    json!({"custom_id":developer::custom_id_for_field(developer::Screen::RotateSecret,&client,"confirm")}),
+                    money.user1,
+                )
             } else if matches!(operation, EditSelect) {
                 let mut payload = button_from_guild(
                     json!({
@@ -206,15 +210,12 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
                     "{}/applications/verification?q={client}",
                     links().site_url
                 ));
-                let mut payload = button_from_guild(
+                button_from_guild(
                     json!({
-                        "custom_id":developer::custom_id_for(developer::Screen::Connect,&client),
-                        "values":[BOT.to_string()]
+                        "custom_id":developer::custom_id_for_field(developer::Screen::ConfirmConnect,&client,&BOT.to_string())
                     }),
                     money.user1,
-                );
-                payload["data"]["component_type"] = json!(5);
-                payload
+                )
             }
         }
         Delete => json!({"type":5,"guild_id":money.guild.to_string(),
@@ -366,6 +367,7 @@ async fn failed_management_result_delivery_does_not_repeat_the_mutation(pool: Pg
         Operation::PatCreate,
         Operation::GrantApprove,
         Operation::EditForm,
+        Operation::RotateSecret,
         Operation::Delete,
     ]
     .into_iter()

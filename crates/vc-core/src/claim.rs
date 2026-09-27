@@ -1357,6 +1357,12 @@ pub async fn search_candidates(
               OR $2 = 'received' AND py.discord_id = $3
               OR $2 = 'claimed' AND cl.discord_id = $3)
             AND c.id::text LIKE $4
+            AND NOT EXISTS (
+                SELECT 1 FROM mutes mu
+                 WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $3)
+                   AND (mu.currency_id = c.currency_id
+                        OR mu.muted_user_id = c.claimant_user_id
+                        OR mu.muted_user_id = c.payer_user_id))
           ORDER BY (cur.guild_id = $5) DESC NULLS LAST, c.id DESC
           LIMIT $6",
         statuses,

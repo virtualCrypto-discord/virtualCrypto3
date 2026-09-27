@@ -2,14 +2,15 @@
 //! appear in their lists.
 //!
 //! A mute is a filter and not a lock. Nothing here refuses a payment, blocks a claim or stops an
-//! issue: the claim and contract lists leave out the rows it names, for the person who set it,
+//! issue: balances, histories, claims, contracts and their autocomplete leave out muted rows
+//! for the person who set it,
 //! and every other reader of that data — another person, an application, a single row fetched by
 //! id — sees what they always saw. That is why the pair a row holds is (who is looking, what
 //! they are not looking at) and why a mute cannot be aimed at somebody: being named in a row
 //! never changes what its target sees.
 //!
 //! 無期限: there is no column for an end, because a preference has no sentence to serve — what
-//! ends one is [`unmute_currency`] or [`unmute_user`], which is the same `/mute list` button the
+//! ends one is [`unmute_currency_id`] or [`unmute_user`], which is the same `/mute list` button the
 //! person who set it pressed.
 //!
 //! An addition rather than a port: the Elixir has no mute and nothing that filters a list by its
@@ -139,25 +140,7 @@ pub async fn mute_user(
     Ok(inserted == 1)
 }
 
-/// Forgetting a currency's mute. `false` when there was nothing to forget, which is what a
-/// button pressed twice comes back as.
-pub async fn unmute_currency(pool: &PgPool, user_id: i32, unit: &str) -> Result<bool, MuteError> {
-    let Some(currency_id) = currency(pool, unit).await? else {
-        return Err(MuteError::NoSuchCurrency);
-    };
-
-    remove(
-        pool,
-        "DELETE FROM mutes WHERE user_id = $1 AND currency_id = $2",
-        user_id,
-        currency_id,
-    )
-    .await
-}
-
-/// Forgetting a currency's mute by the id a row was built from, which is what a button carries:
-/// the same deletion [`unmute_currency`] makes, looked up by the other of the currency's two
-/// names.
+/// Remove the currency mute named by a list button. False if it was already removed.
 pub async fn unmute_currency_id(
     pool: &PgPool,
     user_id: i32,
@@ -172,7 +155,7 @@ pub async fn unmute_currency_id(
     .await
 }
 
-/// Forgetting somebody's mute, and answering like [`unmute_currency`].
+/// Forgetting somebody's mute, and answering like [`unmute_currency_id`].
 pub async fn unmute_user(pool: &PgPool, user_id: i32, discord_id: i64) -> Result<bool, MuteError> {
     let mut tx = pool.begin().await?;
     let Some(target) = account(&mut tx, discord_id).await? else {
@@ -290,13 +273,4 @@ async fn account(conn: &mut PgConnection, discord_id: i64) -> Result<Option<i32>
             return Ok(Some(id));
         }
     }
-}
-
-/// The currency a unit names, if there is one.
-async fn currency(pool: &PgPool, unit: &str) -> Result<Option<i64>, MuteError> {
-    Ok(
-        sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
-            .fetch_optional(pool)
-            .await?,
-    )
 }

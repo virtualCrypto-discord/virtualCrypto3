@@ -14,33 +14,24 @@ const COLOR_OK: i64 = 0x38EA42;
 async fn pay(pool: PgPool, payload: Value) -> Value {
     let discord = fake();
     let response = interaction(vc_api::router(state(pool, discord.clone())), payload).await;
-    assert_eq!(response.status, 202, "{}", response.body);
-    assert_acknowledgement(&discord);
-    discord.payment_finished().await;
-    if let [body] = discord.webhooks().as_slice() {
-        assert_eq!(body["flags"], 32768, "success is public");
-        assert_eq!(discord.response_deletions(), 1);
-        assert!(discord.response_edits().is_empty());
-        body.clone()
-    } else {
-        assert!(discord.webhooks().is_empty(), "errors must stay private");
-        assert_eq!(discord.response_deletions(), 0);
-        let edits = discord.response_edits();
-        assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0]["flags"], 32768);
-        assert_eq!(edits[0].get("content"), Some(&Value::Null));
-        assert_eq!(edits[0]["embeds"], json!([]));
-        edits[0].clone()
-    }
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(
+        response.body["type"], 4,
+        "the initial response is the final result"
+    );
+    assert_no_intermediate_reply(&discord);
+    response.body["data"].clone()
 }
 
-fn assert_acknowledgement(discord: &FakeDiscord) {
-    assert_eq!(
-        discord.callbacks(),
-        vec![json!({
-            "type": 4,
-            "data": {"flags": 64, "content": "処理中…", "allowed_mentions": {"parse": []}}
-        })]
+fn assert_no_intermediate_reply(discord: &FakeDiscord) {
+    assert!(
+        discord.callbacks().is_empty(),
+        "no processing/deferred callback"
+    );
+    assert!(discord.webhooks().is_empty(), "no extra result message");
+    assert!(
+        discord.response_edits().is_empty(),
+        "no receipt to edit or delete"
     );
 }
 
@@ -66,12 +57,13 @@ fn from_guild(receiver: i64, amount: Value, unit: &str, sender: i64) -> Value {
 
 /// `Interactions.Pay.render/2` for `:error`, which every failure shares.
 fn assert_error(response: &Value, content: &str) {
+    assert_eq!(response["components"][0]["accent_color"], 0xEA3875);
     assert_eq!(
         response["components"][0]["components"][0]["content"],
         json!(content),
     );
 
-    assert_eq!(response["flags"], json!(32768));
+    assert_eq!(response["flags"], json!(32832), "errors are private");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -85,7 +77,7 @@ async fn an_unknown_unit_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨は存在しません。");
+    assert_error(&response, "エラー: 通貨が存在しません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -116,7 +108,7 @@ async fn a_payment_moves_the_amount_between_the_accounts(pool: PgPool) {
     assert_eq!(
         response["components"][0]["components"][0]["content"],
         json!(format!(
-            "<@{}>から<@{}>へ**20** `{}`送金されました。",
+            "<@{}> から <@{}> に **20** `{}` を送金しました。",
             money.user1, money.user2, money.unit
         )),
     );
@@ -149,7 +141,7 @@ async fn paying_an_unknown_receiver_creates_their_account(pool: PgPool) {
     assert_eq!(
         response["components"][0]["components"][0]["content"],
         json!(format!(
-            "<@{}>から<@{}>へ**20** `{}`送金されました。",
+            "<@{}> から <@{}> に **20** `{}` を送金しました。",
             money.user1, receiver, money.unit
         ))
     );
@@ -164,14 +156,25 @@ async fn paying_an_unknown_receiver_creates_their_account(pool: PgPool) {
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn paying_more_than_the_balance_is_reported(pool: PgPool) {
     let money = setup_money(&pool).await;
+    let sender_before = get_amount(&pool, money.user1, money.currency).await;
+    let receiver_before = get_amount(&pool, money.user2, money.currency).await;
 
     let response = pay(
-        pool,
+        pool.clone(),
         from_guild(money.user2, json!(1_000_000), &money.unit, money.user1),
     )
     .await;
 
     assert_error(&response, "エラー: 通貨が不足しています。");
+    assert_eq!(
+        get_amount(&pool, money.user1, money.currency).await,
+        sender_before
+    );
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        receiver_before
+    );
+    assert_eq!(history_count(&pool).await, 0);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -189,7 +192,7 @@ async fn paying_the_whole_balance_empties_the_account(pool: PgPool) {
     assert_eq!(
         response["components"][0]["components"][0]["content"],
         json!(format!(
-            "<@{}>から<@{}>へ**{}** `{}`送金されました。",
+            "<@{}> から <@{}> に **{}** `{}` を送金しました。",
             money.user1, money.user2, sender_before, money.unit
         ))
     );
@@ -236,8 +239,134 @@ async fn an_amount_sent_as_a_string_is_parsed(pool: PgPool) {
     assert_error(&response, "エラー: 通貨が不足しています。");
 }
 
+const BUSY: &str = "処理が混み合っているため、送金しませんでした。時間をおいてやり直してください。";
+const UNCERTAIN: &str =
+    "送金結果を確認できませんでした。再送せず、/history で送金履歴を確認してください。";
+
+async fn history_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn wait_for_receipt(pool: &PgPool, id: &str, completed: bool) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let found: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM discord_interactions WHERE id = $1 AND (NOT $2 OR status IS NOT NULL))"
+            ).bind(id).bind(completed).fetch_one(pool).await.unwrap();
+            if found { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_wallet_lock_longer_than_three_seconds_is_acknowledged_and_paid_once(pool: PgPool) {
+async fn a_wallet_lock_returns_a_private_refusal_and_rolls_back_everything(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let before = get_amount(&pool, money.user1, money.currency).await;
+    let discord = fake();
+    let app = vc_api::router(state(pool.clone(), discord.clone()));
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM assets WHERE user_id = 1 AND currency_id = $1 FOR UPDATE")
+        .bind(money.currency)
+        .fetch_one(&mut *blocker)
+        .await
+        .unwrap();
+    // Resolving a new recipient happens before the locked balance write.
+    let mut payload = from_guild(987654321, json!(20), &money.unit, money.user1);
+    payload["id"] = json!("900000000000001001");
+    let response = tokio::time::timeout(
+        Duration::from_millis(2500),
+        interaction(app.clone(), payload.clone()),
+    )
+    .await
+    .expect("return a refusal before Discord's three-second deadline");
+    assert_eq!(response.status, 200);
+    assert_error(&response.body["data"], BUSY);
+    assert_eq!(
+        interaction(app.clone(), payload.clone()).await.body,
+        response.body
+    );
+    blocker.rollback().await.unwrap();
+    // Taking the same lock waits for the cancelled transaction to finish.
+    sqlx::query("SELECT id FROM assets WHERE user_id = 1 AND currency_id = $1 FOR UPDATE")
+        .bind(money.currency)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(get_amount(&pool, money.user1, money.currency).await, before);
+    assert_eq!(history_count(&pool).await, 0);
+    let created: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM users WHERE discord_id = 987654321")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(created, 0, "recipient creation must roll back too");
+    assert_eq!(interaction(app, payload).await.body, response.body);
+    assert_no_intermediate_reply(&discord);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_blocked_receipt_does_not_start_a_late_payment(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let before = get_amount(&pool, money.user1, money.currency).await;
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE discord_interactions IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(
+        Duration::from_millis(2500),
+        pay(
+            pool.clone(),
+            from_guild(money.user2, json!(20), &money.unit, money.user1),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_error(&response, UNCERTAIN);
+    blocker.rollback().await.unwrap();
+    assert_eq!(get_amount(&pool, money.user1, money.currency).await, before);
+    assert_eq!(history_count(&pool).await, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn success_is_one_public_initial_response_and_replay_does_not_pay_again(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let before = get_amount(&pool, money.user2, money.currency).await;
+    // The old callback path would fail; returning the result needs no REST call.
+    let discord = FakeDiscord::with_callback_error();
+    let app = vc_api::router(state(pool.clone(), discord.clone()));
+    let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
+    payload["id"] = json!("900000000000003001");
+    let response = interaction(app.clone(), payload.clone()).await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body["type"], 4);
+    assert_eq!(response.body["data"]["flags"], 32768, "success is public");
+    assert_eq!(
+        response.body["data"]["allowed_mentions"],
+        json!({"parse": []})
+    );
+    assert_eq!(
+        response.body["data"]["components"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(interaction(app, payload).await.body, response.body);
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        before + 20
+    );
+    assert_eq!(history_count(&pool).await, 1);
+    assert_no_intermediate_reply(&discord);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn concurrent_replay_never_starts_a_second_payment(pool: PgPool) {
     let money = setup_money(&pool).await;
     let before = get_amount(&pool, money.user2, money.currency).await;
     let discord = fake();
@@ -249,115 +378,62 @@ async fn a_wallet_lock_longer_than_three_seconds_is_acknowledged_and_paid_once(p
         .await
         .unwrap();
     let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
-    payload["id"] = json!("900000000000001001");
-    let started = std::time::Instant::now();
-    let response = tokio::time::timeout(
-        Duration::from_millis(2500),
-        interaction(app.clone(), payload.clone()),
-    )
-    .await
-    .expect("the initial response must not wait for the payment lock");
-    assert!(started.elapsed() < Duration::from_secs(3));
-    assert_eq!(response.status, 202);
-    assert_acknowledgement(&discord);
-
-    tokio::time::sleep(Duration::from_millis(3200)).await;
-    assert!(discord.webhooks().is_empty());
-    assert!(discord.response_edits().is_empty());
-    assert_eq!(discord.response_deletions(), 0);
-    assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
-    // The receipt now records acceptance, even while the payment is still blocked.
-    assert_eq!(interaction(app.clone(), payload.clone()).await.status, 202);
+    payload["id"] = json!("900000000000003002");
+    let first = tokio::spawn(interaction(app.clone(), payload.clone()));
+    wait_for_receipt(&pool, "900000000000003002", false).await;
+    assert_eq!(interaction(app.clone(), payload.clone()).await.status, 409);
     blocker.rollback().await.unwrap();
-    discord.payment_finished().await;
-    assert_eq!(interaction(app, payload).await.status, 202);
-    assert_eq!(discord.callbacks().len(), 1);
-    assert_eq!(discord.webhooks().len(), 1);
-    assert_eq!(discord.webhooks()[0]["flags"], 32768);
-    assert_eq!(discord.response_deletions(), 1);
+    let response = first.await.unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body["data"]["flags"], 32768);
+    assert_eq!(interaction(app, payload).await.body, response.body);
     assert_eq!(
         get_amount(&pool, money.user2, money.currency).await,
         before + 20
     );
-    let records: i64 = sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(records, 1);
+    assert_eq!(history_count(&pool).await, 1);
+    assert_no_intermediate_reply(&discord);
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_rejected_or_timed_out_acknowledgement_never_pays(pool: PgPool) {
+async fn disconnecting_the_request_preserves_the_result_and_never_repays(pool: PgPool) {
     let money = setup_money(&pool).await;
     let before = get_amount(&pool, money.user2, money.currency).await;
-    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
-    for (index, discord) in [
-        FakeDiscord::with_callback_error(),
-        FakeDiscord::with_callback_gate(gate.clone()),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
-        payload["id"] = json!((900_000_000_000_002_000u64 + index as u64).to_string());
-        let response = tokio::time::timeout(
-            Duration::from_secs(3),
-            interaction(
-                vc_api::router(state(pool.clone(), discord.clone())),
-                payload.clone(),
-            ),
-        )
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM assets WHERE user_id = 1 AND currency_id = $1 FOR UPDATE")
+        .bind(money.currency)
+        .fetch_one(&mut *blocker)
         .await
         .unwrap();
-        assert_eq!(response.status, 500);
-        assert!(discord.callbacks().is_empty());
-        assert!(discord.webhooks().is_empty());
-        assert!(discord.response_edits().is_empty());
-        assert_eq!(discord.response_deletions(), 0);
-        let retry_discord = fake();
-        let retry = interaction(
-            vc_api::router(state(pool.clone(), retry_discord.clone())),
-            payload,
-        )
-        .await;
-        assert_eq!(retry.status, 500);
-        assert!(retry_discord.callbacks().is_empty());
-    }
-    gate.add_permits(1);
-    assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
-    let records: i64 = sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(records, 0);
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_failed_public_notification_keeps_the_committed_result_private(pool: PgPool) {
-    let money = setup_money(&pool).await;
-    let before = get_amount(&pool, money.user2, money.currency).await;
-    let discord = FakeDiscord::with_followup(true, None);
-    let app = vc_api::router(state(pool.clone(), discord.clone()));
     let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
-    payload["id"] = json!("900000000000003001");
-    assert_eq!(interaction(app.clone(), payload.clone()).await.status, 202);
-    discord.payment_finished().await;
-    assert_acknowledgement(&discord);
-    assert!(discord.webhooks().is_empty());
-    assert_eq!(discord.response_deletions(), 0);
-    let edits = discord.response_edits();
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0]["components"][0]["accent_color"], COLOR_OK);
-    assert!(
-        edits[0]["components"][0]["components"][0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("送金されました。")
+    payload["id"] = json!("900000000000003003");
+    let request = tokio::spawn(interaction(app.clone(), payload.clone()));
+    wait_for_receipt(&pool, "900000000000003003", false).await;
+    request.abort();
+    assert!(matches!(request.await, Err(error) if error.is_cancelled()));
+    blocker.rollback().await.unwrap();
+    wait_for_receipt(&pool, "900000000000003003", true).await;
+    let replay = interaction(app, payload).await;
+    assert_eq!(replay.status, 200);
+    assert_eq!(replay.body["data"]["flags"], 32768);
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        before + 20
     );
-    assert_eq!(edits[0]["flags"], 32768);
-    assert_eq!(edits[0].get("content"), Some(&Value::Null));
-    assert_eq!(interaction(app, payload).await.status, 202);
-    assert_eq!(discord.callbacks().len(), 1);
+    assert_eq!(history_count(&pool).await, 1);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn paying_in_a_dm_returns_the_result_directly(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let before = get_amount(&pool, money.user2, money.currency).await;
+    let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
+    payload["user"] = payload["member"]["user"].clone();
+    payload.as_object_mut().unwrap().remove("member");
+    payload.as_object_mut().unwrap().remove("guild_id");
+    let response = pay(pool.clone(), payload).await;
+    assert_eq!(response["flags"], 32768);
     assert_eq!(
         get_amount(&pool, money.user2, money.currency).await,
         before + 20
@@ -365,51 +441,7 @@ async fn a_failed_public_notification_keeps_the_committed_result_private(pool: P
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn the_processing_message_remains_until_publication_succeeds(pool: PgPool) {
-    let money = setup_money(&pool).await;
-    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
-    let discord = FakeDiscord::with_followup(false, Some(gate.clone()));
-    let response = interaction(
-        vc_api::router(state(pool, discord.clone())),
-        from_guild(money.user2, json!(20), &money.unit, money.user1),
-    )
-    .await;
-    assert_eq!(response.status, 202);
-    tokio::time::timeout(Duration::from_secs(5), discord.followup_started())
-        .await
-        .unwrap();
-    assert_acknowledgement(&discord);
-    assert!(discord.webhooks().is_empty());
-    assert!(discord.response_edits().is_empty());
-    assert_eq!(discord.response_deletions(), 0);
-    gate.add_permits(1);
-    discord.payment_finished().await;
-    assert_eq!(discord.webhooks().len(), 1);
-    assert_eq!(discord.response_deletions(), 1);
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn failure_to_delete_processing_replaces_it_with_the_known_success(pool: PgPool) {
-    let money = setup_money(&pool).await;
-    let discord = FakeDiscord::with_response_delete_error();
-    let response = interaction(
-        vc_api::router(state(pool, discord.clone())),
-        from_guild(money.user2, json!(20), &money.unit, money.user1),
-    )
-    .await;
-    assert_eq!(response.status, 202);
-    discord.payment_finished().await;
-    assert_eq!(discord.webhooks().len(), 1);
-    assert_eq!(discord.response_deletions(), 0);
-    assert_eq!(discord.response_edits().len(), 1);
-    assert_eq!(
-        discord.response_edits()[0]["components"],
-        discord.webhooks()[0]["components"]
-    );
-}
-
-#[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_database_failure_updates_only_the_private_response(pool: PgPool) {
+async fn a_database_failure_returns_only_a_private_error_and_rolls_back(pool: PgPool) {
     let money = setup_money(&pool).await;
     let before = get_amount(&pool, money.user2, money.currency).await;
     sqlx::query(
@@ -425,7 +457,98 @@ async fn a_database_failure_updates_only_the_private_response(pool: PgPool) {
     .await;
     assert_error(
         &response,
-        "送金結果を確認できませんでした。送金履歴を確認してください。",
+        "送金できませんでした。時間をおいてやり直してください。",
     );
     assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
+    assert_eq!(history_count(&pool).await, 0);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_commit_timeout_is_private_and_never_claims_the_payment_was_cancelled(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let before = get_amount(&pool, money.user2, money.currency).await;
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(73003)")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE FUNCTION delay_payment_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN PERFORM pg_advisory_xact_lock(73003); RETURN NEW; END $$;
+        CREATE CONSTRAINT TRIGGER delay_payment_commit AFTER INSERT ON currency_payment_histories
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION delay_payment_commit();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
+    payload["id"] = json!("900000000000003004");
+    let response = tokio::time::timeout(
+        Duration::from_millis(2800),
+        interaction(app.clone(), payload.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, 200);
+    assert_error(&response.body["data"], UNCERTAIN);
+    assert_eq!(
+        interaction(app.clone(), payload.clone()).await.body,
+        response.body
+    );
+    sqlx::query("SELECT pg_advisory_unlock(73003)")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while get_amount(&pool, money.user2, money.currency).await != before + 20 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(interaction(app, payload).await.body, response.body);
+    assert_eq!(history_count(&pool).await, 1);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_slow_receipt_save_still_returns_the_committed_result(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let before = get_amount(&pool, money.user2, money.currency).await;
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(73004)")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE FUNCTION delay_receipt_save() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN PERFORM pg_advisory_xact_lock(73004); RETURN NEW; END $$;
+        CREATE TRIGGER delay_receipt_save BEFORE UPDATE ON discord_interactions
+        FOR EACH ROW EXECUTE FUNCTION delay_receipt_save();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = vc_api::router(state(pool.clone(), fake()));
+    let mut payload = from_guild(money.user2, json!(20), &money.unit, money.user1);
+    payload["id"] = json!("900000000000003005");
+    let response = tokio::time::timeout(
+        Duration::from_millis(2800),
+        interaction(app.clone(), payload.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body["data"]["flags"], 32768);
+    assert_eq!(
+        get_amount(&pool, money.user2, money.currency).await,
+        before + 20
+    );
+    sqlx::query("SELECT pg_advisory_unlock(73004)")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    wait_for_receipt(&pool, "900000000000003005", true).await;
+    assert_eq!(interaction(app, payload).await.body, response.body);
+    assert_eq!(history_count(&pool).await, 1);
 }

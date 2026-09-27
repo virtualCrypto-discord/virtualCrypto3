@@ -85,6 +85,27 @@ pub async fn pay_from_discord(
 ) -> Result<(), PayError> {
     let mut tx = pool.begin().await.map_err(PayError::Database)?;
 
+    pay_from_discord_in(
+        &mut tx,
+        sender_discord_id,
+        receiver_discord_id,
+        unit,
+        amount,
+    )
+    .await?;
+    tx.commit().await.map_err(PayError::Database)?;
+    Ok(())
+}
+
+/// Prepare a Discord payment in the caller's transaction. The caller may roll
+/// back on its response deadline, without interrupting an in-flight commit.
+pub async fn pay_from_discord_in(
+    tx: &mut PgConnection,
+    sender_discord_id: i64,
+    receiver_discord_id: i64,
+    unit: &str,
+    amount: i64,
+) -> Result<(), PayError> {
     let known = sqlx::query_scalar!("SELECT id FROM currencies WHERE unit = $1", unit)
         .fetch_optional(&mut *tx)
         .await
@@ -94,12 +115,12 @@ pub async fn pay_from_discord(
         return Err(PayError::NotFoundCurrency);
     }
 
-    let ids = crate::user::resolve_ids(&mut tx, &[sender_discord_id, receiver_discord_id])
+    let ids = crate::user::resolve_ids(&mut *tx, &[sender_discord_id, receiver_discord_id])
         .await
         .map_err(PayError::Database)?;
 
     crate::transfer::transfer(
-        &mut tx,
+        &mut *tx,
         ids[&sender_discord_id],
         ids[&receiver_discord_id],
         amount,
@@ -113,8 +134,6 @@ pub async fn pay_from_discord(
         TransferError::NotEnoughAmount => PayError::NotEnoughAmount,
         TransferError::Database(error) => PayError::Database(error),
     })?;
-
-    tx.commit().await.map_err(PayError::Database)?;
 
     Ok(())
 }

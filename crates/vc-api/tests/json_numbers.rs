@@ -292,8 +292,14 @@ async fn discord_commands_accept_integer_values_written_as_decimals(pool: PgPool
     payload["application_id"] = json!("123");
     payload["token"] = json!("pay-token");
     let response = support::interaction(app, payload).await;
-    assert_eq!(response.status, 202, "{}", response.body);
-    discord.payment_finished().await;
+    // Pay returns its final result directly, including when Discord's integer
+    // fields use decimal notation. The balances are committed before it replies.
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.body["type"], 4);
+    assert!(discord.callbacks().is_empty());
+    assert!(discord.webhooks().is_empty());
+    assert!(discord.response_edits().is_empty());
+    assert_eq!(support::get_amount(&pool, PARTY, 1).await, 199_480);
     assert_eq!(
         support::get_amount(&pool, 100_000_000_000_000_002, 1).await,
         1_020

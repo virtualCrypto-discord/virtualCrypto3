@@ -34,6 +34,23 @@ pub struct RefreshedToken {
     pub refresh_token: Option<String>,
 }
 
+/// The message Discord created for an interaction follow-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FollowupMessage {
+    pub id: u64,
+    pub channel_id: u64,
+}
+
+impl FollowupMessage {
+    pub fn url(&self, guild_id: Option<i64>) -> String {
+        let guild = guild_id.map_or_else(|| "@me".to_owned(), |id| id.to_string());
+        format!(
+            "https://discord.com/channels/{guild}/{}/{}",
+            self.channel_id, self.id
+        )
+    }
+}
+
 /// Discord API access, injectable so tests do not call the network. This mirrors
 /// the Elixir `DiscordApiService` seam, but `get_user_info/1` had no such seam
 /// there, which is why the goldens needed a patched clone.
@@ -133,12 +150,6 @@ pub trait DiscordApi: Send + Sync {
         body: &Value,
     ) -> Result<(), DiscordError>;
 
-    async fn delete_original_interaction_response(
-        &self,
-        application_id: &str,
-        token: &str,
-    ) -> Result<(), DiscordError>;
-
     /// `post_webhook_message/3`: the follow-up a component answers with, which
     /// is where a button's result is shown. The Elixir tests swap the service
     /// for one that records the body instead of sending it.
@@ -147,7 +158,7 @@ pub trait DiscordApi: Send + Sync {
         application_id: &str,
         token: &str,
         body: &Value,
-    ) -> Result<(), DiscordError>;
+    ) -> Result<FollowupMessage, DiscordError>;
 
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError>;
 
@@ -408,19 +419,9 @@ impl DiscordApi for CachedDiscord {
         application_id: &str,
         token: &str,
         body: &Value,
-    ) -> Result<(), DiscordError> {
+    ) -> Result<FollowupMessage, DiscordError> {
         self.inner
             .post_webhook_message(application_id, token, body)
-            .await
-    }
-
-    async fn delete_original_interaction_response(
-        &self,
-        application_id: &str,
-        token: &str,
-    ) -> Result<(), DiscordError> {
-        self.inner
-            .delete_original_interaction_response(application_id, token)
             .await
     }
 
@@ -466,7 +467,9 @@ impl HttpDiscordApi {
     }
 
     fn endpoint(&self, path: &str) -> String {
-        format!("{}{path}", self.api_base)
+        // Unversioned routes can retain legacy integration-list behavior. Use the
+        // same current API contract for commands, components and resource reads.
+        format!("{}/v10{path}", self.api_base)
     }
 }
 
@@ -530,15 +533,13 @@ impl DiscordApi for HttpDiscordApi {
             .await
             .map_err(|error| DiscordError::Request(error.to_string()))?;
 
-        let integrations = body
-            .as_array()
-            .map(|integrations| {
-                integrations
-                    .iter()
-                    .filter_map(|integration| integration.as_object().cloned())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let integrations = if status == 200 {
+            serde_json::from_value::<Vec<Map<String, Value>>>(body).map_err(|_| {
+                DiscordError::Request("integrations is not an array of objects".into())
+            })?
+        } else {
+            Vec::new()
+        };
 
         Ok((status, integrations))
     }
@@ -815,7 +816,7 @@ impl DiscordApi for HttpDiscordApi {
         application_id: &str,
         token: &str,
         body: &Value,
-    ) -> Result<(), DiscordError> {
+    ) -> Result<FollowupMessage, DiscordError> {
         let response = self
             .http
             .post(self.endpoint(&format!("/webhooks/{application_id}/{token}")))
@@ -831,31 +832,23 @@ impl DiscordApi for HttpDiscordApi {
             )));
         }
 
-        Ok(())
-    }
-
-    async fn delete_original_interaction_response(
-        &self,
-        application_id: &str,
-        token: &str,
-    ) -> Result<(), DiscordError> {
-        let response = self
-            .http
-            .delete(self.endpoint(&format!(
-                "/webhooks/{application_id}/{token}/messages/@original"
-            )))
-            .send()
-            .await
-            .map_err(|_| {
-                DiscordError::Request("the interaction response could not be deleted".into())
-            })?;
-        if !response.status().is_success() {
-            return Err(DiscordError::Request(format!(
-                "the interaction response deletion answered {}",
-                response.status()
-            )));
-        }
-        Ok(())
+        // Interaction follow-ups always wait and return the created message.
+        let message: Value = response.json().await.map_err(|_| {
+            DiscordError::Request("the follow-up response was not a message".into())
+        })?;
+        let id = |field: &str| {
+            message[field]
+                .as_str()
+                .and_then(|id| id.parse::<u64>().ok())
+                .filter(|id| *id > 0)
+                .ok_or_else(|| {
+                    DiscordError::Request("the follow-up response has invalid IDs".into())
+                })
+        };
+        Ok(FollowupMessage {
+            id: id("id")?,
+            channel_id: id("channel_id")?,
+        })
     }
 
     async fn refresh_token(&self, refresh_token: &str) -> Result<RefreshedToken, DiscordError> {

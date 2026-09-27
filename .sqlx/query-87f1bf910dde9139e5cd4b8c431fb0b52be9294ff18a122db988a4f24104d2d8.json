@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency_payment_histories\n             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at,\n              sender_balance_after, receiver_balance_after)\n         VALUES ($1, $2, $3, $4, $5, $5, $5,\n                 COALESCE((SELECT amount FROM assets WHERE user_id = $2 AND currency_id = $4), 0),\n                 COALESCE((SELECT amount FROM assets WHERE user_id = $3 AND currency_id = $4), 0))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "87f1bf910dde9139e5cd4b8c431fb0b52be9294ff18a122db988a4f24104d2d8"
+}

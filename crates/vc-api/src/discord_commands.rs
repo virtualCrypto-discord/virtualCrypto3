@@ -51,7 +51,6 @@ pub fn commands() -> Vec<Value> {
         bal(),
         claim(),
         mute(),
-        unmute(),
         history(),
     ]
     .into_iter()
@@ -152,18 +151,12 @@ fn pat() -> Value {
                 "name": "create",
                 "description": "トークンを1つ作ります（1アカウント25個まで）。値はこの返信に一度だけ表示されます。",
                 "type": 1,
-                "options": [name("トークンの名前です。1〜32文字で、失効させる時に使います。")],
+                "options": [name("トークンを見分ける名前です。1〜32文字で指定します。")],
             },
             {
                 "name": "list",
-                "description": "作ったトークンの名前を表示します。",
+                "description": "トークンの名前を一覧表示し、ボタンで失効させます。",
                 "type": 1,
-            },
-            {
-                "name": "revoke",
-                "description": "名前を指定してトークンを失効させます。",
-                "type": 1,
-                "options": [name("失効させるトークンの名前です。")],
             },
         ],
         "contexts": [0, 1],
@@ -199,17 +192,17 @@ fn contract() -> Value {
 fn grant() -> Value {
     json!({
         "name": "grant",
-        "description": "Review application access and manage personal or server grants.",
+        "description": "アプリケーションからの権限申請を確認し、アカウントやサーバーへのアクセス許可を管理します。",
         "options": [
-            {"name": "user", "description": "List and revoke applications with access to your account.", "type": 1},
+            {"name": "user", "description": "あなたのアカウントへのアクセス許可を一覧表示し、取り消せます。", "type": 1},
             {
                 "name": "server",
-                "description": "発行を許可しているアプリケーションの一覧を表示します。",
+                "description": "このサーバーでの通貨発行の許可を一覧表示し、取り消せます。管理者権限が必要です。",
                 "type": 1,
             },
             {
                 "name": "approve",
-                "description": "Review a personal or server request before approving it.",
+                "description": "申請コードから、アカウントやサーバーへの権限申請の内容を確認して承認します。",
                 "type": 1,
                 "options": [
                     {
@@ -217,6 +210,7 @@ fn grant() -> Value {
                         "description": "アプリケーションが表示する申請コードです。",
                         "type": 3,
                         "required": true,
+                        "autocomplete": true,
                     },
                 ],
             },
@@ -535,7 +529,7 @@ fn options_for_listing(user_description: &str) -> Value {
 /// them are covered either.
 pub const API_BASE: &str = "https://discord.com/api/v10";
 
-/// The `unit` option the two mute commands share: a currency, by the unit the caller types and
+/// The currency mute option: a currency, by the unit the caller types and
 /// [`crate::command::autocomplete`] completes from their own.
 fn unit_option(description: &str) -> Value {
     json!({
@@ -547,7 +541,7 @@ fn unit_option(description: &str) -> Value {
     })
 }
 
-/// The `user` option the two mute commands share.
+/// The user mute option.
 fn user_option(description: &str) -> Value {
     json!({
         "name": "user",
@@ -560,7 +554,7 @@ fn user_option(description: &str) -> Value {
 /// `/mute`: what a person has chosen not to see.
 ///
 /// In a guild and in a DM both, and about nobody but the caller: a mute filters the caller's own
-/// claim and contract lists, so there is no guild to be in, no administrator to ask and no
+/// lists and suggestions, so there is no guild to be in, no administrator to ask and no
 /// permission to check. An addition rather than a port — the Elixir has no mute and nothing that
 /// filters a list by its reader — so what it mirrors is `/pat`'s shape: a personal command whose
 /// whole subject is the account that typed it.
@@ -571,13 +565,13 @@ fn mute() -> Value {
         "options": [
             {
                 "name": "currency",
-                "description": "その通貨の請求と契約を、自分の一覧に表示しなくします。",
+                "description": "その通貨の残高・履歴・請求・契約を、自分の一覧や入力候補に表示しなくします。",
                 "type": 1,
                 "options": [unit_option("表示しなくする通貨の単位です。")],
             },
             {
                 "name": "user",
-                "description": "その人の請求と契約を、自分の一覧に表示しなくします。",
+                "description": "その人に関係する履歴・請求・契約を、自分の一覧や入力候補に表示しなくします。",
                 "type": 1,
                 "options": [user_option("表示しなくする相手です。")],
             },
@@ -585,30 +579,6 @@ fn mute() -> Value {
                 "name": "list",
                 "description": "ミュートしているものを表示し、1件ずつ解除できます。",
                 "type": 1,
-            },
-        ],
-        "contexts": [0, 1],
-        "integration_types": [0, 1],
-    })
-}
-
-/// `/unmute`: the same two targets, without the screen between them.
-fn unmute() -> Value {
-    json!({
-        "name": "unmute",
-        "description": "ミュートを解除します。",
-        "options": [
-            {
-                "name": "currency",
-                "description": "通貨のミュートを解除します。",
-                "type": 1,
-                "options": [unit_option("解除する通貨の単位です。")],
-            },
-            {
-                "name": "user",
-                "description": "その人のミュートを解除します。",
-                "type": 1,
-                "options": [user_option("解除する相手です。")],
             },
         ],
         "contexts": [0, 1],
@@ -731,7 +701,6 @@ mod tests {
                 "bal",
                 "claim",
                 "mute",
-                "unmute",
                 "history"
             ]
         );

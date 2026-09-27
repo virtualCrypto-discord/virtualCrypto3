@@ -1338,6 +1338,60 @@ pub async fn revoke_refresh_token(pool: &PgPool, token: &str) -> Result<bool> {
     Ok(deleted.rows_affected() > 0)
 }
 
+/// Public fields offered by code completion; credentials and device codes stay in the database.
+pub struct RequestCandidate {
+    pub user_code: String,
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub bot_discord_id: Option<i64>,
+    pub target: Target,
+}
+
+/// Pending, unexpired requests visible to this user in this interaction's guild.
+/// `guild` must be the execution guild after checking administrator permission,
+/// just as for `review_requests`. Match a literal code prefix before limiting results.
+pub async fn request_candidates(
+    pool: &PgPool,
+    user: i64,
+    guild: Option<i64>,
+    prefix: &str,
+    limit: i64,
+    now: OffsetDateTime,
+) -> Result<Vec<RequestCandidate>> {
+    let at = PrimitiveDateTime::new(now.date(), now.time()).truncate_to_second();
+    let rows = sqlx::query!(
+        r#"SELECT r.user_code AS "user_code!", a.client_id::text AS "client_id!",
+                  a.client_name, bot.discord_id AS bot_discord_id, r.guild_id, r.discord_id
+             FROM grant_requests r JOIN applications a ON a.id = r.application_id
+             LEFT JOIN users bot ON bot.application_id = a.id
+            WHERE (r.discord_id = $1 OR r.guild_id = $2)
+              AND r.status = 'pending'
+              AND r.inserted_at + make_interval(secs => r.expires_in) > $3
+              AND starts_with(lower(r.user_code), lower($4))
+            ORDER BY r.id DESC
+            LIMIT $5"#,
+        user,
+        guild,
+        at,
+        prefix,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(RequestCandidate {
+                user_code: row.user_code,
+                client_id: row.client_id,
+                client_name: row.client_name,
+                bot_discord_id: row.bot_discord_id,
+                target: Target::of(row.guild_id, row.discord_id).ok_or(sqlx::Error::RowNotFound)?,
+            })
+        })
+        .collect()
+}
+
 /// A pending request shown to its target before consent. The request id
 /// binds the button to this exact request, not a user code that may be reused.
 #[derive(Debug, Clone)]

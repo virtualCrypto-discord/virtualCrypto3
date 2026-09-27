@@ -53,10 +53,11 @@ async fn page(state: &AppState, me: i64, page: i64, kind: i64) -> Result<Value, 
     let mut children = Vec::new();
 
     if balances.total == 0 {
-        children.push(text("通貨を持っていません。"));
+        children.push(text(
+            "表示できる通貨はありません。ミュート設定は `/mute list` で確認できます。",
+        ));
     } else {
-        // The count is what they hold altogether, not what this page shows: that is the
-        // number a person is looking for.
+        // Count every visible holding, including those on later pages.
         children.push(text(format!("**所持通貨一覧** ({}件)", balances.total)));
 
         if balances.balances.is_empty() {

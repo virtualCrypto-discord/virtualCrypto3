@@ -62,7 +62,13 @@ fn issue_in_guild(user: i64, permissions: &str, options: Vec<Value>) -> Value {
 
 /// Everything one answer says, as one string: what a person reads.
 fn rendered(response: &Response) -> String {
-    response.body["data"].to_string()
+    response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|child| child["content"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The custom id of the arrow that moves forward, taken from the screen rather than rebuilt: the
@@ -120,7 +126,7 @@ async fn pagination_preserves_an_imported_emoji_unit(pool: PgPool) {
         }
         let first = interaction(app.clone(), history(MONEY_USER2, "pay", options)).await;
         assert_eq!(first.status, 200, "{}", first.body);
-        assert!(rendered(&first).contains("(6件)"), "{}", first.body);
+        assert!(rendered(&first).contains("全6件"), "{}", first.body);
 
         let second = interaction(
             app.clone(),
@@ -129,9 +135,9 @@ async fn pagination_preserves_an_imported_emoji_unit(pool: PgPool) {
         .await;
         assert_eq!(second.status, 200, "{}", second.body);
         let shown = rendered(&second);
-        assert!(shown.contains("(6件)"), "{shown}");
+        assert!(shown.contains("全6件"), "{shown}");
         assert!(shown.contains(unit), "{shown}");
-        assert_eq!(shown.matches("受取: **10**").count(), 1, "{shown}");
+        assert_eq!(shown.matches("**受取　+10**").count(), 1, "{shown}");
         assert!(!shown.contains("`w`"), "{shown}");
     }
 }
@@ -155,9 +161,9 @@ async fn pay_shows_both_what_was_sent_and_what_came_in(pool: PgPool) {
     let screen =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await);
 
-    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
-    assert!(screen.contains("送金: **500**"), "{screen}");
-    assert!(screen.contains("受取: **300**"), "{screen}");
+    assert!(screen.contains("## 入出金の履歴\n全2件"), "{screen}");
+    assert!(screen.contains("**送金　−500**"), "{screen}");
+    assert!(screen.contains("**受取　+300**"), "{screen}");
     // The other side of each row, which is who the money went to and came from.
     assert!(screen.contains(&MONEY_USER1.to_string()), "{screen}");
 
@@ -167,12 +173,12 @@ async fn pay_shows_both_what_was_sent_and_what_came_in(pool: PgPool) {
 
     let theirs =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
-    assert!(theirs.contains("受取: **500**"), "{theirs}");
-    assert!(theirs.contains("送金: **300**"), "{theirs}");
+    assert!(theirs.contains("**受取　+500**"), "{theirs}");
+    assert!(theirs.contains("**送金　−300**"), "{theirs}");
 
     let stranger =
         rendered(&interaction(router(pool.clone()), history(OTHER, "pay", vec![])).await);
-    assert!(stranger.contains("送金の履歴はありません"), "{stranger}");
+    assert!(stranger.contains("入出金の履歴はありません"), "{stranger}");
 }
 
 /// A contract's money is the wallet's money when it moves. Approving locks it and the screen
@@ -208,9 +214,9 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
 
     let screen =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
-    assert!(screen.contains("**送金の履歴** (1件)"), "{screen}");
+    assert!(screen.contains("## 入出金の履歴\n全1件"), "{screen}");
     assert!(
-        screen.contains("契約にロック: **100** `n` → Bot未連携: `a metered service`"),
+        screen.contains("**契約にロック　−100** `n`\n預け先: ボット未連携: `a metered service`"),
         "{screen}"
     );
 
@@ -223,16 +229,16 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
     let screen =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(
-        screen.contains("**送金の履歴** (1件)"),
+        screen.contains("## 入出金の履歴\n全1件"),
         "a charge is not the wallet's: {screen}"
     );
-    assert!(!screen.contains("**25**"), "{screen}");
+    assert!(!screen.contains("+25**"), "{screen}");
 
     let receiver =
         rendered(&interaction(router(pool.clone()), history(OTHER, "pay", vec![])).await);
-    assert!(receiver.contains("**送金の履歴** (1件)"), "{receiver}");
+    assert!(receiver.contains("## 入出金の履歴\n全1件"), "{receiver}");
     assert!(
-        receiver.contains("契約から受取: **25** `n` ← Bot未連携: `a metered service`"),
+        receiver.contains("**契約から受取　+25** `n`\n支払元: ボット未連携: `a metered service`"),
         "{receiver}"
     );
 
@@ -243,9 +249,9 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
 
     let screen =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
-    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
+    assert!(screen.contains("## 入出金の履歴\n全2件"), "{screen}");
     assert!(
-        screen.contains("契約から返却: **75** `n` ← Bot未連携: `a metered service`"),
+        screen.contains("**契約から返却　+75** `n`\n返却元: ボット未連携: `a metered service`"),
         "{screen}"
     );
 }
@@ -309,16 +315,19 @@ async fn edited_application_names_cannot_forge_contract_history(pool: PgPool) {
             format!("<@{BOT}>")
         } else {
             format!(
-                "Bot未連携: `｀ <@500000000000000004>  受取: **999999** @everyone <@&123>`\nclient_id: `{client_id}`"
+                "ボット未連携: `｀ <@500000000000000004>  受取: **999999** @everyone <@&123>`\nアプリケーションID: `{client_id}`"
             )
         };
         // Lock, return, and incoming charge all use the same safe identity.
         for (reader, prefixes) in [
             (
                 MONEY_USER2,
-                vec!["契約から返却: **7** `n` ← ", "契約にロック: **10** `n` → "],
+                vec![
+                    "**契約から返却　+7** `n`\n返却元: ",
+                    "**契約にロック　−10** `n`\n預け先: ",
+                ],
             ),
-            (OTHER, vec!["契約から受取: **3** `n` ← "]),
+            (OTHER, vec!["**契約から受取　+3** `n`\n支払元: "]),
         ] {
             let response = interaction(app.clone(), history(reader, "pay", vec![])).await;
             assert_eq!(response.status, 200);
@@ -331,16 +340,16 @@ async fn edited_application_names_cannot_forge_contract_history(pool: PgPool) {
                 .unwrap()
                 .iter()
                 .filter_map(|value| value["content"].as_str())
-                .skip(1)
+                .filter(|row| row.contains("\n取引ID: "))
                 .collect();
             assert_eq!(rows.len(), prefixes.len());
             for (row, prefix) in rows.into_iter().zip(prefixes) {
                 assert!(
-                    row.starts_with(&format!("{prefix}{identity} ・ <t:")),
+                    row.starts_with(&format!("{prefix}{identity}\n取引後残高: **")),
                     "{row}"
                 );
                 assert!(!row.contains(forged_name), "{row}");
-                assert_eq!(row.matches('\n').count(), usize::from(!bound), "{row}");
+                assert_eq!(row.matches('\n').count(), 4 + usize::from(!bound), "{row}");
                 if bound {
                     assert!(!row.contains("999999"), "{row}");
                     assert!(!row.contains(&client_id), "{row}");
@@ -362,9 +371,9 @@ async fn the_count_is_the_whole_ledger_and_the_arrows_move(pool: PgPool) {
 
     let first = interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await;
     let shown = rendered(&first);
-    assert!(shown.contains("**送金の履歴** (6件)"), "{shown}");
+    assert!(shown.contains("## 入出金の履歴\n全6件"), "{shown}");
     assert_eq!(
-        shown.matches("受取: **10**").count(),
+        shown.matches("**受取　+10**").count(),
         5,
         "a page is five rows: {shown}"
     );
@@ -376,9 +385,9 @@ async fn the_count_is_the_whole_ledger_and_the_arrows_move(pool: PgPool) {
     .await;
 
     let second = rendered(&pressed);
-    assert!(second.contains("**送金の履歴** (6件)"), "{second}");
+    assert!(second.contains("## 入出金の履歴\n全6件"), "{second}");
     assert_eq!(
-        second.matches("受取: **10**").count(),
+        second.matches("**受取　+10**").count(),
         1,
         "the last page holds the one row left: {second}"
     );
@@ -406,9 +415,9 @@ async fn a_filter_narrows_the_screen_and_travels_with_the_arrow(pool: PgPool) {
     .await;
 
     let shown = rendered(&first);
-    assert!(shown.contains("**送金の履歴** (6件)"), "{shown}");
+    assert!(shown.contains("## 入出金の履歴\n全6件"), "{shown}");
     assert!(
-        !shown.contains("**999**"),
+        !shown.contains("−999**"),
         "the other currency is filtered out: {shown}"
     );
 
@@ -419,9 +428,9 @@ async fn a_filter_narrows_the_screen_and_travels_with_the_arrow(pool: PgPool) {
     .await;
 
     let second = rendered(&pressed);
-    assert!(second.contains("**送金の履歴** (6件)"), "{second}");
+    assert!(second.contains("## 入出金の履歴\n全6件"), "{second}");
     assert!(
-        !second.contains("**999**"),
+        !second.contains("−999**"),
         "the second page is still the filtered one: {second}"
     );
 }
@@ -443,9 +452,9 @@ async fn issue_shows_what_the_pool_paid(pool: PgPool) {
     assert_eq!(screen.status, 200, "body: {}", screen.body);
 
     let shown = rendered(&screen);
-    assert!(shown.contains("**発行の履歴** (2件)"), "{shown}");
-    assert!(shown.contains("発行: **300**"), "{shown}");
-    assert!(shown.contains("発行: **200**"), "{shown}");
+    assert!(shown.contains("## 発行の履歴\n全2件"), "{shown}");
+    assert!(shown.contains("**発行　+300**"), "{shown}");
+    assert!(shown.contains("**発行　+200**"), "{shown}");
     assert!(shown.contains(&MONEY_USER1.to_string()), "{shown}");
     assert!(shown.contains(&OTHER.to_string()), "{shown}");
 
@@ -461,8 +470,8 @@ async fn issue_shows_what_the_pool_paid(pool: PgPool) {
     .await;
 
     let shown = rendered(&narrowed);
-    assert!(shown.contains("**発行の履歴** (1件)"), "{shown}");
-    assert!(!shown.contains("**200**"), "{shown}");
+    assert!(shown.contains("## 発行の履歴\n全1件"), "{shown}");
+    assert!(!shown.contains("+200**"), "{shown}");
 }
 
 /// What may be seen follows what may be done: the pool is the guild's, so the ledger of what it
@@ -491,6 +500,14 @@ async fn issue_is_the_administrators(pool: PgPool) {
         direct.body
     );
 
+    for refusal in [&member, &direct] {
+        assert_eq!(
+            refusal.body["data"]["components"][0]["accent_color"],
+            0xEA3875
+        );
+        assert_eq!(refusal.body["data"]["flags"], 32832);
+    }
+
     // And the payments screen, which is nobody else's business, needs no permission at all.
     let own = interaction(
         router(pool.clone()),
@@ -505,7 +522,7 @@ async fn issue_is_the_administrators(pool: PgPool) {
     .await;
     assert_eq!(own.status, 200, "body: {}", own.body);
     assert!(
-        rendered(&own).contains("送金の履歴はありません"),
+        rendered(&own).contains("入出金の履歴はありません"),
         "{}",
         own.body
     );
@@ -518,11 +535,15 @@ async fn an_empty_ledger_says_so(pool: PgPool) {
 
     let paid = interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await;
     assert!(
-        rendered(&paid).contains("送金の履歴はありません"),
+        rendered(&paid).contains("入出金の履歴はありません"),
         "{}",
         paid.body
     );
 
+    assert_eq!(
+        paid.body["data"]["components"][0]["accent_color"], 0x6221ED,
+        "an empty list is not an error"
+    );
     let issued = interaction(
         router(pool.clone()),
         issue_in_guild(MONEY_USER2, support::DEFAULT_PERMISSIONS, vec![]),
@@ -549,14 +570,17 @@ async fn an_issuance_to_the_reader_is_on_their_own_screen(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await);
 
     // Both ledgers, and the count is the merged list's rather than one table's.
-    assert!(screen.contains("**送金の履歴** (2件)"), "{screen}");
-    assert!(screen.contains("発行: **300** `n` ← 発行枠"), "{screen}");
-    assert!(screen.contains("受取: **500**"), "{screen}");
+    assert!(screen.contains("## 入出金の履歴\n全2件"), "{screen}");
+    assert!(
+        screen.contains("**発行　+300** `n`\n発行元: 発行枠"),
+        "{screen}"
+    );
+    assert!(screen.contains("**受取　+500**"), "{screen}");
 
     // And it is personal: what was issued to somebody else is not on this screen.
     let other =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
-    assert!(!other.contains("発行: **300**"), "{other}");
+    assert!(!other.contains("**発行　+300**"), "{other}");
 }
 
 /// A credit funded by the receiver and another party separates the receiver's
@@ -607,17 +631,17 @@ async fn a_mixed_payment_to_a_party_shows_the_return_and_receipt_separately(pool
     // Both credits appear, without debiting either wallet again for the charge.
     let screen =
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
-    assert!(screen.contains("**送金の履歴** (3件)"), "{screen}");
+    assert!(screen.contains("## 入出金の履歴\n全3件"), "{screen}");
     assert!(
-        screen.contains("契約にロック: **100** `n` → Bot未連携: `a metered service`"),
+        screen.contains("**契約にロック　−100** `n`\n預け先: ボット未連携: `a metered service`"),
         "{screen}"
     );
     assert!(
-        screen.contains("契約から返却: **100** `n` ← Bot未連携: `a metered service`"),
+        screen.contains("**契約から返却　+100** `n`\n返却元: ボット未連携: `a metered service`"),
         "{screen}"
     );
     assert!(
-        screen.contains("契約から受取: **20** `n` ← Bot未連携: `a metered service`"),
+        screen.contains("**契約から受取　+20** `n`\n支払元: ボット未連携: `a metered service`"),
         "{screen}"
     );
 
@@ -636,4 +660,275 @@ async fn a_mixed_payment_to_a_party_shows_the_return_and_receipt_separately(pool
     assert_eq!(statement[1].amount, 100);
     assert_eq!(statement[1].discord_id, None);
     assert_eq!(statement[1].receiver_discord_id, Some(MONEY_USER1));
+}
+
+fn rows(response: &Response) -> Vec<&str> {
+    response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|child| child["content"].as_str())
+        .filter(|row| row.contains("\n取引ID: "))
+        .collect()
+}
+
+fn buttons(response: &Response) -> &[Value] {
+    let buttons = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["type"] == 1)
+        .unwrap()["components"]
+        .as_array()
+        .unwrap();
+    let ids: std::collections::HashSet<_> = buttons
+        .iter()
+        .map(|b| b["custom_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids.len(),
+        buttons.len(),
+        "Discord requires unique custom IDs within a message"
+    );
+    buttons
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn entries_identify_each_ledger_and_explain_self_transfers(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    sqlx::query("UPDATE currencies SET pool_amount = 10000 WHERE id = $1")
+        .bind(money.currency)
+        .execute(&pool)
+        .await
+        .unwrap();
+    issue(&pool, MONEY_USER2, 1200).await;
+    pay(&pool, MONEY_USER1, MONEY_USER2, &money.unit, 1234).await;
+    pay(&pool, MONEY_USER2, MONEY_USER2, &money.unit, 10).await;
+    // Use a fixed timestamp to verify the displayed date as well as the stable IDs.
+    for statement in [
+        "UPDATE currency_given_histories SET time = TIMESTAMP '2026-09-27 00:00:00'",
+        "UPDATE currency_payment_histories SET time = TIMESTAMP '2026-09-27 00:00:00'",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+    let response = interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await;
+    let shown = rendered(&response);
+    assert_eq!(response.body["data"]["flags"], 32832);
+    assert_eq!(
+        response.body["data"]["allowed_mentions"]["parse"],
+        json!([])
+    );
+    assert!(shown.contains("通貨: すべて / 相手: すべて"), "{shown}");
+    assert!(shown.contains("ページ 1/1 ・ 1–3件 / 全3件"), "{shown}");
+    assert_eq!(
+        rows(&response),
+        vec![
+            "**発行　+1,200** `n`\n発行元: 発行枠\n取引後残高: **2,200** `n`\n日時: <t:1790467200>\n取引ID: `I1`",
+            "**自己送金　10** `n`\n相手: 自分（残高変動なし）\n取引後残高: **3,434** `n`\n日時: <t:1790467200>\n取引ID: `P2`",
+            &format!(
+                "**受取　+1,234** `n`\n送金元: <@{MONEY_USER1}>\n取引後残高: **3,434** `n`\n日時: <t:1790467200>\n取引ID: `P1`"
+            ),
+        ]
+    );
+    let children = response.body["data"]["components"][0]["components"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        children.iter().filter(|child| child["type"] == 14).count(),
+        4
+    );
+    assert!(!children.iter().any(|child| child["type"] == 1));
+    let outgoing = interaction(router(pool), history(MONEY_USER1, "pay", vec![])).await;
+    assert!(rendered(&outgoing).contains("**送金　−1,234** `n`"));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn separate_contracts_of_one_application_have_distinct_references(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    let application = insert_application(&pool, MONEY_USER1, "same application").await;
+    let now = time::OffsetDateTime::now_utc();
+    let mut contracts = Vec::new();
+    for _ in 0..2 {
+        let id = vc_core::contract::create(
+            &pool,
+            application,
+            &money.unit,
+            &[vc_core::contract::NewParty {
+                discord_id: MONEY_USER2,
+                amount: 10,
+            }],
+            None,
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+        vc_core::contract::approve(&pool, id, 2, || now)
+            .await
+            .unwrap();
+        contracts.push(id);
+    }
+    let response = interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await;
+    let entries = rows(&response);
+    assert_eq!(entries.len(), 2);
+    for (entry, id) in entries.iter().zip(contracts.iter().rev()) {
+        assert!(entry.contains(&format!(" / 契約ID: `{id}`")), "{entry}");
+        assert!(entry.contains("預け先: ボット未連携: `same application`"));
+    }
+    assert_ne!(entries[0], entries[1]);
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn empty_results_keep_the_filters_without_claiming_the_guild_never_issued(pool: PgPool) {
+    setup_money(&pool).await;
+    issue(&pool, MONEY_USER2, 10).await;
+    let app = router(pool);
+    let paid = interaction(
+        app.clone(),
+        history(
+            MONEY_USER2,
+            "pay",
+            vec![
+                option("unit", json!("missing")),
+                option("user", json!(OTHER.to_string())),
+            ],
+        ),
+    )
+    .await;
+    let issued = interaction(
+        app.clone(),
+        issue_in_guild(
+            MONEY_USER2,
+            support::DEFAULT_PERMISSIONS,
+            vec![option("user", json!(OTHER.to_string()))],
+        ),
+    )
+    .await;
+    // An account with no ledger gets the same visible filters and empty state.
+    let absent = interaction(
+        app.clone(),
+        history(OTHER, "pay", vec![option("unit", json!("missing"))]),
+    )
+    .await;
+    for response in [&paid, &issued, &absent] {
+        let shown = rendered(response);
+        assert!(shown.contains("全0件"), "{shown}");
+        assert!(
+            shown.contains("指定した条件に一致する履歴はありません"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("まだ発行枠から発行されていません"),
+            "{shown}"
+        );
+        assert!(rows(response).is_empty());
+        assert!(!shown.contains("ページ"));
+    }
+    assert!(rendered(&paid).contains(&format!("通貨: `missing` / 相手: <@{OTHER}>")));
+    assert!(rendered(&issued).contains(&format!("発行先: <@{OTHER}>")));
+    assert!(rendered(&absent).contains("通貨: `missing` / 相手: すべて"));
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn both_ledgers_show_page_ranges_and_emoji_navigation_with_filters(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    for _ in 0..6 {
+        pay(&pool, MONEY_USER1, MONEY_USER2, &money.unit, 10).await;
+        issue(&pool, MONEY_USER2, 20).await;
+    }
+    issue(&pool, OTHER, 99).await;
+    let app = router(pool);
+    for (command, filter) in [
+        (
+            history(
+                MONEY_USER2,
+                "pay",
+                vec![
+                    option("unit", json!("n")),
+                    option("user", json!(MONEY_USER1.to_string())),
+                ],
+            ),
+            format!("通貨: `n` / 相手: <@{MONEY_USER1}>"),
+        ),
+        (
+            issue_in_guild(
+                MONEY_USER2,
+                support::DEFAULT_PERMISSIONS,
+                vec![option("user", json!(MONEY_USER2.to_string()))],
+            ),
+            format!("発行先: <@{MONEY_USER2}>"),
+        ),
+    ] {
+        let first = interaction(app.clone(), command).await;
+        assert!(rendered(&first).contains("ページ 1/2 ・ 1–5件 / 全6件"));
+        assert!(rendered(&first).contains(&filter));
+        assert_eq!(
+            buttons(&first)
+                .iter()
+                .map(|b| b["emoji"]["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["⏪", "⏮️", "⏭️", "⏩"]
+        );
+        assert!(buttons(&first).iter().all(|b| b.get("label").is_none()));
+        assert_eq!(
+            buttons(&first)
+                .iter()
+                .map(|b| b["disabled"].as_bool().unwrap())
+                .collect::<Vec<_>>(),
+            [true, true, false, false]
+        );
+        let mut click = support::button_from_guild(
+            json!({"custom_id": buttons(&first)[3]["custom_id"]}),
+            MONEY_USER2,
+        );
+        click["guild_id"] = json!(MONEY_GUILD.to_string());
+        let last = interaction(app.clone(), click).await;
+        assert_eq!(last.body["type"], 7);
+        assert!(rendered(&last).contains("ページ 2/2 ・ 6–6件 / 全6件"));
+        assert!(rendered(&last).contains(&filter));
+        assert_eq!(rows(&last).len(), 1);
+        assert_eq!(
+            buttons(&last)
+                .iter()
+                .map(|b| b["disabled"].as_bool().unwrap())
+                .collect::<Vec<_>>(),
+            [false, false, true, true]
+        );
+        // Both backward controls restore the same filtered first page.
+        for button in &buttons(&last)[..2] {
+            let mut click =
+                support::button_from_guild(json!({"custom_id": button["custom_id"]}), MONEY_USER2);
+            click["guild_id"] = json!(MONEY_GUILD.to_string());
+            let back = interaction(app.clone(), click).await;
+            assert!(rendered(&back).contains("ページ 1/2 ・ 1–5件 / 全6件"));
+            assert!(rendered(&back).contains(&filter));
+            assert_eq!(rows(&back), rows(&first));
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn history_navigation_ids_are_unique_even_when_destinations_match(pool: PgPool) {
+    let money = setup_money(&pool).await;
+    for _ in 0..6 {
+        pay(&pool, MONEY_USER1, MONEY_USER2, &money.unit, 1).await;
+    }
+    let first = interaction(router(pool.clone()), history(MONEY_USER2, "pay", vec![])).await;
+    let last = interaction(
+        router(pool),
+        support::button_from_guild(json!({"custom_id": next_button(&first)}), MONEY_USER2),
+    )
+    .await;
+    for response in [&first, &last] {
+        let ids: Vec<_> = buttons(response)
+            .iter()
+            .map(|b| b["custom_id"].as_str().unwrap())
+            .collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(
+            ids.len(),
+            unique.len(),
+            "Discord rejects duplicate custom_id values"
+        );
+    }
 }

@@ -8,7 +8,7 @@ use vc_core::claim::{PartialClaim, UpdateClaimsError};
 
 use super::{list, show};
 use crate::claim_list::ListOptions;
-use crate::command::{CommandError, get_user};
+use crate::command::{COLOR_ERROR, COLOR_OK, CommandError, get_user};
 use crate::custom_id::ui::button::{Action, Path, parse};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -50,7 +50,7 @@ pub async fn handle(
                     .unwrap_or_else(super::failed);
                 let body = response["data"].clone();
                 if response["type"] == crate::command::UPDATE_MESSAGE
-                    || !reply.followup(&body).await
+                    || reply.followup(&body).await.is_none()
                 {
                     reply.edit(body).await;
                 }
@@ -78,7 +78,7 @@ pub async fn handle(
             }
             Err(error) => tracing::warn!(?error, "claim list redraw failed"),
         }
-        if !reply.followup(&body).await {
+        if reply.followup(&body).await.is_none() {
             reply.edit(body).await;
         }
     });
@@ -148,6 +148,11 @@ async fn patch(
     let result =
         vc_core::claim::update_claims(state.pool(), state.notifier(), account, &partials).await;
 
+    let color = if result.is_err() {
+        COLOR_ERROR
+    } else {
+        COLOR_OK
+    };
     let content = match result {
         Ok(updated) => {
             let ids = updated
@@ -180,7 +185,7 @@ async fn patch(
     // A follow-up message rather than an interaction response, and the same shape either way:
     // `content` is what the components flag forbids, so the sentence is a Text Display.
     Ok(crate::components::ephemeral(vec![
-        crate::components::container(None, vec![crate::components::text(content)]),
+        crate::components::container(Some(color as u32), vec![crate::components::text(content)]),
     ]))
 }
 

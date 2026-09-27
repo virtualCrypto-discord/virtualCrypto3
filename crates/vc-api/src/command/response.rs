@@ -7,7 +7,10 @@ use axum::{
 use serde_json::{Value, json};
 
 use super::CommandError;
-use crate::{discord::DiscordApi, state::AppState};
+use crate::{
+    discord::{DiscordApi, FollowupMessage},
+    state::AppState,
+};
 
 /// Run a private management operation only after Discord accepts its callback.
 /// Commands and modal submissions create a private message; buttons update their
@@ -45,7 +48,7 @@ where
         let body = response["data"].clone();
         if update
             && response["type"] == super::CHANNEL_MESSAGE_WITH_SOURCE
-            && reply.followup(&body).await
+            && reply.followup(&body).await.is_some()
         {
             return;
         }
@@ -131,7 +134,7 @@ impl Acknowledged {
         }
     }
 
-    pub async fn followup(&self, body: &Value) -> bool {
+    pub async fn followup(&self, body: &Value) -> Option<FollowupMessage> {
         match tokio::time::timeout(
             Duration::from_secs(10),
             self.discord
@@ -139,14 +142,14 @@ impl Acknowledged {
         )
         .await
         {
-            Ok(Ok(())) => true,
+            Ok(Ok(message)) => Some(message),
             Ok(Err(error)) => {
                 tracing::warn!(%error, "interaction follow-up failed");
-                false
+                None
             }
             Err(_) => {
                 tracing::warn!("interaction follow-up timed out");
-                false
+                None
             }
         }
     }

@@ -306,17 +306,19 @@ pub async fn open_of_party(
            JOIN contract_parties p ON p.contract_id = c.id
           WHERE p.discord_id = $1 AND c.status IN ('pending', 'active')
             -- What the reader has chosen not to see: a muted currency's contracts, and the
-            -- contracts a muted person is named in. The count and the page below are the same
+            -- contracts involving a muted participant, receiver or linked bot. The count and the page below are the same
             -- rows, and a page that hides fewer of them is an arrow that opens an empty page.
             AND NOT EXISTS (
                 SELECT 1 FROM mutes mu
                  WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
                    AND (mu.currency_id = c.currency_id
-                        OR EXISTS (SELECT 1
-                                     FROM contract_parties q
-                                     JOIN users mut ON mut.id = mu.muted_user_id
-                                    WHERE q.contract_id = c.id
-                                      AND q.discord_id = mut.discord_id)))",
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = c.application_id
+                                           OR mut.discord_id = c.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = c.id
+                                                         AND q.discord_id = mut.discord_id)))))",
         discord_id
     )
     .fetch_one(pool)
@@ -338,11 +340,13 @@ pub async fn open_of_party(
                 SELECT 1 FROM mutes mu
                  WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
                    AND (mu.currency_id = c.currency_id
-                        OR EXISTS (SELECT 1
-                                     FROM contract_parties q
-                                     JOIN users mut ON mut.id = mu.muted_user_id
-                                    WHERE q.contract_id = c.id
-                                      AND q.discord_id = mut.discord_id)))
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = c.application_id
+                                           OR mut.discord_id = c.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = c.id
+                                                         AND q.discord_id = mut.discord_id)))))
           ORDER BY c.id DESC
           LIMIT $2
          OFFSET $3",
@@ -411,11 +415,13 @@ pub async fn of_party_in(
                 SELECT 1 FROM mutes mu
                  WHERE mu.user_id = (SELECT id FROM users WHERE discord_id = $1)
                    AND (mu.currency_id = c.currency_id
-                        OR EXISTS (SELECT 1
-                                     FROM contract_parties q
-                                     JOIN users mut ON mut.id = mu.muted_user_id
-                                    WHERE q.contract_id = c.id
-                                      AND q.discord_id = mut.discord_id)))
+                        OR EXISTS (SELECT 1 FROM users mut
+                                    WHERE mut.id = mu.muted_user_id
+                                      AND (mut.application_id = c.application_id
+                                           OR mut.discord_id = c.receiver_discord_id
+                                           OR EXISTS (SELECT 1 FROM contract_parties q
+                                                       WHERE q.contract_id = c.id
+                                                         AND q.discord_id = mut.discord_id)))))
             AND ($2::bigint IS NULL OR c.id < $2)
             AND ($3::bigint IS NULL OR c.id <= $3)
           ORDER BY c.id DESC
@@ -675,13 +681,14 @@ pub async fn approve(
     sqlx::query!(
         "INSERT INTO currency_payment_histories
              (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-              updated_at)
-         VALUES ($1, $2, NULL, $3, $4, $5, $5, $5)",
+              updated_at, sender_balance_after)
+         VALUES ($1, $2, NULL, $3, $4, $5, $5, $5, $6)",
         party.amount,
         i64::from(user_id),
         contract.currency_id,
         contract_id,
-        now
+        now,
+        balance - party.amount
     )
     .execute(&mut *tx)
     .await
@@ -1048,8 +1055,11 @@ pub async fn pay_in(
     sqlx::query!(
         "INSERT INTO currency_payment_histories
              (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-              updated_at)
-         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6
+              updated_at, receiver_balance_after)
+         SELECT t.amount, NULLIF(t.sender_id, $3), $3, $4, $5, $6, $6, $6,
+                (SELECT amount FROM assets WHERE user_id = $3 AND currency_id = $4)
+                - COALESCE(SUM(t.amount) OVER (ORDER BY p.approval_order, p.id
+                           ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint
            FROM UNNEST($1::bigint[], $2::bigint[]) AS t(amount, sender_id)
            JOIN users u ON u.id = t.sender_id
            JOIN contract_parties p ON p.contract_id = $5 AND p.discord_id = u.discord_id
@@ -1365,8 +1375,9 @@ async fn end(
     sqlx::query!(
         "INSERT INTO currency_payment_histories
              (amount, sender_id, receiver_id, currency_id, contract_id, \"time\", inserted_at,
-              updated_at)
-         SELECT p.remaining, NULL, u.id, $2, $1, $3, $3, $3
+              updated_at, receiver_balance_after)
+         SELECT p.remaining, NULL, u.id, $2, $1, $3, $3, $3,
+                (SELECT amount FROM assets WHERE user_id = u.id AND currency_id = $2)
            FROM contract_parties p
            JOIN users u ON u.discord_id = p.discord_id
           WHERE p.contract_id = $1 AND p.remaining > 0",

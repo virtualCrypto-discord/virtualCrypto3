@@ -102,10 +102,10 @@ fn all_settings_at_their_limits_fit_in_one_message_without_truncation() {
         let screen = vc_api::developer::application(
             "00000000-0000-0000-0000-000000000000",
             new.client_name.as_deref(),
-            connected,
+            connected.then_some(i64::MAX),
             new.logo_uri.as_deref(),
             Some(&secret),
-            (!connected).then_some(token.as_str()),
+            &token,
             vc_api::developer::Fields {
                 client_name: new.client_name.as_deref(),
                 redirect_uris: &new.redirect_uris,
@@ -121,6 +121,21 @@ fn all_settings_at_their_limits_fit_in_one_message_without_truncation() {
                 subscribed_events: &new.subscribed_events,
             },
         );
+        let screen = vc_api::developer::saved(
+            screen,
+            "client_secret を再生成しました。旧 secret は使えません。利用中のサービスの設定を更新してください。",
+        );
+        fn component_count(value: &Value) -> usize {
+            match value {
+                Value::Object(map) => {
+                    usize::from(map.contains_key("type"))
+                        + map.values().map(component_count).sum::<usize>()
+                }
+                Value::Array(items) => items.iter().map(component_count).sum(),
+                _ => 0,
+            }
+        }
+        assert!(component_count(&screen) <= 40);
         let count = text_chars(&screen);
         assert!(count <= 4000, "settings use {count} characters");
         eprintln!("maximum settings screen: connected={connected}, {count} characters");

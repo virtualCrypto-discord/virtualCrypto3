@@ -28,7 +28,6 @@ async fn issue(pool: PgPool, payload: Value) -> Value {
     assert_eq!(edits[0].get("content"), Some(&Value::Null));
     assert_eq!(edits[0]["embeds"], json!([]));
     assert!(discord.webhooks().is_empty());
-    assert_eq!(discord.response_deletions(), 0);
     edits[0].clone()
 }
 
@@ -83,6 +82,7 @@ fn assert_error(response: &Value, content: &str) {
         response["components"],
         json!([{
             "type": 17,
+            "accent_color": 0xEA3875,
             "components": [{ "type": 10, "content": content }],
         }])
     );
@@ -261,7 +261,6 @@ async fn a_currency_lock_longer_than_three_seconds_is_acknowledged_and_issued_on
     assert_eq!(discord.response_edits().len(), 1);
     assert_eq!(discord.response_edits()[0]["flags"], 32768);
     assert!(discord.webhooks().is_empty());
-    assert_eq!(discord.response_deletions(), 0);
     assert_eq!(
         get_amount(&pool, money.user2, money.currency).await,
         before + 100
@@ -360,7 +359,6 @@ async fn a_response_edit_failure_does_not_repeat_issuance(pool: PgPool) {
     assert_acknowledgement(&discord);
     assert!(discord.response_edits().is_empty());
     assert!(discord.webhooks().is_empty());
-    assert_eq!(discord.response_deletions(), 0);
     assert_eq!(
         get_amount(&pool, money.user2, money.currency).await,
         before + 100

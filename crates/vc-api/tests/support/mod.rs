@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod discord_schema;
+pub mod mute_ui;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -16,7 +17,7 @@ use time::{OffsetDateTime, PrimitiveDateTime};
 use tower::ServiceExt;
 use uuid::Uuid;
 use vc_api::AppState;
-use vc_api::discord::{DiscordApi, DiscordError, RefreshedToken};
+use vc_api::discord::{DiscordApi, DiscordError, FollowupMessage, RefreshedToken};
 use vc_api::rate_limit::RateLimiter;
 use vc_api::state::Links;
 use vc_core::claim::Transition;
@@ -47,6 +48,8 @@ pub struct FakeDiscord {
     /// What `get_guild_member` reports, and the guild's roles. Only the consent
     /// screen asks for either, so they are empty unless a test sets them.
     member: Map<String, Value>,
+    member_status: u16,
+    raw_user: Option<Map<String, Value>>,
     roles: Vec<Map<String, Value>>,
     /// What `get_guild_integrations_with_status` reports. Empty unless a test sets it,
     /// and an empty list is a guild with nothing installed rather than a guild that
@@ -74,9 +77,6 @@ pub struct FakeDiscord {
     response_edits: Mutex<Vec<(String, Value)>>,
     response_edit_finished: tokio::sync::Notify,
     response_edit_error: bool,
-    response_deletions: AtomicUsize,
-    response_delete_finished: tokio::sync::Notify,
-    response_delete_error: bool,
     followup_gate: Option<Arc<tokio::sync::Semaphore>>,
     followup_error: bool,
     callback_error: bool,
@@ -132,6 +132,8 @@ impl FakeDiscord {
             payload: golden_discord_payload(),
             guild,
             member: Map::new(),
+            member_status: 200,
+            raw_user: None,
             roles: Vec::new(),
             integrations: Vec::new(),
             commands: Vec::new(),
@@ -149,9 +151,6 @@ impl FakeDiscord {
             response_edits: Mutex::new(Vec::new()),
             response_edit_finished: tokio::sync::Notify::new(),
             response_edit_error: false,
-            response_deletions: AtomicUsize::new(0),
-            response_delete_finished: tokio::sync::Notify::new(),
-            response_delete_error: false,
             followup_gate: None,
             followup_error: false,
             callback_error: false,
@@ -240,6 +239,19 @@ impl FakeDiscord {
         fake
     }
 
+    /// A selected Bot exists, but its integration was omitted by Discord.
+    pub fn with_missing_integration(bot_id: i64, member_status: u16) -> Self {
+        let mut fake = Self::new();
+        fake.raw_user = Some(
+            json!({"id":bot_id.to_string(), "username":"VirtualCrypto", "bot":true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        fake.member_status = member_status;
+        fake
+    }
+
     /// The statuses a refused integrations call and the guild call that follows it
     /// answer. 403 with 403 is "the service is not in that server"; 403 with 200 is "it
     /// is there without Manage Server", which is a different thing to go and fix.
@@ -293,31 +305,10 @@ impl FakeDiscord {
         Arc::new(api)
     }
 
-    pub fn with_response_delete_error() -> Arc<Self> {
-        let mut api = Self::new();
-        api.response_delete_error = true;
-        Arc::new(api)
-    }
-
     pub fn with_response_edit_error() -> Arc<Self> {
         let mut api = Self::new();
         api.response_edit_error = true;
         Arc::new(api)
-    }
-
-    pub fn response_deletions(&self) -> usize {
-        self.response_deletions.load(Ordering::SeqCst)
-    }
-
-    pub async fn payment_finished(&self) {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::select! {
-                () = self.response_edit_finished.notified() => {},
-                () = self.response_delete_finished.notified() => {},
-            }
-        })
-        .await
-        .expect("payment delivered its final response");
     }
 
     pub fn callbacks(&self) -> Vec<Value> {
@@ -374,10 +365,7 @@ impl DiscordApi for FakeDiscord {
     // own fields, so a test says which guild it is asking about rather than being
     // answered a made-up one.
     //
-    // The user lookup answers 404 instead: the fake does not know any user beyond the
-    // ones its other calls report, and "no such user" is a refusal where an empty 200
-    // would be a claim that the id exists and is not a bot. A test that needs the other
-    // answers should give the fake the field to say so.
+    // User lookups default to 404; omitted-integration tests provide an explicit Bot.
 
     async fn get_guild_integrations_with_status(
         &self,
@@ -397,7 +385,10 @@ impl DiscordApi for FakeDiscord {
         &self,
         _user_id: i64,
     ) -> Result<(u16, Map<String, Value>), DiscordError> {
-        Ok((404, Map::new()))
+        Ok(self
+            .raw_user
+            .clone()
+            .map_or((404, Map::new()), |user| (200, user)))
     }
 
     async fn get_application_commands(&self) -> Result<Vec<Map<String, Value>>, DiscordError> {
@@ -434,7 +425,11 @@ impl DiscordApi for FakeDiscord {
         _guild_id: i64,
         _user_id: i64,
     ) -> Result<Option<Map<String, Value>>, DiscordError> {
-        Ok(Some(self.member.clone()))
+        match self.member_status {
+            200 => Ok(Some(self.member.clone())),
+            404 => Ok(None),
+            _ => Err(DiscordError::Request("member lookup failed".to_owned())),
+        }
     }
 
     async fn get_roles(&self, _guild_id: i64) -> Result<Vec<Map<String, Value>>, DiscordError> {
@@ -508,7 +503,7 @@ impl DiscordApi for FakeDiscord {
         _application_id: &str,
         token: &str,
         body: &Value,
-    ) -> Result<(), DiscordError> {
+    ) -> Result<FollowupMessage, DiscordError> {
         assert!(
             !self.callbacks().is_empty(),
             "follow-up sent before initial response"
@@ -528,28 +523,10 @@ impl DiscordApi for FakeDiscord {
             .push((token.to_owned(), body.clone()));
         self.followup_finished.notify_one();
 
-        Ok(())
-    }
-
-    async fn delete_original_interaction_response(
-        &self,
-        application_id: &str,
-        token: &str,
-    ) -> Result<(), DiscordError> {
-        assert!(!application_id.is_empty());
-        assert!(!token.is_empty());
-        assert!(
-            !self.webhooks().is_empty(),
-            "deleted before public success was sent"
-        );
-        if self.response_delete_error {
-            return Err(DiscordError::Request(
-                "simulated response deletion failure".into(),
-            ));
-        }
-        self.response_deletions.fetch_add(1, Ordering::SeqCst);
-        self.response_delete_finished.notify_one();
-        Ok(())
+        Ok(FollowupMessage {
+            id: 900_719_925_474_099_301,
+            channel_id: 900_719_925_474_099_302,
+        })
     }
 
     async fn refresh_token(&self, _refresh_token: &str) -> Result<RefreshedToken, DiscordError> {

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>レビュー作業室 · virtualCrypto</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/"
+        ><span class="brand-mark">vC</span
+        ><span
+          >レビュー作業室<small>virtualCrypto · human + Codex</small></span
+        ></a
+      >
+      <div id="repository" class="repository">読み込み中…</div>
+      <div class="top-actions">
+        <span id="live" class="live">接続中</span
+        ><button id="connect" class="quiet">Codex 接続確認</button>
+      </div>
+    </header>
+    <div id="error" class="error-banner" role="alert" hidden></div>
+    <div id="notice" class="notice-banner" role="status" hidden></div>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="sidebar-heading">REVIEW SCOPE</div>
+        <nav id="categories" aria-label="レビュー分野"></nav>
+        <div class="sidebar-bottom">
+          <p>LLMと調査・修正・再確認を進め、<br />人間が判断を記録します。</p>
+          <button id="add-item" class="secondary full">
+            ＋ レビュー項目を追加
+          </button>
+          <div class="exports">
+            <a href="/api/export" download>Markdown出力 ↗</a
+            ><a href="/api/export?format=json" download>JSON出力 ↗</a>
+          </div>
+        </div>
+      </aside>
+      <main>
+        <section class="overview" aria-label="全体の進捗">
+          <div>
+            <div class="eyebrow">RELEASE READINESS</div>
+            <h1>確認して、直して、判断する。</h1>
+            <p>項目ごとの会話で調査・修正を進め、判断の根拠を残します。</p>
+          </div>
+          <div id="progress" class="progress-summary"></div>
+        </section>
+        <div id="active-run" hidden></div>
+        <details id="message-queue" class="message-queue" open hidden>
+          <summary id="message-queue-title">送信待ち</summary>
+          <ol id="queued-messages"></ol>
+        </details>
+        <div class="toolbar">
+          <label class="search"
+            ><span>⌕</span
+            ><input
+              id="search"
+              type="search"
+              placeholder="項目・判断基準・参照先を検索"
+              aria-label="レビュー項目を検索"
+          /></label>
+          <select id="status-filter" aria-label="進捗で絞り込む">
+            <option value="all">すべての進捗</option>
+            <option value="open">未完了</option>
+            <option value="todo">未着手</option>
+            <option value="ready">確認待ち</option>
+            <option value="reviewing">確認中</option>
+            <option value="approved">確認済み</option>
+            <option value="changes">要修正</option>
+            <option value="blocked">保留</option>
+            <option value="waived">対象外</option>
+          </select>
+          <label class="priority-filter"
+            ><input type="checkbox" id="critical-only" />重点項目</label
+          >
+        </div>
+        <div class="workspace">
+          <section class="queue" aria-label="レビュー項目一覧">
+            <div class="queue-heading">
+              <strong id="queue-title">すべての項目</strong
+              ><span id="queue-count"></span>
+            </div>
+            <div id="items"></div>
+          </section>
+          <section id="detail" class="detail" aria-label="レビューの詳細">
+            <div class="empty">
+              項目を選ぶと、判断基準と会話が表示されます。
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+    <dialog id="source-dialog">
+      <div class="dialog-heading">
+        <h2 id="source-title">参照ファイル</h2>
+        <button data-close="source-dialog" aria-label="閉じる">閉じる</button>
+      </div>
+      <pre id="source-content" class="source-content"></pre>
+    </dialog>
+    <dialog id="add-dialog">
+      <form id="add-form">
+        <div class="dialog-heading">
+          <h2>レビュー項目を追加</h2>
+          <button type="button" data-close="add-dialog">閉じる</button>
+        </div>
+        <label>タイトル<input name="title" required maxlength="200" /></label
+        ><label
+          >人間が判断したいこと<textarea
+            name="question"
+            required
+            maxlength="5000"
+            rows="3"
+          ></textarea></label
+        ><label
+          >判断基準（1行に1件）<textarea
+            name="criteria"
+            required
+            maxlength="5000"
+            rows="5"
+            placeholder="誰が確認しても判定できる具体的な条件を書いてください"
+          ></textarea>
+        </label>
+        <p class="hint">
+          追加項目と進捗は、このリポジトリ用のローカル保存先に記録します。
+        </p>
+        <button class="primary" type="submit">項目を追加</button>
+      </form>
+    </dialog>
+  </body>
+</html>

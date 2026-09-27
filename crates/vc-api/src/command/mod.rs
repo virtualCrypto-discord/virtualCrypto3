@@ -116,7 +116,7 @@ pub(super) fn application_identity(
                 .unwrap_or("（名前なし）")
                 .replace('`', "｀")
                 .replace(['\r', '\n'], " ");
-            format!("Bot未連携: `{name}`\nclient_id: `{client_id}`")
+            format!("ボット未連携: `{name}`\nアプリケーションID: `{client_id}`")
         }
     }
 }
@@ -240,7 +240,6 @@ pub async fn handle(
         "info" => info::handle(state, options, payload).await,
         "issue" => issue::handle(state, options, payload).await,
         "mute" => mute::handle(state, options, payload).await,
-        "unmute" => mute::unmute(state, options, payload).await,
         "pat" => pat::handle(state, options, payload).await,
         "pay" => pay::handle(state, options, payload).await,
         _ => Err(CommandError::Unknown),

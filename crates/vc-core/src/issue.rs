@@ -112,8 +112,11 @@ pub async fn issue_in(
 
     sqlx::query!(
         "INSERT INTO currency_given_histories
-             (amount, currency_id, \"time\", receiver_id, inserted_at, updated_at)
-         VALUES ($1, $2, $3, $4, $3, $3)",
+             (amount, currency_id, \"time\", receiver_id, inserted_at, updated_at,
+              receiver_balance_after, pool_balance_after)
+         VALUES ($1, $2, $3, $4, $3, $3,
+                 COALESCE((SELECT amount FROM assets WHERE user_id = $4 AND currency_id = $2), 0),
+                 (SELECT pool_amount FROM currencies WHERE id = $2))",
         amount,
         currency.id,
         now,

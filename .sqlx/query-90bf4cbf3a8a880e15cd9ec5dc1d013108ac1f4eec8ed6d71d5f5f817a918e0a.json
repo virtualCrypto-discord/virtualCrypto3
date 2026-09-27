@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entries AS (\n             SELECT t.*,\n                    COALESCE(SUM(CASE WHEN receiver_id = $4 THEN 0 ELSE amount END)\n                        OVER (PARTITION BY currency_id ORDER BY ordinal\n                              ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint\n                        AS sender_later,\n                    COALESCE(SUM(amount)\n                        OVER (PARTITION BY currency_id, receiver_id ORDER BY ordinal\n                              ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), 0)::bigint\n                        AS receiver_later\n               FROM UNNEST($1::bigint[], $2::bigint[], $3::bigint[]) WITH ORDINALITY\n                    AS t(amount, receiver_id, currency_id, ordinal)\n         )\n         INSERT INTO currency_payment_histories\n             (amount, sender_id, receiver_id, currency_id, \"time\", inserted_at, updated_at,\n              sender_balance_after, receiver_balance_after)\n         SELECT t.amount, $4, t.receiver_id, t.currency_id, $5, $5, $5,\n                COALESCE(sender.amount, 0) + t.sender_later,\n                CASE WHEN t.receiver_id = $4 THEN COALESCE(sender.amount, 0) + t.sender_later\n                     ELSE COALESCE(receiver.amount, 0) - t.receiver_later END\n           FROM entries t\n           LEFT JOIN assets sender ON sender.user_id = $4 AND sender.currency_id = t.currency_id\n           LEFT JOIN assets receiver ON receiver.user_id = t.receiver_id AND receiver.currency_id = t.currency_id\n          ORDER BY t.ordinal",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "90bf4cbf3a8a880e15cd9ec5dc1d013108ac1f4eec8ed6d71d5f5f817a918e0a"
+}

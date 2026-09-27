@@ -626,3 +626,118 @@ async fn connect_requires_management_scope(pool: PgPool) {
 
     assert_eq!(bound, None, "a refused request must not bind the bot");
 }
+
+/// A guild integration list is not an authoritative membership list. Refuse without
+/// changing the wallet when the description cannot be verified, and explain why.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn missing_integration_distinguishes_present_absent_and_unreadable_members(pool: PgPool) {
+    insert_user(&pool, OWNER, OWNER_DISCORD_ID).await;
+    let application = insert_application(&pool, OWNER_DISCORD_ID, "mine").await;
+    let client_id = client_id_of(&pool, application).await;
+    let token = mint(&pool, OWNER, &["oauth2.register"]).await;
+    for (member_status, expected_status, error, message) in [
+        (
+            200,
+            409,
+            "integration_unavailable",
+            "サーバーに参加していますが",
+        ),
+        (404, 404, "invalid_bot", "このサーバーに参加していません"),
+        (403, 502, "discord_error", "在籍を確認できませんでした"),
+        (429, 502, "discord_error", "在籍を確認できませんでした"),
+    ] {
+        let response = connect_with(
+            pool.clone(),
+            Arc::new(FakeDiscord::with_missing_integration(BOT_ID, member_status)),
+            &token,
+            &client_id,
+            json!({"bot_id":BOT_ID.to_string(), "guild_id":A_SNOWFLAKE_AS_TEXT}),
+        )
+        .await;
+        assert_eq!(response.status, expected_status, "{}", response.body);
+        assert_eq!(response.body["error"], error);
+        assert!(
+            response.body["error_description"]
+                .as_str()
+                .unwrap()
+                .contains(message)
+        );
+        let found = vc_api::routes::oauth2_clients::details(&pool, application)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.discord_user_id, None);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn reconnect_keeps_the_application_wallet_and_merges_the_new_bots_balance(pool: PgPool) {
+    const NEXT_BOT: i64 = BOT_ID + 1;
+    let money = support::setup_money(&pool).await;
+    let application = insert_application(&pool, money.user1, "reconnect").await;
+    let account = support::account_of(&pool, application).await;
+    let client_id = client_id_of(&pool, application).await;
+    let owner_token = mint(&pool, 1, &["oauth2.register"]).await;
+    let payer_token = mint(&pool, 2, &["vc.pay"]).await;
+    let proof = token_of(&client_id);
+    let discord = Arc::new(FakeDiscord::with_integrations(
+        json!({"name":"TestGuild"}),
+        &[(BOT_ID, &proof), (NEXT_BOT, &proof)],
+    ));
+    let app = vc_api::router(state(pool.clone(), discord));
+    for (bot, amount) in [(BOT_ID, "2"), (NEXT_BOT, "3")] {
+        assert_eq!(
+            post(
+                app.clone(),
+                "/api/v2/users/@me/transactions",
+                &payer_token,
+                json!({"unit":"n", "receiver_discord_id":bot.to_string(), "amount":amount})
+            )
+            .await
+            .status,
+            201
+        );
+        assert_eq!(
+            post(
+                app.clone(),
+                &format!("/applications/{client_id}/connect"),
+                &owner_token,
+                json!({"bot_id":bot.to_string(), "guild_id":money.guild.to_string()})
+            )
+            .await
+            .status,
+            204
+        );
+    }
+    let now = vc_core::user::find_by_discord_id(&pool, NEXT_BOT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(now.id, account);
+    assert_eq!(
+        support::get_amount(&pool, NEXT_BOT, money.currency).await,
+        5
+    );
+    assert!(
+        vc_core::user::find_by_discord_id(&pool, BOT_ID)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Repeating the same binding must not add the merged balance a second time.
+    assert_eq!(
+        post(
+            app,
+            &format!("/applications/{client_id}/connect"),
+            &owner_token,
+            json!({"bot_id":NEXT_BOT.to_string(), "guild_id":money.guild.to_string()})
+        )
+        .await
+        .status,
+        204
+    );
+    assert_eq!(
+        support::get_amount(&pool, NEXT_BOT, money.currency).await,
+        5
+    );
+}

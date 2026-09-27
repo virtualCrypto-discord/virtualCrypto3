@@ -156,8 +156,8 @@ findings.
 
 ### 1.3 The Discord surface
 
-Thirteen commands — `help`, `invite`, `application`, `issue`, `pat`, `grant`, `contract`,
-`pay`, `info`, `create`, `delete`, `bal`, `claim` — and each is four artefacts that
+Fifteen commands — `help`, `invite`, `application`, `issue`, `pat`, `grant`, `contract`,
+`pay`, `info`, `create`, `delete`, `bal`, `claim`, `mute`, `history` — and each is four artefacts that
 have to agree:
 
 | Artefact | Where | What to check |
@@ -180,10 +180,101 @@ have to agree:
 - [ ] The screens nobody clicks in a test: the empty list, "this page is empty", the
       error screens (`CommandError`), the ephemeral flags, the autocomplete lists
       (`crates/vc-api/src/command/autocomplete.rs`).
-- [ ] `contexts` in the registration: `[0, 1]` everywhere except `issue`, `grant`,
+- [ ] `contexts` in the registration: `[0, 1]` everywhere except `issue`,
       `create` and `delete`, which are `[0]` — guild only, because they act on a
       guild's currency. `discord_commands.rs`'s header says that is the whole of
-      what the deprecated `dm_permission` said, and its unit test asserts the four.
+      what the deprecated `dm_permission` said, and its unit test asserts the three.
+
+#### UX-07 サーバーへの権限申請の再確認
+
+変更後のコマンド定義とサーバー実装がテスト環境に反映された状態で確認する。
+コマンド候補の説明を更新するには、サーバー実装の更新に加えてコマンドの再登録が必要。
+テスト用のサーバー・アカウント・アプリケーションを使う。
+
+1. `/grant` と各サブコマンド・`code` の説明、`/help command:grant` が日本語で読めることを確認する。
+2. 管理者が申請先のサーバーで `/grant approve code:<user_code>` を実行する。
+   `code` の入力欄に有効期限内の未承認申請が最大25件表示され、コードの前方一致で絞り込めることを確認する。
+   候補の申請元とサーバー／アカウントの区別を読み、選択して確認画面へ進む。
+   確認画面に申請元のアプリケーション、対象サーバー、発行権限、対象通貨が日本語で表示され、
+   アプリケーションIDの見出しと権限の説明に、内部向けの英語名が出ていないことを確認する。
+   「承認する」を押すまで許可されないことを確認する。対象通貨が複数ページに分かれる場合は、
+   矢印で全件を読めることと、承認が全ページの通貨を対象にする説明も確認する。
+   確認画面と許可の詳細画面では、1ページだけでも4つのページ移動ボタンが表示され、すべて無効であることを確認する。
+3. 一般メンバーとDMから同じサーバー申請コードを入力し、申請先のサーバー内で管理者が確認するよう
+   日本語で案内され、承認ボタンが出ないことを確認する。
+   両方のサーバーで管理者権限を持つ同じユーザーでも、申請先と異なるサーバーから同じコードを
+   入力すると拒否されること、申請先のサーバーからは確認・承認できることを確認する。
+   補完候補にも別サーバーへの申請は出ず、一般メンバーとDMでは本人宛ての申請だけが出ることを確認する。
+4. 複数アプリケーションへの許可を合計6件以上用意し、`/grant server` の矢印でページを移動する。
+   `/grant server` と `/grant user` は、0件や1ページだけでも最初から4つのページ移動ボタンが表示され、
+   移動先がない矢印は無効であることを確認する。取消により1ページや0件に減った後もボタンが残ることを確認する。
+   各アプリケーションとその操作ボタンがまとまりとして読め、次の項目やページ移動ボタンとの間に区切り線があることを確認する。
+   通貨が多い許可では「詳細」から内容を読み、「一覧に戻る」で戻れることを確認する。
+   取消ボタンが内部番号の付かない「取り消す」と表示され、選んだ許可だけが消えること、
+   同じアプリケーションへの別の許可は残ることを確認する。
+
+ローカルでは `interactions_grant` が管理者・一般メンバー・DM、承認前の表示、複数ページ、
+個別取消を検証する。`documentation`、`interactions_commands`、`discord_schema` で
+コマンド説明とヘルプの整合性、表示、登録データの形式を検証する。実機での読みやすさは別途確認する。
+
+#### UX-09 アプリ登録・設定変更の再確認
+
+テスト用のアカウント・アプリ・Bot・残高だけで確認する。秘密値は証跡に残さない。
+
+1. `/application register` で、緑色の「登録しました」と Bot 未接続の表示を確認する。
+   `client_secret` の用途が説明され、他のチャンネル参加者には応答が見えないことを確認する。
+   `/application list` に秘密値がなく、所有者の `show` だけで再確認できることも確認する。
+2. 名前・リダイレクト URI・選択式の設定を変更し、「設定を保存しました」と再表示後の値を確認する。
+   アプリケーションの種類・グラントタイプ・レスポンスタイプ・通知イベントは、見出しの下の
+   セレクトメニューだけに選択状態が表示され、同じ値が別のテキストとして重複しないことを確認する。
+   不正 URI、検証に失敗する Webhook を指定すると赤い失敗表示になり、保存済みの値が維持される。
+3. 「client_secret を再生成」を押す。旧 secret の無効化とサービス側設定更新の説明を確認する。
+   キャンセルでは変わらず、確定後は新 secret だけで認証できることを確認する。
+   作成画面・再生成結果・認証ヘッダーは撮影・記録しない。
+4. 「Bot の接続」の説明・確認用 URL の直下にユーザー選択メニューがあることを確認する。
+   Bot の Description に確認用 URL を記入する。直下のメニューで Bot を選び、
+   現在の接続先・選択した ID・残高合算の説明を確認して「接続する」を押す。
+   人間を選ぶと拒否される。DM ではサーバー内での操作を案内する。
+5. 別のテスト Bot へ再連携し、アプリの既存残高と接続先 Bot の連携前の残高が合算されること、
+   旧 Bot からアプリの残高へアクセスできなくなることを確認する。他アプリに接続済みなら拒否される。
+6. 在籍中なのにエラーになる場合は、表示されたエラー種別と Bot ID を確認する。
+   在籍確認済みでも連携情報が取得できない場合はその旨が表示される。
+   一覧の取得上限は50件であり、不在とは別の状態として扱う。
+   必要なら両 Bot が参加する連携数の少ないテストサーバーで再試行する。
+
+実装では Discord REST API を v10 に固定する。一覧に対象がない場合はメンバー取得で在籍を確認し、
+説明を検証できるまで接続・残高変更を行わない。
+仕様: [API のバージョン指定](https://docs.discord.com/developers/reference#api-versioning)、
+[連携一覧の上限](https://docs.discord.com/developers/resources/guild#get-guild-integrations)。
+証跡には操作・結果・秘密値を含まない画面だけを残し、レビュー判断は確認者が別途記録する。
+
+#### UX-10 PAT recheck
+
+Use a test account and test PATs only. After the changed command registration and
+server are available in the test environment, perform these device checks:
+
+1. Open `/help` → `pat` and the website's PAT help. Confirm they explain the
+   account authority, no expiry, no scope selection, private one-time display,
+   and revocation from `/pat list`. The command picker offers `create` and `list`.
+2. Create `ux10-test` in a test server. Confirm only the invoking account sees
+   the response; another account in the channel cannot see it. Do not capture
+   the creation screen. Keep the value only in the test API client's memory.
+3. Call `GET /api/v2/users/@me` with that PAT and record only HTTP 200. Open
+   `/pat list`: the name and 「失効」 button appear, without the value. Press the
+   button and repeat the same request; record HTTP 401 and the revocation notice.
+4. Check duplicate names, a 32-character name (including Japanese), rejection of
+   33 characters, and the 25-token cap. With 25 test tokens, visit all three
+   pages; confirm every name has a button. Revoke the last page's tokens and
+   confirm the list moves back. A new token can be issued after a slot is freed.
+5. Recreate a revoked name, then press its button on an older list. Confirm the
+   replacement remains usable. Revoke all remaining test PATs afterward.
+
+Evidence should contain only the test token's **name**, operation, time, HTTP
+status, and screenshots of help/list/result screens that contain no credential.
+Do not record the creation screen, Authorization headers, request dumps, token
+values, browser network exports, or terminal history containing a value. A
+reviewer records the final judgment separately; executing these steps does not
+change the review application's decision or checkboxes.
 
 ### 1.4 The joins between artefacts
 
@@ -419,6 +510,109 @@ belief into a fact, and each of these was run while the code was written:
 ## 3. Human
 
 Nothing here can be settled from a terminal.
+
+**Shared error display: red accent.** Error/refusal containers carry an explicit
+red `accent_color`, including initial replies, edits and follow-ups. Recheck
+insufficient funds in `/pay` and `/issue`, permission/window errors in `/delete`,
+permission errors in `/history issue`, invalid codes or permissions in `/grant`,
+and claim button failures. Unknown `/help command` values and a Bot connection
+attempt in a DM should also show the red bar. Error text and privacy must remain
+unchanged. Success replies, ordinary help and empty history lists retain their
+normal colours; an empty list alone is not an error.
+
+**UX-05: 請求一覧の区切り線。** `/claim list`・`/claim received`・`/claim sent` で、
+履歴と同じ区切り線が見出しの下、各請求の間、ページ操作ボタンの上に表示されることを確認する。
+各請求の本文と承諾・拒否・キャンセルボタンは、同じ区切りの中にまとまっていることを確認する。
+0件では「表示する内容がありません。」の上下に線があり、矢印は無効、更新は操作できる。
+1件・6件以上でも確認し、ページ移動・更新・請求の操作後も区切りとボタンの対応が崩れないことを確認する。
+処理済み請求を表示したときは、操作ボタンがなくても請求ごとの区切りがあることを確認する。
+
+**UX-05: 請求一覧の操作結果の色。** テスト用の未処理請求を使い、請求先の利用者が
+`/claim received` の承諾ボタンを押す。本人だけに表示される
+「id: `…` の請求を承諾し、支払いました。」の通知に緑のアクセントが付き、
+一覧が更新されることを確認する。別の未処理請求で拒否、請求元の利用者で
+`/claim sent` からキャンセルした際も、成功通知が緑になることを確認する。
+残高不足による承諾失敗は赤、一覧自体は通常の紫のままであることを確認する。
+支払い済みの請求を再承諾して確認せず、新しいテスト用請求を使う。
+ローカル回帰テストは `cargo test -p vc-api --test interactions_claim`。
+
+**UX-03: `/pay` answers directly with its outcome.** The initial type-4 reply
+shows the sender, recipient, amount and unit publicly on success. Errors are
+initial ephemeral replies. There is no processing/deferred response, follow-up,
+private completion link, or deletion of an original response.
+
+Preparation has a one-second budget from request receipt; a timeout rolls back
+balances, newly created accounts and history before COMMIT and answers privately
+that no payment was made. Once COMMIT starts, a timeout or lost connection is
+ambiguous: the private reply asks the caller to check `/history` without retrying.
+A receipt lookup timeout is also ambiguous because an earlier delivery may have
+paid already. Result receipt storage is bounded separately so a slow save does
+not hide a known result. The durable receipt still prevents repeated execution.
+Delivery failure does not undo a committed payment, so a Discord interaction
+failure is not proof that no payment was made.
+
+For a human recheck in a test guild, note both balances, send 1 unit, and expect
+sender −1 / recipient +1 and one public result as the command reply. Check the
+same behavior in a thread and a DM. Request more than the sender's balance and
+expect only a private error with both balances unchanged. Check there is no
+extra `処理中…`, completion receipt or `Original message was deleted` placeholder.
+Discord's own transient display before receiving our response remains client
+behavior; the bot does not send a deferred/thinking response.
+
+Local tests in `crates/vc-api/tests/interactions_pay.rs` cover DB locks,
+preparation rollback, delayed COMMIT, disconnects and concurrent/replayed
+interactions. The source audit found `/pay` was the sole caller of original-response
+deletion; that API remains removed. Other commands' private screen updates are
+unchanged by the direct payment response.
+
+**UX-03: `/pay unit` autocomplete recheck.** In a test guild, open `/pay`
+and focus `unit` before submitting. With the field empty, expect the caller's
+currencies and the guild's currency; enter a unit prefix to narrow the list
+(case-insensitive), and a nonmatching prefix to get no choices. Repeat in a DM,
+where the empty field offers only the caller's currencies. Labels show the
+currency name, balance and unit. Long legacy names are shortened to keep labels
+within 100 characters; selecting a suggestion must still fill the exact unit.
+Selecting a suggestion alone does not transfer currency. The local regression
+suite is `cargo test -p vc-api --test interactions_autocomplete`; it checks the
+response against the vendored Discord schema, including long ASCII/Japanese
+names, guild/DM payloads, a caller with no holdings and the 25-choice limit.
+If no choices appear even for a short known unit, record whether the field was
+empty or typed, guild or DM, and the endpoint's status and elapsed time without
+recording interaction tokens. A local schema test cannot confirm which command
+registration or server version Discord is using.
+
+**UX-11: 通貨ミュートと `/pay` の入力候補。** テスト用の通貨を3種類保有し、
+`/pay unit` の未入力時と単位の先頭文字を入力したときの候補を確認する。
+そのうち2種類を `/mute currency` でミュートし、未入力・先頭文字・単位の完全入力の
+いずれでも、その2種類が候補から消え、残る1種類は表示されることを確認する。
+サーバー自身の通貨もミュート対象に含め、サーバー内とDMの両方で確認する。
+別の利用者の候補には影響しないこと、`/info name` の通貨名候補からも消えることを確認する。
+`/mute list` で対象を確認し、「解除」で1種類だけ解除する。
+その通貨だけが候補に戻り、もう1種類は非表示のままであることを確認する。
+続いて `/mute list` の「解除」で残りを戻し、候補に再表示されることを確認する。
+候補の選択だけでは送金されない。ミュートは送金の禁止ではなく、単位を直接指定した
+送金は可能。ローカル回帰テストは `cargo test -p vc-api --test interactions_autocomplete`。
+
+**UX-11: ミュートの適用範囲の再確認。** テスト用データで次を確認する。
+
+| 対象 | 通貨ミュート | 相手ミュート |
+| --- | --- | --- |
+| `/bal`、本人の残高API | 該当通貨の行を非表示 | 残高は通貨単位なので対象外 |
+| `/history pay`、本人の入出金API | 発行・送金・契約の行を非表示 | 通常送金の相手、契約の参加者・固定支払先・連携Botに関する行を非表示 |
+| `/history issue` | 実行者の設定で非表示 | 実行者がミュートした発行先を非表示 |
+| `/claim list`、本人の請求API、請求ID補完 | 該当通貨を非表示 | 請求元・請求先を非表示 |
+| `/contract list`、本人の契約API | 該当通貨を非表示 | 参加者・固定支払先・連携Botを非表示 |
+| 通貨名・単位の補完 | 該当通貨を非表示 | 通貨と利用者は別の対象 |
+
+ミュート前後の件数とページ移動、複数対象のうち1件だけ解除した際の復帰を確認する。
+全件非表示になった残高・履歴では、資金や記録がなくなったと誤認させない表示か確認する。
+履歴の取引後残高は保存された実額のままで、非表示の行を飛ばすと金額が連続しないことがある。
+`/info` やIDで開く請求・契約の詳細は読み取れ、送金・発行・承認・返金は引き続き実行できる。
+サーバートークンの発行履歴API、アプリ自身の契約一覧、公開通貨検索には、所有者個人の
+ミュートを転用しない。Discord標準のユーザー選択欄もアプリのミュートでは絞り込まれない。
+コマンド一覧と `/help` に独立した解除コマンドがなく、解除を `/mute list` から行えることを確認する。
+コマンド登録の更新は別途必要。このローカル確認ではDiscordへの登録は実施しない。
+回帰テスト: `cargo test -p vc-api --test interactions_mute_surfaces --test interactions_mute --test interactions_autocomplete`。
 
 - [ ] **`/help` and the site's command list** against what the commands do.
 - [ ] **`/contract list`**: five rows, the count in the first line, the arrows
