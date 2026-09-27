@@ -1208,6 +1208,20 @@ async fn lock_contract(
     tx: &mut PgConnection,
     contract_id: i64,
 ) -> std::result::Result<LockedContract, ContractError> {
+    // Deletion locks the currency before removing assets and contracts. Take
+    // a compatible reference lock first so it cannot remove our escrow while
+    // we hold the contract lock. Issuance's NO KEY UPDATE remains compatible.
+    sqlx::query_scalar!(
+        "SELECT c.id FROM currencies c
+           JOIN contracts contract ON contract.currency_id = c.id
+          WHERE contract.id = $1 FOR KEY SHARE OF c",
+        contract_id
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ContractError::Database)?
+    .ok_or(ContractError::NotFound)?;
+
     let row = sqlx::query!(
         "SELECT application_id, currency_id, receiver_discord_id, expires_at,
                 status AS \"status!\"

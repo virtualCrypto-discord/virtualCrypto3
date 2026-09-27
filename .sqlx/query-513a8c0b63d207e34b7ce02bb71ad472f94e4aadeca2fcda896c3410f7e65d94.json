@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id FROM currencies c\n           JOIN contracts contract ON contract.currency_id = c.id\n          WHERE contract.id = $1 FOR KEY SHARE OF c",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "currencies",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "513a8c0b63d207e34b7ce02bb71ad472f94e4aadeca2fcda896c3410f7e65d94"
+}
