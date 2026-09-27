@@ -991,6 +991,126 @@ pub mod ui {
         }
     }
 
+    /// Personal token list buttons. The owner is checked against the interaction user;
+    /// revocation carries an immutable token id so stale screens cannot target a replacement.
+    pub mod pat {
+        use super::UiError;
+        use uuid::Uuid;
+
+        const HEAD: u8 = 0xF8;
+
+        pub fn head() -> u8 {
+            HEAD
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Pressed {
+            Page {
+                owner: i64,
+                number: usize,
+            },
+            Revoke {
+                owner: i64,
+                number: usize,
+                token_id: Uuid,
+            },
+        }
+
+        pub fn page(owner: i64, number: usize) -> String {
+            encode(1, &format!("{owner}:{number}"))
+        }
+
+        pub fn revoke(owner: i64, number: usize, token_id: Uuid) -> String {
+            encode(2, &format!("{owner}:{number}:{token_id}"))
+        }
+
+        fn encode(action: u8, payload: &str) -> String {
+            let mut data = vec![HEAD, action];
+            data.extend_from_slice(payload.as_bytes());
+            crate::custom_id::encode(0, &data)
+        }
+
+        pub fn parse(source: &[u8]) -> Result<Pressed, UiError> {
+            let [HEAD, action, rest @ ..] = source else {
+                return Err(UiError::Head);
+            };
+            let payload = std::str::from_utf8(rest).map_err(|_| UiError::Head)?;
+            let mut fields = payload.trim_end_matches('\0').split(':');
+            let owner = fields
+                .next()
+                .and_then(|s| s.parse().ok())
+                .filter(|id| *id > 0)
+                .ok_or(UiError::Head)?;
+            let number = fields
+                .next()
+                .and_then(|s| s.parse().ok())
+                .filter(|n| *n > 0)
+                .ok_or(UiError::Head)?;
+            let pressed = match action {
+                1 => Pressed::Page { owner, number },
+                2 => Pressed::Revoke {
+                    owner,
+                    number,
+                    token_id: fields
+                        .next()
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                        .ok_or(UiError::Head)?,
+                },
+                other => return Err(UiError::Unknown(u16::from(*other))),
+            };
+            if fields.next().is_some() {
+                return Err(UiError::Head);
+            }
+            Ok(pressed)
+        }
+    }
+
+    #[cfg(test)]
+    mod pat_tests {
+        use super::pat::{self, Pressed};
+
+        #[test]
+        fn buttons_round_trip_within_discord_limit() {
+            let owner = i64::MAX;
+            let token_id = uuid::Uuid::new_v4();
+            for (id, expected) in [
+                (
+                    pat::page(owner, usize::MAX),
+                    Pressed::Page {
+                        owner,
+                        number: usize::MAX,
+                    },
+                ),
+                (
+                    pat::revoke(owner, 3, token_id),
+                    Pressed::Revoke {
+                        owner,
+                        number: 3,
+                        token_id,
+                    },
+                ),
+            ] {
+                assert!(id.encode_utf16().count() <= 100);
+                assert_eq!(pat::parse(&crate::custom_id::parse(&id)), Ok(expected));
+            }
+        }
+
+        #[test]
+        fn malformed_ids_are_refused() {
+            for bytes in [
+                &b"\xf7\x011:1"[..],
+                &b"\xf8"[..],
+                &b"\xf8\x011:0"[..],
+                &b"\xf8\x010:1"[..],
+                &b"\xf8\x011:1:extra"[..],
+                &b"\xf8\x021:1:invalid-uuid"[..],
+                &b"\xf8\x091:1"[..],
+            ] {
+                assert!(pat::parse(bytes).is_err());
+            }
+        }
+    }
+
     pub mod modal {
         use super::{UiError, parse_id};
 

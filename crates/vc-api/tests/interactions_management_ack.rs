@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 use support::*;
-use vc_api::custom_id::ui::{developer, grant, modal, mute};
+use vc_api::custom_id::ui::{developer, grant, modal, mute, pat};
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -85,21 +85,26 @@ async fn prepare(pool: &PgPool, money: &Money, operation: Operation, index: usiz
             ]}),
             money.user1,
         ),
-        PatCreate | PatRevoke => {
-            if matches!(operation, PatRevoke) {
-                vc_auth::issue::personal_token(pool, JWT_SECRET.as_bytes(), 1, "revoked", now)
-                    .await
-                    .unwrap();
-            }
-            command(
-                money,
-                "pat",
-                if matches!(operation, PatCreate) {
-                    "create"
-                } else {
-                    "revoke"
-                },
-                json!([{"name":"name","value":if matches!(operation, PatCreate) {"created"} else {"revoked"}}]),
+        PatCreate => command(
+            money,
+            "pat",
+            "create",
+            json!([{"name":"name","value":"created"}]),
+        ),
+        PatRevoke => {
+            vc_auth::issue::personal_token(pool, JWT_SECRET.as_bytes(), 1, "revoked", now)
+                .await
+                .unwrap();
+            let token_id = vc_auth::issue::personal_tokens(pool, 1)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|token| token.name == "revoked")
+                .unwrap()
+                .token_id;
+            button_from_guild(
+                json!({"custom_id":pat::revoke(money.user1, 1, token_id)}),
+                money.user1,
             )
         }
         GrantApprove | GrantRevoke => {

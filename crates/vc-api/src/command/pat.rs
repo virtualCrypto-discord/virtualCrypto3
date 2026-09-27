@@ -1,12 +1,7 @@
 //! `/pat`: the credentials an account gives to something that is not a browser.
 //!
-//! Three subcommands, and a token appears exactly once — in the answer to `create`. What the
-//! table keeps is the name, so `list` has nothing to leak and `revoke` needs nothing but the name.
-//!
-//! A personal access token has no expiry, which is why the list is a list of names and not of
-//! days: nothing but `/pat revoke` ends one, so there is no date to show and no purge that takes
-//! it away. What that leaves is the count, and [`MAX_TOKENS`] is the count — the list is one
-//! message and nothing pages it.
+//! `create` shows the credential once, privately. `list` shows names with revocation buttons.
+//! Ten rows per page leave room for the controls within Discord's component limit.
 //!
 //! An addition rather than a port: the Elixir has no personal access token, no API key, and no
 //! column that could hold one. `docs/pat.md` is the design.
@@ -15,9 +10,11 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, get_user,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
+    get_user,
 };
-use crate::components::{container, ephemeral, text};
+use crate::components::{ButtonStyle, action_row, button, container, ephemeral, section, text};
+use crate::custom_id::ui::pat::{self as ids, Pressed};
 use crate::docs::discord::mentions;
 use crate::state::AppState;
 use vc_auth::issue::{
@@ -28,6 +25,7 @@ use vc_auth::issue::{
 /// The longest a name may be. `crate::discord_commands`'s `/pat name` option states the same
 /// bound — one number in the option Discord shows and in the check that makes it true.
 const NAME_MAX: usize = 32;
+const PER_PAGE: usize = 10;
 
 /// `Command.handle/4` for `pat`.
 pub async fn handle(
@@ -46,8 +44,7 @@ pub async fn handle(
 
     match subcommand {
         "create" => create(state, named(sub_options)?, me).await,
-        "list" => list(state, me).await,
-        "revoke" => revoke(state, named(sub_options)?, me).await,
+        "list" => list(state, me, 1, None, CHANNEL_MESSAGE_WITH_SOURCE).await,
         // Everything this service registers is written down, so a subcommand that is not is one
         // it does not have: a client with a stale command list, answered the way any unknown
         // command is.
@@ -55,8 +52,7 @@ pub async fn handle(
     }
 }
 
-/// The name a subcommand was given. Both subcommands that take one require it in the registry,
-/// so a missing one is a client rather than a person.
+/// The required name for creation.
 fn named(sub_options: Option<&Value>) -> Result<&str, CommandError> {
     sub_options
         .and_then(|options| options.get("name"))
@@ -66,14 +62,12 @@ fn named(sub_options: Option<&Value>) -> Result<&str, CommandError> {
 
 /// A token, once: the value, and what it can do.
 ///
-/// The scopes are read from [`BROWSER_SCOPES`] rather than written out here, because they are the
-/// same list the session's token carries and a screen that repeats it by hand is a screen that
-/// can disagree with the token it just issued.
+/// The scopes come from the issuance constant so they agree with the credential.
 async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, CommandError> {
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
             vec![text(
-                "VirtualCryptoのアカウントがまだありません。`/create` でアプリケーションを登録すると作られます。",
+                "VirtualCryptoのアカウントがまだありません。`/application register` でアプリケーションを登録すると作られます。",
             )],
             COLOR_ERROR,
         ));
@@ -102,30 +96,36 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         Ok(token) => Ok(screen(
             vec![
                 text(format!(
-                    "**{name}** としてトークンを発行しました。このトークンは一度だけ表示されます。"
+                    "{} としてトークンを発行しました。値は実行した本人だけに、この返信で一度だけ表示されます。",
+                    display_name(name)
                 )),
                 text(format!("```\n{token}\n```")),
+                text(
+                    "このトークンを持つツールは、あなたとしてアプリケーションの登録と接続、残高の参照、送金、請求、契約の承認などができます。権限は絞れません。他人に見せないでください。",
+                ),
                 text(format!("スコープ: {}", BROWSER_SCOPES.join(", "))),
                 text(mentions(
-                    "期限はありません。`/pat revoke` で失効させるまで使えます。",
+                    "有効期限はありません。`/pat list` の名前の横にある「失効」ボタンで失効させるまで使えます。",
                     state.command_ids().await,
                 )),
             ],
             COLOR_OK,
         )),
-        // The name is how a token is revoked, so two of them on one account could not be told
-        // apart: the second is refused rather than made.
         Err(PersonalError::NameTaken(name)) => Ok(screen(
-            vec![text(format!(
-                "`{name}` という名前のトークンはもうあります。`/pat revoke` で消してから作ってください。"
+            vec![text(mentions(
+                &format!(
+                    "{} という名前のトークンはもうあります。別の名前を使うか、`/pat list` の「失効」ボタンで失効させてから作ってください。",
+                    display_name(&name)
+                ),
+                state.command_ids().await,
             ))],
             COLOR_ERROR,
         )),
         Err(PersonalError::LimitReached) => Ok(screen(
             vec![text(mentions(
                 &format!(
-                    "トークンは1アカウントに{MAX_TOKENS}個までです。`/pat list` で名前を確かめて、\
-                     要らないものを`/pat revoke` で失効させてから作ってください。"
+                    "トークンは1アカウントに{MAX_TOKENS}個までです。`/pat list` で不要なトークンの\
+                     「失効」ボタンを押してから作ってください。"
                 ),
                 state.command_ids().await,
             ))],
@@ -135,11 +135,14 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
     }
 }
 
-/// What this account has given out: the names, never a token.
-///
-/// Every one of them is here, because nothing hides a row: the count is bounded by what one
-/// message holds, so a screen that paged would be a screen with an arrow nobody ever presses.
-async fn list(state: &AppState, discord_id: i64) -> Result<Value, CommandError> {
+/// Names and actions only: credential values cannot be read back.
+async fn list(
+    state: &AppState,
+    discord_id: i64,
+    number: usize,
+    notice: Option<(String, i64)>,
+    kind: i64,
+) -> Result<Value, CommandError> {
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
             vec![text("VirtualCryptoのアカウントがまだありません。")],
@@ -149,28 +152,78 @@ async fn list(state: &AppState, discord_id: i64) -> Result<Value, CommandError> 
 
     let tokens = personal_tokens(state.pool(), i64::from(account)).await?;
 
-    if tokens.is_empty() {
-        return Ok(screen(
-            vec![text(mentions(
-                "まだありません。`/pat create` で作れます。",
-                state.command_ids().await,
-            ))],
-            COLOR_BRAND,
-        ));
+    let mut children = Vec::new();
+    let mut color = COLOR_BRAND;
+    if let Some((message, accent)) = notice {
+        children.push(text(message));
+        color = accent;
     }
-
-    Ok(screen(
-        tokens
-            .iter()
-            .map(|token| text(format!("**{}**", token.name)))
-            .collect(),
-        COLOR_BRAND,
-    ))
+    if tokens.is_empty() {
+        children.push(text(mentions(
+            "まだありません。`/pat create` で作れます。",
+            state.command_ids().await,
+        )));
+    } else {
+        let last = tokens.len().div_ceil(PER_PAGE);
+        let number = number.clamp(1, last);
+        children.push(text(format!(
+            "**個人アクセストークン** ({} / {MAX_TOKENS}個・{number} / {last}ページ)\n有効期限はありません。「失効」を押すと直ちに使えなくなり、そのトークンを使うツールも動かなくなります。",
+            tokens.len()
+        )));
+        for token in tokens.iter().skip((number - 1) * PER_PAGE).take(PER_PAGE) {
+            children.push(section(
+                vec![text(display_name(&token.name))],
+                button(
+                    &ids::revoke(discord_id, number, token.token_id),
+                    "失効",
+                    ButtonStyle::Danger,
+                ),
+            ));
+        }
+        if last > 1 {
+            let mut previous = button(
+                &ids::page(discord_id, number - 1),
+                "前へ",
+                ButtonStyle::Secondary,
+            );
+            previous["disabled"] = json!(number == 1);
+            let mut next = button(
+                &ids::page(discord_id, number + 1),
+                "次へ",
+                ButtonStyle::Secondary,
+            );
+            next["disabled"] = json!(number == last);
+            children.push(action_row(vec![previous, next]));
+        }
+    }
+    Ok(json!({
+        "type": kind,
+        "data": ephemeral(vec![container(Some(color as u32), children)]),
+    }))
 }
 
-/// Forgetting one, by the name it was made under. The row is what the token resolves against, so
-/// deleting it is the whole of the revocation: the signature stays valid and stops being enough.
-async fn revoke(state: &AppState, name: &str, discord_id: i64) -> Result<Value, CommandError> {
+/// A button never trusts its embedded owner or token id as authorization.
+pub async fn component(
+    state: &AppState,
+    custom_id: &str,
+    payload: &Value,
+) -> Result<Value, CommandError> {
+    let discord_id =
+        get_user(payload).ok_or_else(|| CommandError::missing("interaction has no user"))?;
+    let pressed =
+        ids::parse(&crate::custom_id::parse(custom_id)).map_err(|_| CommandError::Unknown)?;
+    let (Pressed::Page { owner, number } | Pressed::Revoke { owner, number, .. }) = pressed;
+    if owner != discord_id {
+        return Ok(screen(
+            vec![text(
+                "この一覧は操作できません。`/pat list` で自分の一覧を開いてください。",
+            )],
+            COLOR_ERROR,
+        ));
+    }
+    let Pressed::Revoke { token_id, .. } = pressed else {
+        return list(state, discord_id, number, None, UPDATE_MESSAGE).await;
+    };
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
             vec![text("VirtualCryptoのアカウントがまだありません。")],
@@ -178,17 +231,29 @@ async fn revoke(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         ));
     };
 
-    if !revoke_personal(state.pool(), i64::from(account), name).await? {
-        return Ok(screen(
-            vec![text(format!("`{name}` という名前のトークンはありません。"))],
+    let notice = match revoke_personal(state.pool(), i64::from(account), token_id).await? {
+        Some(name) => (
+            format!("{} を失効させました。", display_name(&name)),
+            COLOR_OK,
+        ),
+        None => (
+            "このトークンは既に失効しているか、見つかりません。".to_owned(),
             COLOR_ERROR,
-        ));
-    }
+        ),
+    };
+    list(state, discord_id, number, Some(notice), UPDATE_MESSAGE).await
+}
 
-    Ok(screen(
-        vec![text(format!("`{name}` を失効させました。"))],
-        COLOR_OK,
-    ))
+/// Keep a user-chosen name from hiding or reformatting the adjacent action.
+fn display_name(name: &str) -> String {
+    let mut escaped = String::new();
+    for c in name.chars() {
+        if "\\`*_{}[]()<>#+-.!|~".contains(c) {
+            escaped.push('\\');
+        }
+        escaped.push(if c == '\n' || c == '\r' { ' ' } else { c });
+    }
+    format!("**{escaped}**")
 }
 
 /// The account behind an interaction, or nothing when the caller has none yet — a token belongs

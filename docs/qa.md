@@ -185,6 +185,34 @@ have to agree:
       guild's currency. `discord_commands.rs`'s header says that is the whole of
       what the deprecated `dm_permission` said, and its unit test asserts the four.
 
+#### UX-10 PAT recheck
+
+Use a test account and test PATs only. After the changed command registration and
+server are available in the test environment, perform these device checks:
+
+1. Open `/help` → `pat` and the website's PAT help. Confirm they explain the
+   account authority, no expiry, no scope selection, private one-time display,
+   and revocation from `/pat list`. The command picker offers `create` and `list`.
+2. Create `ux10-test` in a test server. Confirm only the invoking account sees
+   the response; another account in the channel cannot see it. Do not capture
+   the creation screen. Keep the value only in the test API client's memory.
+3. Call `GET /api/v2/users/@me` with that PAT and record only HTTP 200. Open
+   `/pat list`: the name and 「失効」 button appear, without the value. Press the
+   button and repeat the same request; record HTTP 401 and the revocation notice.
+4. Check duplicate names, a 32-character name (including Japanese), rejection of
+   33 characters, and the 25-token cap. With 25 test tokens, visit all three
+   pages; confirm every name has a button. Revoke the last page's tokens and
+   confirm the list moves back. A new token can be issued after a slot is freed.
+5. Recreate a revoked name, then press its button on an older list. Confirm the
+   replacement remains usable. Revoke all remaining test PATs afterward.
+
+Evidence should contain only the test token's **name**, operation, time, HTTP
+status, and screenshots of help/list/result screens that contain no credential.
+Do not record the creation screen, Authorization headers, request dumps, token
+values, browser network exports, or terminal history containing a value. A
+reviewer records the final judgment separately; executing these steps does not
+change the review application's decision or checkboxes.
+
 ### 1.4 The joins between artefacts
 
 | This | must agree with | How it is held |

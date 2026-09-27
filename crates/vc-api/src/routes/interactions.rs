@@ -298,6 +298,32 @@ async fn component(state: &AppState, payload: &Value) -> Response {
         };
     }
 
+    if let Some(custom_id) = custom_id
+        && crate::custom_id::parse(custom_id).first() == Some(&crate::custom_id::ui::pat::head())
+    {
+        if component_type != Some(2) {
+            return text(StatusCode::BAD_REQUEST, "Type Not Found");
+        }
+        let Ok(pressed) = crate::custom_id::ui::pat::parse(&crate::custom_id::parse(custom_id))
+        else {
+            return text(StatusCode::BAD_REQUEST, "Type Not Found");
+        };
+        if matches!(pressed, crate::custom_id::ui::pat::Pressed::Revoke { .. }) {
+            let custom_id = custom_id.to_owned();
+            return management_response(
+                crate::command::response::run(state, payload, true, |state, payload| async move {
+                    crate::command::pat::component(&state, &custom_id, &payload).await
+                })
+                .await,
+            );
+        }
+        return match crate::command::pat::component(state, custom_id, payload).await {
+            Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+            Err(CommandError::Unknown) => text(StatusCode::BAD_REQUEST, "Type Not Found"),
+            Err(CommandError::Internal(error)) => error.into_response(),
+        };
+    }
+
     // And the balance list's arrows, which carry a page and nothing else.
     if let Some(custom_id) = custom_id
         && crate::custom_id::ui::bal::parse(&crate::custom_id::parse(custom_id)).is_ok()
@@ -393,7 +419,7 @@ async fn command(state: &AppState, payload: &Value, received_at: Instant) -> Res
     let subcommand = options.get("subcommand").and_then(Value::as_str);
     let management = match name {
         "create" => true,
-        "pat" => matches!(subcommand, Some("create" | "revoke")),
+        "pat" => subcommand == Some("create"),
         "mute" | "unmute" => matches!(subcommand, Some("currency" | "user")),
         "application" => subcommand == Some("register"),
         _ => false,

@@ -90,11 +90,11 @@ pub struct Issuance<'a> {
     /// credential something that is not a browser keeps, and which nobody is around to renew.
     pub ttl: Option<Duration>,
     /// Set for a personal access token and nothing else. It is what tells such a row apart from
-    /// an expiring user token, and the name a person revokes it by.
+    /// an expiring user token, and the name shown in the personal token list.
     pub name: Option<&'a str>,
 }
 
-/// Maximum personal access tokens per account, keeping the list within one Discord message.
+/// Maximum personal access tokens per account.
 pub const MAX_PERSONAL_TOKENS: usize = 25;
 
 /// Why a personal access token could not be issued.
@@ -102,8 +102,7 @@ pub const MAX_PERSONAL_TOKENS: usize = 25;
 pub enum PersonalError {
     #[error("personal access token limit reached")]
     LimitReached,
-    /// A token with this name already exists on this account. Names are how one is revoked, so
-    /// two of them could not be told apart.
+    /// A token with this name already exists on this account.
     #[error("a token named {0} already exists")]
     NameTaken(String),
     #[error(transparent)]
@@ -176,10 +175,9 @@ fn unique_violation(error: &sqlx::Error) -> bool {
         .is_some_and(|error| error.code().as_deref() == Some("23505"))
 }
 
-/// One personal access token, as a list shows it: the name, and nothing else. The row does not
-/// hold the token, and it no longer holds a day either — nothing but revocation ends one — so a
-/// list is for recognising a credential and has nothing else to say about it.
+/// A personal token's display name and stable identifier, never its credential value.
 pub struct PersonalToken {
+    pub token_id: Uuid,
     pub name: String,
 }
 
@@ -188,11 +186,12 @@ pub struct PersonalToken {
 /// Ordered by name rather than by age, because that is how a person finds the one they mean, and
 /// because it does not move as new tokens are made.
 ///
-/// No paging: personal issuance caps how many an account may hold, so the whole list is what it
-/// needs — the count to refuse one more, and the names to draw.
+/// The bounded list is paginated by the Discord renderer.
 pub async fn personal_tokens(pool: &PgPool, user_id: i64) -> Result<Vec<PersonalToken>, AuthError> {
-    let rows = sqlx::query_scalar!(
-        r#"SELECT name AS "name!"
+    // The legacy schema permits NULL token ids, but personal_token always writes a UUID.
+    let rows = sqlx::query_as!(
+        PersonalToken,
+        r#"SELECT token_id AS "token_id!", name AS "name!"
            FROM user_access_tokens
            WHERE user_id = $1 AND name IS NOT NULL
            ORDER BY name"#,
@@ -201,24 +200,25 @@ pub async fn personal_tokens(pool: &PgPool, user_id: i64) -> Result<Vec<Personal
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|name| PersonalToken { name })
-        .collect())
+    Ok(rows)
 }
 
-/// Forgetting a personal access token by the name it was made under: the same deletion the `jti`
-/// one performs, found the way a person refers to it.
-pub async fn revoke_personal(pool: &PgPool, user_id: i64, name: &str) -> Result<bool, AuthError> {
-    let deleted = sqlx::query!(
-        "DELETE FROM user_access_tokens WHERE user_id = $1 AND name = $2",
+/// Revoke only this account's named token. An old button cannot revoke a replacement with
+/// the same name, and an arbitrary token id cannot revoke an unnamed session or app token.
+pub async fn revoke_personal(
+    pool: &PgPool,
+    user_id: i64,
+    token_id: Uuid,
+) -> Result<Option<String>, AuthError> {
+    Ok(sqlx::query_scalar!(
+        r#"DELETE FROM user_access_tokens
+           WHERE user_id = $1 AND token_id = $2 AND name IS NOT NULL
+           RETURNING name AS "name!""#,
         user_id,
-        name
+        token_id
     )
-    .execute(pool)
-    .await?;
-
-    Ok(deleted.rows_affected() > 0)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// The issuance both kinds share.
