@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  review-workbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm --prefix tools/review-workbench run check
+      - run: npm --prefix tools/review-workbench test
+
   check:
     runs-on: ubuntu-latest
 

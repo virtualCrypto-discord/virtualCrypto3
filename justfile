@@ -37,6 +37,14 @@ build:
 test:
 	cargo nextest run --workspace
 
+# Local review progress and Codex preparation UI (Node.js 24+).
+review:
+	node tools/review-workbench/server.mjs
+
+review-check:
+	npm --prefix tools/review-workbench run check
+	npm --prefix tools/review-workbench test
+
 # Regenerate the offline query data — the way that actually compiles every crate
 # carrying a query. A bare `cargo sqlx prepare` in this checkout does not: mbx
 # restores the artifacts, the compiler never runs, and sqlx — which learns

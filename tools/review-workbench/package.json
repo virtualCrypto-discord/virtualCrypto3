@@ -1,0 +1,13 @@
+{
+  "name": "virtualcrypto-review-workbench",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}

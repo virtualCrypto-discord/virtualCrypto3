@@ -17,3 +17,6 @@
 
 # Logs
 *.log
+
+# Local review preparation artifacts (decisions live outside the repository).
+/.review-artifacts/
