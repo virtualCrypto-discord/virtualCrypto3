@@ -1,0 +1,35 @@
+# Separate from fly.toml, which targets production.
+app = "virtualcrypto-staging"
+primary_region = "phx"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Staging is publicly reachable; retain production outbound protections.
+  VCRYPTO_ENV = "production"
+  VCRYPTO_SITE_URL = "https://virtualcrypto-staging.fly.dev"
+  VCRYPTO_DISCORD_CALLBACK_URI = "https://virtualcrypto-staging.fly.dev/callback/discord"
+  SECURE_COOKIES = "true"
+
+[deploy]
+  release_command = "/app/bin/migrate"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"

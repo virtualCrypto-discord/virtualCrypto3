@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   review-workbench:
@@ -97,3 +98,30 @@ jobs:
             npm run check
             npm run build
           '
+
+  deploy-staging:
+    name: Deploy staging
+    needs: [review-workbench, check, web]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    environment:
+      name: staging
+      url: https://virtualcrypto-staging.fly.dev
+    concurrency:
+      group: fly-staging
+      # Let migrations and Machine updates finish before another deployment.
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.97"
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN" || { echo 'Set FLY_STAGING_API_TOKEN in the staging environment'; exit 1; }
+          flyctl deploy --config fly.staging.toml --remote-only --ha=false

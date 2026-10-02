@@ -204,7 +204,112 @@ result. The API serves it as a **fallback** rather than a mount, so `/api`, `/he
 and the OAuth2 routes keep their own paths, and the two cache headers that come with
 that are tested in `crates/vc-api/tests/web.rs`.
 
-## Still missing
+## Fly.io staging
 
-No `Dockerfile` and no target-specific configuration. What is above is the input to
-writing one, not the thing itself.
+`fly.toml` targets production. Staging uses **`fly.staging.toml`** and the separate
+`virtualcrypto-staging` app in `phx`. Always pass the staging config or app explicitly.
+Staging retains `VCRYPTO_ENV=production` because it is a public deployment; this
+value controls outbound security, not the deployment name.
+
+The `deploy-staging` job in `.github/workflows/ci.yml` runs after all three CI jobs
+succeed on a push to `main`. Actions → ci → Run workflow on `main` also checks and
+deploys again. Pull requests and manual runs on other branches never deploy.
+Deployments are serialized without cancelling an in-progress migration. The image
+build includes the SPA, and `/app/bin/migrate` runs before the rollout. `--ha=false`
+avoids provisioning a spare Machine on the first deploy; it does not remove any
+previously created Machines.
+
+### Initial setup
+
+1. Create the staging app in the intended Fly organization and allocate public IPs:
+
+   ```sh
+   flyctl apps create virtualcrypto-staging --org virtual-crypto
+   flyctl ips allocate-v4 --shared -a virtualcrypto-staging
+   flyctl ips allocate-v6 -a virtualcrypto-staging
+   ```
+
+2. Prepare a separate staging PostgreSQL database and database user. Do not point
+   `DATABASE_URL` at the production database: the release command applies migrations
+   automatically. The database must be reachable from both the release Machine and
+   the app. Database hosting and its sleep/wake behavior are configured separately;
+   this app configuration does not stop a database server.
+
+3. Create a staging Discord application/Bot. Register the OAuth redirect URI
+   `https://virtualcrypto-staging.fly.dev/callback/discord` and set its interactions
+   endpoint to `https://virtualcrypto-staging.fly.dev/api/integrations/discord/interactions`.
+   Before registering the endpoint, deploy and warm up the app as described below.
+   Import the following **staging values** with
+   `flyctl secrets import -a virtualcrypto-staging` (stdin, `NAME=value` format):
+
+   - `DATABASE_URL`
+   - `VCRYPTO_API_JWT_SECRET_KEY` (a new random signing secret)
+   - `VCRYPTO_BOT_TOKEN`
+   - `VCRYPTO_CLIENT_ID`
+   - `VCRYPTO_CLIENT_SECRET`
+   - `VCRYPTO_PUBLIC_KEY`
+   - `VCRYPTO_WEBHOOK_PROXY_CERT`
+   - `VCRYPTO_WEBHOOK_PROXY_KEY`
+
+   The proxy certificate/key must be accepted by the webhook proxy; encode PEM
+   newlines as `#`. Keep secrets out of Git and terminal command arguments. The
+   staging origin and callback URL are already set in `fly.staging.toml`; the Bot
+   invite URL defaults to the configured staging client ID.
+
+4. Create the GitHub Actions environment `staging` in repository Settings →
+   Environments. Add its secret `FLY_STAGING_API_TOKEN` using a deploy token scoped
+   to this app. With `gh` authenticated to this repository, the token can be piped
+   directly into GitHub without printing it:
+
+   ```sh
+   set -o pipefail
+   flyctl tokens create deploy -a virtualcrypto-staging --expiry 2160h |
+     gh secret set FLY_STAGING_API_TOKEN --env staging
+   ```
+
+   Rotate this token before its 90-day expiry. After the workflow is merged to
+   `main`, pushes deploy automatically. For an initial local deployment:
+
+   ```sh
+   flyctl deploy --config fly.staging.toml --remote-only --ha=false
+   ```
+
+### Start when needed, stop when idle
+
+`auto_start_machines=true`, `auto_stop_machines="stop"`, and
+`min_machines_running=0` allow the app to stop when idle and wake on an HTTP request.
+The proxy evaluates idleness every few minutes; it is not an immediate shutdown.
+One shared CPU and 512 MiB RAM are configured. Check Machine count after deploying;
+if this app already had multiple Machines, explicitly reduce it to one:
+
+```sh
+flyctl scale count 1 -a virtualcrypto-staging
+flyctl status -a virtualcrypto-staging
+```
+
+Warm up before testing Discord (cold starts can exceed Discord's response deadline):
+
+```sh
+curl --fail --retry 5 --retry-all-errors --retry-delay 2 --max-time 60 \
+  https://virtualcrypto-staging.fly.dev/health
+```
+
+To stop immediately after a test, find the ID with `flyctl machine list`, then stop it:
+
+```sh
+flyctl machine list -a virtualcrypto-staging
+flyctl machine stop MACHINE_ID -a virtualcrypto-staging
+```
+
+The next request will still wake it. Do not scale to zero Machines: autostart can
+only start existing Machines. Avoid external uptime probes, which keep waking the
+app. While stopped, settlement, cleanup and queued webhook workers also stop and
+resume at startup; staging is therefore unsuitable for testing timely background
+execution while idle. Async work can be interrupted by stopping a Machine.
+
+Stopped Machines incur no CPU/RAM usage charges, but root filesystem storage,
+volumes, database resources, builds and network usage can still cost money. This
+configuration reduces app compute usage; it does not make all staging resources free.
+See [Fly autostop/autostart](https://fly.io/docs/reference/fly-proxy-autostop-autostart/),
+[pricing](https://fly.io/docs/about/pricing/) and
+[GitHub Actions deployment](https://fly.io/docs/launch/continuous-deployment-with-github-actions/).
