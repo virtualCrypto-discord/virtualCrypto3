@@ -207,7 +207,7 @@ that are tested in `crates/vc-api/tests/web.rs`.
 ## Fly.io staging
 
 `fly.toml` targets production. Staging uses **`fly.staging.toml`** and the separate
-`virtualcrypto-staging` app in `phx`. Always pass the staging config or app explicitly.
+`virtualcrypto-staging` app in `nrt`. Always pass the staging config or app explicitly.
 Staging retains `VCRYPTO_ENV=production` because it is a public deployment; this
 value controls outbound security, not the deployment name.
 
@@ -215,7 +215,8 @@ The `deploy-staging` job in `.github/workflows/ci.yml` runs after all three CI j
 succeed on a push to `main`. Actions → ci → Run workflow on `main` also checks and
 deploys again. Pull requests and manual runs on other branches never deploy.
 Deployments are serialized without cancelling an in-progress migration. The image
-build includes the SPA, and `/app/bin/migrate` runs before the rollout. `--ha=false`
+build includes the SPA, and `sqlx migrate run` runs before the rollout, allowing
+60 seconds to connect to a sleeping database. `--ha=false`
 avoids provisioning a spare Machine on the first deploy; it does not remove any
 previously created Machines.
 
@@ -233,7 +234,7 @@ previously created Machines.
    `DATABASE_URL` at the production database: the release command applies migrations
    automatically. The database must be reachable from both the release Machine and
    the app. Database hosting and its sleep/wake behavior are configured separately;
-   this app configuration does not stop a database server.
+   the database has its own configuration described below.
 
 3. Create a staging Discord application/Bot. Register the OAuth redirect URI
    `https://virtualcrypto-staging.fly.dev/callback/discord` and set its interactions
@@ -313,3 +314,45 @@ configuration reduces app compute usage; it does not make all staging resources 
 See [Fly autostop/autostart](https://fly.io/docs/reference/fly-proxy-autostop-autostart/),
 [pricing](https://fly.io/docs/about/pricing/) and
 [GitHub Actions deployment](https://fly.io/docs/launch/continuous-deployment-with-github-actions/).
+
+### Staging PostgreSQL on Fly.io
+
+`virtualcrypto-db-staging` is a separate, single-node unmanaged PostgreSQL 18.6
+instance in Tokyo (`nrt`), with a shared CPU, 512 MiB RAM and a 1 GiB persistent
+`pg_data` volume. It has only a private Flycast IP, with no public database IP.
+The staging app's `DATABASE_URL` is installed by `flyctl postgres attach` and uses
+`virtualcrypto-db-staging.flycast`, database/user `virtualcrypto_staging`. The user
+is not a superuser. Never change this hostname to `.internal`: that bypasses the
+proxy which starts stopped Machines.
+
+`fly.postgres-staging.toml` records the database configuration and image digest.
+Database deployment is separate from application CD, so normal code changes do
+not restart PostgreSQL. To reapply the database configuration:
+
+```sh
+flyctl deploy --config fly.postgres-staging.toml --ha=false
+```
+
+`FLY_SCALE_TO_ZERO=1h` makes PostgreSQL check for client connections once per hour
+and shut down when none remain. This is a periodic check, not a promise to stop
+exactly one hour after the last query. The application first stops on HTTP
+inactivity, releasing its connection pool; PostgreSQL can then stop at its next
+check. An open SQL session or another app's pool can prevent shutdown. Both SQL
+services allow autostart, and the Machine restart policy is `on-failure`, so a
+successful idle shutdown does not immediately restart it.
+
+Connecting through `.flycast` wakes the database. Cold starts add latency to the
+first app request or deployment; warm up the application before Discord tests.
+To stop the DB immediately after stopping the app, or explicitly wake it:
+
+```sh
+flyctl machine list -a virtualcrypto-db-staging
+flyctl machine stop MACHINE_ID -a virtualcrypto-db-staging
+flyctl machine start MACHINE_ID -a virtualcrypto-db-staging
+```
+
+Do not destroy the Machine/volume to save compute costs. Stopping preserves the
+volume; its storage and snapshots remain billable. This single-node staging DB
+has no high availability and is not a production backup. PostgreSQL operations
+and recovery are our responsibility with unmanaged Fly Postgres.
+See [Postgres scale to zero](https://fly.io/docs/postgres/managing/scale-to-zero/).

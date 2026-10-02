@@ -1,6 +1,6 @@
 # Separate from fly.toml, which targets production.
 app = "virtualcrypto-staging"
-primary_region = "phx"
+primary_region = "nrt"
 
 [build]
   dockerfile = "Dockerfile"
@@ -13,7 +13,8 @@ primary_region = "phx"
   SECURE_COOKIES = "true"
 
 [deploy]
-  release_command = "/app/bin/migrate"
+  # Allow time for the stopped database to boot through Flycast.
+  release_command = "/app/bin/sqlx migrate run --source /app/migrations --connect-timeout 60"
 
 [http_service]
   internal_port = 8080
