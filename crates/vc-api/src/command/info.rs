@@ -28,14 +28,12 @@ pub async fn handle(
         (None, Some(unit), _) => CurrencySelector::Unit(unit),
         (None, None, Some(guild_id)) => CurrencySelector::Guild(guild_id),
         (None, None, None) => {
-            return Ok(render_error(
-                "DMで実行する場合はオプションを指定する必要があります。",
-            ));
+            return Ok(render_error(message!("command.info.handle.001")));
         }
     };
 
     let Some(info) = vc_core::currency::info(state.pool(), selector).await? else {
-        return Ok(render_error("通貨が見つかりませんでした。"));
+        return Ok(render_error(message!("command.info.handle.002")));
     };
 
     let guild = match info.guild_id {
@@ -66,7 +64,7 @@ fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -
     let mut children = Vec::new();
 
     children.push(crate::components::text(format!(
-        "**通貨名: {}**",
+        message!("command.info.render.001"),
         info.name.clone().unwrap_or_default()
     )));
 
@@ -78,40 +76,50 @@ fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -
 
         children.push(match guild_icon(guild) {
             Some(url) => crate::components::section(
-                vec![crate::components::text(format!("**サーバー名**\n{name}"))],
+                vec![crate::components::text(format!(
+                    message!("command.info.render.002"),
+                    name = name
+                ))],
                 crate::components::thumbnail(&url),
             ),
-            None => crate::components::text(format!("**サーバー名**\n{name}")),
+            None => {
+                crate::components::text(format!(message!("command.info.render.003"), name = name))
+            }
         });
     }
 
     // The fields were `inline`, which is four columns in an embed and four lines here: a Text
     // Display is a block, so the arrangement is the one thing about this message that components
     // cannot say the same way.
-    children.push(crate::components::text(format!("**単位**\n`{unit}`")));
     children.push(crate::components::text(format!(
-        "**総発行量**\n`{}{unit}`",
-        info.total_amount
+        message!("command.info.render.004"),
+        unit = unit
     )));
     children.push(crate::components::text(format!(
-        "**発行枠**\n`{}{unit}`",
-        info.pool_amount.unwrap_or(0)
+        message!("command.info.render.005"),
+        info.total_amount,
+        unit = unit
     )));
     children.push(crate::components::text(format!(
-        "**あなたの所持量**\n`{amount}{unit}`"
+        message!("command.info.render.006"),
+        info.pool_amount.unwrap_or(0),
+        unit = unit
     )));
     children.push(crate::components::text(format!(
-        "**削除可能**\n{}",
+        message!("command.info.render.007"),
+        amount = amount,
+        unit = unit
+    )));
+    children.push(crate::components::text(format!(
+        message!("command.info.render.008"),
         if info.is_deletable(vc_core::model::utc_now()) {
-            "はい"
+            message!("command.info.render.009")
         } else {
-            "いいえ"
+            message!("command.info.render.010")
         }
     )));
     // `-# ` is how a line is written small, which is what the footer was.
-    children.push(crate::components::text(
-        "-# 発行枠は一日一回総発行量の0.5%増加し、最大で総発行量の3.5%となります。",
-    ));
+    children.push(crate::components::text(message!("command.info.render.011")));
 
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
@@ -133,7 +141,7 @@ fn render_error(description: &str) -> Value {
             "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
             "components": [crate::components::container(
                 Some(COLOR_ERROR as u32),
-                vec![crate::components::text(format!("**エラー**\n{description}"))],
+                vec![crate::components::text(format!(message!("command.info.render_error.001"), description = description))],
             )],
             "allowed_mentions": { "parse": [] },
         },

@@ -32,7 +32,7 @@ pub async fn respond(
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
             "flags": crate::components::EPHEMERAL,
-            "content": "処理中…",
+            "content": message!("command.issue.respond.001"),
             "allowed_mentions": { "parse": [] },
         },
     });
@@ -53,7 +53,7 @@ pub async fn respond(
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(?error, "Discord issuance failed");
-                render_error("発行結果を確認できませんでした。発行履歴を確認してください。")
+                render_error(message!("command.issue.respond.002"))
             }
         };
         let mut body = response["data"].clone();
@@ -93,11 +93,11 @@ pub async fn handle(
     // Every `Command.handle/4` clause for `give` takes a guild, so a direct message has no
     // handler at all; the same is true when the receiver is missing.
     let Some(guild_id) = payload.get("guild_id").and_then(as_int) else {
-        return Ok(render_error("エラー: DMでは実行できません。"));
+        return Ok(render_error(message!("command.issue.handle.001")));
     };
 
     let Some(receiver) = options.get("user").map(value_text) else {
-        return Ok(render_error("エラー: DMでは実行できません。"));
+        return Ok(render_error(message!("command.issue.handle.002")));
     };
 
     let permissions = payload
@@ -107,7 +107,7 @@ pub async fn handle(
         .ok_or_else(|| CommandError::missing("issue has no permissions"))?;
 
     if !is_administrator(permissions) {
-        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+        return Ok(render_error(message!("command.issue.handle.003")));
     }
 
     let receiver_discord_id: i64 = receiver
@@ -125,9 +125,9 @@ pub async fn handle(
     match vc_core::issue::issue(state.pool(), guild_id, receiver_discord_id, amount).await {
         Ok(issued) => Ok(render_ok(&receiver, &issued)),
         Err(IssueError::Database(error)) => Err(CommandError::from(error)),
-        Err(IssueError::NotFoundCurrency) => Ok(render_error("エラー: 通貨が存在しません。")),
-        Err(IssueError::InvalidAmount) => Ok(render_error("エラー: 不正な金額です。")),
-        Err(IssueError::NotEnoughAmount) => Ok(render_error("エラー: 通貨が不足しています。")),
+        Err(IssueError::NotFoundCurrency) => Ok(render_error(message!("command.issue.handle.004"))),
+        Err(IssueError::InvalidAmount) => Ok(render_error(message!("command.issue.handle.005"))),
+        Err(IssueError::NotEnoughAmount) => Ok(render_error(message!("command.issue.handle.006"))),
     }
 }
 
@@ -139,7 +139,7 @@ fn render_ok(receiver: &str, issued: &Issued) -> Value {
             // The accent the embed carried.
             Some(COLOR_OK as u32),
             vec![crate::components::text(format!(
-                "\u{2705} {}へ**{}** `{}`発行されました。\n残りの発行枠: **{}** `{}`",
+                message!("command.issue.render_ok.001"),
                 mention(receiver),
                 issued.amount,
                 issued.unit,

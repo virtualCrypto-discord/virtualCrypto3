@@ -1,5 +1,7 @@
 //! axum routers implementing the virtualCrypto HTTP API.
 
+include!(concat!(env!("OUT_DIR"), "/messages.rs"));
+
 pub mod claim_list;
 pub mod command;
 pub mod components;

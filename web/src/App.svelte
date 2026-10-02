@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "./i18n";
   import Documentation from "./pages/Documentation.svelte";
   import Landing from "./pages/Landing.svelte";
   import Verification from "./pages/Verification.svelte";
@@ -38,8 +39,8 @@
   {:else if path === "/document" || path.startsWith("/document/")}
     <Documentation slug={path === "/document" ? "" : path.slice("/document/".length)} />
   {:else}
-    <h1>見つかりません</h1>
-    <p>このページはまだありません。</p>
+    <h1>{t("app.notFound")}</h1>
+    <p>{t("app.notFoundDescription")}</p>
   {/if}
 </main>
 

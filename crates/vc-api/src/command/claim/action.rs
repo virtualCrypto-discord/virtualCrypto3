@@ -41,9 +41,9 @@ pub async fn handle(
 /// `Interactions.Claim.render/1` for `{:ok, "approve" | "deny" | "cancel", claim}`.
 fn render(transition: Transition, claim_id: i64) -> Value {
     let result = match transition {
-        Transition::Approved => "承諾し、支払いました。",
-        Transition::Denied => "拒否しました。",
-        Transition::Canceled => "キャンセルしました。",
+        Transition::Approved => message!("command.claim.action.render.001"),
+        Transition::Denied => message!("command.claim.action.render.002"),
+        Transition::Canceled => message!("command.claim.action.render.003"),
     };
 
     json!({
@@ -52,7 +52,9 @@ fn render(transition: Transition, claim_id: i64) -> Value {
             // The accent the embed carried.
             Some(COLOR_OK as u32),
             vec![crate::components::text(format!(
-                "id: {claim_id}の請求を{result}"
+                message!("command.claim.action.render.004"),
+                claim_id = claim_id,
+                result = result,
             ))],
         )]),
     })

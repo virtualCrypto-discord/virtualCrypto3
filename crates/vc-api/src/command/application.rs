@@ -87,7 +87,7 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
         Ok(new) => new,
         Err(refusal) => {
             return Ok(message(ephemeral(vec![developer::refusal(
-                "登録",
+                message!("command.application.register.001"),
                 refusal.description.as_deref(),
             )])));
         }
@@ -124,10 +124,10 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
                     subscribed_events: &new.subscribed_events,
                 },
             ),
-            "アプリケーションを登録しました。Bot の接続は任意です。",
+            message!("command.application.register.002"),
         )]))),
         Err(refusal) => Ok(message(ephemeral(vec![developer::refusal(
-            "登録",
+            message!("command.application.register.003"),
             refusal.description.as_deref(),
         )]))),
     }
@@ -189,7 +189,9 @@ async fn connect_bot(
     };
 
     let Some((_, found)) = owned(state, client_id, payload).await? else {
-        return Ok(developer::error("そのアプリケーションはありません。"));
+        return Ok(developer::error(message!(
+            "command.application.connect_bot.001"
+        )));
     };
 
     match crate::routes::connect::connect_application(state, &found, bot, bot_id, guild_id).await {
@@ -198,14 +200,14 @@ async fn connect_bot(
             Some(description) => developer::connect_result(&found.client_id, Some(description)),
             // A failure with no description is this service's, and `connect_result` cannot say
             // that: its `None` is the success this just was not.
-            None => developer::refusal("接続", None),
+            None => developer::refusal(message!("command.application.connect_bot.002"), None),
         }),
     }
 }
 
 async fn guild_required(state: &AppState) -> Value {
     developer::error(&crate::docs::discord::mentions(
-        "Bot の接続はサーバーの中で行います。接続したいサーバーで `/application show` を開き、Bot を選んでください。",
+        message!("command.application.guild_required.001"),
         state.command_ids().await,
     ))
 }
@@ -220,8 +222,8 @@ async fn show(state: &AppState, client_id: &str, payload: &Value) -> Result<Valu
         // A refusal rather than a sentence: it carries the list button, and a screen with no way
         // on is the same problem as a button that goes nowhere.
         return Ok(ephemeral(vec![developer::refusal(
-            "表示",
-            Some("そのアプリケーションはありません。"),
+            message!("command.application.show.001"),
+            Some(message!("command.application.show.002")),
         )]));
     };
 
@@ -370,10 +372,8 @@ pub async fn deferred_edit(
             Err(error) => {
                 tracing::warn!(?error, "application settings update failed");
                 ephemeral(vec![developer::refusal(
-                    "変更",
-                    Some(
-                        "設定変更の結果を確認できませんでした。もう一度設定を表示して確認してください。",
-                    ),
+                    message!("command.application.deferred_edit.001"),
+                    Some(message!("command.application.deferred_edit.002")),
                 )])
             }
         };
@@ -411,8 +411,8 @@ async fn edit_form(
 ) -> Result<Value, CommandError> {
     let Some((application_id, found)) = owned(state, client_id, payload).await? else {
         return Ok(registered(developer::refusal(
-            "変更",
-            Some("そのアプリケーションはありません。"),
+            message!("command.application.edit_form.001"),
+            Some(message!("command.application.edit_form.002")),
         )));
     };
 
@@ -420,7 +420,7 @@ async fn edit_form(
         Ok(changes) => changes,
         Err(refusal) => {
             return Ok(registered(developer::refusal(
-                "変更",
+                message!("command.application.edit_form.003"),
                 refusal.description.as_deref(),
             )));
         }
@@ -435,15 +435,18 @@ async fn edit_form(
             Ok(Some(now)) => Ok(registered(developer::saved(
                 application_screen(state, &now),
                 if changes.rotate_client_secret {
-                    "client_secret を再生成しました。旧 secret は使えません。利用中のサービスの設定を更新してください。"
+                    message!("command.application.edit_form.004")
                 } else {
-                    "設定を保存しました。"
+                    message!("command.application.edit_form.005")
                 },
             ))),
-            _ => Ok(registered(developer::refusal("変更", None))),
+            _ => Ok(registered(developer::refusal(
+                message!("command.application.edit_form.006"),
+                None,
+            ))),
         },
         Err(refusal) => Ok(registered(developer::refusal(
-            "変更",
+            message!("command.application.edit_form.007"),
             refusal.description.as_deref(),
         ))),
     }
@@ -502,8 +505,8 @@ pub async fn component(
                 .map_err(|_| CommandError::Unknown)?;
             let Some((_, found)) = owned(state, &client_id, payload).await? else {
                 return Ok(update(ephemeral(vec![developer::refusal(
-                    "接続",
-                    Some("そのアプリケーションはありません。"),
+                    message!("command.application.component.001"),
+                    Some(message!("command.application.component.002")),
                 )])));
             };
             if payload.get("guild_id").and_then(Value::as_str).is_none() {
@@ -516,8 +519,8 @@ pub async fn component(
                 .is_some_and(|user| user.get("bot") != Some(&Value::Bool(true)))
             {
                 return Ok(update(ephemeral(vec![developer::refusal(
-                    "接続",
-                    Some("選択したユーザーは Bot ではありません。Bot を選んでください。"),
+                    message!("command.application.component.003"),
+                    Some(message!("command.application.component.004")),
                 )])));
             }
             Ok(update(ephemeral(vec![developer::connect_confirmation(
@@ -549,8 +552,8 @@ pub async fn component(
             }
             if owned(state, client_id, payload).await?.is_none() {
                 return Ok(update(ephemeral(vec![developer::refusal(
-                    "再生成",
-                    Some("そのアプリケーションはありません。"),
+                    message!("command.application.component.005"),
+                    Some(message!("command.application.component.006")),
                 )])));
             }
             Ok(update(ephemeral(vec![
@@ -594,8 +597,8 @@ async fn edit_field(
 ) -> Result<Value, CommandError> {
     let Some((_, found)) = owned(state, client_id, payload).await? else {
         return Ok(message(ephemeral(vec![developer::refusal(
-            "変更",
-            Some("そのアプリケーションはありません。"),
+            message!("command.application.edit_field.001"),
+            Some(message!("command.application.edit_field.002")),
         )])));
     };
 
@@ -605,37 +608,37 @@ async fn edit_field(
 
     let (label, now, style, longest) = match field {
         "client_name" => (
-            "クライアント名",
+            message!("command.application.edit_field.003"),
             found.client_name.as_deref(),
             crate::components::TextInputStyle::Short,
             Some(TextField::ClientName.max_chars() as u64),
         ),
         "redirect_uris" => (
-            "リダイレクト URI",
+            message!("command.application.edit_field.004"),
             Some(redirects.as_str()),
             crate::components::TextInputStyle::Paragraph,
             Some(vc_core::application::REDIRECT_URIS_MAX_CHARS as u64),
         ),
         "client_uri" => (
-            "クライアント URI",
+            message!("command.application.edit_field.005"),
             found.client_uri.as_deref(),
             crate::components::TextInputStyle::Short,
             Some(TextField::ClientUri.max_chars() as u64),
         ),
         "logo_uri" => (
-            "ロゴ URI",
+            message!("command.application.edit_field.006"),
             found.logo_uri.as_deref(),
             crate::components::TextInputStyle::Short,
             Some(TextField::LogoUri.max_chars() as u64),
         ),
         "webhook_url" => (
-            "webhook URL",
+            message!("common.webhookUrl"),
             found.webhook_url.as_deref(),
             crate::components::TextInputStyle::Short,
             Some(TextField::WebhookUrl.max_chars() as u64),
         ),
         "discord_support_server_invite_slug" => (
-            "サポートサーバーの招待 slug",
+            message!("command.application.edit_field.007"),
             found.discord_support_server_invite_slug.as_deref(),
             crate::components::TextInputStyle::Short,
             Some(TextField::SupportInviteSlug.max_chars() as u64),
@@ -651,11 +654,14 @@ async fn edit_field(
             &found.client_id,
             field,
         ),
-        &format!("{label}の変更"),
+        &format!(
+            message!("command.application.edit_field.008"),
+            label = label
+        ),
         vec![crate::components::label(
             label,
             if style == crate::components::TextInputStyle::Paragraph {
-                Some("1行に1つ入力してください。")
+                Some(message!("command.application.edit_field.009"))
             } else {
                 None
             },

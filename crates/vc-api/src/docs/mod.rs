@@ -168,11 +168,11 @@ impl OptionKind {
     /// What the option is, as a person reads it.
     pub fn label(self) -> &'static str {
         match self {
-            OptionKind::Subcommand => "サブコマンド",
-            OptionKind::Text => "文字列",
-            OptionKind::Integer => "整数",
-            OptionKind::Boolean => "真偽値",
-            OptionKind::User => "ユーザー",
+            OptionKind::Subcommand => message!("docs.mod.label.001"),
+            OptionKind::Text => message!("docs.mod.label.002"),
+            OptionKind::Integer => message!("docs.mod.label.003"),
+            OptionKind::Boolean => message!("docs.mod.label.004"),
+            OptionKind::User => message!("docs.mod.label.005"),
         }
     }
 }
@@ -182,7 +182,7 @@ impl OptionKind {
 /// Here rather than in [`pages`] because it is the one thing on the screen that
 /// is not a command, and the landing page says its own version of it in its own
 /// words.
-pub const INTRO: &str = "VirtualCryptoは、Discordのサーバーで独自の通貨を使えるようにするBotです。";
+pub const INTRO: &str = message!("docs.mod.label.006");
 
 /// The site's own address, as a page writes it.
 pub const SITE: &str = "{site}";

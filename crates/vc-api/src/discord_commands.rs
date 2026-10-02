@@ -77,11 +77,11 @@ fn with_type(mut command: Value) -> Value {
 fn help() -> Value {
     json!({
         "name": "help",
-        "description": "ヘルプを表示します。",
+        "description": message!("discord_commands.help.001"),
         "options": [
             {
                 "name": "command",
-                "description": "使い方を表示するコマンドです。",
+                "description": message!("discord_commands.help.002"),
                 "type": 3,
                 "required": false,
                 "autocomplete": true,
@@ -95,7 +95,7 @@ fn help() -> Value {
 fn invite() -> Value {
     json!({
         "name": "invite",
-        "description": "Botの招待URLを表示します。",
+        "description": message!("discord_commands.invite.001"),
         "contexts": [0, 1],
         "integration_types": [0, 1],
     })
@@ -105,17 +105,17 @@ fn invite() -> Value {
 fn issue() -> Value {
     json!({
         "name": "issue",
-        "description": "発行枠から通貨を発行します。管理者権限が必要です。amountを省略した場合は全額が指定されたuserに発行されます。",
+        "description": message!("discord_commands.issue.001"),
         "options": [
             {
                 "name": "user",
-                "description": "発行先のユーザーです。",
+                "description": message!("discord_commands.issue.002"),
                 "type": 6,
                 "required": true,
             },
             {
                 "name": "amount",
-                "description": "発行する通貨の量です。",
+                "description": message!("discord_commands.issue.003"),
                 "type": 4,
                 "required": false,
             },
@@ -145,17 +145,17 @@ fn pat() -> Value {
 
     json!({
         "name": "pat",
-        "description": "LLMやスクリプトに渡すトークン（個人アクセストークン）を作ります。",
+        "description": message!("discord_commands.pat.001"),
         "options": [
             {
                 "name": "create",
-                "description": "トークンを1つ作ります（1アカウント25個まで）。値はこの返信に一度だけ表示されます。",
+                "description": message!("discord_commands.pat.002"),
                 "type": 1,
-                "options": [name("トークンを見分ける名前です。1〜32文字で指定します。")],
+                "options": [name(message!("discord_commands.pat.003"))],
             },
             {
                 "name": "list",
-                "description": "トークンの名前を一覧表示し、ボタンで失効させます。",
+                "description": message!("discord_commands.pat.004"),
                 "type": 1,
             },
         ],
@@ -173,11 +173,11 @@ fn pat() -> Value {
 fn contract() -> Value {
     json!({
         "name": "contract",
-        "description": "あなたが対象になっている契約を表示し、承認・拒否・取り消しができます。",
+        "description": message!("discord_commands.contract.001"),
         "options": [
             {
                 "name": "list",
-                "description": "承認待ちの契約と、参加中の契約の一覧を表示します。",
+                "description": message!("discord_commands.contract.002"),
                 "type": 1,
             },
         ],
@@ -192,22 +192,22 @@ fn contract() -> Value {
 fn grant() -> Value {
     json!({
         "name": "grant",
-        "description": "アプリケーションからの権限申請を確認し、アカウントやサーバーへのアクセス許可を管理します。",
+        "description": message!("discord_commands.grant.001"),
         "options": [
-            {"name": "user", "description": "あなたのアカウントへのアクセス許可を一覧表示し、取り消せます。", "type": 1},
+            {"name": "user", "description": message!("discord_commands.grant.002"), "type": 1},
             {
                 "name": "server",
-                "description": "このサーバーでの通貨発行の許可を一覧表示し、取り消せます。管理者権限が必要です。",
+                "description": message!("discord_commands.grant.003"),
                 "type": 1,
             },
             {
                 "name": "approve",
-                "description": "申請コードから、アカウントやサーバーへの権限申請の内容を確認して承認します。",
+                "description": message!("discord_commands.grant.004"),
                 "type": 1,
                 "options": [
                     {
                         "name": "code",
-                        "description": "アプリケーションが表示する申請コードです。",
+                        "description": message!("discord_commands.grant.005"),
                         "type": 3,
                         "required": true,
                         "autocomplete": true,
@@ -223,24 +223,24 @@ fn grant() -> Value {
 fn pay() -> Value {
     json!({
         "name": "pay",
-        "description": "指定したユーザーに通貨を指定した分だけ送信します。",
+        "description": message!("discord_commands.pay.001"),
         "options": [
             {
                 "name": "unit",
-                "description": "送信したい通貨の単位です。",
+                "description": message!("discord_commands.pay.002"),
                 "type": 3,
                 "required": true,
                 "autocomplete": true,
             },
             {
                 "name": "user",
-                "description": "送信先のユーザーです。",
+                "description": message!("discord_commands.pay.003"),
                 "type": 6,
                 "required": true,
             },
             {
                 "name": "amount",
-                "description": "送信する通貨の量です。",
+                "description": message!("discord_commands.pay.004"),
                 "type": 4,
                 "required": true,
             },
@@ -253,18 +253,18 @@ fn pay() -> Value {
 fn info() -> Value {
     json!({
         "name": "info",
-        "description": "通貨の情報を表示します。通貨名または単位がない場合はそのサーバーの通貨を表示します。",
+        "description": message!("discord_commands.info.001"),
         "options": [
             {
                 "name": "name",
-                "description": "検索したい通貨の通貨名です。",
+                "description": message!("discord_commands.info.002"),
                 "type": 3,
                 "required": false,
                 "autocomplete": true,
             },
             {
                 "name": "unit",
-                "description": "検索したい通貨の単位です。",
+                "description": message!("discord_commands.info.003"),
                 "type": 3,
                 "required": false,
                 "autocomplete": true,
@@ -280,23 +280,23 @@ fn info() -> Value {
 fn create() -> Value {
     json!({
         "name": "create",
-        "description": "新しい通貨を作成します。",
+        "description": message!("discord_commands.create.001"),
         "options": [
             {
                 "name": "name",
-                "description": "新しい通貨の通貨名です。2〜16文字の英数字です。",
+                "description": message!("discord_commands.create.002"),
                 "type": 3,
                 "required": true,
             },
             {
                 "name": "unit",
-                "description": "新しい通貨の単位です。1〜10文字の英小文字です。",
+                "description": message!("discord_commands.create.003"),
                 "type": 3,
                 "required": true,
             },
             {
                 "name": "amount",
-                "description": "通貨の初期発行枚数です。あなたの所持金となります。",
+                "description": message!("discord_commands.create.004"),
                 "type": 4,
                 "required": true,
             },
@@ -310,7 +310,7 @@ fn create() -> Value {
 fn delete() -> Value {
     json!({
         "name": "delete",
-        "description": "通貨を削除します。削除は、作成後72時間の間のみ可能です。",
+        "description": message!("discord_commands.delete.001"),
         "contexts": [0],
         "integration_types": [0, 1],
         "default_member_permissions": "0",
@@ -320,7 +320,7 @@ fn delete() -> Value {
 fn bal() -> Value {
     json!({
         "name": "bal",
-        "description": "自分の所持通貨を確認します。",
+        "description": message!("discord_commands.bal.001"),
         "contexts": [0, 1],
         "integration_types": [0, 1],
     })
@@ -339,23 +339,23 @@ fn bal() -> Value {
 fn application() -> Value {
     json!({
         "name": "application",
-        "description": "アプリケーションの登録・確認・編集と、Bot の接続です。",
+        "description": message!("discord_commands.application.001"),
         "contexts": [0, 1],
         "integration_types": [0, 1],
         "options": [
             {
                 "name": "register",
-                "description": "新しいアプリケーションを登録します。",
+                "description": message!("discord_commands.application.002"),
                 "type": 1,
             },
             {
                 "name": "list",
-                "description": "自分が持つアプリケーションの一覧を表示します。",
+                "description": message!("discord_commands.application.003"),
                 "type": 1,
             },
             {
                 "name": "show",
-                "description": "アプリケーションの詳細を表示します。",
+                "description": message!("discord_commands.application.004"),
                 "type": 1,
                 "options": [client_id_option()],
             },
@@ -368,7 +368,7 @@ fn application() -> Value {
 fn client_id_option() -> Value {
     json!({
         "name": "client_id",
-        "description": "対象のアプリケーションです。",
+        "description": message!("discord_commands.client_id_option.001"),
         "type": 3,
         "required": true,
         "autocomplete": true,
@@ -379,49 +379,49 @@ fn client_id_option() -> Value {
 fn claim() -> Value {
     json!({
         "name": "claim",
-        "description": "請求に関するコマンドです。",
+        "description": message!("discord_commands.claim.001"),
         "options": [
             {
                 "name": "list",
-                "description": "請求の一覧を表示します。",
+                "description": message!("discord_commands.claim.002"),
                 "type": 1,
                 "options": options_for_listing(
-                    "ユーザーからの請求及びユーザーへの請求を表示します。"
+                    message!("discord_commands.claim.003")
                 ),
             },
             {
                 "name": "received",
-                "description": "受け取った請求の一覧を表示します。",
+                "description": message!("discord_commands.claim.004"),
                 "type": 1,
-                "options": options_for_listing("請求元を指定します。"),
+                "options": options_for_listing(message!("discord_commands.claim.005")),
             },
             {
                 "name": "sent",
-                "description": "送信した請求の一覧を表示します。",
+                "description": message!("discord_commands.claim.006"),
                 "type": 1,
-                "options": options_for_listing("請求先を指定します。"),
+                "options": options_for_listing(message!("discord_commands.claim.007")),
             },
             {
                 "name": "make",
-                "description": "請求を作成します。",
+                "description": message!("discord_commands.claim.008"),
                 "type": 1,
                 "options": [
                     {
                         "name": "user",
-                        "description": "請求先のユーザーです。",
+                        "description": message!("discord_commands.claim.009"),
                         "type": 6,
                         "required": true,
                     },
                     {
                         "name": "unit",
-                        "description": "請求する通貨の単位です。",
+                        "description": message!("discord_commands.claim.010"),
                         "type": 3,
                         "required": true,
                         "autocomplete": true,
                     },
                     {
                         "name": "amount",
-                        "description": "請求する通貨の枚数です。",
+                        "description": message!("discord_commands.claim.011"),
                         "type": 4,
                         "required": true,
                     },
@@ -429,12 +429,12 @@ fn claim() -> Value {
             },
             {
                 "name": "approve",
-                "description": "請求を承諾し支払います。",
+                "description": message!("discord_commands.claim.012"),
                 "type": 1,
                 "options": [
                     {
                         "name": "id",
-                        "description": "請求の番号です。",
+                        "description": message!("discord_commands.claim.013"),
                         "type": 4,
                         "required": true,
                         "autocomplete": true,
@@ -443,12 +443,12 @@ fn claim() -> Value {
             },
             {
                 "name": "deny",
-                "description": "請求を拒否します。",
+                "description": message!("discord_commands.claim.014"),
                 "type": 1,
                 "options": [
                     {
                         "name": "id",
-                        "description": "請求の番号です。",
+                        "description": message!("discord_commands.claim.015"),
                         "type": 4,
                         "required": true,
                         "autocomplete": true,
@@ -457,12 +457,12 @@ fn claim() -> Value {
             },
             {
                 "name": "cancel",
-                "description": "自分が送った請求をキャンセルします。",
+                "description": message!("discord_commands.claim.016"),
                 "type": 1,
                 "options": [
                     {
                         "name": "id",
-                        "description": "請求の番号です。",
+                        "description": message!("discord_commands.claim.017"),
                         "type": 4,
                         "required": true,
                         "autocomplete": true,
@@ -471,12 +471,12 @@ fn claim() -> Value {
             },
             {
                 "name": "show",
-                "description": "請求を表示します。",
+                "description": message!("discord_commands.claim.018"),
                 "type": 1,
                 "options": [
                     {
                         "name": "id",
-                        "description": "請求の番号です。",
+                        "description": message!("discord_commands.claim.019"),
                         "type": 4,
                         "required": true,
                         "autocomplete": true,
@@ -495,22 +495,22 @@ fn options_for_listing(user_description: &str) -> Value {
     json!([
         {
             "name": "pending",
-            "description": "未処理の請求を表示します。",
+            "description": message!("discord_commands.options_for_listing.001"),
             "type": 5,
         },
         {
             "name": "approved",
-            "description": "承諾済みの請求を表示します。",
+            "description": message!("discord_commands.options_for_listing.002"),
             "type": 5,
         },
         {
             "name": "denied",
-            "description": "拒否済みの請求を表示します。",
+            "description": message!("discord_commands.options_for_listing.003"),
             "type": 5,
         },
         {
             "name": "canceled",
-            "description": "キャンセル済みの請求を表示します。",
+            "description": message!("discord_commands.options_for_listing.004"),
             "type": 5,
         },
         {
@@ -561,23 +561,23 @@ fn user_option(description: &str) -> Value {
 fn mute() -> Value {
     json!({
         "name": "mute",
-        "description": "自分の一覧に表示しない通貨・ユーザーを指定します。資金の移動は止まりません。",
+        "description": message!("discord_commands.mute.001"),
         "options": [
             {
                 "name": "currency",
-                "description": "その通貨の残高・履歴・請求・契約を、自分の一覧や入力候補に表示しなくします。",
+                "description": message!("discord_commands.mute.002"),
                 "type": 1,
-                "options": [unit_option("表示しなくする通貨の単位です。")],
+                "options": [unit_option(message!("discord_commands.mute.003"))],
             },
             {
                 "name": "user",
-                "description": "その人に関係する履歴・請求・契約を、自分の一覧や入力候補に表示しなくします。",
+                "description": message!("discord_commands.mute.004"),
                 "type": 1,
-                "options": [user_option("表示しなくする相手です。")],
+                "options": [user_option(message!("discord_commands.mute.005"))],
             },
             {
                 "name": "list",
-                "description": "ミュートしているものを表示し、1件ずつ解除できます。",
+                "description": message!("discord_commands.mute.006"),
                 "type": 1,
             },
         ],
@@ -601,33 +601,33 @@ fn mute() -> Value {
 fn history() -> Value {
     json!({
         "name": "history",
-        "description": "自分の入出金と、このサーバーの発行の履歴を表示します。",
+        "description": message!("discord_commands.history.001"),
         "options": [
             {
                 "name": "pay",
-                "description": "自分の通貨の出入りの履歴を表示します。発行で受け取った分も含みます。",
+                "description": message!("discord_commands.history.002"),
                 "type": 1,
                 "options": [
                     {
                         "name": "unit",
-                        "description": "表示する通貨の単位です。",
+                        "description": message!("discord_commands.history.003"),
                         "type": 3,
                         "autocomplete": true,
                     },
                     {
                         "name": "user",
-                        "description": "この相手との履歴だけを表示します。",
+                        "description": message!("discord_commands.history.004"),
                         "type": 6,
                     },
                 ],
             },
             {
                 "name": "issue",
-                "description": "このサーバーの発行枠から発行された履歴を表示します。管理者権限が必要です。",
+                "description": message!("discord_commands.history.005"),
                 "type": 1,
                 "options": [{
                     "name": "user",
-                    "description": "この人に発行された履歴だけを表示します。",
+                    "description": message!("discord_commands.history.006"),
                     "type": 6,
                 }],
             },

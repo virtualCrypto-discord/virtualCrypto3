@@ -57,9 +57,7 @@ pub async fn respond(
             .await
             .unwrap_or_else(|error| {
                 tracing::warn!(?error, "Discord contract operation failed");
-                error_screen(
-                    "契約の処理結果を確認できませんでした。契約一覧と履歴を確認してください。",
-                )
+                error_screen(message!("command.contract.respond.001"))
             });
         reply.edit(response["data"].clone()).await;
     });
@@ -153,12 +151,16 @@ pub async fn component(
                 UPDATE_MESSAGE,
             ))
         }
-        Err(ContractError::NotFound) => Ok(error_screen("その契約はあなたを対象にしていません。")),
-        Err(ContractError::NotEnoughAmount) => Ok(error_screen("お金が足りません。")),
-        Err(ContractError::InvalidStatus) => Ok(error_screen(
-            "その契約には今この操作ができません。期限のある契約は、期間中は取り消せません。",
-        )),
-        Err(ContractError::Expired) => Ok(error_screen("その契約の期限は切れています。")),
+        Err(ContractError::NotFound) => {
+            Ok(error_screen(message!("command.contract.component.001")))
+        }
+        Err(ContractError::NotEnoughAmount) => {
+            Ok(error_screen(message!("command.contract.component.002")))
+        }
+        Err(ContractError::InvalidStatus) => {
+            Ok(error_screen(message!("command.contract.component.003")))
+        }
+        Err(ContractError::Expired) => Ok(error_screen(message!("command.contract.component.004"))),
         Err(error) => Err(CommandError::Internal(ApiError::Internal(format!(
             "the contract decision failed: {error:?}"
         )))),
@@ -191,13 +193,10 @@ async fn page(state: &AppState, payload: &Value, page: i64) -> Result<Value, Com
     let mut children = Vec::new();
 
     if open.total == 0 {
-        children.push(text(
-            "あなたが対象になっている契約はありません。アプリケーションが契約を作ると、\
-             ここに承認待ちとして並びます。",
-        ));
+        children.push(text(message!("command.contract.page.001")));
     } else {
         children.push(text(format!(
-            "**契約** ({}件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
+            message!("command.contract.page.002"),
             open.total
         )));
 
@@ -205,9 +204,7 @@ async fn page(state: &AppState, payload: &Value, page: i64) -> Result<Value, Com
             // A page a button led to that the list has since shrunk past: the
             // arrows below are the way back, and saying where the contracts are is
             // better than saying there are none.
-            children.push(text(
-                "このページには何もありません。前のページに戻ってください。",
-            ));
+            children.push(text(message!("command.contract.page.003")));
         }
 
         for contract in &open.contracts {
@@ -264,12 +261,15 @@ fn describe(contract: &Contract, me: i64) -> String {
         &contract.client_id,
         contract.client_name.as_deref(),
     );
-    let unit = contract.unit.as_deref().unwrap_or("（単位なし）");
+    let unit = contract
+        .unit
+        .as_deref()
+        .unwrap_or(message!("command.contract.describe.001"));
 
     let mine = contract.parties.iter().find(|party| party.discord_id == me);
     let (amount, mine) = match mine {
         Some(party) => (party.amount, party_status(&party.status).to_string()),
-        None => (0, "対象外".to_string()),
+        None => (0, message!("command.contract.describe.002").to_string()),
     };
     let approved = contract
         .parties
@@ -277,19 +277,29 @@ fn describe(contract: &Contract, me: i64) -> String {
         .filter(|party| party.status == "approved")
         .count();
     let deadline = match contract.expires_at {
-        Some(at) => format!("期限: {}", format_date_time(at)),
-        None => "期限: なし（いつでも取り消せます）".to_string(),
+        Some(at) => format!(
+            message!("command.contract.describe.003"),
+            format_date_time(at)
+        ),
+        None => message!("command.contract.describe.004").to_string(),
     };
     let receiver = match contract.receiver_discord_id {
-        Some(id) => format!("送金先: <@{id}> に限定"),
-        None => "送金先: 制限なし".to_string(),
+        Some(id) => format!(message!("command.contract.describe.005"), id = id),
+        None => message!("command.contract.describe.006").to_string(),
     };
 
     format!(
-        "{application}\n（{unit}） — {}\nあなたの分: {amount}／{mine} ・ 承認 {approved}/{} ・ 残り {}\n{receiver}\n{deadline}",
+        message!("command.contract.describe.007"),
         contract_status(&contract.status),
         contract.parties.len(),
         contract.remaining,
+        amount = amount,
+        application = application,
+        approved = approved,
+        deadline = deadline,
+        mine = mine,
+        receiver = receiver,
+        unit = unit
     )
 }
 
@@ -311,18 +321,18 @@ fn buttons(contract: &Contract, me: i64) -> Option<Value> {
         "pending" => Some(action_row(vec![
             button(
                 &custom_id(Action::Approve, contract.id),
-                "承認する",
+                message!("command.contract.buttons.001"),
                 ButtonStyle::Success,
             ),
             button(
                 &custom_id(Action::Refuse, contract.id),
-                "拒否する",
+                message!("command.contract.buttons.002"),
                 ButtonStyle::Danger,
             ),
         ])),
         "approved" if withdrawable(contract) => Some(action_row(vec![button(
             &custom_id(Action::Withdraw, contract.id),
-            "取り消す",
+            message!("command.contract.buttons.003"),
             ButtonStyle::Secondary,
         )])),
         _ => None,
@@ -340,19 +350,19 @@ fn withdrawable(contract: &Contract) -> bool {
 
 fn contract_status(status: &str) -> &'static str {
     match status {
-        "active" => "全員承認済み",
-        "canceled" => "終了",
-        "expired" => "期限切れ",
-        _ => "承認待ち",
+        "active" => message!("command.contract.contract_status.001"),
+        "canceled" => message!("command.contract.contract_status.002"),
+        "expired" => message!("command.contract.contract_status.003"),
+        _ => message!("command.contract.contract_status.004"),
     }
 }
 
 fn party_status(status: &str) -> &'static str {
     match status {
-        "approved" => "承認済み",
-        "refused" => "拒否",
-        "withdrawn" => "取り消し済み",
-        _ => "未回答",
+        "approved" => message!("command.contract.party_status.001"),
+        "refused" => message!("command.contract.party_status.002"),
+        "withdrawn" => message!("command.contract.party_status.003"),
+        _ => message!("command.contract.party_status.004"),
     }
 }
 
@@ -373,7 +383,7 @@ fn error_screen(sentence: &str) -> Value {
         "type": UPDATE_MESSAGE,
         "data": ephemeral(vec![container(
             Some(COLOR_ERROR as u32),
-            vec![text(format!("エラー: {sentence}"))],
+            vec![text(format!(message!("command.contract.error_screen.001"), sentence = sentence))],
         )]),
     })
 }

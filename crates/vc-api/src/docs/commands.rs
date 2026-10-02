@@ -18,7 +18,7 @@ pub fn all() -> &'static [Command] {
     &[
         Command {
             name: "help",
-            usage: &["/help", "/help command:<コマンド名>"],
+            usage: &["/help", message!("docs.commands.all.001")],
             sections: HELP,
         },
         Command {
@@ -31,18 +31,21 @@ pub fn all() -> &'static [Command] {
             usage: &[
                 "/application register",
                 "/application list",
-                "/application show client_id:<アプリケーション>",
+                message!("docs.commands.all.002"),
             ],
             sections: APPLICATION,
         },
         Command {
             name: "issue",
-            usage: &["/issue user:<発行先>", "/issue user:<発行先> amount:<枚数>"],
+            usage: &[
+                message!("docs.commands.all.003"),
+                message!("docs.commands.all.004"),
+            ],
             sections: ISSUE,
         },
         Command {
             name: "pat",
-            usage: &["/pat create name:<名前>", "/pat list"],
+            usage: &[message!("docs.commands.all.005"), "/pat list"],
             sections: PAT,
         },
         Command {
@@ -57,17 +60,21 @@ pub fn all() -> &'static [Command] {
         },
         Command {
             name: "pay",
-            usage: &["/pay unit:<通貨の単位> user:<送信先> amount:<枚数>"],
+            usage: &[message!("docs.commands.all.006")],
             sections: PAY,
         },
         Command {
             name: "info",
-            usage: &["/info", "/info name:<通貨名>", "/info unit:<単位>"],
+            usage: &[
+                "/info",
+                message!("docs.commands.all.007"),
+                message!("docs.commands.all.008"),
+            ],
             sections: INFO,
         },
         Command {
             name: "create",
-            usage: &["/create name:<通貨名> unit:<単位> amount:<最初の発行枚数>"],
+            usage: &[message!("docs.commands.all.009")],
             sections: CREATE,
         },
         Command {
@@ -86,19 +93,19 @@ pub fn all() -> &'static [Command] {
                 "/claim list",
                 "/claim received",
                 "/claim sent",
-                "/claim make user:<請求先> unit:<通貨の単位> amount:<枚数>",
-                "/claim show id:<請求番号>",
-                "/claim approve id:<請求番号>",
-                "/claim deny id:<請求番号>",
-                "/claim cancel id:<請求番号>",
+                message!("docs.commands.all.010"),
+                message!("docs.commands.all.011"),
+                message!("docs.commands.all.012"),
+                message!("docs.commands.all.013"),
+                message!("docs.commands.all.014"),
             ],
             sections: CLAIM,
         },
         Command {
             name: "mute",
             usage: &[
-                "/mute currency unit:<通貨の単位>",
-                "/mute user user:<相手>",
+                message!("docs.commands.all.015"),
+                message!("docs.commands.all.016"),
                 "/mute list",
             ],
             sections: MUTE,
@@ -107,9 +114,9 @@ pub fn all() -> &'static [Command] {
             name: "history",
             usage: &[
                 "/history pay",
-                "/history pay unit:<通貨の単位> user:<相手>",
+                message!("docs.commands.all.017"),
                 "/history issue",
-                "/history issue user:<相手>",
+                message!("docs.commands.all.018"),
             ],
             sections: HISTORY,
         },
@@ -118,497 +125,354 @@ pub fn all() -> &'static [Command] {
 
 const HELP: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.019"),
         &[
-            text(
-                "引数を付けずに実行すると、すべてのコマンドの一覧を表示します。\
-                 一覧のメニューからコマンドを選ぶと、そのコマンドの使い方を表示します。",
-            ),
-            text("`/help command:<コマンド名>` を使うと、最初から1つのコマンドの詳細を開けます。"),
+            text(message!("docs.commands.all.020")),
+            text(message!("docs.commands.all.021")),
         ],
     ),
     section(
-        "同じ内容をWebで読む",
+        message!("docs.commands.all.022"),
         &[list(&[
-            "コマンドの使い方: [コマンド]({site}/document/commands)",
-            "サービスのはじめかた: [はじめに]({site}/document/start)",
+            message!("docs.commands.all.023"),
+            message!("docs.commands.all.024"),
         ])],
     ),
 ];
 
 const INVITE: &[Section] = &[section(
-    "使い方",
+    message!("docs.commands.all.025"),
     &[
-        text("Botをサーバーに追加するための招待URLと、サポートサーバーの招待URLを表示します。"),
+        text(message!("docs.commands.all.026")),
         list(&[
-            "Botの招待: [招待URL]({invite})",
-            "サポートサーバー: [招待URL]({support})",
+            message!("docs.commands.all.027"),
+            message!("docs.commands.all.028"),
         ]),
     ],
 )];
 
 const APPLICATION: &[Section] = &[
     section(
-        "サブコマンド",
+        message!("docs.commands.all.029"),
         &[
             list(&[
-                "`register` 新しいアプリケーションを登録します。",
-                "`list` 自分が持つアプリケーションの一覧を表示します。",
-                "`show` アプリケーションの詳細を表示します。設定の変更とBotの接続はこの画面から行います。",
+                message!("docs.commands.all.030"),
+                message!("docs.commands.all.031"),
+                message!("docs.commands.all.032"),
             ]),
-            text(
-                "登録したときに発行される `client_id` と `client_secret` は、\
-                 `show` の画面に表示されます。",
-            ),
-            text(
-                "Botを接続するには、先にそのBotのプロフィール（説明）へ、\
-                 `show` の画面に出るトークン（`{site}/applications/verification?q=<client_id>`）を\
-                 追記してください。そのあと `show` の画面の一覧でBotを選ぶと接続できます。\
-                 接続できるサーバーは、そのときコマンドを実行しているサーバーです。",
-            ),
+            text(message!("docs.commands.all.033")),
+            text(message!("docs.commands.all.034")),
         ],
     ),
     section(
-        "詳しく",
-        &[text(
-            "登録からBotの接続、発行の許可までの流れは、\
-             [アプリケーション連携]({site}/document/applications)をご覧ください。",
-        )],
+        message!("docs.commands.all.035"),
+        &[text(message!("docs.commands.all.036"))],
     ),
 ];
 
 const ISSUE: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.037"),
         &[
-            text(
-                "サーバーの発行枠から、指定したユーザーに通貨を発行します。\
-                 実行には管理者権限が必要で、サーバーの中でだけ実行できます。",
-            ),
-            text("`amount` を省略すると、そのときの発行枠のすべてが発行されます。"),
+            text(message!("docs.commands.all.038")),
+            text(message!("docs.commands.all.039")),
         ],
     ),
     section(
-        "発行枠",
+        message!("docs.commands.all.040"),
         &[
-            text(
-                "発行枠は、その通貨の総発行量をもとに増えます。\
-                 1日に1回、総発行量の0.5%が加算され、上限は総発行量の3.5%です。\
-                 加算は最小5、上限は最小35で、端数は丸められます。",
-            ),
-            text(
-                "ここでいう総発行量は、これまでに発行した額の合計です。\
-                 まだ発行していない発行枠そのものは含みません。\
-                 契約でロックされている通貨は、契約の口座にあるので含まれます。",
-            ),
-            text("いまの発行枠は `/info` で確認できます。"),
+            text(message!("docs.commands.all.041")),
+            text(message!("docs.commands.all.042")),
+            text(message!("docs.commands.all.043")),
         ],
     ),
     section(
-        "結果",
-        &[text(
-            "発行できたときは、発行した枚数と残りの発行枠が表示されます。",
-        )],
+        message!("docs.commands.all.044"),
+        &[text(message!("docs.commands.all.045"))],
     ),
 ];
 
 const GRANT: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.046"),
         &[
-            text(
-                "あなたのアカウントへのアクセスや、サーバーでの通貨発行を求めるアプリケーションの申請を確認します。",
-            ),
+            text(message!("docs.commands.all.047")),
             list(&[
-                "`approve code:` アプリケーションが表示する申請コードを入力します。申請元、対象、権限、通貨を確認し、「承認する」を押します。コードを入力しただけでは許可されません。",
-                "`user` あなたのアカウントへのアクセス許可を一覧表示し、取り消せます。サーバーでもDMでも使えます。",
-                "`server` このサーバーでの通貨発行の許可を一覧表示し、取り消せます。そのサーバーの管理者権限が必要です。",
+                message!("docs.commands.all.048"),
+                message!("docs.commands.all.049"),
+                message!("docs.commands.all.050"),
             ]),
         ],
     ),
     section(
-        "承認できる人",
-        &[text(
-            "アカウントへの申請を承認できるのは、申請先の本人だけです。サーバーへの申請は、申請先のサーバー内で管理者が承認します。",
-        )],
+        message!("docs.commands.all.051"),
+        &[text(message!("docs.commands.all.052"))],
     ),
 ];
 
 const CONTRACT: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.053"),
         &[
-            text(
-                "あなたが対象になっている契約の一覧を表示します。\
-                 契約は、アプリケーションがあなたの通貨を決めた量だけロックして使うための取り決めです。",
-            ),
-            text(
-                "承認すると、その分の通貨があなたの残高から契約に移り、アプリケーションが使えるようになります。\
-                 承認・拒否は画面のボタンで行います。",
-            ),
-            text(
-                "承認したあとでも、期限のない契約はいつでも取り消せます。\
-                 期限のある契約は、その期間が終わると取り消せます。",
-            ),
-            text("このコマンドはサーバーの中でもDMでも実行できます。"),
-            text(
-                "`/mute` で指定した通貨と相手の契約は、一覧に表示されません。\
-                 件数にも含まれません。",
-            ),
+            text(message!("docs.commands.all.054")),
+            text(message!("docs.commands.all.055")),
+            text(message!("docs.commands.all.056")),
+            text(message!("docs.commands.all.057")),
+            text(message!("docs.commands.all.058")),
         ],
     ),
     section(
-        "ロックされた通貨",
-        &[text(
-            "ロックされた通貨が消えることはありません。\
-             アプリケーションが使わなかった分は、契約が終わるとあなたに戻ります。",
-        )],
+        message!("docs.commands.all.059"),
+        &[text(message!("docs.commands.all.060"))],
     ),
 ];
 
 const PAT: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.061"),
         &[
-            text(
-                "個人アクセストークン（PAT）を持つツールは、あなたとしてAPIを操作できます。\
-                 アプリケーションの登録と接続、残高の参照、送金、請求、契約の承認などができます。\
-                 発行時に権限を絞ることはできません。",
-            ),
+            text(message!("docs.commands.all.062")),
             list(&[
-                "`/pat create name:<名前>` トークンを1つ作ります。値は実行した本人だけに、この返信で一度だけ表示されます。",
-                "`/pat list` 名前を10件ずつ表示します。対象の名前の横にある「失効」ボタンで失効させます。",
+                message!("docs.commands.all.063"),
+                message!("docs.commands.all.064"),
             ]),
         ],
     ),
     section(
-        "失効",
-        &[text(
-            "有効期限はありません。`/pat list` の「失効」ボタンを押すと、直ちにAPIで使えなくなります。\
-             そのトークンを使うツールも動かなくなります。トークンの値は再表示できません。",
-        )],
+        message!("docs.commands.all.065"),
+        &[text(message!("docs.commands.all.066"))],
     ),
     section(
-        "名前",
-        &[text(
-            "名前は1〜32文字で、同じ名前は1つだけです。1アカウントに25個まで作れます。\
-             使うツールや用途が分かる名前にしてください。",
-        )],
+        message!("docs.commands.all.067"),
+        &[text(message!("docs.commands.all.068"))],
     ),
     section(
-        "気をつけること",
-        &[text(
-            "トークンはパスワードと同じです。他人に見せないでください。\
-             見せてしまったときは `/pat list` で対象の「失効」ボタンを押してください。",
-        )],
+        message!("docs.commands.all.069"),
+        &[text(message!("docs.commands.all.070"))],
     ),
 ];
 
 const PAY: &[Section] = &[
     section(
-        "使い方",
-        &[text("自分の残高から、指定したユーザーに通貨を送ります。")],
+        message!("docs.commands.all.071"),
+        &[text(message!("docs.commands.all.072"))],
     ),
-    section("例", &[code(&["/pay unit:v user:@すみどら amount:100"])]),
     section(
-        "結果の表示",
+        message!("docs.commands.all.073"),
+        &[code(&[message!("docs.commands.all.074")])],
+    ),
+    section(
+        message!("docs.commands.all.075"),
         &[
-            text(
-                "送金に成功すると、送信者・受取人・金額・単位をこのチャンネルに公開します。\
-                 残高不足などのエラーは本人だけに表示します。",
-            ),
-            text(
-                "「送金しませんでした」と表示された場合、残高は変わりません。\
-                 結果を確認できない場合やDiscordに応答が届かなかった場合は、\
-                 再送せず、`/history` で送金履歴を確認してください。",
-            ),
+            text(message!("docs.commands.all.076")),
+            text(message!("docs.commands.all.077")),
         ],
     ),
     section(
-        "エラー",
+        message!("docs.commands.all.078"),
         &[list(&[
-            "`通貨が存在しません` 指定した単位の通貨がありません。",
-            "`不正な金額です` 送る枚数が0以下です。1以上を指定してください。",
-            "`通貨が不足しています` 自分の残高が足りません。`/bal` で確認できます。",
+            message!("docs.commands.all.079"),
+            message!("docs.commands.all.080"),
+            message!("docs.commands.all.081"),
         ])],
     ),
 ];
 
 const INFO: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.082"),
         &[
-            text(
-                "通貨の情報を表示します。\
-                 引数を付けずにサーバーで実行すると、そのサーバーの通貨を表示します。\
-                 DMで実行するときは `name` か `unit` のどちらかが必要です。",
-            ),
-            text("両方を指定した場合は `name` が優先されます。"),
+            text(message!("docs.commands.all.083")),
+            text(message!("docs.commands.all.084")),
         ],
     ),
     section(
-        "表示される内容",
+        message!("docs.commands.all.085"),
         &[list(&[
-            "**通貨名** 通貨の名前です。",
-            "**サーバー名** その通貨を作ったサーバーです。",
-            "**単位** 送金や請求で指定する単位です。",
-            "**総発行量** これまでに発行した額の合計です。発行枠の計算のもとになります。",
-            "**発行枠** 管理者が `/issue` で発行できる、残りの量です。",
-            "**あなたの所持量** あなたの残高です。",
-            "**削除可能** 作成から72時間以内かどうかです。",
+            message!("docs.commands.all.086"),
+            message!("docs.commands.all.087"),
+            message!("docs.commands.all.088"),
+            message!("docs.commands.all.089"),
+            message!("docs.commands.all.090"),
+            message!("docs.commands.all.091"),
+            message!("docs.commands.all.092"),
         ])],
     ),
     section(
-        "発行枠の増え方",
-        &[text(
-            "発行枠は1日に1回、総発行量の0.5%増えます。\
-             加算は最小5、上限は総発行量の3.5%（最小35）で、端数は丸められます。",
-        )],
+        message!("docs.commands.all.093"),
+        &[text(message!("docs.commands.all.094"))],
     ),
 ];
 
 const CREATE: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.095"),
         &[
-            text(
-                "サーバーに新しい通貨を作ります。実行には管理者権限が必要です。\
-                 作った枚数は、そのままあなたの残高になります。",
-            ),
-            text("1つのサーバーに作れる通貨は1つだけです。"),
+            text(message!("docs.commands.all.096")),
+            text(message!("docs.commands.all.097")),
         ],
     ),
     section(
-        "引数",
+        message!("docs.commands.all.098"),
         &[list(&[
-            "`name` 通貨の名前です。2〜16文字の英数字です。",
-            "`unit` 通貨の単位です。1〜10文字の英小文字です。",
-            "`amount` 最初に発行する枚数です。1以上4294967295以下です。",
+            message!("docs.commands.all.099"),
+            message!("docs.commands.all.100"),
+            message!("docs.commands.all.101"),
         ])],
     ),
     section(
-        "作成後のこと",
+        message!("docs.commands.all.102"),
         &[
-            text(
-                "作った枚数の0.5%（最小5）が、最初の発行枠として入ります。\
-                 以後は1日1回、総発行量に応じて増えます。",
-            ),
-            text("作成から72時間以内なら `/delete` で削除できます。"),
-            text("`/info` で情報を確認できます。"),
+            text(message!("docs.commands.all.103")),
+            text(message!("docs.commands.all.104")),
+            text(message!("docs.commands.all.105")),
         ],
     ),
     section(
-        "エラー",
+        message!("docs.commands.all.106"),
         &[list(&[
-            "`このギルドではすでに通貨が作成されています` 1つのサーバーに作れる通貨は1つです。",
-            "`という名前の通貨は存在しています` 名前はサービス全体で一意です。",
-            "`という単位の通貨は存在しています` 単位はサービス全体で一意です。",
-            "`実行には管理者権限が必要です` サーバーの管理者権限が必要です。",
-            "`DMでは実行できません` サーバーの中で実行してください。",
+            message!("docs.commands.all.107"),
+            message!("docs.commands.all.108"),
+            message!("docs.commands.all.109"),
+            message!("docs.commands.all.110"),
+            message!("docs.commands.all.111"),
         ])],
     ),
 ];
 
 const DELETE: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.112"),
         &[
-            text(
-                "サーバーの通貨を削除します。実行には管理者権限が必要で、\
-                 作成から72時間以内だけ行えます。",
-            ),
-            text(
-                "実行すると確認のフォームが開きます。\
-                 `delete 単位` の形で入力すると、削除されます。",
-            ),
+            text(message!("docs.commands.all.113")),
+            text(message!("docs.commands.all.114")),
         ],
     ),
     section(
-        "注意",
-        &[text(
-            "削除すると、その通貨の残高・請求・契約もすべて消えます。元には戻せません。",
-        )],
+        message!("docs.commands.all.115"),
+        &[text(message!("docs.commands.all.116"))],
     ),
     section(
-        "エラー",
+        message!("docs.commands.all.117"),
         &[list(&[
-            "`このサーバーに通貨が存在しません` 通貨がまだありません。",
-            "`作成から72時間以上経過しているため削除できません` 削除できる期間を過ぎています。",
-            "`実行には管理者権限が必要です` 確認フォームの送信時にも管理者権限が必要です。",
+            message!("docs.commands.all.118"),
+            message!("docs.commands.all.119"),
+            message!("docs.commands.all.120"),
         ])],
     ),
 ];
 
 const BAL: &[Section] = &[section(
-    "使い方",
+    message!("docs.commands.all.121"),
     &[
-        text("自分が持っている通貨と枚数の一覧を表示します。この表示は実行者だけに見えます。"),
-        text("ミュートした通貨は一覧に表示されません。解除は `/mute list` からできます。"),
-        text("通貨ごとの詳しい情報は `/info`、他の人への送金は `/pay` です。"),
+        text(message!("docs.commands.all.122")),
+        text(message!("docs.commands.all.123")),
+        text(message!("docs.commands.all.124")),
     ],
 )];
 
 const CLAIM: &[Section] = &[
     section(
-        "請求とは",
-        &[text(
-            "`/claim make` で、相手に支払いを求める請求を作ります。\
-             相手が `/claim approve` すると、相手からあなたへ通貨が支払われます。",
-        )],
+        message!("docs.commands.all.125"),
+        &[text(message!("docs.commands.all.126"))],
     ),
     section(
-        "サブコマンド",
+        message!("docs.commands.all.127"),
         &[
             list(&[
-                "`list` 自分に関係する請求の一覧を表示します。",
-                "`received` 自分が受け取った請求（自分が支払う側）を表示します。",
-                "`sent` 自分が送った請求（自分が受け取る側）を表示します。",
-                "`make` 請求を作ります。",
-                "`show` 1件の請求を表示します。",
-                "`approve` 請求を承諾し、支払います。",
-                "`deny` 請求を拒否します。",
-                "`cancel` 自分が送った請求を取り消します。",
+                message!("docs.commands.all.128"),
+                message!("docs.commands.all.129"),
+                message!("docs.commands.all.130"),
+                message!("docs.commands.all.131"),
+                message!("docs.commands.all.132"),
+                message!("docs.commands.all.133"),
+                message!("docs.commands.all.134"),
+                message!("docs.commands.all.135"),
             ]),
-            text("`id` は `/claim list` で確認できます。"),
+            text(message!("docs.commands.all.136")),
         ],
     ),
     section(
-        "一覧のしぼり込み",
+        message!("docs.commands.all.137"),
         &[
-            text(
-                "`pending` `approved` `denied` `canceled` のいずれかを指定すると、\
-                 指定した状態の請求だけを表示します。\
-                 何も指定しないときは、未決定（`pending`）の請求だけを表示します。",
-            ),
-            text("`user` を指定すると、そのユーザーが関わる請求だけを表示します。"),
-            text(
-                "`/mute` で指定した通貨と相手の請求は、一覧に表示されません。\
-                 件数にも含まれません。",
-            ),
+            text(message!("docs.commands.all.138")),
+            text(message!("docs.commands.all.139")),
+            text(message!("docs.commands.all.140")),
         ],
     ),
     section(
-        "状態",
+        message!("docs.commands.all.141"),
         &[list(&[
-            "⌛未決定 相手の返事を待っています。",
-            "✅支払い済み 支払われました。",
-            "❌拒否 相手が拒否しました。",
-            "🗑️キャンセル 請求した側が取り消しました。",
+            message!("docs.commands.all.142"),
+            message!("docs.commands.all.143"),
+            message!("docs.commands.all.144"),
+            message!("docs.commands.all.145"),
         ])],
     ),
     section(
-        "実行できる人",
-        &[text(
-            "`approve` と `deny` は支払う側（請求先）、`cancel` は請求した側が実行できます。\
-             一覧では、未決定の請求の行にその3つのボタンが出ます。\
-             ボタンは、その請求を実行できる立場のときだけ押せます。",
-        )],
+        message!("docs.commands.all.146"),
+        &[text(message!("docs.commands.all.147"))],
     ),
     section(
-        "請求の表示",
-        &[text(
-            "`/claim show` は1件の請求を表示します。\
-             自分が関係していない請求は表示できません。\
-             支払う側には、自分の残高と、支払ったあとの残高が表示されます。",
-        )],
+        message!("docs.commands.all.148"),
+        &[text(message!("docs.commands.all.149"))],
     ),
 ];
 
 const MUTE: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.150"),
         &[
-            text(
-                "自分の一覧や入力候補に表示しない通貨や相手を指定します。\
-                 資金の移動は止まりません。ミュートした通貨でも、請求・支払い・契約はそのまま行えます。",
-            ),
+            text(message!("docs.commands.all.151")),
             list(&[
-                "`/mute currency unit:<通貨の単位>` その通貨の残高・履歴・請求・契約を、自分の一覧や入力候補に表示しなくします。",
-                "`/mute user user:<相手>` その人に関係する履歴・請求・契約を、自分の一覧や請求の入力候補に表示しなくします。",
-                "`/mute list` ミュートしているものを表示します。1件ずつの解除はこの画面のボタンです。",
+                message!("docs.commands.all.152"),
+                message!("docs.commands.all.153"),
+                message!("docs.commands.all.154"),
             ]),
         ],
     ),
     section(
-        "表示されなくなるもの",
-        &[text(
-            "残高の一覧、入出金・発行の履歴、請求・契約の一覧、通貨・請求の入力候補です。\
-             契約は参加者・支払先・連携Botのミュートも反映します。\
-             `/info` やIDで指定した請求・契約の詳細は引き続き確認できます。\
-             残高は変わりません。相手の画面も変わりません。\
-             ミュートは指定した本人の表示にだけ効きます。",
-        )],
+        message!("docs.commands.all.155"),
+        &[text(message!("docs.commands.all.156"))],
     ),
     section(
-        "解除",
-        &[text(
-            "無期限です。解除するまで続きます。\
-             `/mute list` の各行の「解除」を押してください。解除した対象が一覧や入力候補に戻ります。",
-        )],
+        message!("docs.commands.all.157"),
+        &[text(message!("docs.commands.all.158"))],
     ),
 ];
 
 const HISTORY: &[Section] = &[
     section(
-        "使い方",
+        message!("docs.commands.all.159"),
         &[
-            text(
-                "自分のお金の出入りの履歴と、このサーバーの発行の履歴を表示します。どちらも新しい順です。ミュートした通貨や相手の履歴は非表示です。解除は `/mute list` からできます。",
-            ),
+            text(message!("docs.commands.all.160")),
             list(&[
-                "`/history pay` 自分が送った・受け取った・発行で受け取った分の履歴を表示します。",
-                "`/history pay unit:<通貨の単位> user:<相手>` 表示する履歴を絞ります。",
-                "`/history issue` このサーバーの発行枠から発行された履歴を表示します（管理者）。",
-                "`/history issue user:<相手>` その人に発行された履歴だけを表示します。",
+                message!("docs.commands.all.161"),
+                message!("docs.commands.all.162"),
+                message!("docs.commands.all.163"),
+                message!("docs.commands.all.164"),
             ]),
         ],
     ),
     section(
-        "自分の履歴に出るもの",
+        message!("docs.commands.all.165"),
         &[
-            text(
-                "自分が関わったお金の出入りです。`/pay` のほかに、請求を承諾したときの支払い、\
-                 契約を承認したときのロック（「契約にロック」）、契約が終わって戻ってきた分や\
-                 アプリケーションが返した分（「契約から返却」）、そして発行枠から自分に発行された分\
-                 （「発行」）が入ります。契約から支払いを受け取った分は「契約から受取」と表示されます。\
-                 支払う側はロック時に残高が減っているため、契約からの支払いを再び出金として数えません。",
-            ),
-            text(
-                "相手を指定すると（`user:`）、発行の行は出ません。発行の相手は発行枠で、人ではないからです。",
-            ),
-            text(
-                "ミュートで履歴を隠しても、取引後残高は保存された実額のままです。表示中の取引だけでは残高がつながらない場合があるため、照合するときは `/mute list` から解除してください。",
-            ),
+            text(message!("docs.commands.all.166")),
+            text(message!("docs.commands.all.167")),
+            text(message!("docs.commands.all.168")),
         ],
     ),
     section(
-        "表示の見方",
+        message!("docs.commands.all.169"),
         &[
-            text(
-                "1ページ5件です。種別・金額、相手、取引後残高、日時、取引IDを取引ごとに表示します。\
-                 金額の＋は入金、−は出金です。自己送金は残高変動なしと表示します。\
-                 日時はDiscordの表示設定に従います。",
-            ),
-            text(
-                "残高はその取引直後の保存値です。過去の記録など保存値がない場合は「未記録」と表示します。\
-                 発行履歴では、発行先個人の残高ではなく発行枠の残高を表示します。",
-            ),
-            text(
-                "取引IDのPは送金・契約の記録、Iは発行の記録です。数字が同じでも別の記録です。\
-                 契約の記録には契約IDも表示します。請求の承諾による支払いは送金・受取に含まれます。",
-            ),
-            text(
-                "上部で絞り込み条件と件数、下部でページ番号と表示範囲を確認できます。\
-                 ⏪（最初）・⏮️（前へ）・⏭️（次へ）・⏩（最後）で移動しても条件は維持されます。\
-                 0件の場合は条件を確認し、必要に応じて変更して再実行してください。",
-            ),
+            text(message!("docs.commands.all.170")),
+            text(message!("docs.commands.all.171")),
+            text(message!("docs.commands.all.172")),
+            text(message!("docs.commands.all.173")),
         ],
     ),
     section(
-        "実行できる人",
-        &[text(
-            "`/history pay` は自分の履歴なので、誰でも実行できます。\
-             `/history issue` は発行枠を確認するものなので、`/issue` と同じく管理者権限が必要です。",
-        )],
+        message!("docs.commands.all.174"),
+        &[text(message!("docs.commands.all.175"))],
     ),
 ];
