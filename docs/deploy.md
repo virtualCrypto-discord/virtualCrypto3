@@ -207,9 +207,15 @@ that are tested in `crates/vc-api/tests/web.rs`.
 ## Fly.io staging
 
 `fly.toml` targets production. Staging uses **`fly.staging.toml`** and the separate
-`virtualcrypto-staging` app in `nrt`. Always pass the staging config or app explicitly.
+`virtualcrypto-staging` app in `iad`. Always pass the staging config or app explicitly.
 Staging retains `VCRYPTO_ENV=production` because it is a public deployment; this
 value controls outbound security, not the deployment name.
+
+The app and database share US East (`iad`) to favor Discord connectivity. Discord's
+[March 2026 incident report](https://discord.com/blog/behind-the-scenes-of-the-3-25-26-voice-outage)
+locates Gateway/session infrastructure in Google Cloud `us-east1`. This supports
+US East as a starting choice; it does not guarantee the location of every
+Interactions sender or establish that `iad` has the lowest measured latency.
 
 The `deploy-staging` job in `.github/workflows/ci.yml` runs after all three CI jobs
 succeed on a push to `main`. Actions → ci → Run workflow on `main` also checks and
@@ -318,7 +324,7 @@ See [Fly autostop/autostart](https://fly.io/docs/reference/fly-proxy-autostop-au
 ### Staging PostgreSQL on Fly.io
 
 `virtualcrypto-db-staging` is a separate, single-node unmanaged PostgreSQL 18.6
-instance in Tokyo (`nrt`), with a shared CPU, 512 MiB RAM and a 1 GiB persistent
+instance in Ashburn, Virginia (`iad`), with a shared CPU, 512 MiB RAM and a 1 GiB persistent
 `pg_data` volume. It has only a private Flycast IP, with no public database IP.
 The staging app's `DATABASE_URL` is installed by `flyctl postgres attach` and uses
 `virtualcrypto-db-staging.flycast`, database/user `virtualcrypto_staging`. The user

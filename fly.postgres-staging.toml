@@ -1,10 +1,10 @@
 # Staging-only, single-node PostgreSQL. Deploy separately from the application.
 app = 'virtualcrypto-db-staging'
-primary_region = 'nrt'
+primary_region = 'iad'
 
 [env]
   FLY_SCALE_TO_ZERO = '1h'
-  PRIMARY_REGION = 'nrt'
+  PRIMARY_REGION = 'iad'
 
 [[mounts]]
   source = 'pg_data'

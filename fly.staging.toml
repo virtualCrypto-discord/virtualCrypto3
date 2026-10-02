@@ -1,6 +1,6 @@
 # Separate from fly.toml, which targets production.
 app = "virtualcrypto-staging"
-primary_region = "nrt"
+primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"
