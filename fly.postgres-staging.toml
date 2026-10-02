@@ -1,0 +1,77 @@
+# Staging-only, single-node PostgreSQL. Deploy separately from the application.
+app = 'virtualcrypto-db-staging'
+primary_region = 'iad'
+
+[env]
+  FLY_SCALE_TO_ZERO = '1h'
+  PRIMARY_REGION = 'iad'
+
+[[mounts]]
+  source = 'pg_data'
+  destination = '/data'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 5432
+  auto_start_machines = true
+
+  [[services.ports]]
+    port = 5432
+    handlers = ['pg_tls']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 1000
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 5433
+  auto_start_machines = true
+
+  [[services.ports]]
+    port = 5433
+    handlers = ['pg_tls']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 1000
+
+[checks]
+  [checks.pg]
+    port = 5500
+    type = 'http'
+    interval = '15s'
+    timeout = '10s'
+    path = '/flycheck/pg'
+
+  [checks.role]
+    port = 5500
+    type = 'http'
+    interval = '15s'
+    timeout = '10s'
+    path = '/flycheck/role'
+
+  [checks.vm]
+    port = 5500
+    type = 'http'
+    interval = '15s'
+    timeout = '10s'
+    path = '/flycheck/vm'
+
+[[metrics]]
+  port = 9187
+  path = '/metrics'
+
+[build]
+  image = "flyio/postgres-flex:18.1@sha256:f2aaf3666b0fbf07a1c5450fe3b615335bbe961102c9156e81efcbcc0ad3965f"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
+
+# Idle shutdown exits successfully; do not immediately restart it.
+[[restart]]
+  policy = "on-failure"
