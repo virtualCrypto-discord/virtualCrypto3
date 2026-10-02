@@ -57,7 +57,7 @@ pub async fn component(
 
     let Some(account) = account(state, me).await? else {
         return Ok(screen(
-            vec![text("VirtualCryptoのアカウントがまだありません。")],
+            vec![text(message!("command.mute.component.001"))],
             COLOR_BRAND,
         ));
     };
@@ -100,21 +100,23 @@ async fn currency(
     match muted {
         Ok(true) => Ok(screen(
             vec![text(mentions(
-                &format!(
-                    "`{unit}` をミュートしました。この通貨の残高・履歴・請求・契約は、あなたの一覧に出なくなります。\
-                     通貨と請求の入力候補からも非表示になります。\
-                     解除は `/mute list` からできます。"
-                ),
+                &format!(message!("command.mute.currency.001"), unit = unit),
                 state.command_ids().await,
             ))],
             COLOR_OK,
         )),
         Ok(false) => Ok(screen(
-            vec![text(format!("`{unit}` はすでにミュートしています。"))],
+            vec![text(format!(
+                message!("command.mute.currency.002"),
+                unit = unit
+            ))],
             COLOR_BRAND,
         )),
         Err(MuteError::NoSuchCurrency) => Ok(screen(
-            vec![text(format!("`{unit}` という通貨はありません。"))],
+            vec![text(format!(
+                message!("command.mute.currency.003"),
+                unit = unit
+            ))],
             COLOR_ERROR,
         )),
         Err(error) => Err(database(error)),
@@ -140,18 +142,14 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
     match muted {
         Ok(true) => Ok(screen(
             vec![text(mentions(
-                &format!(
-                    "{} をミュートしました。その人に関係する履歴・請求・契約は、あなたの一覧や請求の入力候補に出なくなります。\
-                     解除は `/mute list` からできます。",
-                    mention(target)
-                ),
+                &format!(message!("command.mute.user.001"), mention(target)),
                 state.command_ids().await,
             ))],
             COLOR_OK,
         )),
         Ok(false) => Ok(screen(
             vec![text(format!(
-                "{} はすでにミュートしています。",
+                message!("command.mute.user.002"),
                 mention(target)
             ))],
             COLOR_BRAND,
@@ -160,13 +158,13 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
         // mute to make: said as what is missing rather than as a refusal.
         Err(MuteError::NoSuchUser) => Ok(screen(
             vec![text(format!(
-                "{} にはVirtualCryptoのアカウントがまだありません。",
+                message!("command.mute.user.003"),
                 mention(target)
             ))],
             COLOR_ERROR,
         )),
         Err(MuteError::Yourself) => Ok(screen(
-            vec![text("自分自身はミュートできません。")],
+            vec![text(message!("command.mute.user.004"))],
             COLOR_ERROR,
         )),
         Err(error) => Err(database(error)),
@@ -198,20 +196,21 @@ async fn page(
 
     if mutes.total == 0 {
         children.push(text(mentions(
-            "ミュートしているものはありません。`/mute currency` と `/mute user` で追加できます。",
+            message!("command.mute.page.001"),
             state.command_ids().await,
         )));
     } else {
         // The count is everything the person is not seeing, not what this page shows: that is
         // the number they are looking for, as it is in every list here.
-        children.push(text(format!("**ミュート一覧** ({}件)", mutes.total)));
+        children.push(text(format!(
+            message!("command.mute.page.002"),
+            mutes.total
+        )));
 
         if mutes.mutes.is_empty() {
             // A page an arrow led to that the list has since shrunk past: the arrows are the way
             // back, and saying where the rows are beats saying there are none.
-            children.push(text(
-                "このページには何もありません。前のページに戻ってください。",
-            ));
+            children.push(text(message!("command.mute.page.003")));
         }
 
         for mute in &mutes.mutes {
@@ -241,7 +240,11 @@ fn row(mute: &Target) -> Value {
 
     section(
         vec![text(line)],
-        button(&unmute_custom_id(mute), "解除", ButtonStyle::Secondary),
+        button(
+            &unmute_custom_id(mute),
+            message!("command.mute.row.001"),
+            ButtonStyle::Secondary,
+        ),
     )
 }
 
@@ -295,10 +298,7 @@ async fn account(state: &AppState, discord_id: i64) -> Result<Option<i32>, Comma
 /// A screen for the caller who has no account here: every answer in this module is about what
 /// their own lists show, and somebody with no account has none.
 fn no_account(color: i64) -> Value {
-    screen(
-        vec![text("VirtualCryptoのアカウントがまだありません。")],
-        color,
-    )
+    screen(vec![text(message!("command.mute.no_account.001"))], color)
 }
 
 /// A database failure as the interaction layer answers one: the only refusal in

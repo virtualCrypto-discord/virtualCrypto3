@@ -23,24 +23,19 @@ impl Reason {
     /// `Interactions.Create.render_error/2`.
     fn message(&self, options: &Map<String, Value>) -> String {
         match self {
-            Reason::Guild => "このギルドではすでに通貨が作成されています。".to_string(),
+            Reason::Guild => message!("command.create.message.001").to_string(),
             Reason::Name => format!(
-                "`{}`という名前の通貨は存在しています。別の名前を使用してください。",
+                message!("command.create.message.002"),
                 option_display(options, "name"),
             ),
             Reason::Unit => format!(
-                "`{}`という単位の通貨は存在しています。別の単位を使用してください。",
+                message!("command.create.message.003"),
                 option_display(options, "unit"),
             ),
-            Reason::Invalid => {
-                "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。"
-                    .to_string()
-            }
-            Reason::Permission => "実行には管理者権限が必要です。".to_string(),
-            Reason::InvalidAmount => {
-                "不正な金額です。1以上4294967295以下である必要があります。".to_string()
-            }
-            Reason::RunInDm => "DMでは実行できません。".to_string(),
+            Reason::Invalid => message!("command.create.message.004").to_string(),
+            Reason::Permission => message!("command.create.message.005").to_string(),
+            Reason::InvalidAmount => message!("command.create.message.006").to_string(),
+            Reason::RunInDm => message!("command.create.message.007").to_string(),
         }
     }
 }
@@ -99,8 +94,7 @@ pub async fn handle(
 /// `Interactions.Create.render/3` for `{:ok, :ok, options}`.
 async fn render_ok(state: &AppState, options: &Map<String, Value>) -> Value {
     let done = format!(
-        "\u{2705} 通貨の作成に成功しました！ `/info unit: {}`コマンドで通貨の情報をご覧ください。\n\
-         削除したい場合は、72時間以内に`/delete`コマンドを実行してください。",
+        message!("command.create.render_ok.001"),
         option_display(options, "unit"),
     );
 
@@ -125,7 +119,7 @@ fn render_error(reason: Reason, options: &Map<String, Value>) -> Value {
             Some(COLOR_ERROR as u32),
             // The title a line of its own, as the embed had it.
             vec![crate::components::text(format!(
-                "**エラー**\n{}",
+                message!("command.create.render_error.001"),
                 reason.message(options)
             ))],
         )]),

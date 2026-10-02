@@ -53,19 +53,18 @@ async fn page(state: &AppState, me: i64, page: i64, kind: i64) -> Result<Value, 
     let mut children = Vec::new();
 
     if balances.total == 0 {
-        children.push(text(
-            "表示できる通貨はありません。ミュート設定は `/mute list` で確認できます。",
-        ));
+        children.push(text(message!("command.bal.page.001")));
     } else {
         // Count every visible holding, including those on later pages.
-        children.push(text(format!("**所持通貨一覧** ({}件)", balances.total)));
+        children.push(text(format!(
+            message!("command.bal.page.002"),
+            balances.total
+        )));
 
         if balances.balances.is_empty() {
             // A page a button led to that the list has since shrunk past: the arrows below are
             // the way back, and saying where the rows are is better than saying there are none.
-            children.push(text(
-                "このページには何もありません。前のページに戻ってください。",
-            ));
+            children.push(text(message!("command.bal.page.003")));
         }
 
         for balance in &balances.balances {

@@ -64,7 +64,7 @@ pub fn applications_page(
         return container(
             Some(WORKING),
             vec![text(crate::docs::discord::mentions(
-                "まだアプリケーションを登録していません。`/application register` で登録できます。",
+                message!("developer.applications_page.001"),
                 ids,
             ))],
         );
@@ -77,7 +77,7 @@ pub fn applications_page(
             let name = application["client_name"]
                 .as_str()
                 .filter(|name| !name.is_empty())
-                .unwrap_or("（名前なし）");
+                .unwrap_or(message!("developer.applications_page.002"));
 
             // The uuid is the value and the name is the label: the label is what somebody
             // typed into a form, and the uuid is what the service will be asked about.
@@ -86,12 +86,15 @@ pub fn applications_page(
         .collect::<Vec<_>>();
 
     let mut children = vec![
-        text(format!("{total} 件のアプリケーションがあります。")),
+        text(format!(
+            message!("developer.applications_page.003"),
+            total = total
+        )),
         action_row(vec![select(
             &crate::custom_id::ui::developer::custom_id(
                 crate::custom_id::ui::developer::Screen::Back,
             ),
-            "アプリケーションを選ぶ",
+            message!("developer.applications_page.004"),
             options,
         )]),
     ];
@@ -149,10 +152,10 @@ pub fn application(
     token: &str,
     fields: Fields<'_>,
 ) -> Value {
-    let name = name.unwrap_or("（名前なし）");
+    let name = name.unwrap_or(message!("developer.application.001"));
     let state = match connected_bot {
-        Some(bot) => format!("接続中の Bot: <@{bot}>（ID: `{bot}`）"),
-        None => "Bot はまだ接続されていません。".to_owned(),
+        Some(bot) => format!(message!("developer.application.002"), bot = bot),
+        None => message!("developer.application.003").to_owned(),
     };
 
     let title = format!("**{name}**\n{state}\n`{client_id}`");
@@ -174,41 +177,51 @@ pub fn application(
         editing(
             client_id,
             "client_name",
-            "クライアント名",
+            message!("developer.application.004"),
             fields.client_name,
         ),
         editing(
             client_id,
             "redirect_uris",
-            "リダイレクト URI",
+            message!("developer.application.005"),
             Some(&listing(fields.redirect_uris)),
         ),
         editing(
             client_id,
             "client_uri",
-            "クライアント URI",
+            message!("developer.application.006"),
             fields.client_uri,
         ),
-        editing(client_id, "logo_uri", "ロゴ URI", fields.logo_uri),
-        editing(client_id, "webhook_url", "webhook URL", fields.webhook_url),
+        editing(
+            client_id,
+            "logo_uri",
+            message!("developer.application.007"),
+            fields.logo_uri,
+        ),
+        editing(
+            client_id,
+            "webhook_url",
+            message!("common.webhookUrl"),
+            fields.webhook_url,
+        ),
         editing(
             client_id,
             "discord_support_server_invite_slug",
-            "サポートサーバーの招待 slug",
+            message!("developer.application.008"),
             fields.discord_support_server_invite_slug,
         ),
         // The three fields whose values are a set the service defines, each with its own
         // menu and nothing behind a button: a string select is the one select a message may
         // carry with options we choose, which is exactly what an enumerated field is, and
         // the set that comes back is the set that is sent.
-        text("**アプリケーションの種類**（`application_type`）"),
+        text(message!("developer.application.009")),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
                 "application_type",
             ),
-            Some("種類を選ぶ"),
+            Some(message!("developer.application.010")),
             APPLICATION_TYPES
                 .iter()
                 .map(|kind| setting_option(kind, kind, *kind == fields.application_type))
@@ -216,14 +229,14 @@ pub fn application(
             1,
             1,
         )]),
-        text("**グラントタイプ**（`grant_types`）"),
+        text(message!("developer.application.011")),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
                 "grant_types",
             ),
-            Some("グラントタイプを選ぶ"),
+            Some(message!("developer.application.012")),
             GRANT_TYPES
                 .iter()
                 .map(|kind| {
@@ -237,14 +250,14 @@ pub fn application(
             0,
             GRANT_TYPES.len() as u8,
         )]),
-        text("**レスポンスタイプ**（`response_types`）"),
+        text(message!("developer.application.013")),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
                 "response_types",
             ),
-            Some("レスポンスタイプを選ぶ"),
+            Some(message!("developer.application.014")),
             RESPONSE_TYPES
                 .iter()
                 .map(|kind| {
@@ -266,14 +279,14 @@ pub fn application(
         // that comes back is the set that is stored: checked is sent,
         // unchecked is not, and empty is nothing — which needs no
         // enforcement, because Discord lets the menu come back empty.
-        text("**通知イベント**（`subscribed_events`）"),
+        text(message!("developer.application.015")),
         action_row(vec![select_many(
             &crate::custom_id::ui::developer::custom_id_for_field(
                 crate::custom_id::ui::developer::Screen::Edit,
                 client_id,
                 "subscribed_events",
             ),
-            Some("イベントを選ぶ"),
+            Some(message!("developer.application.016")),
             EVENT_TYPES
                 .iter()
                 .map(|kind| {
@@ -293,18 +306,19 @@ pub fn application(
                 crate::custom_id::ui::developer::Screen::RotateSecret,
                 client_id,
             ),
-            "client_secret を再生成",
+            message!("developer.application.017"),
             ButtonStyle::Secondary,
         )]),
         text(format!(
-            "**Bot の接続**\nBot のアプリケーションの Description に、次の確認用 URL を追記してください。\n`{token}`"
+            message!("developer.application.018"),
+            token = token
         )),
         action_row(vec![user_select(
             &crate::custom_id::ui::developer::custom_id_for(
                 crate::custom_id::ui::developer::Screen::Connect,
                 client_id,
             ),
-            "接続する Bot を選ぶ",
+            message!("developer.application.019"),
         )]),
     ]);
 
@@ -326,7 +340,7 @@ fn editing(client_id: &str, field: &str, label: &str, now: Option<&str>) -> Valu
     section(
         vec![text(format!(
             "**{label}**（`{field}`）\n{}",
-            now.unwrap_or("（なし）")
+            now.unwrap_or(message!("developer.editing.001"))
         ))],
         button(
             &crate::custom_id::ui::developer::custom_id_for_field(
@@ -334,7 +348,7 @@ fn editing(client_id: &str, field: &str, label: &str, now: Option<&str>) -> Valu
                 client_id,
                 field,
             ),
-            "編集",
+            message!("developer.editing.002"),
             ButtonStyle::Primary,
         ),
     )
@@ -343,7 +357,7 @@ fn editing(client_id: &str, field: &str, label: &str, now: Option<&str>) -> Valu
 /// Redirect URIs as text beside their edit button.
 fn listing(values: &[String]) -> String {
     if values.is_empty() {
-        "（なし）".to_owned()
+        message!("developer.listing.001").to_owned()
     } else {
         values.join(", ")
     }
@@ -359,10 +373,10 @@ pub fn all_events() -> &'static [i64] {
 /// The name a notification `type` value goes by in the menu.
 fn event_name(kind: i64) -> &'static str {
     match kind {
-        2 => "請求の更新",
-        3 => "発行許可の決定",
-        4 => "契約の決定",
-        _ => "（不明）",
+        2 => message!("developer.event_name.001"),
+        3 => message!("developer.event_name.002"),
+        4 => message!("developer.event_name.003"),
+        _ => message!("developer.event_name.004"),
     }
 }
 
@@ -371,10 +385,10 @@ fn event_name(kind: i64) -> &'static str {
 fn secret_block(secret: Option<&str>) -> Value {
     match secret {
         Some(secret) => text(format!(
-            "**client_secret**\n```\n{secret}\n```\nこの返信はあなたにだけ見えています。\
-             \nAPI の認証に使う秘密情報です。所有者はこの画面で再確認できます。他人に共有しないでください。"
+            message!("developer.secret_block.001"),
+            secret = secret
         )),
-        None => text("client_secret は記録されていません。"),
+        None => text(message!("developer.secret_block.002")),
     }
 }
 
@@ -407,18 +421,19 @@ pub fn rotate_secret_confirmation(client_id: &str) -> Value {
         Some(WORKING),
         vec![
             text(format!(
-                "**client_secret を再生成しますか？**\nclient_id: `{client_id}`\n\
-             再生成すると旧 secret での認証は直ちにできなくなります。\
-             利用中のサービスの設定を新しい secret に更新してください。\
-             発行済みのアクセストークンや残高は変更しません。"
+                message!("developer.rotate_secret_confirmation.001"),
+                client_id = client_id
             )),
             action_row(vec![
                 button(
                     &custom_id_for_field(Screen::RotateSecret, client_id, "confirm"),
-                    "再生成する",
+                    message!("developer.rotate_secret_confirmation.002"),
                     ButtonStyle::Danger,
                 ),
-                return_to_application(client_id, "キャンセル"),
+                return_to_application(
+                    client_id,
+                    message!("developer.rotate_secret_confirmation.003"),
+                ),
             ]),
         ],
     )
@@ -427,25 +442,25 @@ pub fn rotate_secret_confirmation(client_id: &str) -> Value {
 pub fn connect_confirmation(client_id: &str, current: Option<i64>, bot: i64) -> Value {
     use crate::custom_id::ui::developer::{Screen, custom_id_for_field};
     let current = current.map_or_else(
-        || "未接続".to_owned(),
+        || message!("developer.connect_confirmation.001").to_owned(),
         |id| format!("<@{id}>（ID: `{id}`）"),
     );
     container(
         Some(WORKING),
         vec![
             text(format!(
-                "**Bot の接続を確認**\nclient_id: `{client_id}`\n現在: {current}\n接続先: <@{bot}>（ID: `{bot}`）\n\
-             このアプリケーションの既存残高は維持され、接続先 Bot が連携前に持っていた残高が合算されます。\
-             再連携すると、旧 Bot はこのアプリケーションの残高にアクセスできなくなります。\
-             他のアプリケーションに接続済みの Bot は接続できません。"
+                message!("developer.connect_confirmation.002"),
+                bot = bot,
+                client_id = client_id,
+                current = current
             )),
             action_row(vec![
                 button(
                     &custom_id_for_field(Screen::ConfirmConnect, client_id, &bot.to_string()),
-                    "接続する",
+                    message!("developer.connect_confirmation.003"),
                     ButtonStyle::Primary,
                 ),
-                return_to_application(client_id, "キャンセル"),
+                return_to_application(client_id, message!("developer.connect_confirmation.004")),
             ]),
         ],
     )
@@ -460,18 +475,22 @@ pub fn connect_confirmation(client_id: &str, current: Option<i64>, bot: i64) -> 
 pub fn refusal(action: &str, description: Option<&str>) -> Value {
     let why = match description {
         Some(description) => description.to_owned(),
-        None => "このサービス側の問題です。時間をおいてもう一度試してください。".to_owned(),
+        None => message!("developer.refusal.001").to_owned(),
     };
 
     container(
         Some(REFUSED),
         vec![
-            text(format!("**{action}できませんでした**\n{why}")),
+            text(format!(
+                message!("developer.refusal.002"),
+                action = action,
+                why = why
+            )),
             action_row(vec![button(
                 &crate::custom_id::ui::developer::custom_id(
                     crate::custom_id::ui::developer::Screen::List,
                 ),
-                "アプリケーション",
+                message!("developer.refusal.003"),
                 ButtonStyle::Primary,
             )]),
         ],
@@ -492,14 +511,12 @@ pub fn connect_result(client_id: &str, refusal: Option<&str>) -> Value {
         None => container(
             Some(WORKING),
             vec![
-                text(
-                    "Bot を接続しました。このアプリケーションのアカウントに、Bot の Discord ID が入りました。",
-                ),
+                text(message!("developer.connect_result.001")),
                 action_row(vec![button(
                     &crate::custom_id::ui::developer::custom_id(
                         crate::custom_id::ui::developer::Screen::List,
                     ),
-                    "アプリケーション",
+                    message!("developer.connect_result.002"),
                     ButtonStyle::Primary,
                 )]),
             ],
@@ -507,7 +524,10 @@ pub fn connect_result(client_id: &str, refusal: Option<&str>) -> Value {
         Some(description) => container(
             Some(REFUSED),
             vec![
-                text(format!("接続できませんでした。\n\n{description}")),
+                text(format!(
+                    message!("developer.connect_result.003"),
+                    description = description
+                )),
                 // No もう一度: the way to try again is the picker on the application's screen,
                 // and a button that reopens a form is the thing this screen is not for. The
                 // service's sentence is what the operator acts on, and it is above.
@@ -515,7 +535,7 @@ pub fn connect_result(client_id: &str, refusal: Option<&str>) -> Value {
                     &crate::custom_id::ui::developer::custom_id(
                         crate::custom_id::ui::developer::Screen::List,
                     ),
-                    "アプリケーション",
+                    message!("developer.connect_result.004"),
                     ButtonStyle::Primary,
                 )]),
                 text(format!("`{client_id}`")),

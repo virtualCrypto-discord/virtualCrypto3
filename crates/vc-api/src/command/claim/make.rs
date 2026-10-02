@@ -39,10 +39,12 @@ pub async fn handle(
     .await
     {
         Ok(claim_id) => Ok(render(state, claim_id).await),
-        Err(CreateError::NotFoundCurrency) => Ok(render_error("指定された通貨は存在しません。")),
-        Err(CreateError::InvalidAmount) => Ok(render_error(
-            "不正な金額です。1以上9223372036854775807以下である必要があります。",
-        )),
+        Err(CreateError::NotFoundCurrency) => {
+            Ok(render_error(message!("command.claim.make.handle.001")))
+        }
+        Err(CreateError::InvalidAmount) => {
+            Ok(render_error(message!("command.claim.make.handle.002")))
+        }
         Err(CreateError::Database(error)) => Err(CommandError::from(error)),
     }
 }
@@ -50,7 +52,8 @@ pub async fn handle(
 /// `Interactions.Claim.render/1` for `{:ok, "make", claim}`.
 async fn render(state: &AppState, claim_id: i64) -> Value {
     let advice = format!(
-        "請求id: {claim_id} で請求を受け付けました。`/claim show id:{claim_id}`でご確認ください。"
+        message!("command.claim.make.render.001"),
+        claim_id = claim_id
     );
 
     json!({

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../i18n";
   // The old site's `readme.html.eex`, whose text the markup below is. It was a
   // server-rendered page there and is a client route here.
   //
@@ -11,17 +12,17 @@
 </script>
 <div class="columns">
   <div class="column is-7 is-offset-1-desktop">
-    <div class="title">このページは?</div>
+    <div class="title">{t("verification.title")}</div>
     <div class="mt-5">
-      <p>VirtualCryptoのアプリケーションとDiscordのBotを紐つけるためのトークンのページです。</p>
+      <p>{t("verification.description")}</p>
       <p class="has-text-weight-bold is-size-5">
-        このページのURLをDiscordのアプリケーションのDescriptionに貼り付けて欲しいと言われたらあなたは11割騙されています！
+        {t("verification.scamWarning")}
       </p>
       <p class="has-text-weight-bold is-size-5 has-text-danger">
-        このページのURLを貼り付けたらあなたのDiscordのアプリケーションが不正に紐つけられてしまいます！
+        {t("verification.connectionWarning")}
       </p>
     </div>
   </div>
 </div>
 
-<p><a href="/applications">アプリケーション</a></p>
+<p><a href="/applications">{t("verification.applications")}</a></p>

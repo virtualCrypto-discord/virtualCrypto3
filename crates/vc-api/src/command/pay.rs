@@ -30,13 +30,11 @@ pub async fn respond(
 }
 
 pub(crate) fn busy_response() -> Value {
-    render_error("処理が混み合っているため、送金しませんでした。時間をおいてやり直してください。")
+    render_error(message!("command.pay.busy_response.001"))
 }
 
 pub(crate) fn uncertain_result() -> Value {
-    render_error(
-        "送金結果を確認できませんでした。再送せず、/history で送金履歴を確認してください。",
-    )
+    render_error(message!("command.pay.uncertain_result.001"))
 }
 
 /// `Command.handle/4` for `pay`, rendered by `InteractionsJSON.pay/1` through
@@ -94,16 +92,16 @@ async fn handle_until(
         Ok(Ok(tx)) => tx,
         Ok(Err(PayError::Database(error))) => {
             tracing::warn!(%error, "Discord payment preparation failed");
-            return Ok(render_error(
-                "送金できませんでした。時間をおいてやり直してください。",
-            ));
+            return Ok(render_error(message!("command.pay.handle_until.001")));
         }
         Ok(Err(PayError::NotFoundCurrency)) => {
-            return Ok(render_error("エラー: 通貨が存在しません。"));
+            return Ok(render_error(message!("command.pay.handle_until.002")));
         }
-        Ok(Err(PayError::InvalidAmount)) => return Ok(render_error("エラー: 不正な金額です。")),
+        Ok(Err(PayError::InvalidAmount)) => {
+            return Ok(render_error(message!("command.pay.handle_until.003")));
+        }
         Ok(Err(PayError::NotFoundSenderAsset | PayError::NotEnoughAmount)) => {
-            return Ok(render_error("エラー: 通貨が不足しています。"));
+            return Ok(render_error(message!("command.pay.handle_until.004")));
         }
     };
 
@@ -142,7 +140,7 @@ fn render_ok(sender: i64, receiver: &str, amount: &Value, unit: &str) -> Value {
                 // The command's colours are `i64` and a container's accent is the 24 bits.
                 Some(COLOR_OK as u32),
                 vec![crate::components::text(format!(
-                    "{} から {} に **{}** `{}` を送金しました。",
+                    message!("command.pay.render_ok.001"),
                     mention(sender),
                     mention(receiver),
                     value_text(amount),

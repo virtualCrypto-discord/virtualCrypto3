@@ -23,65 +23,47 @@ pub fn all() -> &'static [Page] {
 /// はじめに: what this is, and the shortest way to a balance somebody else can see.
 const START: Page = Page {
     slug: "start",
-    title: "はじめに",
-    summary: "VirtualCryptoとは何か、通貨の仕組み、はじめかた。",
+    title: message!("docs.pages.all.001"),
+    summary: message!("docs.pages.all.002"),
     listing: Listing::None,
     sections: &[
-        lead(&[text(
-            "VirtualCryptoは、Discordのサーバーで独自の通貨を使えるようにするBotです。\
-                 ここでいう通貨は暗号通貨ではなく、そのサーバーの中だけで通用する点数です。",
-        )]),
+        lead(&[text(message!("docs.pages.all.003"))]),
         section(
-            "できること",
+            message!("docs.pages.all.004"),
             &[list(&[
-                "`/create` サーバーに通貨を作る",
-                "`/pay` 通貨を送る、`/claim` 支払いを請求する",
-                "`/bal` 自分の残高を見る、`/info` 通貨の情報を見る",
-                "`/issue` 発行枠から配る（管理者）",
-                "アプリケーションと連携すると、Botや外部サービスが通貨を動かせる（[アプリケーション連携]({site}/document/applications)）",
+                message!("docs.pages.all.005"),
+                message!("docs.pages.all.006"),
+                message!("docs.pages.all.007"),
+                message!("docs.pages.all.008"),
+                message!("docs.pages.all.009"),
             ])],
         ),
         section(
-            "はじめかた",
+            message!("docs.pages.all.010"),
             &[
                 list(&[
-                    "[Botを招待する]({invite})。招待には「アプリケーションのコマンド」の権限が必要です。",
-                    "サーバーの管理者が `/create` で通貨を作る。",
-                    "`/pay` で配る。`/bal` で自分の残高を確認できます。",
+                    message!("docs.pages.all.011"),
+                    message!("docs.pages.all.012"),
+                    message!("docs.pages.all.013"),
                 ]),
-                text("コマンドの一覧と使い方は[コマンド]({site}/document/commands)にあります。"),
+                text(message!("docs.pages.all.014")),
             ],
         ),
         section(
-            "通貨の仕組み",
+            message!("docs.pages.all.015"),
             &[
-                text(
-                    "作った枚数は、そのまま作った人の残高になります。\
-                     ここから配る分として、最初の発行枠が用意されます。",
-                ),
-                text(
-                    "発行枠は1日に1回、総発行量の0.5%増えます。\
-                     加算は最小5、上限は総発行量の3.5%（最小35）で、端数は丸められます。",
-                ),
-                text(
-                    "総発行量とは、これまでに発行した額の合計です。発行した通貨は消えないので、\
-                     今みんなの口座にある残高の合計と一致します。\
-                     契約でロックされている通貨は契約の口座にあるので含まれ、\
-                     まだ発行していない発行枠は含みません。\
-                     `/info` で総発行量と今の発行枠を確認できます。",
-                ),
-                text(
-                    "管理者は `/issue` で発行枠から発行できます。\
-                     発行できるのはサーバーごとに1つ、通貨の名前と単位はサービス全体で一意です。",
-                ),
-                text("作成から72時間以内なら、`/delete` で通貨を削除できます。"),
+                text(message!("docs.pages.all.016")),
+                text(message!("docs.pages.all.017")),
+                text(message!("docs.pages.all.018")),
+                text(message!("docs.pages.all.019")),
+                text(message!("docs.pages.all.020")),
             ],
         ),
         section(
-            "困ったとき",
+            message!("docs.pages.all.021"),
             &[
-                text("エラーの意味は[よくある質問]({site}/document/faq)にまとめています。"),
-                text("それでも分からないときは[サポートサーバー]({support})へどうぞ。"),
+                text(message!("docs.pages.all.022")),
+                text(message!("docs.pages.all.023")),
             ],
         ),
     ],
@@ -90,37 +72,24 @@ const START: Page = Page {
 /// コマンド: how to read the list, then the list itself.
 const COMMANDS: Page = Page {
     slug: "commands",
-    title: "コマンド",
-    summary: "使えるコマンドの一覧と、それぞれの使い方。",
+    title: message!("docs.pages.all.024"),
+    summary: message!("docs.pages.all.025"),
     listing: Listing::Commands,
     sections: &[
         section(
-            "読み方",
+            message!("docs.pages.all.026"),
             &[
-                text(
-                    "「使い方」は入力の形です。`< >` の中は、その値に置き換えてください。\
-                     たとえば `/pay unit:<通貨の単位> user:<送信先> amount:<枚数>` は、\
-                     `/pay unit:v user:@すみどら amount:100` のように入力します。",
-                ),
-                text(
-                    "引数には「必須」と「任意」があります。必須の引数を省略するとエラーになります。\
-                     任意の引数を省略したときの動作は、各コマンドの説明をご覧ください。",
-                ),
+                text(message!("docs.pages.all.027")),
+                text(message!("docs.pages.all.028")),
             ],
         ),
         section(
-            "管理者のコマンド",
-            &[text(
-                "`/create` `/delete` `/issue` `/grant` は、実行する人にサーバーの管理者権限が必要です。\
-                 それ以外のコマンドは、サーバーのメンバーなら誰でも使えます。",
-            )],
+            message!("docs.pages.all.029"),
+            &[text(message!("docs.pages.all.030"))],
         ),
         section(
-            "Discordの中で読む",
-            &[text(
-                "同じ内容はDiscordの `/help` でも読めます。\
-                 `/help command:<コマンド名>` で、1つのコマンドを直接開けます。",
-            )],
+            message!("docs.pages.all.031"),
+            &[text(message!("docs.pages.all.032"))],
         ),
     ],
 };
@@ -128,127 +97,74 @@ const COMMANDS: Page = Page {
 /// アプリケーション連携: what an application is, and the four steps to using one.
 const APPLICATIONS: Page = Page {
     slug: "applications",
-    title: "アプリケーション連携",
-    summary: "Botや外部サービスからVirtualCryptoの通貨を扱うための手順。",
+    title: message!("docs.pages.all.033"),
+    summary: message!("docs.pages.all.034"),
     listing: Listing::None,
     sections: &[
-        lead(&[text(
-            "アプリケーションは、Botや外部サービスがVirtualCryptoの通貨を扱うための登録です。\
-             登録すると `client_id` と `client_secret` が発行され、APIを呼べるようになります。",
-        )]),
+        lead(&[text(message!("docs.pages.all.035"))]),
         section(
-            "1. 登録する",
+            message!("docs.pages.all.036"),
             &[
-                text(
-                    "`/application register` で登録します。\
-                     登録した時点では、種類 `web`・グラントタイプ `authorization_code`・\
-                     レスポンスタイプ `code` で作られます。\
-                     細かい設定は `/application show` の画面で変えます。",
-                ),
+                text(message!("docs.pages.all.037")),
                 list(&[
-                    "**クライアント名** 一覧や契約に表示される名前です。",
-                    "**リダイレクト URI** 認可コードを受け取るURLです。1行に1つ書きます。",
-                    "**webhook URL** 通知を受け取るURLです。",
-                    "**グラントタイプ** 認可コードの交換と、リフレッシュトークンでの更新のどちらを許すかです。",
-                    "**レスポンスタイプ** 認可コードを返すかどうかです。",
-                    "**通知イベント** 受け取る通知を選びます。",
-                    "**ロゴ URI** 同意画面などに表示される画像です。",
-                    "**サポートサーバーの招待 slug** 利用者からの質問を受け付ける場所です。",
+                    message!("docs.pages.all.038"),
+                    message!("docs.pages.all.039"),
+                    message!("docs.pages.all.040"),
+                    message!("docs.pages.all.041"),
+                    message!("docs.pages.all.042"),
+                    message!("docs.pages.all.043"),
+                    message!("docs.pages.all.044"),
+                    message!("docs.pages.all.045"),
                 ]),
-                text(
-                    "`client_secret` は API の認証に使う秘密情報です。所有者だけが見える `show` の画面で再確認・再生成できます。再生成すると旧 secret で認証できなくなるため、利用中のサービスの設定も更新してください。発行済みのアクセストークンや残高は変更しません。",
-                ),
-                text(
-                    "`registration_access_token` は HTTP API で登録したときに返る、アプリケーション自身が登録情報を管理するためのトークンです。Discord の登録・設定画面では使いません。",
-                ),
+                text(message!("docs.pages.all.046")),
+                text(message!("docs.pages.all.047")),
             ],
         ),
         section(
-            "2. Botを接続する",
+            message!("docs.pages.all.048"),
             &[
-                text(
-                    "アプリケーションがDiscordのBotなら、サーバー内で `/application show` を開き、Botを選んでください。\
-                     ユーザー選択には人間も表示されますが、接続できるのはBotだけです。\
-                     現在の接続先・新しい接続先・残高への影響を確認し、「接続する」で確定します。",
-                ),
-                text(
-                    "接続できるのは、Discord上のそのBotのプロフィール（説明）に、\
-                     `show` の画面に出るトークン（`{site}/applications/verification?q=<client_id>`）が\
-                     書かれている場合だけです。\
-                     これは、他人のBotにあなたのアプリケーションを騙られないための確認です。",
-                ),
-                text(
-                    "アプリケーションの既存残高は維持され、接続先 Bot が連携前に持っていた残高が合算されます。再連携すると、旧 Bot はこのアプリケーションの残高にアクセスできなくなります。他のアプリケーションに接続済みの Bot は接続できません。",
-                ),
-                text(
-                    "Discord の連携一覧は最大50件です。Bot の在籍を確認できても説明を取得できない場合は、所有確認を省略せずエラーを表示します。VirtualCrypto と対象 Bot が参加している、連携数の少ない別のサーバーで再試行してください。",
-                ),
+                text(message!("docs.pages.all.049")),
+                text(message!("docs.pages.all.050")),
+                text(message!("docs.pages.all.051")),
+                text(message!("docs.pages.all.052")),
             ],
         ),
         section(
-            "3. 発行を許可する",
+            message!("docs.pages.all.053"),
             &[
-                text(
-                    "サーバーの発行枠から通貨を発行したいアプリケーションは、そのサーバーに申請します。\
-                     申請はアプリケーションのAPIから行われ、サーバーに申請コードが届きます。",
-                ),
-                text(
-                    "サーバーの管理者は、アプリケーションが表示する申請コードを\
-                     `/grant approve code:<申請コード>` に入れて承認します。",
-                ),
-                text(
-                    "`/grant list` は、そのサーバーで発行を許可しているアプリケーションの\
-                     一覧です。各アプリケーションの「取り消す」で許可を外せます。",
-                ),
-                text("承認できるのは、申請されたスコープだけです。拒否という決定はありません。"),
+                text(message!("docs.pages.all.054")),
+                text(message!("docs.pages.all.055")),
+                text(message!("docs.pages.all.056")),
+                text(message!("docs.pages.all.057")),
             ],
         ),
         section(
-            "4. 契約で通貨をロックする",
+            message!("docs.pages.all.058"),
             &[
-                text(
-                    "アプリケーションが利用者の通貨を操作するには、契約を作ります。\
-                     契約は、対象になる利用者と、それぞれがロックする量を決めます。",
-                ),
-                text(
-                    "利用者は `/contract list` で内容を確認し、承認します。\
-                     承認した分の通貨は、利用者の残高から契約に移ります。\
-                     アプリケーションは、ロックされた範囲でだけ支払えます。",
-                ),
-                text(
-                    "使われなかった分は、契約が終わると利用者に戻ります。\
-                     ロックは移動であって、通貨が消えることはありません。",
-                ),
+                text(message!("docs.pages.all.059")),
+                text(message!("docs.pages.all.060")),
+                text(message!("docs.pages.all.061")),
             ],
         ),
         section(
-            "スコープ",
+            message!("docs.pages.all.062"),
             &[
-                text("アプリケーションができることは、トークンに付いたスコープで決まります。"),
+                text(message!("docs.pages.all.063")),
                 list(&[
-                    "`vc.pay` 通貨を送る。",
-                    "`vc.claim` 請求を作る・承諾する。",
-                    "`vc.issue` サーバーの発行枠から発行する（サーバーの許可が必要）。",
-                    "`vc.contract` 契約でロックされた通貨を操作する。",
+                    message!("docs.pages.all.064"),
+                    message!("docs.pages.all.065"),
+                    message!("docs.pages.all.066"),
+                    message!("docs.pages.all.067"),
                 ]),
-                text(
-                    "利用者に同意を求めるときは、同意画面にそのアプリケーションが求めるスコープが表示されます。\
-                      同意した内容は、そのアプリケーションのトークンにだけ入ります。",
-                ),
-                text(
-                    "アプリケーションが操作する通貨を名指ししたときは、同意画面にその通貨も表示されます。\
-                      1つの通貨だけを求めた申請は、すべての通貨を求めた申請より少ないことを、画面が示します。",
-                ),
+                text(message!("docs.pages.all.068")),
+                text(message!("docs.pages.all.069")),
             ],
         ),
         section(
-            "通知",
+            message!("docs.pages.all.070"),
             &[
-                text(
-                    "アプリケーションは、契約の決定や発行の許可をWebhookで受け取れます。\
-                     受け取るイベントは `show` の画面で選べます。",
-                ),
-                text("本文の形と署名の検証方法は、[API]({site}/document/api)をご覧ください。"),
+                text(message!("docs.pages.all.071")),
+                text(message!("docs.pages.all.072")),
             ],
         ),
     ],
@@ -257,52 +173,52 @@ const APPLICATIONS: Page = Page {
 /// よくある質問: the sentences people arrive with, answered where they are asked.
 const FAQ: Page = Page {
     slug: "faq",
-    title: "よくある質問",
-    summary: "エラーの意味と、よくあるつまずき。",
+    title: message!("docs.pages.all.073"),
+    summary: message!("docs.pages.all.074"),
     listing: Listing::None,
     sections: &[
         section(
-            "通貨まわり",
+            message!("docs.pages.all.075"),
             &[list(&[
-                "**`/create` で「すでに作成されています」と言われる** 1つのサーバーに作れる通貨は1つです。既にある通貨を `/info` で確認してください。",
-                "**名前や単位が使えないと言われる** 名前と単位は、ほかのサーバーも含めてサービス全体で一意です。別のものを指定してください。",
-                "**「DMでは実行できません」と言われる** 通貨はサーバーのものなので、`/create` `/delete` `/issue` `/grant` はサーバーの中で実行します。",
-                "**「実行には管理者権限が必要です」と言われる** サーバーの管理者に依頼してください。",
+                message!("docs.pages.all.076"),
+                message!("docs.pages.all.077"),
+                message!("docs.pages.all.078"),
+                message!("docs.pages.all.079"),
             ])],
         ),
         section(
-            "残高と発行枠",
+            message!("docs.pages.all.080"),
             &[list(&[
-                "**発行枠が増えない** 発行枠は1日に1回、総発行量の0.5%（最小5）増えます。だれも持っていない通貨は増えません。",
-                "**発行枠が思ったより少ない** 上限は総発行量の3.5%です。`/info` で今の発行枠を確認できます。",
-                "**総発行量には何が入るか** これまでに発行した額の合計です。契約でロックされた分は契約の口座にあるので含まれ、まだ発行していない発行枠は含みません。",
-                "**残高が足りないと言われる** `/bal` で残高を確認してください。",
+                message!("docs.pages.all.081"),
+                message!("docs.pages.all.082"),
+                message!("docs.pages.all.083"),
+                message!("docs.pages.all.084"),
             ])],
         ),
         section(
-            "請求",
+            message!("docs.pages.all.085"),
             &[list(&[
-                "**請求の一覧に何も出ない** 何も指定しない一覧は、未決定の請求だけを表示します。`approved` などを指定すると、その状態だけを表示します。",
-                "**請求を承諾できない** 承諾できるのは請求先（支払う側）だけです。残高が足りない場合も承諾できません。",
-                "**請求を取り消したい** 自分が送った請求は `/claim cancel` で取り消せます。",
-                "**請求が支払われない** 請求は相手が承諾するまで動きません。承諾されないまま残ることもあります。",
+                message!("docs.pages.all.086"),
+                message!("docs.pages.all.087"),
+                message!("docs.pages.all.088"),
+                message!("docs.pages.all.089"),
             ])],
         ),
         section(
-            "契約とアプリケーション",
+            message!("docs.pages.all.090"),
             &[list(&[
-                "**契約が届かない** 契約に名前を挙げられている人が `/contract list` で確認します。一覧に無い契約は、あなたが対象ではありません。",
-                "**承認したお金が戻らない** 期限のない契約は「取り消す」でいつでも戻せます。期限のある契約は、その期間が終わると戻せます。",
-                "**Botを接続できない** そのBotのプロフィール（説明）に、`/application show` の画面に出るトークンが書かれている必要があります。",
-                "**「この通貨は扱えません」と言われる** アプリケーションに渡ったトークンは、申請と承認で名指しされた通貨だけを扱えます。ほかの通貨も使えるようにするには、その通貨を名指しした申請を、もう一度承認してもらってください。",
-                "**アプリケーションの登録をやめたい** 通貨を扱う許可は、サーバーの管理者が `/grant list` の「取り消す」で外せます。管理者に依頼してください。",
+                message!("docs.pages.all.091"),
+                message!("docs.pages.all.092"),
+                message!("docs.pages.all.093"),
+                message!("docs.pages.all.094"),
+                message!("docs.pages.all.095"),
             ])],
         ),
         section(
-            "困ったとき",
+            message!("docs.pages.all.096"),
             &[
-                text("解決しないときは[サポートサーバー]({support})で聞いてください。"),
-                text("障害の状況は公式サイト({site})で告知することがあります。"),
+                text(message!("docs.pages.all.097")),
+                text(message!("docs.pages.all.098")),
             ],
         ),
     ],

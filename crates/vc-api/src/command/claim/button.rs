@@ -161,20 +161,22 @@ async fn patch(
                 .collect::<Vec<_>>()
                 .join(",");
 
-            format!("id: {ids} の請求を{}", result_text(action))
+            format!(
+                message!("command.claim.button.patch.001"),
+                result_text(action),
+                ids = ids
+            )
         }
         Err(UpdateClaimsError::InvalidCurrentStatus) => {
-            "エラー: 処理しようとした請求はすでに処理済みです。".to_string()
+            message!("command.claim.button.patch.002").to_string()
         }
         Err(UpdateClaimsError::PermissionDenied | UpdateClaimsError::InvalidOperator) => {
-            "エラー: この請求に対してこの操作を行う権限がありません。".to_string()
+            message!("command.claim.button.patch.003").to_string()
         }
         Err(UpdateClaimsError::NotEnoughAmount | UpdateClaimsError::NotFoundSenderAsset) => {
-            "エラー: お金が足りません。".to_string()
+            message!("command.claim.button.patch.004").to_string()
         }
-        Err(UpdateClaimsError::NotFound) => {
-            "エラー: そのidの請求は見つかりませんでした。".to_string()
-        }
+        Err(UpdateClaimsError::NotFound) => message!("command.claim.button.patch.005").to_string(),
         Err(other) => {
             return Err(CommandError::Internal(ApiError::Internal(format!(
                 "the claim update failed: {other:?}"
@@ -192,8 +194,8 @@ async fn patch(
 /// `Interaction.Button.action_str/1`.
 fn result_text(action: Action) -> &'static str {
     match action {
-        Action::Approve => "承諾し、支払いました。",
-        Action::Deny => "拒否しました。",
-        Action::Cancel => "キャンセルしました。",
+        Action::Approve => message!("command.claim.button.result_text.001"),
+        Action::Deny => message!("command.claim.button.result_text.002"),
+        Action::Cancel => message!("command.claim.button.result_text.003"),
     }
 }

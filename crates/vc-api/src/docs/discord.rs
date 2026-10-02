@@ -22,8 +22,7 @@ use crate::components::{
 use crate::state::Links;
 
 /// Where the screens send somebody who wants to read more, once.
-const FOOTER: &str = "[コマンドの使い方]({site}/document/commands) — [Botの招待]({invite}) — \
-                      [サポートサーバー]({support})";
+const FOOTER: &str = message!("docs.discord.text.001");
 
 /// The list: what this bot is, every command with the sentence Discord shows for
 /// it, the menu that opens one, and the way to the page a new person needs.
@@ -44,14 +43,17 @@ pub fn index(links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Value> {
             thumbnail(&links.logo_url()),
         ),
         separator(),
-        text(format!("## コマンド\n\n{listing}")),
+        text(format!(
+            message!("docs.discord.index.001"),
+            listing = listing
+        )),
         menu(),
         // 「はじめに」 was a line in the footer and nothing a person could press, and the page
         // is a screen of this service's rather than a jump to the site: the same document the
         // site renders, which is what makes it a button and not a link.
         action_row(vec![button(
             &crate::custom_id::ui::help::start(),
-            "はじめに",
+            message!("docs.discord.index.002"),
             ButtonStyle::Primary,
         )]),
         text(resolve(FOOTER, links)),
@@ -178,12 +180,12 @@ pub fn page(page: &Page, links: &Links, ids: &BTreeMap<String, u64>) -> Vec<Valu
     children.push(action_row(vec![
         button(
             &crate::custom_id::ui::help::index(),
-            "一覧に戻る",
+            message!("docs.discord.page.001"),
             ButtonStyle::Secondary,
         ),
         link_button(
             &format!("{}/document/{}", links.site_url, page.slug),
-            "サイトで見る",
+            message!("docs.discord.page.002"),
         ),
     ]));
 
@@ -196,7 +198,10 @@ pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) ->
     let mut children = vec![greeting(&named(&showing.name, ids), &showing.description)];
 
     if !showing.usage.is_empty() {
-        children.push(text(format!("## 使い方\n\n{}", fence(showing.usage))));
+        children.push(text(format!(
+            message!("docs.discord.command.001"),
+            fence(showing.usage)
+        )));
     }
 
     if !showing.options.is_empty() {
@@ -211,12 +216,12 @@ pub fn command(showing: &Showing, links: &Links, ids: &BTreeMap<String, u64>) ->
     children.push(action_row(vec![
         button(
             &crate::custom_id::ui::help::index(),
-            "一覧に戻る",
+            message!("docs.discord.command.002"),
             ButtonStyle::Secondary,
         ),
         link_button(
             &format!("{}/document/commands#{}", links.site_url, showing.name),
-            "サイトで見る",
+            message!("docs.discord.command.003"),
         ),
     ]));
 
@@ -241,7 +246,7 @@ fn menu() -> Value {
 
     action_row(vec![select(
         &crate::custom_id::ui::help::select(),
-        "コマンドを選ぶ",
+        message!("docs.discord.menu.001"),
         options,
     )])
 }
@@ -251,7 +256,7 @@ fn menu() -> Value {
 fn listing_line(showing: &Showing, ids: &BTreeMap<String, u64>) -> String {
     if showing.admin_only {
         format!(
-            "- {}（管理者） {}",
+            message!("docs.discord.listing_line.001"),
             named(&showing.name, ids),
             showing.description
         )
@@ -271,7 +276,10 @@ fn greeting(title: &str, description: &str) -> Value {
 
 /// The options as a list, a subcommand's own options nested under it.
 fn options_text(options: &[OptionLine]) -> String {
-    let mut lines = vec!["## 引数".to_owned(), String::new()];
+    let mut lines = vec![
+        message!("docs.discord.options_text.001").to_owned(),
+        String::new(),
+    ];
     lines.extend(option_lines(options, 0));
 
     lines.join("\n")
@@ -285,8 +293,8 @@ fn option_lines(options: &[OptionLine], depth: usize) -> Vec<String> {
         // saying 「任意」 of one would be saying something untrue.
         let mark = match option.kind {
             OptionKind::Subcommand => String::new(),
-            _ if option.required => "（必須）".to_owned(),
-            _ => "（任意）".to_owned(),
+            _ if option.required => message!("docs.discord.option_lines.001").to_owned(),
+            _ => message!("docs.discord.option_lines.002").to_owned(),
         };
 
         lines.push(format!(

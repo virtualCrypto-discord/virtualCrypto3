@@ -1,5 +1,7 @@
 //! Domain model and PostgreSQL access for virtualCrypto.
 
+include!(concat!(env!("OUT_DIR"), "/messages.rs"));
+
 pub mod application;
 pub mod balance;
 pub mod claim;

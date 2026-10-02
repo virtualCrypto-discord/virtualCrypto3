@@ -49,17 +49,17 @@ impl Scope {
 
     pub const fn description(self) -> &'static str {
         match self {
-            Self::ProfileRead => "あなたのプロフィールを閲覧する",
-            Self::BalancesRead => "あなたの残高を閲覧する",
-            Self::ClaimsRead => "あなたの請求を閲覧する",
-            Self::ContractsRead => "あなたの契約を閲覧する",
-            Self::ContractPaymentsRead => "あなたの契約の支払い履歴を閲覧する",
-            Self::PaymentsCreate => "あなたのアカウントから送金する",
-            Self::ClaimsCreate => "あなたからの請求を作成・閲覧する",
-            Self::ClaimsApprove => "あなた宛ての請求を閲覧・承認し、あなたのアカウントから支払う",
-            Self::ClaimsDeny => "あなた宛ての請求を閲覧・拒否する",
-            Self::ClaimsCancel => "あなたからの請求を閲覧・取り消す",
-            Self::ClaimsMetadataWrite => "あなたの請求を閲覧し、そのメタデータを編集・削除する",
+            Self::ProfileRead => message!("delegation.description.001"),
+            Self::BalancesRead => message!("delegation.description.002"),
+            Self::ClaimsRead => message!("delegation.description.003"),
+            Self::ContractsRead => message!("delegation.description.004"),
+            Self::ContractPaymentsRead => message!("delegation.description.005"),
+            Self::PaymentsCreate => message!("delegation.description.006"),
+            Self::ClaimsCreate => message!("delegation.description.007"),
+            Self::ClaimsApprove => message!("delegation.description.008"),
+            Self::ClaimsDeny => message!("delegation.description.009"),
+            Self::ClaimsCancel => message!("delegation.description.010"),
+            Self::ClaimsMetadataWrite => message!("delegation.description.011"),
         }
     }
 

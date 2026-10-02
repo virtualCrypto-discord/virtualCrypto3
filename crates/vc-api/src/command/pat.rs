@@ -68,9 +68,7 @@ fn named(sub_options: Option<&Value>) -> Result<&str, CommandError> {
 async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, CommandError> {
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
-            vec![text(
-                "VirtualCryptoのアカウントがまだありません。`/application register` でアプリケーションを登録すると作られます。",
-            )],
+            vec![text(message!("command.pat.create.001"))],
             COLOR_ERROR,
         ));
     };
@@ -79,7 +77,10 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
 
     if length == 0 || length > NAME_MAX {
         return Ok(screen(
-            vec![text(format!("名前は1〜{NAME_MAX}文字です。"))],
+            vec![text(format!(
+                message!("command.pat.create.002"),
+                NAME_MAX = NAME_MAX
+            ))],
             COLOR_ERROR,
         ));
     }
@@ -98,16 +99,17 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         Ok(token) => Ok(screen(
             vec![
                 text(format!(
-                    "{} としてトークンを発行しました。値は実行した本人だけに、この返信で一度だけ表示されます。",
+                    message!("command.pat.create.003"),
                     display_name(name)
                 )),
                 text(format!("```\n{token}\n```")),
-                text(
-                    "このトークンを持つツールは、あなたとしてアプリケーションの登録と接続、残高の参照、送金、請求、契約の承認などができます。権限は絞れません。他人に見せないでください。",
-                ),
-                text(format!("スコープ: {}", BROWSER_SCOPES.join(", "))),
+                text(message!("command.pat.create.004")),
+                text(format!(
+                    message!("command.pat.create.005"),
+                    BROWSER_SCOPES.join(", ")
+                )),
                 text(mentions(
-                    "有効期限はありません。`/pat list` の名前の横にある「失効」ボタンで失効させるまで使えます。",
+                    message!("command.pat.create.006"),
                     state.command_ids().await,
                 )),
             ],
@@ -115,20 +117,14 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
         )),
         Err(PersonalError::NameTaken(name)) => Ok(screen(
             vec![text(mentions(
-                &format!(
-                    "{} という名前のトークンはもうあります。別の名前を使うか、`/pat list` の「失効」ボタンで失効させてから作ってください。",
-                    display_name(&name)
-                ),
+                &format!(message!("command.pat.create.007"), display_name(&name)),
                 state.command_ids().await,
             ))],
             COLOR_ERROR,
         )),
         Err(PersonalError::LimitReached) => Ok(screen(
             vec![text(mentions(
-                &format!(
-                    "トークンは1アカウントに{MAX_TOKENS}個までです。`/pat list` で不要なトークンの\
-                     「失効」ボタンを押してから作ってください。"
-                ),
+                &format!(message!("command.pat.create.008"), MAX_TOKENS = MAX_TOKENS),
                 state.command_ids().await,
             ))],
             COLOR_ERROR,
@@ -147,7 +143,7 @@ async fn list(
 ) -> Result<Value, CommandError> {
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
-            vec![text("VirtualCryptoのアカウントがまだありません。")],
+            vec![text(message!("command.pat.list.001"))],
             COLOR_BRAND,
         ));
     };
@@ -162,22 +158,25 @@ async fn list(
     }
     if tokens.is_empty() {
         children.push(text(mentions(
-            "まだありません。`/pat create` で作れます。",
+            message!("command.pat.list.002"),
             state.command_ids().await,
         )));
     } else {
         let last = tokens.len().div_ceil(PER_PAGE);
         let number = number.clamp(1, last);
         children.push(text(format!(
-            "**個人アクセストークン** ({} / {MAX_TOKENS}個・{number} / {last}ページ)\n有効期限はありません。「失効」を押すと直ちに使えなくなり、そのトークンを使うツールも動かなくなります。",
-            tokens.len()
+            message!("command.pat.list.003"),
+            tokens.len(),
+            MAX_TOKENS = MAX_TOKENS,
+            last = last,
+            number = number
         )));
         for token in tokens.iter().skip((number - 1) * PER_PAGE).take(PER_PAGE) {
             children.push(section(
                 vec![text(display_name(&token.name))],
                 button(
                     &ids::revoke(discord_id, number, token.token_id),
-                    "失効",
+                    message!("command.pat.list.004"),
                     ButtonStyle::Danger,
                 ),
             ));
@@ -217,9 +216,7 @@ pub async fn component(
     let (Pressed::Page { owner, number } | Pressed::Revoke { owner, number, .. }) = pressed;
     if owner != discord_id {
         return Ok(screen(
-            vec![text(
-                "この一覧は操作できません。`/pat list` で自分の一覧を開いてください。",
-            )],
+            vec![text(message!("command.pat.component.001"))],
             COLOR_ERROR,
         ));
     }
@@ -228,18 +225,18 @@ pub async fn component(
     };
     let Some(account) = account(state, discord_id).await? else {
         return Ok(screen(
-            vec![text("VirtualCryptoのアカウントがまだありません。")],
+            vec![text(message!("command.pat.component.002"))],
             COLOR_ERROR,
         ));
     };
 
     let notice = match revoke_personal(state.pool(), i64::from(account), token_id).await? {
         Some(name) => (
-            format!("{} を失効させました。", display_name(&name)),
+            format!(message!("command.pat.component.003"), display_name(&name)),
             COLOR_OK,
         ),
         None => (
-            "このトークンは既に失効しているか、見つかりません。".to_owned(),
+            message!("command.pat.component.004").to_owned(),
             COLOR_ERROR,
         ),
     };

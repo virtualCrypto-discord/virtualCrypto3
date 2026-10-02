@@ -352,7 +352,7 @@ pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Bo
         return Err(Box::new(refused(
             StatusCode::UNAUTHORIZED,
             "invalid_kind",
-            "a user token is required",
+            message!("routes.oauth2_clients.refusal.001"),
         )));
     }
 
@@ -360,7 +360,7 @@ pub fn checked(user: &AuthUser, body: Registration) -> Result<NewApplication, Bo
         return Err(Box::new(refused(
             StatusCode::FORBIDDEN,
             "insufficient_scope",
-            "oauth2.register is required",
+            message!("routes.oauth2_clients.refusal.002"),
         )));
     }
 
@@ -632,7 +632,7 @@ pub async fn register(
         return refused(
             StatusCode::BAD_REQUEST,
             "user_verification_failed",
-            "a bot account may not register",
+            message!("routes.oauth2_clients.refusal.003"),
         );
     }
 
@@ -803,7 +803,7 @@ fn unverified(handshake: Handshake, through_proxy: bool) -> Box<Refusal> {
     refusal(
         StatusCode::BAD_REQUEST,
         "webhook_verification_failed",
-        "the webhook did not verify",
+        message!("routes.oauth2_clients.refusal.004"),
     )
 }
 
@@ -981,7 +981,7 @@ pub async fn me(State(state): State<AppState>, user: AuthUser) -> Response {
         return refused(
             StatusCode::UNAUTHORIZED,
             "invalid_kind",
-            "an application token is required",
+            message!("routes.oauth2_clients.refusal.005"),
         );
     }
 
@@ -989,7 +989,7 @@ pub async fn me(State(state): State<AppState>, user: AuthUser) -> Response {
         return refused(
             StatusCode::FORBIDDEN,
             "insufficient_scope",
-            "oauth2.register is required",
+            message!("routes.oauth2_clients.refusal.006"),
         );
     }
 
@@ -1008,7 +1008,11 @@ pub async fn me(State(state): State<AppState>, user: AuthUser) -> Response {
 
     match details(state.pool(), application_id).await {
         Ok(Some(found)) => Json(render(&found)).into_response(),
-        Ok(None) => refused(StatusCode::NOT_FOUND, "not_found", "no such application"),
+        Ok(None) => refused(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            message!("routes.oauth2_clients.refusal.007"),
+        ),
         Err(_) => internal("the application could not be read").response(),
     }
 }
@@ -1022,7 +1026,7 @@ pub async fn edit(
         return refused(
             StatusCode::UNAUTHORIZED,
             "invalid_kind",
-            "an application token is required",
+            message!("routes.oauth2_clients.refusal.008"),
         );
     }
 
@@ -1030,7 +1034,7 @@ pub async fn edit(
         return refused(
             StatusCode::FORBIDDEN,
             "insufficient_scope",
-            "oauth2.register is required",
+            message!("routes.oauth2_clients.refusal.009"),
         );
     }
 

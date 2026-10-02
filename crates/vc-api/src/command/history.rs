@@ -151,7 +151,7 @@ async fn issued(
     // Every `Command.handle/4` clause for `give` takes a guild, so a direct message has no
     // handler at all; the same is true here.
     let Some(guild_id) = payload.get("guild_id").and_then(as_int) else {
-        return Ok(refused("エラー: DMでは実行できません。"));
+        return Ok(refused(message!("command.history.issued.001")));
     };
 
     let permissions = payload
@@ -161,7 +161,7 @@ async fn issued(
         .ok_or_else(|| CommandError::missing("history has no permissions"))?;
 
     if !is_administrator(permissions) {
-        return Ok(refused("エラー: 実行には管理者権限が必要です。"));
+        return Ok(refused(message!("command.history.issued.002")));
     }
 
     // The ledger is the currency's, which is what the API's path names; the guild is what a
@@ -193,34 +193,43 @@ fn heading(listing: &Listing, total: i64) -> Value {
     let person = listing
         .discord_id
         .map(mention)
-        .unwrap_or_else(|| "すべて".into());
+        .unwrap_or_else(|| message!("command.history.heading.001").into());
     let (title, filters) = match listing.screen {
         Screen::Paid => (
-            "入出金の履歴",
+            message!("command.history.heading.002"),
             format!(
-                "通貨: {} / 相手: {person}",
+                message!("command.history.heading.003"),
                 listing
                     .unit
                     .as_deref()
                     .map(unit_text)
-                    .unwrap_or_else(|| "すべて".into())
+                    .unwrap_or_else(|| message!("command.history.heading.004").into()),
+                person = person
             ),
         ),
-        Screen::Issued => ("発行の履歴", format!("発行先: {person}")),
+        Screen::Issued => (
+            message!("command.history.heading.005"),
+            format!(message!("command.history.heading.006"), person = person),
+        ),
     };
-    text(format!("## {title}\n全{total}件 ・ 新しい順\n{filters}"))
+    text(format!(
+        message!("command.history.heading.007"),
+        filters = filters,
+        title = title,
+        total = total
+    ))
 }
 
 fn empty_answer(listing: &Listing, kind: i64) -> Value {
     let message = if listing.unit.is_some() || listing.discord_id.is_some() {
-        "指定した条件に一致する履歴はありません。条件を変更して再実行してください。"
+        message!("command.history.empty_answer.001")
     } else {
         match listing.screen {
             Screen::Paid => {
-                "表示できる入出金の履歴はありません。ミュート設定は `/mute list` で確認できます。"
+                message!("command.history.empty_answer.002")
             }
             Screen::Issued => {
-                "表示できる発行の履歴はありません。ミュート設定は `/mute list` で確認できます。"
+                message!("command.history.empty_answer.003")
             }
         }
     };
@@ -244,15 +253,16 @@ fn page_answer<T>(
     children.push(separator());
     let pages = (page.total - 1) / PER_PAGE + 1;
     if page.rows.is_empty() {
-        children.push(text(
-            "このページには何もありません。⏪ で先頭に戻ってください。",
-        ));
-        children.push(text(format!("ページ {}/{}", page.page, pages)));
+        children.push(text(message!("command.history.empty_answer.004")));
+        children.push(text(format!(
+            message!("command.history.empty_answer.005"),
+            page.page, pages
+        )));
     } else {
         let start = (page.page - 1) * PER_PAGE + 1;
         let end = start + page.rows.len() as i64 - 1;
         children.push(text(format!(
-            "ページ {}/{} ・ {}–{}件 / 全{}件",
+            message!("command.history.empty_answer.006"),
             page.page, pages, start, end, page.total
         )));
     }
@@ -279,15 +289,19 @@ fn movement_line(movement: &Movement, me: i64) -> String {
 fn issued_to_me(issuance: &Issuance) -> String {
     entry(
         format!(
-            "**発行　+{}** {}",
+            message!("command.history.issued_to_me.001"),
             amount_text(issuance.amount),
             unit_text(&issuance.unit)
         ),
-        "発行元: 発行枠".into(),
+        message!("command.history.issued_to_me.002").into(),
         issuance.time,
         format!("I{}", issuance.id),
         None,
-        balance_line("取引後残高", issuance.balance_after, &issuance.unit),
+        balance_line(
+            message!("command.history.issued_to_me.003"),
+            issuance.balance_after,
+            &issuance.unit,
+        ),
     )
 }
 
@@ -303,42 +317,59 @@ fn issued_to_me(issuance: &Issuance) -> String {
 fn paid_line(payment: &Payment, me: i64) -> String {
     let (label, sign, party) = match payment.event {
         Some("lock") => (
-            "契約にロック",
+            message!("command.history.paid_line.001"),
             "−",
-            format!("預け先: {}", contract_identity(payment)),
+            format!(
+                message!("command.history.paid_line.002"),
+                contract_identity(payment)
+            ),
         ),
         Some("return") => (
-            "契約から返却",
+            message!("command.history.paid_line.003"),
             "+",
-            format!("返却元: {}", contract_identity(payment)),
+            format!(
+                message!("command.history.paid_line.004"),
+                contract_identity(payment)
+            ),
         ),
         Some("charge") => (
-            "契約から受取",
+            message!("command.history.paid_line.005"),
             "+",
-            format!("支払元: {}", contract_identity(payment)),
+            format!(
+                message!("command.history.paid_line.006"),
+                contract_identity(payment)
+            ),
         ),
         _ => match (
             payment.sender_discord_id == Some(me),
             payment.receiver_discord_id == Some(me),
         ) {
             (true, false) => (
-                "送金",
+                message!("command.history.paid_line.007"),
                 "−",
                 format!(
-                    "送金先: {}",
+                    message!("command.history.paid_line.008"),
                     counterparty(payment.receiver_discord_id, payment)
                 ),
             ),
             (false, true) => (
-                "受取",
+                message!("command.history.paid_line.009"),
                 "+",
                 format!(
-                    "送金元: {}",
+                    message!("command.history.paid_line.010"),
                     counterparty(payment.sender_discord_id, payment)
                 ),
             ),
-            (true, true) => ("自己送金", "", "相手: 自分（残高変動なし）".into()),
-            _ => ("送金記録", "", "相手: 不明".into()),
+            (true, true) => (
+                message!("command.history.paid_line.011"),
+                "",
+                message!("command.history.paid_line.012").into(),
+            ),
+            _ => (
+                message!("command.history.paid_line.013"),
+                "",
+                message!("command.history.paid_line.014").into(),
+            ),
         },
     };
     entry(
@@ -351,7 +382,11 @@ fn paid_line(payment: &Payment, me: i64) -> String {
         payment.time,
         format!("P{}", payment.id),
         payment.contract_id,
-        balance_line("取引後残高", payment.balance_after, &payment.unit),
+        balance_line(
+            message!("command.history.paid_line.015"),
+            payment.balance_after,
+            &payment.unit,
+        ),
     )
 }
 
@@ -365,11 +400,15 @@ fn entry(
     balance: String,
 ) -> String {
     let mut row = format!(
-        "{heading}\n{party}\n{balance}\n日時: {}\n取引ID: `{reference}`",
-        format_date_time(time)
+        message!("command.history.entry.001"),
+        format_date_time(time),
+        balance = balance,
+        heading = heading,
+        party = party,
+        reference = reference
     );
     if let Some(id) = contract_id {
-        row.push_str(&format!(" / 契約ID: `{id}`"));
+        row.push_str(&format!(message!("command.history.entry.002"), id = id));
     }
     row
 }
@@ -377,7 +416,7 @@ fn entry(
 fn balance_line(label: &str, balance: Option<i64>, unit: &str) -> String {
     match balance {
         Some(balance) => format!("{label}: **{}** {}", amount_text(balance), unit_text(unit)),
-        None => format!("{label}: 未記録"),
+        None => format!(message!("command.history.balance_line.001"), label = label),
     }
 }
 
@@ -411,7 +450,7 @@ fn contract_identity(payment: &Payment) -> String {
             client_id,
             payment.contract_client_name.as_deref(),
         ),
-        None => "契約".to_owned(),
+        None => message!("command.history.contract_identity.001").to_owned(),
     }
 }
 
@@ -419,20 +458,24 @@ fn contract_identity(payment: &Payment) -> String {
 fn issued_line(issuance: &Issuance) -> String {
     let to = match issuance.receiver_discord_id {
         Some(discord_id) => mention(discord_id),
-        None => "アプリケーション".to_owned(),
+        None => message!("command.history.issued_line.001").to_owned(),
     };
 
     entry(
         format!(
-            "**発行　+{}** {}",
+            message!("command.history.issued_line.002"),
             amount_text(issuance.amount),
             unit_text(&issuance.unit)
         ),
-        format!("発行先: {to}"),
+        format!(message!("command.history.issued_line.003"), to = to),
         issuance.time,
         format!("I{}", issuance.id),
         None,
-        balance_line("発行枠残高", issuance.pool_balance_after, &issuance.unit),
+        balance_line(
+            message!("command.history.issued_line.004"),
+            issuance.pool_balance_after,
+            &issuance.unit,
+        ),
     )
 }
 
@@ -444,7 +487,7 @@ fn counterparty(discord_id: Option<i64>, payment: &Payment) -> String {
         Some(discord_id) => mention(discord_id),
         None => match &payment.contract_client_id {
             Some(_) => contract_identity(payment),
-            None => "アプリケーション".to_owned(),
+            None => message!("command.history.counterparty.001").to_owned(),
         },
     }
 }

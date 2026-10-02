@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Nothing to do here: the page is prose. The block is what makes the file a
-  // module, which is what the shell's import of it resolves against.
+  import Message from "../Message.svelte";
+  import { t } from "../i18n";
 </script>
 
 <!--
@@ -9,17 +9,18 @@
   never wrong enough to be caught — so this says only what the documents say.
 -->
 <h1>VirtualCrypto</h1>
-<p>Discord のサーバーで使う通貨を扱うためのサービスです。</p>
+<p>{t("landing.description")}</p>
 
-<p><a href="/invite">Discord サーバーに導入する</a></p>
-<p>導入後は、Discord で <code>/help</code> を入力すると使い方を確認できます。</p>
+<p><a href="/invite">{t("landing.invite")}</a></p>
+{#snippet command()}<code>/help</code>{/snippet}
+<p><Message id="landing.help" slots={{ command }} /></p>
 
 <!-- OAuth consent verifies identity with Discord for each request; there is no site login. -->
 
 <!-- An ordinary link: it reloads, and the API answers it with this document.
      The documentation is the service's own, rendered from the same content the
      bot's `/help` answers with. -->
-<p><a href="/document">使い方</a></p>
+<p><a href="/document">{t("landing.documentation")}</a></p>
 
 <style>
   h1 {

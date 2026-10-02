@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Message from "../Message.svelte";
+  import { t } from "../i18n";
   import { onMount, tick } from "svelte";
 
   import { flatten, load, type Guide, type Page } from "../docs";
@@ -29,7 +31,8 @@
     try {
       guide = await load();
     } catch (error) {
-      failure = String(error);
+      console.error(error);
+      failure = t("documentation.networkError");
       return;
     }
 
@@ -57,14 +60,15 @@
   </nav>
 
   {#if failure !== null}
-    <h1>読み込めませんでした</h1>
+    <h1>{t("documentation.loadFailed")}</h1>
     <p>{failure}</p>
-    <p>時間をおいて、もう一度開いてください。</p>
+    <p>{t("documentation.tryAgain")}</p>
   {:else if guide === null}
-    <p>読み込んでいます…</p>
+    <p>{t("documentation.loading")}</p>
   {:else if here === null}
-    <h1>見つかりません</h1>
-    <p>そのページはありません。<a href="/document">はじめに</a>からどうぞ。</p>
+    <h1>{t("documentation.notFound")}</h1>
+    {#snippet introduction()}<a href="/document">{t("documentation.introduction")}</a>{/snippet}
+    <p><Message id="documentation.missing" slots={{ introduction }} /></p>
   {:else}
     <h1>{here.title}</h1>
 
@@ -81,25 +85,25 @@
           <h2>/{command.name}</h2>
           <p>
             <Spans spans={command.description} />
-            {#if command.admin_only}<strong>（管理者権限が必要）</strong>{/if}
+            {#if command.admin_only}<strong>{t("documentation.adminOnly")}</strong>{/if}
           </p>
 
           {#if command.usage.length > 0}
-            <h3>使い方</h3>
+            <h3>{t("documentation.usage")}</h3>
             <pre><code>{command.usage.join("\n")}</code></pre>
           {/if}
 
           {#if command.options.length > 0}
-            <h3>引数</h3>
+            <h3>{t("documentation.arguments")}</h3>
             <ul class="options">
               {#each flatten(command.options) as placed}
                 <li style={`margin-left: ${placed.depth}rem`}>
                   <code>{placed.option.name}</code>
                   {#if placed.option.kind !== "subcommand"}
-                    {#if placed.option.required}（必須）{:else}（任意）{/if}
+                    {#if placed.option.required}{t("documentation.required")}{:else}{t("documentation.optional")}{/if}
                   {/if}
                   {#if placed.option.autocomplete}
-                    <span class="tag">候補から選択</span>
+                    <span class="tag">{t("documentation.autocomplete")}</span>
                   {/if}
                   <Spans spans={placed.option.description} />
                 </li>
@@ -136,9 +140,9 @@
           {/if}
 
           {#if endpoint.example !== null}
-            <p class="example">リクエスト</p>
+            <p class="example">{t("documentation.request")}</p>
             <Body blocks={[{ kind: "code", lines: endpoint.example.request }]} />
-            <p class="example">応答</p>
+            <p class="example">{t("documentation.response")}</p>
             <Body blocks={[{ kind: "code", lines: endpoint.example.response }]} />
           {/if}
 
@@ -151,7 +155,7 @@
           {/if}
 
           {#if endpoint.errors.length > 0}
-            <p class="example">エラー</p>
+            <p class="example">{t("documentation.errors")}</p>
             <ul>
               {#each endpoint.errors as line}
                 <li><Spans spans={line} /></li>

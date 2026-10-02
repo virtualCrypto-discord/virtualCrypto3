@@ -22,6 +22,7 @@ WORKDIR /src
 # needed here — the reason that directory is in the repository at all.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ ./crates/
+COPY i18n/ ./i18n/
 COPY .sqlx/ ./.sqlx/
 
 ENV SQLX_OFFLINE=true

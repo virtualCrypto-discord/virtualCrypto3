@@ -113,10 +113,14 @@ pub(super) fn application_identity(
             // A self-chosen name must not render a Bot mention or another identity line.
             let name = client_name
                 .filter(|name| !name.is_empty())
-                .unwrap_or("（名前なし）")
+                .unwrap_or(message!("command.mod.application_identity.001"))
                 .replace('`', "｀")
                 .replace(['\r', '\n'], " ");
-            format!("ボット未連携: `{name}`\nアプリケーションID: `{client_id}`")
+            format!(
+                message!("command.mod.application_identity.002"),
+                client_id = client_id,
+                name = name
+            )
         }
     }
 }
@@ -251,7 +255,7 @@ pub fn invite(state: &AppState) -> Value {
     let links = state.links();
 
     let description = format!(
-        "[Botの招待]({bot})\n[サポートサーバーの招待]({support})",
+        message!("command.mod.invite.001"),
         bot = links.invite_url,
         support = links.support_guild_invite_url,
     );
