@@ -259,7 +259,10 @@ previously created Machines.
    - `VCRYPTO_WEBHOOK_PROXY_KEY`
 
    The proxy certificate/key must be accepted by the webhook proxy; encode PEM
-   newlines as `#`. Keep secrets out of Git and terminal command arguments. The
+   newlines as `#`. When using `flyctl secrets import`, wrap the entire value in
+   double quotes (`VCRYPTO_WEBHOOK_PROXY_CERT="-----BEGIN CERTIFICATE-----#..."`),
+   including the private-key value: unquoted `#` starts a comment and truncates
+   the secret. Keep secrets out of Git and terminal command arguments. The
    staging origin and callback URL are already set in `fly.staging.toml`; the Bot
    invite URL defaults to the configured staging client ID.
 
