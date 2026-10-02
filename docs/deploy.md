@@ -270,12 +270,14 @@ previously created Machines.
 
    ```sh
    set -o pipefail
-   flyctl tokens create deploy -a virtualcrypto-staging --expiry 2160h |
+   flyctl tokens create deploy -a virtualcrypto-staging --name github-actions-staging-cd --expiry 175200h |
      gh secret set FLY_STAGING_API_TOKEN --env staging
    ```
 
-   Rotate this token before its 90-day expiry. After the workflow is merged to
-   `main`, pushes deploy automatically. For an initial local deployment:
+   This app-scoped token uses Fly's standard 20-year lifetime (175200 hours),
+   avoiding a recurring 90-day manual renewal requirement. It is not non-expiring.
+   After the workflow is merged to `main`, pushes deploy automatically.
+   For an initial local deployment:
 
    ```sh
    flyctl deploy --config fly.staging.toml --remote-only --ha=false
