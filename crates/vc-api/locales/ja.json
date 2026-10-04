@@ -166,7 +166,6 @@
   "command.grant.page.005": "取り消す",
   "command.grant.page.006": "詳細",
   "command.grant.currency_label.001": "すべての通貨",
-  "command.grant.currency_label.002": "{}",
   "command.grant.currency_label.003": "{}種類の通貨（「詳細」ですべて確認できます）",
   "command.grant.review_screen.001": "すべての通貨",
   "command.grant.review_screen.002": "あなたのアカウント ({id})",
