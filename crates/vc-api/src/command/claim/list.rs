@@ -6,6 +6,7 @@ use super::{format_date_time, user_identity};
 use crate::claim_list::{ListOptions, Page, Position, encode_claim_ids};
 use crate::command::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, get_user,
+    money_text,
 };
 use crate::custom_id::ui::button::{Action, ListScope, claim_action, claim_list};
 use crate::state::AppState;
@@ -269,8 +270,7 @@ fn field(position: Position, claim: &ClaimView, me: i64) -> Value {
         ),
         format!(
             message!("command.claim.list.field.002"),
-            claim.amount.unwrap_or_default(),
-            unit = unit
+            money_text(claim.amount.unwrap_or_default(), &unit)
         ),
     ];
     lines.extend(users(position, claim));

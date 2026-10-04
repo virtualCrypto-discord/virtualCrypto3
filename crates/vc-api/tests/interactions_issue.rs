@@ -184,7 +184,7 @@ async fn issuing_more_than_the_pool_is_refused(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 発行枠が足りません。");
+    assert_error(&response, "**エラー**\n発行枠が足りません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -197,7 +197,7 @@ async fn issuing_needs_the_administrator_bit(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 実行には管理者権限が必要です。");
+    assert_error(&response, "**エラー**\n実行には管理者権限が必要です。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -213,7 +213,7 @@ async fn issuing_in_a_direct_message_is_refused(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: DMでは実行できません。");
+    assert_error(&response, "**エラー**\nDMでは実行できません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -397,7 +397,7 @@ async fn a_database_failure_rolls_back_issuance_and_updates_the_private_response
     .await;
     assert_error(
         &response,
-        "発行できたか確認できませんでした。`/history issue` で確認してください。",
+        "**エラー**\n発行できたか確認できませんでした。`/history issue` で確認してください。",
     );
     assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
     assert_eq!(

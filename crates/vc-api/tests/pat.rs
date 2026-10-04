@@ -415,7 +415,7 @@ async fn a_name_can_only_be_used_once(pool: PgPool) {
     assert_eq!(accent(&again), COLOR_ERROR, "{:?}", again.body);
     assert_eq!(
         lines(&again)[0],
-        "**agent** という名前のトークンはすでにあります。別の名前にしてください。"
+        "**エラー**\n**agent** という名前のトークンはすでにあります。別の名前にしてください。"
     );
     assert_eq!(names_of(&pool).await.len(), 1, "the first one is still it");
     assert_eq!(
@@ -449,7 +449,7 @@ async fn a_name_longer_than_the_option_allows_is_refused(pool: PgPool) {
     assert!(
         lines(&refused)
             .iter()
-            .any(|line| line == "名前は1〜32文字で指定してください。"),
+            .any(|line| line == "**エラー**\n名前は1〜32文字で指定してください。"),
         "{:?}",
         lines(&refused)
     );

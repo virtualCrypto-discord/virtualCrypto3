@@ -5,6 +5,7 @@ use vc_core::claim::{ClaimCurrency, ClaimView, Transition, TransitionError};
 use super::{format_date_time, render_error, sub_option, user_identity};
 use crate::command::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, as_int, get_user,
+    money_text,
 };
 use crate::state::AppState;
 
@@ -121,8 +122,7 @@ fn render(
         user_identity(&claim.claimant),
         user_identity(&claim.payer),
         format_date_time(claim.inserted_at),
-        amount = amount,
-        unit = unit
+        amount = money_text(amount, &unit)
     );
 
     let mut children = Vec::new();
@@ -260,7 +260,9 @@ fn render_quotation(currency: &ClaimCurrency, current: i64, quoted: i64) -> Stri
     let warning = if current < quoted { "⚠" } else { "" };
 
     format!(
-        "**{name}**: `{current}{unit}` - `{quoted}{unit}` => `{}{unit}`{warning}",
-        current - quoted
+        "**{name}**: {} - {} => {}{warning}",
+        money_text(current, &unit),
+        money_text(quoted, &unit),
+        money_text(current - quoted, &unit)
     )
 }

@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
-    as_int, get_user, mention, value_text,
+    as_int, error_text, get_user, mention, value_text,
 };
 use crate::components::{
     ButtonStyle, action_row, button, container, ephemeral, icon_button, section, text,
@@ -91,7 +91,7 @@ async fn currency(
     let unit = option(chosen, "unit", "mute option unit")?;
 
     let Some(account) = account(state, me).await? else {
-        return Ok(no_account(COLOR_ERROR));
+        return Ok(error_screen(message!("command.mute.no_account.001")));
     };
 
     let muted =
@@ -112,13 +112,10 @@ async fn currency(
             ))],
             COLOR_BRAND,
         )),
-        Err(MuteError::NoSuchCurrency) => Ok(screen(
-            vec![text(format!(
-                message!("command.mute.currency.003"),
-                unit = unit
-            ))],
-            COLOR_ERROR,
-        )),
+        Err(MuteError::NoSuchCurrency) => Ok(error_screen(&format!(
+            message!("command.mute.currency.003"),
+            unit = unit
+        ))),
         Err(error) => Err(database(error)),
     }
 }
@@ -133,7 +130,7 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
     };
 
     let Some(account) = account(state, me).await? else {
-        return Ok(no_account(COLOR_ERROR));
+        return Ok(error_screen(message!("command.mute.no_account.001")));
     };
 
     let muted =
@@ -156,17 +153,11 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
         )),
         // Nothing of theirs can be in a list before they have an account here, so there is no
         // mute to make: said as what is missing rather than as a refusal.
-        Err(MuteError::NoSuchUser) => Ok(screen(
-            vec![text(format!(
-                message!("command.mute.user.003"),
-                mention(target)
-            ))],
-            COLOR_ERROR,
-        )),
-        Err(MuteError::Yourself) => Ok(screen(
-            vec![text(message!("command.mute.user.004"))],
-            COLOR_ERROR,
-        )),
+        Err(MuteError::NoSuchUser) => Ok(error_screen(&format!(
+            message!("command.mute.user.003"),
+            mention(target)
+        ))),
+        Err(MuteError::Yourself) => Ok(error_screen(message!("command.mute.user.004"))),
         Err(error) => Err(database(error)),
     }
 }
@@ -174,7 +165,7 @@ async fn user(state: &AppState, chosen: Option<&Value>, me: i64) -> Result<Value
 /// `/mute list`: what the caller is not seeing, a page at a time.
 async fn list(state: &AppState, me: i64, number: i64, kind: i64) -> Result<Value, CommandError> {
     let Some(account) = account(state, me).await? else {
-        return Ok(no_account(COLOR_BRAND));
+        return Ok(no_account());
     };
 
     page(state, account, number, kind).await
@@ -297,8 +288,11 @@ async fn account(state: &AppState, discord_id: i64) -> Result<Option<i32>, Comma
 
 /// A screen for the caller who has no account here: every answer in this module is about what
 /// their own lists show, and somebody with no account has none.
-fn no_account(color: i64) -> Value {
-    screen(vec![text(message!("command.mute.no_account.001"))], color)
+fn no_account() -> Value {
+    screen(
+        vec![text(message!("command.mute.no_account.001"))],
+        COLOR_BRAND,
+    )
 }
 
 /// A database failure as the interaction layer answers one: the only refusal in
@@ -308,6 +302,11 @@ fn database(error: MuteError) -> CommandError {
         MuteError::Database(error) => CommandError::from(vc_core::Error::Database(error)),
         other => CommandError::Internal(ApiError::Internal(format!("{other:?}"))),
     }
+}
+
+/// A refusal: the screen below in the error accent, with the heading every error screen has.
+fn error_screen(sentence: &str) -> Value {
+    screen(vec![text(error_text(sentence))], COLOR_ERROR)
 }
 
 /// An ephemeral screen in one colour, which is the shape every answer here has: a mute is one

@@ -7,8 +7,8 @@ use tokio::time::{Instant, timeout_at};
 use vc_core::payment::PayError;
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, get_user, mention,
-    option_text, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, error_text, get_user,
+    mention, money_text, option_text,
 };
 use crate::state::AppState;
 
@@ -113,7 +113,7 @@ async fn handle_until(
     // Never label it as unpaid or retry it. The durable interaction receipt
     // prevents a replay from executing the payment again.
     match timeout_at(commit_deadline, tx.commit()).await {
-        Ok(Ok(())) => Ok(render_ok(sender, &receiver, amount, &unit)),
+        Ok(Ok(())) => Ok(render_ok(sender, &receiver, amount_value, &unit)),
         Ok(Err(error)) => {
             tracing::warn!(%error, "Discord payment commit failed");
             Ok(uncertain_result())
@@ -131,7 +131,7 @@ async fn handle_until(
 /// — an embed is content and a message with components has none — so the sentence is a Text
 /// Display in a container with the accent the embed carried. `allowed_mentions` stays, because a
 /// mention in a Text Display pings exactly as one in content does.
-fn render_ok(sender: i64, receiver: &str, amount: &Value, unit: &str) -> Value {
+fn render_ok(sender: i64, receiver: &str, amount: i64, unit: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {
@@ -143,8 +143,7 @@ fn render_ok(sender: i64, receiver: &str, amount: &Value, unit: &str) -> Value {
                     message!("command.pay.render_ok.001"),
                     mention(sender),
                     mention(receiver),
-                    value_text(amount),
-                    unit,
+                    money_text(amount, unit),
                 ))],
             )],
             "allowed_mentions": { "parse": [] },
@@ -162,7 +161,7 @@ fn render_error(content: &str) -> Value {
             "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
             "components": [crate::components::container(
                 Some(COLOR_ERROR as u32),
-                vec![crate::components::text(content)],
+                vec![crate::components::text(error_text(content))],
             )],
             "allowed_mentions": { "parse": [] },
         },

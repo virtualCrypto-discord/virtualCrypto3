@@ -10,6 +10,7 @@ use support::{
     DEFAULT_PERMISSIONS, Response, execute_from_dm, fake, fake_with_guild, interaction,
     setup_money, state,
 };
+use vc_api::command::amount_text;
 
 const COLOR_BRAND: i64 = 0x0062_21ED;
 const COLOR_ERROR: i64 = 0x00EA_3875;
@@ -68,12 +69,13 @@ fn embed(name: &str, unit: &str, amount: i64) -> Value {
         "accent_color": COLOR_BRAND,
         "components": [
             { "type": 10, "content": format!("**通貨名: {name}**") },
-            { "type": 10, "content": "**サーバー名**\nTestGuild" },
-            { "type": 10, "content": format!("**単位**\n`{unit}`") },
-            { "type": 10, "content": format!("**総発行量**\n`{TOTAL}{unit}`") },
-            { "type": 10, "content": format!("**発行枠**\n`{POOL}{unit}`") },
-            { "type": 10, "content": format!("**あなたの残高**\n`{amount}{unit}`") },
-            { "type": 10, "content": "**削除可能**\nはい" },
+            { "type": 10, "content": "サーバー名: TestGuild" },
+            { "type": 10, "content": format!(
+                "単位: `{unit}`\n総発行量: **{}** `{unit}`\n発行枠: **{}** `{unit}`\nあなたの残高: **{}** `{unit}`\n削除可能: はい",
+                amount_text(TOTAL),
+                amount_text(POOL),
+                amount_text(amount),
+            ) },
             { "type": 10, "content": format!("-# {FOOTER}") },
         ],
     }])
@@ -224,7 +226,7 @@ async fn a_guild_without_an_icon_has_no_icon_url(pool: PgPool) {
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(
         guild_line(&response.body),
-        "**サーバー名**\nTestGuild",
+        "サーバー名: TestGuild",
         "{}",
         response.body
     );
@@ -265,7 +267,7 @@ async fn a_guild_icon_url_is_webp(pool: PgPool) {
     );
     assert_eq!(
         guild_line(&response.body),
-        "**サーバー名**\nTestGuild",
+        "サーバー名: TestGuild",
         "{}",
         response.body
     );
@@ -300,7 +302,7 @@ async fn an_animated_guild_icon_url_is_gif(pool: PgPool) {
     );
     assert_eq!(
         guild_line(&response.body),
-        "**サーバー名**\nTestGuild",
+        "サーバー名: TestGuild",
         "{}",
         response.body
     );

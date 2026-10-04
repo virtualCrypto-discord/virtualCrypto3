@@ -2,8 +2,8 @@ use serde_json::{Map, Value, json};
 use vc_core::currency::{CurrencyInfo, CurrencySelector};
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, as_int, get_user,
-    value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, as_int, error_text,
+    get_user, money_text, unit_text, value_text,
 };
 use crate::state::AppState;
 
@@ -56,8 +56,9 @@ pub async fn handle(
 ///
 /// The embed this replaces had the guild as its **author**, the currency as its **title**, and
 /// four **fields** under them. What a person wants first is which currency this is, so the name
-/// is the title and the guild and the unit are fields beside the four — the guild with its icon
-/// as the section's accessory, where the author's small icon used to sit.
+/// is the title, the guild sits under it with its icon as the section's accessory, where the
+/// author's small icon used to sit, and the fields are `label: value` lines, the way the other
+/// screens list what they show.
 fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -> Value {
     let unit = info.unit.clone().unwrap_or_default();
 
@@ -68,7 +69,7 @@ fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -
         info.name.clone().unwrap_or_default()
     )));
 
-    // The guild name is a field now, and its icon is the accessory that keeps it from being a
+    // The guild name is a line of its own, and its icon is the accessory that keeps it from being a
     // bare sentence: a section is the pairing, and a section needs one — so an icon that is not
     // there leaves a Text Display.
     if let Some(guild) = &guild {
@@ -88,36 +89,32 @@ fn render(info: &CurrencyInfo, amount: i64, guild: Option<Map<String, Value>>) -
         });
     }
 
-    // The fields were `inline`, which is four columns in an embed and four lines here: a Text
-    // Display is a block, so the arrangement is the one thing about this message that components
-    // cannot say the same way.
-    children.push(crate::components::text(format!(
-        message!("command.info.render.004"),
-        unit = unit
-    )));
-    children.push(crate::components::text(format!(
-        message!("command.info.render.005"),
-        info.total_amount,
-        unit = unit
-    )));
-    children.push(crate::components::text(format!(
-        message!("command.info.render.006"),
-        info.pool_amount.unwrap_or(0),
-        unit = unit
-    )));
-    children.push(crate::components::text(format!(
-        message!("command.info.render.007"),
-        amount = amount,
-        unit = unit
-    )));
-    children.push(crate::components::text(format!(
-        message!("command.info.render.008"),
-        if info.is_deletable(vc_core::model::utc_now()) {
-            message!("command.info.render.009")
-        } else {
-            message!("command.info.render.010")
-        }
-    )));
+    // The fields were `inline`, four columns in an embed. A Text Display is a block, so they are
+    // one line each in a single block, as the other screens write theirs.
+    let fields = [
+        format!(message!("command.info.render.004"), unit = unit_text(&unit)),
+        format!(
+            message!("command.info.render.005"),
+            money_text(info.total_amount, &unit)
+        ),
+        format!(
+            message!("command.info.render.006"),
+            money_text(info.pool_amount.unwrap_or(0), &unit)
+        ),
+        format!(
+            message!("command.info.render.007"),
+            money_text(amount, &unit)
+        ),
+        format!(
+            message!("command.info.render.008"),
+            if info.is_deletable(vc_core::model::utc_now()) {
+                message!("command.info.render.009")
+            } else {
+                message!("command.info.render.010")
+            }
+        ),
+    ];
+    children.push(crate::components::text(fields.join("\n")));
     // `-# ` is how a line is written small, which is what the footer was.
     children.push(crate::components::text(message!("command.info.render.011")));
 
@@ -141,7 +138,7 @@ fn render_error(description: &str) -> Value {
             "flags": crate::components::EPHEMERAL | crate::components::IS_COMPONENTS_V2,
             "components": [crate::components::container(
                 Some(COLOR_ERROR as u32),
-                vec![crate::components::text(format!(message!("command.info.render_error.001"), description = description))],
+                vec![crate::components::text(error_text(description))],
             )],
             "allowed_mentions": { "parse": [] },
         },

@@ -9,7 +9,9 @@
 
 use serde_json::{Value, json};
 
-use super::{CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, get_user};
+use super::{
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, CommandError, UPDATE_MESSAGE, get_user, money_text,
+};
 use crate::components::{ButtonStyle, action_row, container, ephemeral, icon_button, text};
 use crate::custom_id::ui::bal::{Page, page_custom_id};
 use crate::error::ApiError;
@@ -69,8 +71,9 @@ async fn page(state: &AppState, me: i64, page: i64, kind: i64) -> Result<Value, 
 
         for balance in &balances.balances {
             children.push(text(format!(
-                "**{}**\n{} {}",
-                balance.name, balance.amount, balance.unit
+                "**{}**\n{}",
+                balance.name,
+                money_text(balance.amount, &balance.unit)
             )));
         }
 

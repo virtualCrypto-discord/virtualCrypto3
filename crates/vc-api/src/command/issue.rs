@@ -7,7 +7,7 @@ use vc_core::issue::{IssueError, Issued};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, as_permissions,
-    is_administrator, mention, value_text,
+    error_text, is_administrator, mention, money_text, value_text,
 };
 use crate::state::AppState;
 
@@ -141,10 +141,8 @@ fn render_ok(receiver: &str, issued: &Issued) -> Value {
             vec![crate::components::text(format!(
                 message!("command.issue.render_ok.001"),
                 mention(receiver),
-                issued.amount,
-                issued.unit,
-                issued.pool_amount,
-                issued.unit,
+                money_text(issued.amount, &issued.unit),
+                money_text(issued.pool_amount, &issued.unit),
             ))],
         )]),
     })
@@ -159,7 +157,7 @@ fn render_error(content: &str) -> Value {
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_ERROR as u32),
-            vec![crate::components::text(content)],
+            vec![crate::components::text(error_text(content))],
         )]),
     })
 }

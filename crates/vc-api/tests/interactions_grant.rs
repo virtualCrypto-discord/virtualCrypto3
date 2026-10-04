@@ -530,7 +530,7 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
+            "**エラー**\n承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
         ]
     );
 }
@@ -617,7 +617,7 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 202, "body: {}", response.body);
-    assert_eq!(texts(&response), ["エラー: この許可は見つかりません。"]);
+    assert_eq!(texts(&response), ["**エラー**\nこの許可は見つかりません。"]);
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
 }
 
@@ -826,7 +826,7 @@ async fn the_command_needs_the_administrator_bit(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
+            "**エラー**\n承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
         ]
     );
 }
@@ -850,7 +850,7 @@ async fn the_command_is_refused_in_a_direct_message(pool: PgPool) {
         0xEA3875
     );
     assert_eq!(response.body["data"]["flags"], 32832);
-    assert_eq!(texts(&response), ["エラー: DMでは実行できません。"]);
+    assert_eq!(texts(&response), ["**エラー**\nDMでは実行できません。"]);
 }
 
 async fn approve_and_confirm(
@@ -1126,7 +1126,7 @@ async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool)
     assert_eq!(
         texts(&dm),
         [
-            "承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
+            "**エラー**\n承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
         ]
     );
     assert!(buttons(&dm).is_empty());

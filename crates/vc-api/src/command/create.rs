@@ -3,7 +3,7 @@ use vc_core::currency::{self, CreateError};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, COLOR_OK, CommandError, as_int, as_permissions,
-    is_administrator, option_text, value_text,
+    error_text, is_administrator, option_text, value_text,
 };
 use crate::state::AppState;
 
@@ -118,10 +118,7 @@ fn render_error(reason: Reason, options: &Map<String, Value>) -> Value {
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_ERROR as u32),
             // The title a line of its own, as the embed had it.
-            vec![crate::components::text(format!(
-                message!("command.create.render_error.001"),
-                reason.message(options)
-            ))],
+            vec![crate::components::text(error_text(&reason.message(options)))],
         )]),
     })
 }

@@ -39,9 +39,9 @@ where
                 "type": super::CHANNEL_MESSAGE_WITH_SOURCE,
                 "data": crate::components::ephemeral(vec![crate::components::container(
                     Some(super::COLOR_ERROR as u32),
-                    vec![crate::components::text(
-                        message!("command.response.text.001")
-                    )],
+                    vec![crate::components::text(super::error_text(message!(
+                        "command.response.text.001"
+                    )))],
                 )]),
             })
         });

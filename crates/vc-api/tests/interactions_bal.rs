@@ -38,7 +38,7 @@ async fn bal_lists_the_currency_the_user_holds(pool: PgPool) {
         texts(&response.body),
         [
             "**残高一覧** (1件)".to_string(),
-            format!("**{}**\n199500 {}", money.name, money.unit),
+            format!("**{}**\n**199,500** `{}`", money.name, money.unit),
         ]
     );
     assert_eq!(
@@ -61,8 +61,8 @@ async fn bal_lists_every_currency_in_unit_order(pool: PgPool) {
         texts(&response.body),
         [
             "**残高一覧** (2件)".to_string(),
-            format!("**{}**\n1000 {}", money.name, money.unit),
-            format!("**{}**\n200000 {}", money.name2, money.unit2),
+            format!("**{}**\n**1,000** `{}`", money.name, money.unit),
+            format!("**{}**\n**200,000** `{}`", money.name2, money.unit2),
         ]
     );
 
@@ -137,7 +137,7 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
         texts(&second.body),
         [
             "**残高一覧** (11件)".to_string(),
-            "**k**\n100 k".to_string(),
+            "**k**\n**100** `k`".to_string(),
         ]
     );
 
@@ -181,7 +181,7 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
         texts(&last.body),
         [
             "**残高一覧** (11件)".to_string(),
-            "**k**\n100 k".to_string(),
+            "**k**\n**100** `k`".to_string(),
         ]
     );
 }
