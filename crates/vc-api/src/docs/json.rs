@@ -220,7 +220,13 @@ pub fn spans(text: &str) -> Vec<Span> {
             && let Some(close) = tail[2..].find("**")
         {
             for inner in spans(&tail[2..2 + close]) {
-                push(&mut out, Span { bold: true, ..inner });
+                push(
+                    &mut out,
+                    Span {
+                        bold: true,
+                        ..inner
+                    },
+                );
             }
             rest = &tail[2 + close + 2..];
             continue;
