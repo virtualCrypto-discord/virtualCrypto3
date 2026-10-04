@@ -17,7 +17,7 @@
   "documentation.errors": "エラー",
   "landing.description": "Discord のサーバーで、独自の通貨を作って使えるようにする Bot です。",
   "landing.invite": "Discord サーバーに導入する",
-  "landing.documentation": "はじめかたを読む",
+  "landing.documentation": "はじめかた",
   "verification.title": "このページについて",
   "verification.description": "VirtualCrypto のアプリケーションと Discord の Bot を接続するための確認用ページです。",
   "verification.scamWarning": "このページの URL を Bot の説明欄に貼り付けてほしいと言われたら、あなたは11割騙されています！",
