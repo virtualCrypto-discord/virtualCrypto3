@@ -15,6 +15,7 @@ export default defineConfig({
       "/api": "http://localhost:8080",
       "/oauth2": "http://localhost:8080",
       "/invite": "http://localhost:8080",
+      "/support": "http://localhost:8080",
     },
   },
 });

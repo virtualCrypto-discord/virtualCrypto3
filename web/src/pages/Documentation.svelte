@@ -50,6 +50,8 @@
 
 <article>
   <nav>
+    <!-- The way back to the landing page, there before the pages have loaded. -->
+    <a class="home" href="/">VirtualCrypto</a>
     {#each guide?.pages ?? [] as page (page.slug)}
       <a
         href={`/document/${page.slug}`}
@@ -183,6 +185,13 @@
 
   nav a {
     color: inherit;
+  }
+
+  nav .home {
+    padding-right: 1rem;
+    border-right: 1px solid #d0d0d0;
+    font-weight: 700;
+    text-decoration: none;
   }
 
   nav a[aria-current="page"] {
