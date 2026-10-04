@@ -190,9 +190,9 @@ impl Span {
 /// `**bold**`, `` `code` `` and `[label](url)`, taken apart.
 ///
 /// Total, and deliberately: a mark with no close is prose, because the
-/// alternative is text that a person wrote and the page does not show. Nothing
-/// nests — a label is text, not more prose — and the three marks are the whole
-/// of the language, which is what keeps this a function rather than a parser.
+/// alternative is text that a person wrote and the page does not show. Only
+/// bold nests — its inside is read again, so code and links keep their marks —
+/// while a label and a code span are text, not more prose.
 pub fn spans(text: &str) -> Vec<Span> {
     let mut out: Vec<Span> = Vec::new();
     let mut rest = text;
@@ -214,17 +214,14 @@ pub fn spans(text: &str) -> Vec<Span> {
         let tail = &rest[at..];
 
         // The mark that starts here, if it closes.
+        // Bold is the one mark whose inside is still prose: a heading like
+        // `**`/create` で…**` keeps its code, and each run inside is bold too.
         if bold == Some(at)
             && let Some(close) = tail[2..].find("**")
         {
-            push(
-                &mut out,
-                Span {
-                    text: tail[2..2 + close].to_owned(),
-                    bold: true,
-                    ..Span::plain("")
-                },
-            );
+            for inner in spans(&tail[2..2 + close]) {
+                push(&mut out, Span { bold: true, ..inner });
+            }
             rest = &tail[2 + close + 2..];
             continue;
         }
@@ -379,6 +376,29 @@ mod tests {
                     code: true,
                     ..Span::plain("")
                 }
+            ]
+        );
+    }
+
+    /// The FAQ's headings are bold and name a command: the code inside keeps
+    /// its mark rather than showing its backticks.
+    #[test]
+    fn marks_inside_bold_are_read() {
+        assert_eq!(
+            marked("**`/create` で失敗する** 説明"),
+            vec![
+                Span {
+                    text: "/create".to_owned(),
+                    bold: true,
+                    code: true,
+                    href: None,
+                },
+                Span {
+                    text: " で失敗する".to_owned(),
+                    bold: true,
+                    ..Span::plain("")
+                },
+                Span::plain(" 説明"),
             ]
         );
     }
