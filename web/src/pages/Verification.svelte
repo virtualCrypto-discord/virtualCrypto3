@@ -8,7 +8,8 @@
   // description. So anything that gets somebody to put this address in a description is
   // doing it for a reason that is not theirs.
   //
-  // The old page's spelling is kept as it was, `紐つける` and all.
+  // The "11割" line is a parody of the warning Discord prints in its developer
+  // console ("11/10 chance you're being scammed"); keep it when rewording.
 </script>
 <div class="columns">
   <div class="column is-7 is-offset-1-desktop">
