@@ -13,9 +13,9 @@ primary_region = "phx"
   dockerfile = "Dockerfile"
 
 [deploy]
-  # The same command the current deployment runs, which this image provides as a
-  # script over `sqlx migrate run`.
-  release_command = "/app/bin/migrate"
+  # The migrations, then registering the slash commands with the application, so
+  # Discord's list always matches the deployed code. The image provides it as a script.
+  release_command = "/app/bin/release"
 
 [http_service]
   internal_port = 8080
