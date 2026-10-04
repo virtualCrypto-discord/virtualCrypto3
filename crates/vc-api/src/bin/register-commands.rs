@@ -39,6 +39,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the application not being the bot's.
     println!("{status}");
 
+    // Anything else is a failure, so that a deploy running this stops on it.
+    if !(200..300).contains(&status) {
+        return Err(format!("Discord answered {status}").into());
+    }
+
     Ok(())
 }
 

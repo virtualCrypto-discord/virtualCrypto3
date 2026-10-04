@@ -197,6 +197,16 @@ for both proxy and direct transports. The limit also applies while streaming
 responses without Content-Length. Oversized bodies are discarded and cannot
 satisfy a successful PING check; refusal status codes still retain their meaning.
 
+## Release command
+
+Both `fly.toml` and `fly.staging.toml` run `/app/bin/release` before the rollout:
+`sqlx migrate run` (arguments to the script are passed to it), then
+`register-commands`, which overwrites the application's global slash commands with
+the current list using `VCRYPTO_BOT_TOKEN` and `VCRYPTO_CLIENT_ID`. No manual
+`just register-commands` is needed after a deploy; a failed registration (any
+non-2xx answer from Discord) fails the deploy before the rollout. Migrations that
+already ran are not rolled back by that failure.
+
 ## The frontend
 
 `web/dist` is not committed; CI builds it (`web` job) and a deployment packages the
@@ -221,8 +231,8 @@ The `deploy-staging` job in `.github/workflows/ci.yml` runs after all three CI j
 succeed on a push to `main`. Actions → ci → Run workflow on `main` also checks and
 deploys again. Pull requests and manual runs on other branches never deploy.
 Deployments are serialized without cancelling an in-progress migration. The image
-build includes the SPA, and `sqlx migrate run` runs before the rollout, allowing
-60 seconds to connect to a sleeping database. `--ha=false`
+build includes the SPA, and the release command runs before the rollout, allowing
+60 seconds to connect to a sleeping database (see "Release command" above). `--ha=false`
 avoids provisioning a spare Machine on the first deploy; it does not remove any
 previously created Machines.
 

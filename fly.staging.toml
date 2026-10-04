@@ -13,8 +13,9 @@ primary_region = "iad"
   SECURE_COOKIES = "true"
 
 [deploy]
-  # Allow time for the stopped database to boot through Flycast.
-  release_command = "/app/bin/sqlx migrate run --source /app/migrations --connect-timeout 60"
+  # Migrations (allowing the stopped database time to boot through Flycast), then
+  # registering the slash commands with the staging application.
+  release_command = "/app/bin/release --connect-timeout 60"
 
 [http_service]
   internal_port = 8080
