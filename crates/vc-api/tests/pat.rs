@@ -413,8 +413,10 @@ async fn a_name_can_only_be_used_once(pool: PgPool) {
     .await;
 
     assert_eq!(accent(&again), COLOR_ERROR, "{:?}", again.body);
-    assert!(lines(&again)[0].contains("/pat list"));
-    assert!(lines(&again)[0].contains("失効"));
+    assert_eq!(
+        lines(&again)[0],
+        "**agent** という名前のトークンはすでにあります。別の名前にしてください。"
+    );
     assert_eq!(names_of(&pool).await.len(), 1, "the first one is still it");
     assert_eq!(
         get(
@@ -447,7 +449,7 @@ async fn a_name_longer_than_the_option_allows_is_refused(pool: PgPool) {
     assert!(
         lines(&refused)
             .iter()
-            .any(|line| line == "名前は1〜32文字です。"),
+            .any(|line| line == "名前は1〜32文字で指定してください。"),
         "{:?}",
         lines(&refused)
     );
@@ -547,7 +549,7 @@ async fn an_account_holds_at_most_twenty_five_tokens(pool: PgPool) {
 
     assert!(sentence.contains("25個まで"), "{sentence}");
     assert!(
-        sentence.contains("/pat list") && sentence.contains("「失効」ボタン"),
+        sentence.contains("/pat list") && sentence.contains("失効させてください"),
         "the way to find what to give up, and what to do about it: {sentence}"
     );
     assert_eq!(names_of(&pool).await.len(), 25, "and nothing more was made");
@@ -761,12 +763,11 @@ async fn guild_creation_is_private_and_explains_the_authority_and_one_time_displ
     assert_private(&made);
     let prose = lines(&made).join("\n");
     for meaning in [
-        "本人だけ",
-        "一度だけ",
+        "一度しか表示されません",
         "有効期限はありません",
         "あなたとして",
         "送金",
-        "権限は絞れません",
+        "他人に見せないでください",
         "/pat list",
     ] {
         assert!(prose.contains(meaning), "missing explanation: {meaning}");

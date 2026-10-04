@@ -114,7 +114,7 @@ async fn issuing_from_the_pool_credits_the_receiver(pool: PgPool) {
             "components": [{
                 "type": 10,
                 "content": format!(
-                    "✅ <@{}>へ**100** `{}`発行されました。\n残りの発行枠: **400** `{}`",
+                    "✅ <@{}>に **100** `{}` を発行しました。\n残りの発行枠: **400** `{}`",
                     money.user2, money.unit, money.unit
                 ),
             }],
@@ -157,7 +157,7 @@ async fn issuing_without_an_amount_issues_the_whole_pool(pool: PgPool) {
     assert_eq!(
         response["components"][0]["components"][0]["content"],
         json!(format!(
-            "✅ <@{}>へ**500** `{}`発行されました。\n残りの発行枠: **0** `{}`",
+            "✅ <@{}>に **500** `{}` を発行しました。\n残りの発行枠: **0** `{}`",
             money.user2, money.unit, money.unit
         ))
     );
@@ -184,7 +184,7 @@ async fn issuing_more_than_the_pool_is_refused(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨が不足しています。");
+    assert_error(&response, "エラー: 発行枠が足りません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -397,7 +397,7 @@ async fn a_database_failure_rolls_back_issuance_and_updates_the_private_response
     .await;
     assert_error(
         &response,
-        "発行結果を確認できませんでした。発行履歴を確認してください。",
+        "発行できたか確認できませんでした。`/history issue` で確認してください。",
     );
     assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
     assert_eq!(

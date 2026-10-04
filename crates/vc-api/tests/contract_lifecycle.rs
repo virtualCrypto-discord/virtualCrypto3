@@ -47,7 +47,7 @@ async fn settled_contracts_are_not_listed_as_open(pool: PgPool) {
     assert!(
         response
             .to_string()
-            .contains("あなたが対象になっている契約はありません")
+            .contains("あなたが対象の契約はありません")
     );
     assert!(open.contracts.is_empty());
     assert_eq!(

@@ -145,15 +145,15 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
     let said = texts(&response);
     assert_eq!(
         said[0],
-        "**契約** (1件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。"
+        "**契約** (1件)\n承認すると、その額の通貨がロックされ、アプリケーションが使えるようになります。"
     );
     assert_eq!(
         said[1],
         format!(
-            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\n\
+            "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n\
          （nyan） — 承認待ち\n\
          あなたの分: 100／未回答 ・ 承認 0/1 ・ 残り 0\n\
-         送金先: 制限なし\n\
+         支払先: 指定なし\n\
          期限: なし（いつでも取り消せます）"
         )
     );
@@ -209,12 +209,12 @@ async fn fixed_receivers_and_unrestricted_contracts_are_distinguishable(pool: Pg
         let text = children[row - 1]["content"].as_str().unwrap();
         match receiver {
             Some(receiver) => {
-                assert!(text.contains(&format!("送金先: <@{receiver}> に限定")));
-                assert!(!text.contains("制限なし"));
+                assert!(text.contains(&format!("支払先: <@{receiver}> のみ")));
+                assert!(!text.contains("指定なし"));
             }
             None => {
-                assert!(text.contains("送金先: 制限なし"));
-                assert!(!text.contains("に限定"));
+                assert!(text.contains("支払先: 指定なし"));
+                assert!(!text.contains("> のみ"));
             }
         }
     }
@@ -248,7 +248,7 @@ async fn same_named_applications_use_their_own_client_id_or_bound_bot(pool: PgPo
         .unwrap();
     let response = interaction(router(&pool, recorded.clone()), command.clone()).await;
     let said = texts(&response);
-    assert!(said[1].starts_with("ボット未連携: `an application`\n"));
+    assert!(said[1].starts_with("Bot 未接続: `an application`\n"));
     assert!(said[2].starts_with(&format!("<@{bot}>\n")));
     assert!(!said[2].contains("an application"));
     assert!(!said[2].contains(&client_id));
@@ -266,7 +266,7 @@ async fn same_named_applications_use_their_own_client_id_or_bound_bot(pool: PgPo
         .unwrap();
     let response = interaction(router(&pool, recorded), command).await;
     assert!(texts(&response)[2].starts_with(&format!(
-        "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\n"
+        "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n"
     )));
 }
 
@@ -289,7 +289,7 @@ async fn an_unbound_name_cannot_render_a_bot_mention_or_another_heading(pool: Pg
     )
     .await;
     assert!(texts(&response)[1].starts_with(
-        "ボット未連携: `｀ <@700000000000000001>  **bound bot**`\nアプリケーションID: `"
+        "Bot 未接続: `｀ <@700000000000000001>  **bound bot**`\nアプリケーションID: `"
     ));
 }
 
@@ -310,13 +310,7 @@ async fn a_user_who_is_named_in_nothing_says_so(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(
-        texts(&response),
-        [
-            "あなたが対象になっている契約はありません。アプリケーションが契約を作ると、\
-          ここに承認待ちとして並びます。"
-        ]
-    );
+    assert_eq!(texts(&response), ["あなたが対象の契約はありません。"]);
     assert!(buttons(&response).is_empty());
 }
 
@@ -354,10 +348,10 @@ async fn approving_from_the_button_locks_it(pool: PgPool) {
     assert_eq!(
         said[1],
         format!(
-            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\n\
+            "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n\
          （nyan） — 全員承認済み\n\
          あなたの分: 100／承認済み ・ 承認 1/1 ・ 残り 100\n\
-         送金先: 制限なし\n\
+         支払先: 指定なし\n\
          期限: なし（いつでも取り消せます）"
         )
     );
@@ -394,10 +388,7 @@ async fn refusing_from_the_button_ends_it(pool: PgPool) {
     );
     assert_eq!(
         texts(&response),
-        [
-            "あなたが対象になっている契約はありません。アプリケーションが契約を作ると、\
-          ここに承認待ちとして並びます。"
-        ],
+        ["あなたが対象の契約はありません。"],
         "a contract that is over is not shown"
     );
 }
@@ -420,7 +411,7 @@ async fn somebody_elses_contract_is_refused(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
-        ["エラー: その契約はあなたを対象にしていません。"]
+        ["エラー: あなたはこの契約の対象ではありません。"]
     );
     assert_eq!(balance(&pool, STRANGER).await, 0);
 }
@@ -456,7 +447,7 @@ async fn a_running_contract_offers_no_withdraw(pool: PgPool) {
 
     assert_eq!(refused.status, 202, "body: {}", refused.body);
     assert!(
-        texts(&refused)[0].starts_with("エラー: その契約には今この操作ができません。"),
+        texts(&refused)[0].starts_with("エラー: この契約には今この操作ができません。"),
         "{:?}",
         texts(&refused)
     );
@@ -512,7 +503,7 @@ async fn the_sixth_contract_is_a_page_and_a_count(pool: PgPool) {
     let said = texts(&response);
     assert_eq!(
         said[0],
-        "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。"
+        "**契約** (7件)\n承認すると、その額の通貨がロックされ、アプリケーションが使えるようになります。"
     );
 
     // Five shown, newest first, and each with the two answers a pending contract
@@ -569,7 +560,7 @@ async fn the_arrows_reach_the_rest_of_the_list(pool: PgPool) {
     );
     assert_eq!(
         texts(&second)[0],
-        "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。",
+        "**契約** (7件)\n承認すると、その額の通貨がロックされ、アプリケーションが使えるようになります。",
         "the count is the list's, not the page's"
     );
 
@@ -609,7 +600,7 @@ async fn the_arrows_reach_the_rest_of_the_list(pool: PgPool) {
         assert_eq!(back.body["type"], 7, "the message is updated, not added to");
         assert_eq!(
             texts(&back)[0],
-            "**契約** (7件)\n承認すると、その分の通貨がロックされ、アプリケーションが操作できるようになります。"
+            "**契約** (7件)\n承認すると、その額の通貨がロックされ、アプリケーションが使えるようになります。"
         );
 
         let offered = buttons(&back);

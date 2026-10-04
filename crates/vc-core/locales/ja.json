@@ -5,9 +5,9 @@
   "delegation.description.004": "あなたの契約を閲覧する",
   "delegation.description.005": "あなたの契約の支払い履歴を閲覧する",
   "delegation.description.006": "あなたのアカウントから送金する",
-  "delegation.description.007": "あなたからの請求を作成・閲覧する",
+  "delegation.description.007": "あなたとして請求を作成・閲覧する",
   "delegation.description.008": "あなた宛ての請求を閲覧・承認し、あなたのアカウントから支払う",
   "delegation.description.009": "あなた宛ての請求を閲覧・拒否する",
-  "delegation.description.010": "あなたからの請求を閲覧・取り消す",
+  "delegation.description.010": "あなたが作った請求を閲覧・取り消しする",
   "delegation.description.011": "あなたの請求を閲覧し、そのメタデータを編集・削除する"
 }

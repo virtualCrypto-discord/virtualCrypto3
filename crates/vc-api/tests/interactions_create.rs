@@ -64,8 +64,8 @@ fn assert_ok(response: &Response, unit: &str) {
             "components": [{
                 "type": 10,
                 "content": format!(
-                    "✅ 通貨の作成に成功しました！ `/info unit: {unit}`コマンドで通貨の情報をご覧ください。\n\
-                     削除したい場合は、72時間以内に`/delete`コマンドを実行してください。"
+                    "✅ 通貨を作成しました。`/info unit:{unit}` で情報を確認できます。\n\
+                     72時間以内なら `/delete` で削除できます。"
                 ),
             }],
         }])
@@ -132,11 +132,11 @@ async fn the_created_message_links_the_commands_it_names(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(
-        rendered.contains("</info:7> `unit: ub`コマンドで通貨の情報をご覧ください。"),
+        rendered.contains("</info:7> `unit:ub` で情報を確認できます。"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("72時間以内に</delete:8>コマンドを実行してください。"),
+        rendered.contains("72時間以内なら </delete:8> で削除できます。"),
         "{rendered}"
     );
 }
@@ -196,7 +196,7 @@ async fn create_rejects_a_currency_name_that_is_taken(pool: PgPool) {
     assert_error(
         &response,
         &format!(
-            "`{}`という名前の通貨は存在しています。別の名前を使用してください。",
+            "`{}` という名前の通貨はすでにあります。別の名前にしてください。",
             money.name
         ),
     );
@@ -224,7 +224,7 @@ async fn create_rejects_a_currency_unit_that_is_taken(pool: PgPool) {
     assert_error(
         &response,
         &format!(
-            "`{}`という単位の通貨は存在しています。別の単位を使用してください。",
+            "`{}` という単位の通貨はすでにあります。別の単位にしてください。",
             money.unit
         ),
     );
@@ -249,10 +249,7 @@ async fn create_rejects_a_grant_above_the_limit(pool: PgPool) {
     )
     .await;
 
-    assert_error(
-        &response,
-        "不正な金額です。1以上4294967295以下である必要があります。",
-    );
+    assert_error(&response, "枚数は1以上4294967295以下で指定してください。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -296,7 +293,7 @@ async fn create_rejects_a_guild_that_already_has_a_currency(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "このギルドではすでに通貨が作成されています。");
+    assert_error(&response, "このサーバーにはすでに通貨があります。");
 }
 
 /// The unit's letters and length are the sentence's too. The regexes took any
@@ -317,7 +314,7 @@ async fn create_rejects_a_unit_that_is_not_one_to_ten_lowercase_letters(pool: Pg
 
         assert_error(
             &response,
-            "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+            "名前は2〜16文字の英数字、単位は1〜10文字の英小文字で指定してください。",
         );
     }
 }
@@ -336,7 +333,7 @@ async fn create_rejects_a_name_without_enough_alphanumerics(pool: PgPool) {
 
     assert_error(
         &response,
-        "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+        "名前は2〜16文字の英数字、単位は1〜10文字の英小文字で指定してください。",
     );
 }
 
@@ -358,7 +355,7 @@ async fn create_rejects_a_name_that_is_too_long_or_has_a_mark_in_it(pool: PgPool
 
         assert_error(
             &response,
-            "通貨の名前は2から16文字以内の英数字、単位は1から10文字以内の英小文字を使ってください。",
+            "名前は2〜16文字の英数字、単位は1〜10文字の英小文字で指定してください。",
         );
     }
 }
@@ -430,9 +427,9 @@ async fn racing_create(pool: PgPool, collision: &str) {
         .find(|r| r.body["data"]["components"][0]["accent_color"] == COLOR_ERROR)
         .unwrap();
     let message = match collision {
-        "guild" => "このギルドではすでに通貨が作成されています。",
-        "unit" => "`racea`という単位の通貨は存在しています。別の単位を使用してください。",
-        "name" => "`racenamea`という名前の通貨は存在しています。別の名前を使用してください。",
+        "guild" => "このサーバーにはすでに通貨があります。",
+        "unit" => "`racea` という単位の通貨はすでにあります。別の単位にしてください。",
+        "name" => "`racenamea` という名前の通貨はすでにあります。別の名前にしてください。",
         _ => unreachable!(),
     };
     assert_error(refused, message);

@@ -191,7 +191,7 @@ async fn grant_codes_only_offer_live_requests_the_actor_can_review(pool: PgPool)
         review
             .body
             .to_string()
-            .contains("アプリケーションの権限申請の確認")
+            .contains("アプリケーションからの申請")
     );
     assert!(review.body.to_string().contains("申請元"));
     assert!(review.body.to_string().contains("承認する"));
@@ -261,7 +261,7 @@ async fn grant_code_prefixes_filter_before_the_limit_and_keep_labels_readable(po
         choices(&response)[0]["name"]
             .as_str()
             .unwrap()
-            .contains("ボット 920001")
+            .contains("Bot 920001")
     );
     for (choice, (_, client_id)) in choices(&response)
         .iter()
@@ -271,7 +271,7 @@ async fn grant_code_prefixes_filter_before_the_limit_and_keep_labels_readable(po
         let label = choice["name"].as_str().unwrap();
         assert_eq!(label.chars().count(), 100);
         assert!(label.starts_with(choice["value"].as_str().unwrap()));
-        assert!(label.contains("サーバー / ボット未連携:"));
+        assert!(label.contains("サーバー / Bot 未接続:"));
         assert!(label.contains(client_id));
         assert!(!label.contains(['\r', '\n']));
     }
@@ -622,7 +622,7 @@ async fn the_id_option_under_approve_offers_only_what_can_be_approved(pool: PgPo
         choices(&response)[0]["name"]
             .as_str()
             .expect("a name")
-            .contains(&format!("請求id: {}", claims.id(5))),
+            .contains(&format!("請求ID: {}", claims.id(5))),
         "the suggestion names the claim"
     );
 }
@@ -668,7 +668,7 @@ async fn long_application_names_fit_claim_choices_without_changing_the_ids(pool:
         for choice in choices(&response) {
             let name = choice["name"].as_str().unwrap();
             assert_eq!(name.chars().count(), 100);
-            assert!(name.contains(&format!("請求id: {}", choice["value"].as_str().unwrap())));
+            assert!(name.contains(&format!("請求ID: {}", choice["value"].as_str().unwrap())));
         }
     }
 }

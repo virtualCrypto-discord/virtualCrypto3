@@ -374,7 +374,7 @@ async fn response_edit_failures_do_not_repeat_mutations(pool: PgPool) {
             assert!(
                 api.webhooks()[0]
                     .to_string()
-                    .contains("承諾し、支払いました")
+                    .contains("承諾して支払いました")
             );
         }
     }
@@ -419,7 +419,7 @@ async fn database_errors_roll_back_and_report_a_private_result(pool: PgPool) {
         assert!(
             message
                 .to_string()
-                .contains("処理結果を確認できませんでした"),
+                .contains("処理できたか確認できませんでした"),
             "{message}"
         );
         sqlx::query(drop).execute(&pool).await.unwrap();
@@ -447,7 +447,7 @@ async fn failed_claim_followup_preserves_the_known_result_on_the_private_screen(
     .unwrap();
     let edits = api.response_edits();
     assert_eq!(edits[1]["flags"], 32768);
-    assert!(edits[1].to_string().contains("承諾し、支払いました"));
+    assert!(edits[1].to_string().contains("承諾して支払いました"));
     assert!(api.webhooks().is_empty());
     applied(&pool, &money, &prepared).await;
     let after = ledger(&pool).await;
