@@ -39,7 +39,7 @@ pub async fn respond(
 
 fn failed(error: CommandError) -> Value {
     tracing::warn!(?error, "Discord claim operation failed");
-    render_error("請求の処理結果を確認できませんでした。請求の状態と履歴を確認してください。")
+    render_error(message!("command.claim.mod.failed.001"))
 }
 
 /// A Discord user or Bot is mentioned; an unbound application needs its public identity.
@@ -49,7 +49,7 @@ fn user_identity(user: &ClaimUser) -> String {
     } else if let Some(client_id) = user.client_id.as_deref() {
         super::application_identity(None, client_id, user.client_name.as_deref())
     } else {
-        format!("不明なアカウント（ID: {}）", user.id)
+        format!(message!("command.claim.mod.user_identity.001"), user.id)
     }
 }
 
@@ -102,20 +102,24 @@ pub(super) fn format_date_time(value: PrimitiveDateTime) -> String {
 /// the buttons that move a claim both answer a refusal with it.
 pub(super) fn transition_error(error: TransitionError) -> Result<Value, CommandError> {
     match error {
-        TransitionError::NotFound => Ok(render_error("そのidの請求は見つかりませんでした。")),
-        TransitionError::InvalidOperator => Ok(render_error(
-            "この請求に対してこの操作を行う権限がありません。",
-        )),
-        TransitionError::InvalidStatus => Ok(render_error(
-            "この請求に対してこの操作を行うことは出来ません。",
-        )),
-        TransitionError::NotEnoughAmount | TransitionError::NotFoundSenderAsset => {
-            Ok(render_error("お金が足りません。"))
-        }
-        TransitionError::NotFoundCurrency => Ok(render_error("指定された通貨は存在しません。")),
-        TransitionError::InvalidAmount => Ok(render_error(
-            "不正な金額です。1以上9223372036854775807以下である必要があります。",
-        )),
+        TransitionError::NotFound => Ok(render_error(message!(
+            "command.claim.mod.transition_error.001"
+        ))),
+        TransitionError::InvalidOperator => Ok(render_error(message!(
+            "command.claim.mod.transition_error.002"
+        ))),
+        TransitionError::InvalidStatus => Ok(render_error(message!(
+            "command.claim.mod.transition_error.003"
+        ))),
+        TransitionError::NotEnoughAmount | TransitionError::NotFoundSenderAsset => Ok(
+            render_error(message!("command.claim.mod.transition_error.004")),
+        ),
+        TransitionError::NotFoundCurrency => Ok(render_error(message!(
+            "command.claim.mod.transition_error.005"
+        ))),
+        TransitionError::InvalidAmount => Ok(render_error(message!(
+            "command.claim.mod.transition_error.006"
+        ))),
         // Unreachable here: both callers move a claim without a metadata patch of their
         // own, which is the only way a claim's metadata grows. Reported the way the
         // metadata endpoints report it.
@@ -133,7 +137,7 @@ fn render_error(description: &str) -> Value {
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_ERROR as u32),
-            vec![crate::components::text(format!("**エラー**\n{description}"))],
+            vec![crate::components::text(format!(message!("command.claim.mod.render_error.001"), description = description))],
         )]),
     })
 }

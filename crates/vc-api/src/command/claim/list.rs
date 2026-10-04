@@ -199,7 +199,9 @@ fn render(
 
     if page.claims.is_empty() {
         children.push(crate::components::separator());
-        children.push(crate::components::text("表示する内容がありません。"));
+        children.push(crate::components::text(message!(
+            "command.claim.list.render.001"
+        )));
     } else {
         children.extend(rows(position, &page.claims, me, options, balances));
     }
@@ -222,9 +224,9 @@ fn render(
 /// `Listing.render_title/1`.
 fn title(position: Position) -> &'static str {
     match position {
-        Position::All => "請求一覧(all)",
-        Position::Received => "請求一覧(received)",
-        Position::Claimed => "請求一覧(sent)",
+        Position::All => message!("command.claim.list.title.001"),
+        Position::Received => message!("command.claim.list.title.002"),
+        Position::Claimed => message!("command.claim.list.title.003"),
     }
 }
 
@@ -261,11 +263,21 @@ fn rows(
 fn field(position: Position, claim: &ClaimView, me: i64) -> Value {
     let unit = claim.currency.unit.clone().unwrap_or_default();
     let mut lines = vec![
-        format!("状態　: {}", render_status(claim.status.as_deref())),
-        format!("請求額: **{}** `{unit}`", claim.amount.unwrap_or_default()),
+        format!(
+            message!("command.claim.list.field.001"),
+            render_status(claim.status.as_deref())
+        ),
+        format!(
+            message!("command.claim.list.field.002"),
+            claim.amount.unwrap_or_default(),
+            unit = unit
+        ),
     ];
     lines.extend(users(position, claim));
-    lines.push(format!("請求日: {}", format_date_time(claim.inserted_at)));
+    lines.push(format!(
+        message!("command.claim.list.field.003"),
+        format_date_time(claim.inserted_at)
+    ));
 
     let name = format!(
         "{}{}",
@@ -349,10 +361,10 @@ fn claim_row(
 
 fn render_status(status: Option<&str>) -> &'static str {
     match status {
-        Some("approved") => "✅支払い済み",
-        Some("denied") => "❌拒否",
-        Some("canceled") => "🗑️キャンセル",
-        Some("pending") => "⌛未決定",
+        Some("approved") => message!("command.claim.list.render_status.001"),
+        Some("denied") => message!("command.claim.list.render_status.002"),
+        Some("canceled") => message!("command.claim.list.render_status.003"),
+        Some("pending") => message!("command.claim.list.render_status.004"),
         _ => "",
     }
 }
@@ -363,9 +375,21 @@ fn users(position: Position, claim: &ClaimView) -> Vec<String> {
     let payer = user_identity(&claim.payer);
 
     match position {
-        Position::All => vec![format!("請求元: {claimant}"), format!("請求先: {payer}")],
-        Position::Received => vec![format!("請求元: {claimant}")],
-        Position::Claimed => vec![format!("請求先: {payer}")],
+        Position::All => vec![
+            format!(
+                message!("command.claim.list.users.001"),
+                claimant = claimant
+            ),
+            format!(message!("command.claim.list.users.002"), payer = payer),
+        ],
+        Position::Received => vec![format!(
+            message!("command.claim.list.users.003"),
+            claimant = claimant
+        )],
+        Position::Claimed => vec![format!(
+            message!("command.claim.list.users.004"),
+            payer = payer
+        )],
     }
 }
 

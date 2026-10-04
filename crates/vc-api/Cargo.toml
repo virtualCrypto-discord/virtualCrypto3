@@ -32,3 +32,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 jsonschema = { version = "0.56", default-features = false }
+
+[build-dependencies]
+serde_json.workspace = true

@@ -169,20 +169,29 @@ async fn grant_codes(
         .into_iter()
         .map(|candidate| {
             let target = match candidate.target {
-                vc_core::grant::Target::Guild(_) => "サーバー",
-                vc_core::grant::Target::User(_) => "アカウント",
+                vc_core::grant::Target::Guild(_) => {
+                    message!("command.autocomplete.grant_codes.001")
+                }
+                vc_core::grant::Target::User(_) => message!("command.autocomplete.grant_codes.002"),
             };
             let prefix = format!("{} / {target} / ", candidate.user_code);
             let label = match candidate.bot_discord_id {
-                Some(bot) => format!("{prefix}ボット {bot}"),
+                Some(bot) => format!(
+                    message!("command.autocomplete.grant_codes.003"),
+                    bot = bot,
+                    prefix = prefix
+                ),
                 None => {
-                    let prefix = format!("{prefix}ボット未連携: ");
+                    let prefix = format!(
+                        message!("command.autocomplete.grant_codes.004"),
+                        prefix = prefix
+                    );
                     let suffix = format!(" ({})", candidate.client_id);
                     let name = candidate
                         .client_name
                         .as_deref()
                         .filter(|name| !name.is_empty())
-                        .unwrap_or("（名前なし）")
+                        .unwrap_or(message!("command.autocomplete.grant_codes.005"))
                         .replace(['\r', '\n'], " ");
                     let budget =
                         100_usize.saturating_sub(prefix.chars().count() + suffix.chars().count());
@@ -227,8 +236,12 @@ async fn currencies(
         .map(|candidate| {
             let unit = candidate.unit.unwrap_or_default();
             let name = candidate.name.unwrap_or_default();
-            let prefix = "通貨名: ";
-            let balance = format!(" 所持量: {}{unit}", candidate.amount);
+            let prefix = message!("command.autocomplete.currencies.001");
+            let balance = format!(
+                message!("command.autocomplete.currencies.002"),
+                candidate.amount,
+                unit = unit
+            );
             // Older currencies can have names longer than today's creation limit.
             // Keep the balance and unit visible, and shorten only the displayed
             // name. The value must remain the exact name/unit the command accepts.
@@ -280,7 +293,7 @@ async fn claims(
         let payer = party(state, &claim.payer).await?;
 
         let label = format!(
-            "{}  請求id: {}  金額: {}{}  請求元: {}  請求先: {}",
+            message!("command.autocomplete.claims.001"),
             status_emoji(claim.status.as_deref()),
             claim.id,
             claim.amount.unwrap_or_default(),

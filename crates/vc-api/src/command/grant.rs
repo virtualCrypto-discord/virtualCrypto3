@@ -72,10 +72,10 @@ pub async fn handle(
         // Keep already-issued /grant list interactions as a server-list alias.
         "server" | "list" => {
             if payload.get("guild_id").and_then(as_int).is_none() {
-                return Ok(render_error("エラー: DMでは実行できません。"));
+                return Ok(render_error(message!("command.grant.handle.001")));
             }
             let Some(guild) = authorized_guild(payload) else {
-                return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+                return Ok(render_error(message!("command.grant.handle.002")));
             };
             Ok(answered(
                 page(state, guild, FIRST_PAGE).await?,
@@ -86,7 +86,7 @@ pub async fn handle(
     }
 }
 
-const NOT_FOUND: &str = "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。";
+const NOT_FOUND: &str = message!("command.grant.handle.003");
 
 fn actor(payload: &Value) -> Result<i64, CommandError> {
     get_user(payload).ok_or_else(|| CommandError::missing("grant has no user"))
@@ -137,7 +137,7 @@ pub async fn component(
                 vc_core::grant::grant_details(state.pool(), grant, user, authorized_guild(payload))
                     .await?
             else {
-                return Ok(error_screen("この許可は現在確認できません。"));
+                return Ok(error_screen(message!("command.grant.component.001")));
             };
             review_screen(state, ReviewDisplay::Granted(&review), page, UPDATE_MESSAGE).await
         }
@@ -146,7 +146,7 @@ pub async fn component(
             let Some(review) =
                 vc_core::grant::grant_details(state.pool(), grant, user, guild).await?
             else {
-                return Ok(error_screen("この許可は現在確認できません。"));
+                return Ok(error_screen(message!("command.grant.component.002")));
             };
             if vc_core::grant::revoke_one(state.pool(), grant, user, guild).await? {
                 state.notifier().notify_delegation_decided(
@@ -194,11 +194,11 @@ pub async fn component(
             );
             let message = match review.target {
                 Target::Guild(_) => format!(
-                    "発行を許可しました。この申請は、{}を操作できます。",
+                    message!("command.grant.component.003"),
                     currency_label(state, &review.resources).await?.0
                 ),
                 Target::User(_) => format!(
-                    "アクセスを許可しました。\n{}\n対象の通貨: {}",
+                    message!("command.grant.component.004"),
                     permissions(&review.scopes),
                     currency_label(state, &review.resources).await?.0
                 ),
@@ -210,41 +210,37 @@ pub async fn component(
         }
         Pressed::UserPaged(owner, number) => {
             if owner != user {
-                return Ok(error_screen("これは別のユーザーの許可一覧です。"));
+                return Ok(error_screen(message!("command.grant.component.005")));
             }
             Ok(answered(
                 personal_page(state, user, number).await?,
                 UPDATE_MESSAGE,
             ))
         }
-        Pressed::UserRevoked(_, _) => Ok(error_screen(
-            "許可を個別に取り消すには、`/grant user` を開き直してください。",
-        )),
+        Pressed::UserRevoked(_, _) => Ok(error_screen(message!("command.grant.component.006"))),
         Pressed::Paged(_, number) => {
             let Some(guild) = authorized_guild(payload) else {
-                return Ok(error_screen("実行には管理者権限が必要です。"));
+                return Ok(error_screen(message!("command.grant.component.007")));
             };
             Ok(answered(page(state, guild, number).await?, UPDATE_MESSAGE))
         }
-        Pressed::Revoked(_) => Ok(error_screen(
-            "許可を個別に取り消すには、`/grant server` を開き直してください。",
-        )),
+        Pressed::Revoked(_) => Ok(error_screen(message!("command.grant.component.008"))),
     }
 }
 
 fn permissions(scopes: &[String]) -> String {
     if scopes.is_empty() {
-        return "許可されている操作はありません。".to_owned();
+        return message!("command.grant.permissions.001").to_owned();
     }
     scopes
         .iter()
         .map(|scope| {
             let description = if scope == "vc.issue" {
-                "このサーバーの発行枠から通貨を発行する"
+                message!("command.grant.permissions.002")
             } else {
                 vc_core::delegation::Scope::parse(scope)
                     .map(|scope| scope.description())
-                    .unwrap_or("未対応の権限です。新しい申請を依頼してください")
+                    .unwrap_or(message!("command.grant.permissions.003"))
             };
             format!("- {description}")
         })
@@ -259,18 +255,19 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
         vc_core::grant::personal_applications(state.pool(), user, requested, LIMIT).await?;
     let last = ((total + LIMIT - 1) / LIMIT).max(1);
     let mut children = vec![text(format!(
-        "**あなたのアカウントへのアクセス許可** ({total}件)\nページ {page}/{last}"
+        message!("command.grant.personal_page.001"),
+        last = last,
+        page = page,
+        total = total
     ))];
     if apps.is_empty() {
-        children.push(text(
-            "アクセスを許可しているアプリケーションはありません。申請を確認するには `/grant approve code:` を使ってください。",
-        ));
+        children.push(text(message!("command.grant.personal_page.002")));
     }
     for app in apps {
         let (label, needs_details) = currency_label(state, &app.resources).await?;
         children.push(separator());
         children.push(text(format!(
-            "{}\n{}\n対象の通貨: {}",
+            message!("command.grant.personal_page.003"),
             super::application_identity(
                 app.bot_discord_id,
                 &app.client_id,
@@ -281,13 +278,13 @@ async fn personal_page(state: &AppState, user: i64, requested: i64) -> Result<Va
         )));
         let mut actions = vec![button(
             &ids::revoke_one_custom_id(app.grant_id),
-            "取り消す",
+            message!("command.grant.personal_page.004"),
             ButtonStyle::Danger,
         )];
         if needs_details {
             actions.push(button(
                 &ids::details_custom_id(app.grant_id, 1),
-                "詳細",
+                message!("command.grant.personal_page.005"),
                 ButtonStyle::Secondary,
             ));
         }
@@ -340,14 +337,12 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
 
     if authorized.total == 0 {
         children.push(text(crate::docs::discord::mentions(
-            "発行を許可しているアプリケーションはありません。申請が来たときは、\
-             アプリケーションが表示するコードを `/grant approve code:` に入力し、内容を確認して「承認する」を押してください。",
+            message!("command.grant.page.001"),
             state.command_ids().await,
         )));
     } else {
         children.push(text(format!(
-            "**発行を許可しているアプリケーション** ({}件)\n\
-             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。",
+            message!("command.grant.page.002"),
             authorized.total
         )));
 
@@ -355,9 +350,7 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
             // A page a button led to that the list has since shrunk past: the
             // arrows below are the way back, and saying where the rows are is
             // better than saying there are none.
-            children.push(text(
-                "このページには何もありません。前のページに戻ってください。",
-            ));
+            children.push(text(message!("command.grant.page.003")));
         }
 
         for application in &authorized.applications {
@@ -369,7 +362,7 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
 
             children.push(separator());
             children.push(text(format!(
-                "{}\nこの申請は、{}を操作できます。",
+                message!("command.grant.page.004"),
                 super::application_identity(
                     application.bot_discord_id,
                     &application.client_id,
@@ -379,13 +372,13 @@ async fn page(state: &AppState, guild_id: i64, page: i64) -> Result<Value, Comma
             )));
             let mut actions = vec![button(
                 &ids::revoke_one_custom_id(application.grant_id),
-                "取り消す",
+                message!("command.grant.page.005"),
                 ButtonStyle::Danger,
             )];
             if needs_details {
                 actions.push(button(
                     &ids::details_custom_id(application.grant_id, 1),
-                    "詳細",
+                    message!("command.grant.page.006"),
                     ButtonStyle::Secondary,
                 ));
             }
@@ -424,16 +417,22 @@ async fn currency_label(
     resources: &[i64],
 ) -> Result<(String, bool), CommandError> {
     if resources.is_empty() {
-        return Ok(("すべての通貨".to_owned(), false));
+        return Ok((
+            message!("command.grant.currency_label.001").to_owned(),
+            false,
+        ));
     }
     let units = crate::resource::units(state.pool(), resources).await?;
-    let label = format!("通貨 {} だけ", units.join("、"));
+    let label = format!(
+        message!("command.grant.currency_label.002"),
+        units.join("、")
+    );
     if label.chars().count() <= 300 {
         Ok((label, false))
     } else {
         Ok((
             format!(
-                "{}種類の通貨（`/grant user` または `/grant server` を開き、「詳細」で全件を確認できます）",
+                message!("command.grant.currency_label.003"),
                 resources.len()
             ),
             true,
@@ -481,7 +480,7 @@ async fn review_screen(
     let units = crate::resource::units(state.pool(), resources).await?;
     let mut pages = vec![String::new()];
     if units.is_empty() {
-        pages[0] = "すべての通貨".to_owned();
+        pages[0] = message!("command.grant.review_screen.001").to_owned();
     }
     for unit in &units {
         let line = format!("- {unit}\n");
@@ -493,27 +492,31 @@ async fn review_screen(
     let last = pages.len() as i64;
     let page = requested.clamp(1, last);
     let target_label = match target {
-        Target::User(id) => format!("あなたのアカウント ({id})"),
-        Target::Guild(id) => format!("このサーバー ({id})"),
+        Target::User(id) => format!(message!("command.grant.review_screen.002"), id = id),
+        Target::Guild(id) => format!(message!("command.grant.review_screen.003"), id = id),
     };
     let heading = if pending {
-        "アプリケーションの権限申請の確認"
+        message!("command.grant.review_screen.004")
     } else {
-        "許可している内容"
+        message!("command.grant.review_screen.005")
     };
     let mut children = vec![text(format!(
-        "**{heading}**\n申請元のアプリケーション: {}\n対象: {target_label}\n\n許可する操作:\n{}\n対象の通貨（{}・ページ {page}/{last}）:\n{}",
+        message!("command.grant.review_screen.006"),
         super::application_identity(bot_discord_id, client_id, client_name.as_deref()),
         permissions(scopes),
         if units.is_empty() {
-            "すべて".to_owned()
+            message!("command.grant.review_screen.007").to_owned()
         } else {
-            format!("{}種類", units.len())
+            format!(message!("command.grant.review_screen.008"), units.len())
         },
-        pages[(page - 1) as usize]
+        pages[(page - 1) as usize],
+        heading = heading,
+        last = last,
+        page = page,
+        target_label = target_label
     ))];
     if pending {
-        children.push(text("承認すると、この申請の許可を新しく追加します。既存の許可は変わりません。承認の対象は、全ページに表示されているすべての通貨です。"));
+        children.push(text(message!("command.grant.review_screen.009")));
     }
     let id = |p| {
         if pending {
@@ -544,13 +547,13 @@ async fn review_screen(
         action_row(vec![if pending {
             button(
                 &ids::confirm_custom_id(key),
-                "承認する",
+                message!("command.grant.review_screen.010"),
                 ButtonStyle::Success,
             )
         } else {
             button(
                 &ids::revoke_one_custom_id(key),
-                "取り消す",
+                message!("command.grant.review_screen.011"),
                 ButtonStyle::Danger,
             )
         }]),
@@ -562,7 +565,7 @@ async fn review_screen(
         };
         children.push(action_row(vec![button(
             &back,
-            "一覧に戻る",
+            message!("command.grant.review_screen.012"),
             ButtonStyle::Secondary,
         )]));
     }
@@ -589,7 +592,7 @@ fn error_screen(sentence: &str) -> Value {
         "type": UPDATE_MESSAGE,
         "data": ephemeral(vec![container(
             Some(COLOR_ERROR as u32),
-            vec![text(format!("エラー: {sentence}"))],
+            vec![text(format!(message!("command.grant.error_screen.001"), sentence = sentence))],
         )]),
     })
 }

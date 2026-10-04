@@ -4,6 +4,43 @@
 - [Human + Codex review workbench](tools/review-workbench/README.md) — run `just review`
   for review conversations, code changes, verification and human decision records.
 
+## UI text and translations
+
+User-facing text lives in JSON catalogs:
+
+- `crates/vc-api/locales/ja.json`: Discord replies, command descriptions, the
+  shared user guide, application refusals, and browser consent.
+- `crates/vc-core/locales/ja.json`: delegated permission descriptions.
+- `web/src/locales/ja.json`: web page text and loading/error states.
+
+Edit the values to change copy; keep existing keys stable. The numbered suffixes
+identify existing messages, not their current line or display order. New messages
+should use descriptive keys. Protocol identifiers (command names, scopes, API
+error codes), user-supplied content, logs, and test fixtures are not translated.
+
+Rust uses `message!("key")`; `i18n/build.rs` generates literal expansions so static
+help content and `format!` retain compile-time checks. For formatted messages,
+pass captured variables explicitly, for example
+`format!(message!("key"), amount = amount)`. Preserve placeholders (`{}`, `{name}`,
+format specifiers, and guide URLs `{site}`, `{invite}`, `{support}`). Positional
+arguments can use explicit indexes when a translation needs a different order.
+
+To add a server language, add `<locale>.json` to both Rust catalog directories
+(an empty object is valid for an untranslated catalog), then build with
+`VC_LOCALE=<locale> cargo build -p vc-server`. Missing entries fall back to
+Japanese; unknown keys fail the build. Language selection is currently at build
+time, not per Discord user or HTTP request. The default remains Japanese.
+
+Web components use the typed `t("key", parameters)` helper. Add a partial catalog
+and pass it to `createTranslator` in `web/src/i18n.ts` when enabling another
+language; update the document language in `web/index.html` with it. `Message.svelte`
+allows links and code snippets to move within a translated sentence without
+inserting translation text as HTML. There is no language selector yet.
+
+Run `npm --prefix web test`, `npm --prefix web run check`, and
+`npm --prefix web run build` for the web changes. Rust catalog changes are checked
+by compilation and the existing command, documentation, and consent tests.
+
 ## The build cache (mbx)
 
 Rust builds in this checkout go through [mbx](https://mr-boxington.jdx.dev), a

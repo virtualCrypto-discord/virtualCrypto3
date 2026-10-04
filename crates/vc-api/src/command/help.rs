@@ -34,7 +34,10 @@ pub async fn command(state: &AppState, options: &Map<String, Value>) -> Value {
             // anyway: the list, with the one sentence that says so above it.
             None => {
                 color = COLOR_ERROR;
-                let mut children = vec![text(format!("`{name}` というコマンドはありません。"))];
+                let mut children = vec![text(format!(
+                    message!("command.help.command.001"),
+                    name = name
+                ))];
                 children.extend(discord::index(links, ids));
 
                 children

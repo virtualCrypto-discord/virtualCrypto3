@@ -25,7 +25,7 @@ pub async fn handle(
         .ok_or_else(|| CommandError::missing("delete requires a guild"))?;
 
     if !may_delete(payload) {
-        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+        return Ok(render_error(message!("command.delete.handle.001")));
     }
 
     let check =
@@ -33,10 +33,8 @@ pub async fn handle(
 
     match check {
         DeleteCheck::Deletable { unit } => Ok(render_confirm(&unit)),
-        DeleteCheck::NotExist => Ok(render_error("エラー: このサーバーに通貨が存在しません。")),
-        DeleteCheck::OutOfTerm => Ok(render_error(
-            "エラー: 作成から72時間以上経過しているため削除できません。",
-        )),
+        DeleteCheck::NotExist => Ok(render_error(message!("command.delete.handle.002"))),
+        DeleteCheck::OutOfTerm => Ok(render_error(message!("command.delete.handle.003"))),
     }
 }
 
@@ -49,9 +47,12 @@ fn render_confirm(unit: &str) -> Value {
     // modals, and the row existed to carry the `label` field that a label now carries itself.
     crate::components::modal(
         &crate::custom_id::encode(0, &crate::custom_id::ui::modal::confirm_currency_delete()),
-        "通貨の削除",
+        message!("command.delete.render_confirm.001"),
         vec![crate::components::label(
-            &format!("確認のため、「{required}」と入力してください。"),
+            &format!(
+                message!("command.delete.render_confirm.002"),
+                required = required
+            ),
             None,
             crate::components::text_input(
                 "confirm",
@@ -75,7 +76,7 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
 
     // Opening a modal grants no lasting permission: use the signed submission's current roles.
     if !may_delete(payload) {
-        return Ok(render_error("エラー: 実行には管理者権限が必要です。"));
+        return Ok(render_error(message!("command.delete.confirm.001")));
     }
 
     let value = payload
@@ -97,16 +98,14 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
     match vc_core::currency::delete(state.pool(), guild_id, value).await? {
         DeleteResult::Deleted => {}
         DeleteResult::NotExist => {
-            return Ok(render_error("エラー: このサーバーに通貨が存在しません。"));
+            return Ok(render_error(message!("command.delete.confirm.002")));
         }
         DeleteResult::OutOfTerm => {
-            return Ok(render_error(
-                "エラー: 作成から72時間以上経過しているため削除できません。",
-            ));
+            return Ok(render_error(message!("command.delete.confirm.003")));
         }
         DeleteResult::ConfirmationFailed => {
             return Ok(render_error(&crate::docs::discord::mentions(
-                "エラー: 確認に失敗しました。再度`/delete`コマンドを実行してください。",
+                message!("command.delete.confirm.004"),
                 state.command_ids().await,
             )));
         }
@@ -116,7 +115,7 @@ pub async fn confirm(state: &AppState, payload: &Value) -> Result<Value, Command
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             None,
-            vec![crate::components::text("通貨を削除しました。")],
+            vec![crate::components::text(message!("command.delete.confirm.005"))],
         )]),
     }))
 }

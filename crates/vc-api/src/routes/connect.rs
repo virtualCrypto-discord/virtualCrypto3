@@ -106,7 +106,7 @@ pub async fn connect(
         return refused(
             StatusCode::UNAUTHORIZED,
             "invalid_kind",
-            "a user token is required",
+            message!("routes.connect.refusal.001"),
         );
     }
 
@@ -114,7 +114,7 @@ pub async fn connect(
         return refused(
             StatusCode::FORBIDDEN,
             "insufficient_scope",
-            "oauth2.register is required",
+            message!("routes.connect.refusal.002"),
         );
     }
 
@@ -130,7 +130,7 @@ pub async fn connect(
         return refused(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "both ids must be Discord ids, as strings",
+            message!("routes.connect.refusal.003"),
         );
     };
 
@@ -150,7 +150,11 @@ pub async fn connect(
     let found = match owned_by_client_id(state.pool(), &owned, &client_id).await {
         Ok(Some((_, found))) => found,
         Ok(None) => {
-            return refused(StatusCode::NOT_FOUND, "not_found", "no such application");
+            return refused(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                message!("routes.connect.refusal.004"),
+            );
         }
         Err(_) => return internal("the application could not be read").response(),
     };
@@ -197,15 +201,12 @@ pub async fn connect_application(
             Ok((403, _)) => Err(refusal(
                 StatusCode::FORBIDDEN,
                 "not_installed",
-                "VirtualCrypto is not in that server",
+                message!("routes.connect.refusal.005"),
             )),
             Ok((200, guild)) => Err(refusal(
                 StatusCode::FORBIDDEN,
                 "insufficient_permissions",
-                format!(
-                    "VirtualCrypto is in {} but does not have Manage Server there",
-                    text(&guild, "name")
-                ),
+                format!(message!("routes.connect.refusal.006"), text(&guild, "name")),
             )),
             _ => Err(Box::new(internal(
                 "the guild could not be read after a refused integrations call",
@@ -214,14 +215,18 @@ pub async fn connect_application(
     }
 
     if status == 404 {
-        return Err(refusal(StatusCode::NOT_FOUND, "not_found", "no such guild"));
+        return Err(refusal(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            message!("routes.connect.refusal.007"),
+        ));
     }
 
     if status != 200 {
         return Err(refusal(
             StatusCode::BAD_GATEWAY,
             "discord_error",
-            format!("fetching integrations failed with {status}"),
+            format!(message!("routes.connect.refusal.008"), status = status),
         ));
     }
 
@@ -247,8 +252,7 @@ pub async fn connect_application(
                         StatusCode::CONFLICT,
                         "integration_unavailable",
                         format!(
-                            "{}（Bot ID: {}）はサーバーに参加していますが、Discord の連携一覧から説明を取得できませんでした。\
-                             一覧は最大 50 件です。VirtualCrypto と対象 Bot が参加している、連携数の少ない別のサーバーで再試行してください。",
+                            message!("routes.connect.connect_application.001"),
                             text(&user, "username"),
                             bot
                         ),
@@ -257,7 +261,7 @@ pub async fn connect_application(
                         StatusCode::NOT_FOUND,
                         "invalid_bot",
                         format!(
-                            "{}（Bot ID: {}）はこのサーバーに参加していません。",
+                            message!("routes.connect.connect_application.002"),
                             text(&user, "username"),
                             bot
                         ),
@@ -265,19 +269,22 @@ pub async fn connect_application(
                     Err(_) => Err(refusal(
                         StatusCode::BAD_GATEWAY,
                         "discord_error",
-                        "Discord で Bot の在籍を確認できませんでした。時間をおいてもう一度試してください。",
+                        message!("routes.connect.connect_application.003"),
                     )),
                 }
             }
             Ok((200, user)) => Err(refusal(
                 StatusCode::BAD_REQUEST,
                 "invalid_bot",
-                format!("{} is not a bot", text(&user, "username")),
+                format!(
+                    message!("routes.connect.refusal.009"),
+                    text(&user, "username")
+                ),
             )),
             Ok((404, _)) => Err(refusal(
                 StatusCode::NOT_FOUND,
                 "invalid_bot",
-                "no such user id",
+                message!("routes.connect.refusal.010"),
             )),
             _ => Err(Box::new(internal("the bot id could not be looked up"))),
         };
@@ -299,7 +306,7 @@ pub async fn connect_application(
             StatusCode::BAD_REQUEST,
             "invalid_description",
             format!(
-                "the integration's description does not contain this application's token (bot: {})",
+                message!("routes.connect.refusal.011"),
                 integration
                     .get("application")
                     .and_then(|application| application.get("bot"))
@@ -316,7 +323,7 @@ pub async fn connect_application(
         Err(vc_core::user::BindError::Taken) => Err(refusal(
             StatusCode::CONFLICT,
             "already_connected",
-            "that bot already belongs to another application",
+            message!("routes.connect.refusal.012"),
         )),
         Err(vc_core::user::BindError::Database(_)) => Err(Box::new(internal(
             "the bot could not be bound to the application",

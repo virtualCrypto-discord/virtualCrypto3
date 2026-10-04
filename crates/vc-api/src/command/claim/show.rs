@@ -23,13 +23,13 @@ pub async fn handle(
     let account = vc_core::user::resolve_discord_id(state.pool(), me).await?;
 
     let Some(claim) = vc_core::claim::view(state.pool(), account, id).await? else {
-        return Ok(render_error("そのidの請求は見つかりませんでした。"));
+        return Ok(render_error(message!("command.claim.show.handle.001")));
     };
 
     // `Money.get_claim_by_id/2` answers whoever asks; the handler is what
     // requires the caller to be one of the claim's two parties.
     if claim.claimant.discord_id != Some(me) && claim.payer.discord_id != Some(me) {
-        return Ok(render_error("そのidの請求は見つかりませんでした。"));
+        return Ok(render_error(message!("command.claim.show.handle.002")));
     }
 
     // Only a pending claim's payer is shown their balance: the quotation is what
@@ -111,16 +111,18 @@ fn render(
     // The embed was a title and a field, and a Text Display has no title: it is a bold line above
     // what it introduced. The second embed was the quotation, the same way.
     let heading = format!(
-        "**請求**\n**{}{}**",
+        message!("command.claim.show.render.001"),
         render_rs_icon(me, claimant, payer),
         claim.id
     );
     let field = format!(
-        "状態　: {}\n請求額: **{amount}** `{unit}`\n請求元: {}\n請求先: {}\n請求日: {}",
+        message!("command.claim.show.render.002"),
         render_status(claim.status.as_deref()),
         user_identity(&claim.claimant),
         user_identity(&claim.payer),
         format_date_time(claim.inserted_at),
+        amount = amount,
+        unit = unit
     );
 
     let mut children = Vec::new();
@@ -137,7 +139,7 @@ fn render(
 
     if let Some(current) = current {
         children.push(crate::components::text(format!(
-            "**残高**\n{}",
+            message!("command.claim.show.render.003"),
             render_quotation(&claim.currency, current, amount)
         )));
         rows.push(action_row(claim, me, Some(current)));
@@ -167,12 +169,16 @@ fn render(
 /// same sentence the command answers with and the claim's own id in it.
 fn outcome_text(action: ButtonAction, claim_id: i64) -> String {
     let result = match action {
-        ButtonAction::Approve => "承諾し、支払いました。",
-        ButtonAction::Deny => "拒否しました。",
-        ButtonAction::Cancel => "キャンセルしました。",
+        ButtonAction::Approve => message!("command.claim.show.outcome_text.001"),
+        ButtonAction::Deny => message!("command.claim.show.outcome_text.002"),
+        ButtonAction::Cancel => message!("command.claim.show.outcome_text.003"),
     };
 
-    format!("id: {claim_id}の請求を{result}")
+    format!(
+        message!("command.claim.show.outcome_text.004"),
+        claim_id = claim_id,
+        result = result
+    )
 }
 
 /// `Show.selection_execute_row/2`: the three buttons, disabled when the caller
@@ -238,10 +244,10 @@ fn render_rs_icon(me: i64, claimant: Option<i64>, payer: Option<i64>) -> &'stati
 /// `Show.render_status/1`.
 fn render_status(status: Option<&str>) -> &'static str {
     match status {
-        Some("approved") => "✅支払い済み",
-        Some("denied") => "❌拒否",
-        Some("canceled") => "🗑️キャンセル",
-        Some("pending") => "⌛未決定",
+        Some("approved") => message!("command.claim.show.render_status.001"),
+        Some("denied") => message!("command.claim.show.render_status.002"),
+        Some("canceled") => message!("command.claim.show.render_status.003"),
+        Some("pending") => message!("command.claim.show.render_status.004"),
         _ => "",
     }
 }

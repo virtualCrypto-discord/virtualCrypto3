@@ -40,7 +40,7 @@ where
                 "data": crate::components::ephemeral(vec![crate::components::container(
                     Some(super::COLOR_ERROR as u32),
                     vec![crate::components::text(
-                        "処理結果を確認できませんでした。現在の状態を確認してください。"
+                        message!("command.response.text.001")
                     )],
                 )]),
             })
@@ -74,7 +74,7 @@ impl Acknowledged {
                 "type": super::CHANNEL_MESSAGE_WITH_SOURCE,
                 "data": {
                     "flags": crate::components::EPHEMERAL,
-                    "content": "処理中…",
+                    "content": message!("command.response.private.001"),
                     "allowed_mentions": {"parse": []},
                 },
             }),
