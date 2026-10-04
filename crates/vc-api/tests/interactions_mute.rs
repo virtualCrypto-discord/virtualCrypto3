@@ -482,7 +482,7 @@ async fn a_muted_currency_leaves_the_contract_list(pool: PgPool) {
         .await,
     );
     assert!(after.contains("**契約** (1件)"), "{after}");
-    assert!(after.contains(&format!("（{}）", money.unit2)), "{after}");
+    assert!(after.contains(&format!("`{}`", money.unit2)), "{after}");
 
     // The API answers the same list, as it does for claims.
     let listed = get(

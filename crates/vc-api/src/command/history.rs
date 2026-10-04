@@ -22,8 +22,9 @@ use serde_json::{Map, Value, json};
 
 use super::claim::format_date_time;
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE, as_int,
-    as_permissions, get_user, is_administrator, mention, value_text,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE,
+    amount_text, as_int, as_permissions, error_text, get_user, is_administrator, mention,
+    money_text, unit_text, value_text,
 };
 use crate::components::{
     ButtonStyle, action_row, container, ephemeral, icon_button, separator, text,
@@ -415,30 +416,9 @@ fn entry(
 
 fn balance_line(label: &str, balance: Option<i64>, unit: &str) -> String {
     match balance {
-        Some(balance) => format!("{label}: **{}** {}", amount_text(balance), unit_text(unit)),
+        Some(balance) => format!("{label}: {}", money_text(balance, unit)),
         None => format!(message!("command.history.balance_line.001"), label = label),
     }
-}
-
-fn amount_text(amount: i64) -> String {
-    let digits = amount.unsigned_abs().to_string();
-    let mut grouped = if amount < 0 {
-        "-".to_owned()
-    } else {
-        String::new()
-    };
-    for (i, digit) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
-}
-
-/// Imported currency units and filter text must stay on their own line.
-fn unit_text(unit: &str) -> String {
-    format!("`{}`", unit.replace('`', "｀").replace(['\r', '\n'], " "))
 }
 
 /// Use the same identity as the approval screen. A later name edit must not
@@ -532,6 +512,6 @@ fn answer(children: Vec<Value>, kind: i64) -> Value {
 fn refused(sentence: &str) -> Value {
     json!({
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": ephemeral(vec![container(Some(COLOR_ERROR as u32), vec![text(sentence)])]),
+        "data": ephemeral(vec![container(Some(COLOR_ERROR as u32), vec![text(error_text(sentence))])]),
     })
 }

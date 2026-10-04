@@ -125,7 +125,11 @@ async fn balances_hide_muted_currencies_without_falsifying_details_or_blocking_p
         json!([{"name":"unit","value":"n"}]),
     )
     .await;
-    assert!(info.body.to_string().contains("1000n"), "{}", info.body);
+    assert!(
+        info.body.to_string().contains("**1,000** `n`"),
+        "{}",
+        info.body
+    );
     let paid = screen(
         app.clone(),
         money.user2,

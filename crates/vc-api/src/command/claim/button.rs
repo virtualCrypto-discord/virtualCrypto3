@@ -8,7 +8,7 @@ use vc_core::claim::{PartialClaim, UpdateClaimsError};
 
 use super::{list, show};
 use crate::claim_list::ListOptions;
-use crate::command::{COLOR_ERROR, COLOR_OK, CommandError, get_user};
+use crate::command::{COLOR_ERROR, COLOR_OK, CommandError, error_text, get_user};
 use crate::custom_id::ui::button::{Action, Path, parse};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -153,6 +153,7 @@ async fn patch(
     } else {
         COLOR_OK
     };
+    let failed = result.is_err();
     let content = match result {
         Ok(updated) => {
             let ids = updated
@@ -187,7 +188,14 @@ async fn patch(
     // A follow-up message rather than an interaction response, and the same shape either way:
     // `content` is what the components flag forbids, so the sentence is a Text Display.
     Ok(crate::components::ephemeral(vec![
-        crate::components::container(Some(color as u32), vec![crate::components::text(content)]),
+        crate::components::container(
+            Some(color as u32),
+            vec![crate::components::text(if failed {
+                error_text(&content)
+            } else {
+                content
+            })],
+        ),
     ]))
 }
 

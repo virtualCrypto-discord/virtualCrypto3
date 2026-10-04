@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
-    as_int, as_permissions, get_user, is_administrator, value_text,
+    as_int, as_permissions, error_text, get_user, is_administrator, value_text,
 };
 use crate::components::{
     ButtonStyle, action_row, button, container, ephemeral, icon_button, separator, text,
@@ -589,7 +589,7 @@ fn error_screen(sentence: &str) -> Value {
         "type": UPDATE_MESSAGE,
         "data": ephemeral(vec![container(
             Some(COLOR_ERROR as u32),
-            vec![text(format!(message!("command.grant.error_screen.001"), sentence = sentence))],
+            vec![text(error_text(sentence))],
         )]),
     })
 }
@@ -602,7 +602,7 @@ fn render_error(content: &str) -> Value {
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": ephemeral(vec![container(
             Some(COLOR_ERROR as u32),
-            vec![text(content)],
+            vec![text(error_text(content))],
         )]),
     })
 }

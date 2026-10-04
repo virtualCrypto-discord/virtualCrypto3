@@ -19,7 +19,8 @@ use time::PrimitiveDateTime;
 
 use super::claim::format_date_time;
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE, get_user,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, CommandError, UPDATE_MESSAGE,
+    amount_text, error_text, get_user, money_text,
 };
 use crate::components::{ButtonStyle, action_row, button, container, ephemeral, text};
 use crate::custom_id::ui::contract::{Action, Page, Pressed, custom_id, page_custom_id};
@@ -261,10 +262,14 @@ fn describe(contract: &Contract, me: i64) -> String {
         &contract.client_id,
         contract.client_name.as_deref(),
     );
-    let unit = contract
-        .unit
-        .as_deref()
-        .unwrap_or(message!("command.contract.describe.001"));
+    // A contract whose currency is gone has no unit to show, and still has amounts.
+    let money = |amount: i64| match contract.unit.as_deref() {
+        Some(unit) => money_text(amount, unit),
+        None => format!(
+            message!("command.contract.describe.001"),
+            amount_text(amount)
+        ),
+    };
 
     let mine = contract.parties.iter().find(|party| party.discord_id == me);
     let (amount, mine) = match mine {
@@ -292,14 +297,13 @@ fn describe(contract: &Contract, me: i64) -> String {
         message!("command.contract.describe.007"),
         contract_status(&contract.status),
         contract.parties.len(),
-        contract.remaining,
-        amount = amount,
+        money(contract.remaining),
+        amount = money(amount),
         application = application,
         approved = approved,
         deadline = deadline,
         mine = mine,
-        receiver = receiver,
-        unit = unit
+        receiver = receiver
     )
 }
 
@@ -383,7 +387,7 @@ fn error_screen(sentence: &str) -> Value {
         "type": UPDATE_MESSAGE,
         "data": ephemeral(vec![container(
             Some(COLOR_ERROR as u32),
-            vec![text(format!(message!("command.contract.error_screen.001"), sentence = sentence))],
+            vec![text(error_text(sentence))],
         )]),
     })
 }

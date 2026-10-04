@@ -77,7 +77,7 @@ async fn an_unknown_unit_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: その通貨はありません。");
+    assert_error(&response, "**エラー**\nその通貨はありません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -90,7 +90,7 @@ async fn a_non_positive_amount_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 枚数は1以上で指定してください。");
+    assert_error(&response, "**エラー**\n枚数は1以上で指定してください。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -165,7 +165,7 @@ async fn paying_more_than_the_balance_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 残高が足りません。");
+    assert_error(&response, "**エラー**\n残高が足りません。");
     assert_eq!(
         get_amount(&pool, money.user1, money.currency).await,
         sender_before
@@ -193,7 +193,10 @@ async fn paying_the_whole_balance_empties_the_account(pool: PgPool) {
         response["components"][0]["components"][0]["content"],
         json!(format!(
             "<@{}> から <@{}> に **{}** `{}` を送金しました。",
-            money.user1, money.user2, sender_before, money.unit
+            money.user1,
+            money.user2,
+            vc_api::command::amount_text(sender_before),
+            money.unit
         ))
     );
 
@@ -215,7 +218,7 @@ async fn paying_one_more_than_the_balance_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 残高が足りません。");
+    assert_error(&response, "**エラー**\n残高が足りません。");
 }
 
 /// An amount Discord sends as a string is parsed the same way. This one is past
@@ -236,13 +239,12 @@ async fn an_amount_sent_as_a_string_is_parsed(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 残高が足りません。");
+    assert_error(&response, "**エラー**\n残高が足りません。");
 }
 
 const BUSY: &str =
-    "混み合っているため送金できませんでした。しばらくしてからもう一度お試しください。";
-const UNCERTAIN: &str =
-    "送金できたか確認できませんでした。もう一度送る前に `/history pay` で確認してください。";
+    "**エラー**\n混み合っているため送金できませんでした。しばらくしてからもう一度お試しください。";
+const UNCERTAIN: &str = "**エラー**\n送金できたか確認できませんでした。もう一度送る前に `/history pay` で確認してください。";
 
 async fn history_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
@@ -458,7 +460,7 @@ async fn a_database_failure_returns_only_a_private_error_and_rolls_back(pool: Pg
     .await;
     assert_error(
         &response,
-        "送金できませんでした。しばらくしてからもう一度お試しください。",
+        "**エラー**\n送金できませんでした。しばらくしてからもう一度お試しください。",
     );
     assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
     assert_eq!(history_count(&pool).await, 0);

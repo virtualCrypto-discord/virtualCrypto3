@@ -137,7 +137,7 @@ fn render_error(description: &str) -> Value {
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_ERROR as u32),
-            vec![crate::components::text(format!(message!("command.claim.mod.render_error.001"), description = description))],
+            vec![crate::components::text(super::error_text(description))],
         )]),
     })
 }

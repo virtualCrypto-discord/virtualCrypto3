@@ -88,7 +88,7 @@ fn assert_shown(response: &support::Response, claim_id: i64, claim: &ClaimSet, i
     assert_eq!(
         container["components"][1]["content"],
         json!(format!(
-            "**残高**\n**{}**: `200000{}` - `100{}` => `199900{}`",
+            "**残高**\n**{}**: **200,000** `{}` - **100** `{}` => **199,900** `{}`",
             money.name, money.unit, money.unit, money.unit
         ))
     );
@@ -994,7 +994,7 @@ async fn list_renders_the_first_page(pool: PgPool) {
                     "**{}{}**\n状態　: ⌛未処理\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
                     claim_icon(money.user1, claim),
                     claim.id,
-                    claim.amount.unwrap_or_default(),
+                    vc_api::command::amount_text(claim.amount.unwrap_or_default()),
                     claim.currency.unit.clone().unwrap_or_default(),
                     claim.claimant.discord_id.unwrap_or_default(),
                     claim.payer.discord_id.unwrap_or_default(),
@@ -1100,10 +1100,10 @@ async fn list_renders_the_first_page(pool: PgPool) {
 }
 
 /// The button path's own wording, which differs from the command path's.
-const BUTTON_UNAUTHORIZED: &str = "エラー: あなたはこの請求に対してこの操作ができません。";
-const BUTTON_ALREADY_PROCESSED: &str = "エラー: この請求はすでに処理されています。";
-const BUTTON_NO_MONEY: &str = "エラー: 残高が足りません。";
-const BUTTON_NOT_FOUND: &str = "エラー: 請求が見つかりません。";
+const BUTTON_UNAUTHORIZED: &str = "**エラー**\nあなたはこの請求に対してこの操作ができません。";
+const BUTTON_ALREADY_PROCESSED: &str = "**エラー**\nこの請求はすでに処理されています。";
+const BUTTON_NO_MONEY: &str = "**エラー**\n残高が足りません。";
+const BUTTON_NOT_FOUND: &str = "**エラー**\n請求が見つかりません。";
 
 /// `InteractionsControllerTest.Claim.List.Helper.action_data/2`: a `type 3`
 /// button press, carrying the token the follow-up is posted to.

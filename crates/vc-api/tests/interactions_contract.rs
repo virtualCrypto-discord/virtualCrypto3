@@ -151,8 +151,8 @@ async fn the_list_shows_what_the_caller_was_asked_for(pool: PgPool) {
         said[1],
         format!(
             "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n\
-         （nyan） — 承認待ち\n\
-         あなたの分: 100／未回答 ・ 承認 0/1 ・ 残り 0\n\
+         状態: 承認待ち\n\
+         あなたの分: **100** `nyan`（未回答） ・ 承認 0/1 ・ 残り **0** `nyan`\n\
          支払先: 指定なし\n\
          期限: なし（いつでも取り消せます）"
         )
@@ -349,8 +349,8 @@ async fn approving_from_the_button_locks_it(pool: PgPool) {
         said[1],
         format!(
             "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n\
-         （nyan） — 全員承認済み\n\
-         あなたの分: 100／承認済み ・ 承認 1/1 ・ 残り 100\n\
+         状態: 全員承認済み\n\
+         あなたの分: **100** `nyan`（承認済み） ・ 承認 1/1 ・ 残り **100** `nyan`\n\
          支払先: 指定なし\n\
          期限: なし（いつでも取り消せます）"
         )
@@ -411,7 +411,7 @@ async fn somebody_elses_contract_is_refused(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
-        ["エラー: あなたはこの契約の対象ではありません。"]
+        ["**エラー**\nあなたはこの契約の対象ではありません。"]
     );
     assert_eq!(balance(&pool, STRANGER).await, 0);
 }
@@ -447,7 +447,7 @@ async fn a_running_contract_offers_no_withdraw(pool: PgPool) {
 
     assert_eq!(refused.status, 202, "body: {}", refused.body);
     assert!(
-        texts(&refused)[0].starts_with("エラー: この契約には今この操作ができません。"),
+        texts(&refused)[0].starts_with("**エラー**\nこの契約には今この操作ができません。"),
         "{:?}",
         texts(&refused)
     );

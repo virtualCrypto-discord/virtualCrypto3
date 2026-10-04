@@ -2,7 +2,7 @@ use serde_json::{Map, Value, json};
 use vc_core::currency::DeleteCheck;
 
 use super::{
-    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError, as_int, as_permissions,
+    CHANNEL_MESSAGE_WITH_SOURCE, COLOR_ERROR, CommandError, as_int, as_permissions, error_text,
     is_administrator,
 };
 use crate::state::AppState;
@@ -134,7 +134,7 @@ fn render_error(content: &str) -> Value {
         "type": CHANNEL_MESSAGE_WITH_SOURCE,
         "data": crate::components::ephemeral(vec![crate::components::container(
             Some(COLOR_ERROR as u32),
-            vec![crate::components::text(content)],
+            vec![crate::components::text(error_text(content))],
         )]),
     })
 }

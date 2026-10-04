@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 
 use super::{
     CHANNEL_MESSAGE_WITH_SOURCE, COLOR_BRAND, COLOR_ERROR, COLOR_OK, CommandError, UPDATE_MESSAGE,
-    get_user,
+    error_text, get_user,
 };
 use crate::components::{
     ButtonStyle, action_row, button, container, ephemeral, icon_button, section, text,
@@ -67,22 +67,16 @@ fn named(sub_options: Option<&Value>) -> Result<&str, CommandError> {
 /// The scopes come from the issuance constant so they agree with the credential.
 async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, CommandError> {
     let Some(account) = account(state, discord_id).await? else {
-        return Ok(screen(
-            vec![text(message!("command.pat.create.001"))],
-            COLOR_ERROR,
-        ));
+        return Ok(error_screen(message!("command.pat.create.001")));
     };
 
     let length = name.chars().count();
 
     if length == 0 || length > NAME_MAX {
-        return Ok(screen(
-            vec![text(format!(
-                message!("command.pat.create.002"),
-                NAME_MAX = NAME_MAX
-            ))],
-            COLOR_ERROR,
-        ));
+        return Ok(error_screen(&format!(
+            message!("command.pat.create.002"),
+            NAME_MAX = NAME_MAX
+        )));
     }
 
     let now = OffsetDateTime::now_utc();
@@ -115,20 +109,14 @@ async fn create(state: &AppState, name: &str, discord_id: i64) -> Result<Value, 
             ],
             COLOR_OK,
         )),
-        Err(PersonalError::NameTaken(name)) => Ok(screen(
-            vec![text(mentions(
-                &format!(message!("command.pat.create.007"), display_name(&name)),
-                state.command_ids().await,
-            ))],
-            COLOR_ERROR,
-        )),
-        Err(PersonalError::LimitReached) => Ok(screen(
-            vec![text(mentions(
-                &format!(message!("command.pat.create.008"), MAX_TOKENS = MAX_TOKENS),
-                state.command_ids().await,
-            ))],
-            COLOR_ERROR,
-        )),
+        Err(PersonalError::NameTaken(name)) => Ok(error_screen(&mentions(
+            &format!(message!("command.pat.create.007"), display_name(&name)),
+            state.command_ids().await,
+        ))),
+        Err(PersonalError::LimitReached) => Ok(error_screen(&mentions(
+            &format!(message!("command.pat.create.008"), MAX_TOKENS = MAX_TOKENS),
+            state.command_ids().await,
+        ))),
         Err(PersonalError::Auth(error)) => Err(error.into()),
     }
 }
@@ -215,19 +203,13 @@ pub async fn component(
         ids::parse(&crate::custom_id::parse(custom_id)).map_err(|_| CommandError::Unknown)?;
     let (Pressed::Page { owner, number } | Pressed::Revoke { owner, number, .. }) = pressed;
     if owner != discord_id {
-        return Ok(screen(
-            vec![text(message!("command.pat.component.001"))],
-            COLOR_ERROR,
-        ));
+        return Ok(error_screen(message!("command.pat.component.001")));
     }
     let Pressed::Revoke { token_id, .. } = pressed else {
         return list(state, discord_id, number, None, UPDATE_MESSAGE).await;
     };
     let Some(account) = account(state, discord_id).await? else {
-        return Ok(screen(
-            vec![text(message!("command.pat.component.002"))],
-            COLOR_ERROR,
-        ));
+        return Ok(error_screen(message!("command.pat.component.002")));
     };
 
     let notice = match revoke_personal(state.pool(), i64::from(account), token_id).await? {
@@ -261,6 +243,11 @@ async fn account(state: &AppState, discord_id: i64) -> Result<Option<i32>, Comma
     Ok(vc_core::user::find_by_discord_id(state.pool(), discord_id)
         .await?
         .map(|user| user.id))
+}
+
+/// A refusal: the screen below in the error accent, with the heading every error screen has.
+fn error_screen(sentence: &str) -> Value {
+    screen(vec![text(error_text(sentence))], COLOR_ERROR)
 }
 
 /// An ephemeral screen in one colour, which is the shape every answer here has: two of them

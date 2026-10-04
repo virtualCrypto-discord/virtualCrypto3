@@ -101,6 +101,39 @@ pub fn mention(id: impl std::fmt::Display) -> String {
     format!("<@{id}>")
 }
 
+/// A refusal as every error screen says it: the heading on a line of its own, as an embed's
+/// title was, and the sentence under it.
+pub fn error_text(sentence: &str) -> String {
+    format!(message!("command.error_text.001"), sentence)
+}
+
+/// An amount with its digits grouped in threes, the way every screen writes one.
+pub fn amount_text(amount: i64) -> String {
+    let digits = amount.unsigned_abs().to_string();
+    let mut grouped = if amount < 0 {
+        "-".to_owned()
+    } else {
+        String::new()
+    };
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+/// Imported currency units and filter text must stay on their own line.
+pub fn unit_text(unit: &str) -> String {
+    format!("`{}`", unit.replace('`', "｀").replace(['\r', '\n'], " "))
+}
+
+/// An amount of a currency as every screen shows it: the number bold, the unit as code.
+pub fn money_text(amount: i64, unit: &str) -> String {
+    format!("**{}** {}", amount_text(amount), unit_text(unit))
+}
+
 /// The identity shown for grants, contracts, claims, and transaction history.
 pub(super) fn application_identity(
     bot_discord_id: Option<i64>,
