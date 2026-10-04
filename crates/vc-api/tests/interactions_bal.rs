@@ -37,7 +37,7 @@ async fn bal_lists_the_currency_the_user_holds(pool: PgPool) {
     assert_eq!(
         texts(&response.body),
         [
-            "**所持通貨一覧** (1件)".to_string(),
+            "**残高一覧** (1件)".to_string(),
             format!("**{}**\n199500 {}", money.name, money.unit),
         ]
     );
@@ -60,7 +60,7 @@ async fn bal_lists_every_currency_in_unit_order(pool: PgPool) {
     assert_eq!(
         texts(&response.body),
         [
-            "**所持通貨一覧** (2件)".to_string(),
+            "**残高一覧** (2件)".to_string(),
             format!("**{}**\n1000 {}", money.name, money.unit),
             format!("**{}**\n200000 {}", money.name2, money.unit2),
         ]
@@ -78,10 +78,7 @@ async fn bal_for_an_unknown_user_says_there_is_nothing(pool: PgPool) {
     let response = interaction(router(pool), execute_from_guild(bal_data(), -1)).await;
 
     assert_eq!(response.status, 200, "body: {}", response.body);
-    assert_eq!(
-        texts(&response.body),
-        ["表示できる通貨はありません。ミュート設定は `/mute list` で確認できます。"]
-    );
+    assert_eq!(texts(&response.body), ["表示できる通貨はありません。"]);
 
     assert_eq!(response.body["data"]["flags"], json!(32832),);
 }
@@ -106,7 +103,7 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
     let first = interaction(router(pool.clone()), execute_from_guild(bal_data(), USER)).await;
 
     assert_eq!(first.status, 200, "body: {}", first.body);
-    assert_eq!(texts(&first.body)[0], "**所持通貨一覧** (11件)");
+    assert_eq!(texts(&first.body)[0], "**残高一覧** (11件)");
     assert_eq!(
         texts(&first.body).len(),
         11,
@@ -139,7 +136,7 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
     assert_eq!(
         texts(&second.body),
         [
-            "**所持通貨一覧** (11件)".to_string(),
+            "**残高一覧** (11件)".to_string(),
             "**k**\n100 k".to_string(),
         ]
     );
@@ -169,7 +166,7 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
         assert_eq!(back.status, 200, "body: {}", back.body);
         assert_eq!(back.body["type"], 7, "a redraw: {}", back.body);
         assert_eq!(texts(&back.body).len(), rows + 1, "the header and the page");
-        assert_eq!(texts(&back.body)[0], "**所持通貨一覧** (11件)");
+        assert_eq!(texts(&back.body)[0], "**残高一覧** (11件)");
     }
 
     // And ⏩ from the first screen: the last page, which is the same one ⏭️ reached.
@@ -183,7 +180,7 @@ async fn bal_pages_when_there_are_more_currencies_than_a_screen_holds(pool: PgPo
     assert_eq!(
         texts(&last.body),
         [
-            "**所持通貨一覧** (11件)".to_string(),
+            "**残高一覧** (11件)".to_string(),
             "**k**\n100 k".to_string(),
         ]
     );

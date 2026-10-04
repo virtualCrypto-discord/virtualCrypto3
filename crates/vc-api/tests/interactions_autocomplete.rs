@@ -191,7 +191,7 @@ async fn grant_codes_only_offer_live_requests_the_actor_can_review(pool: PgPool)
         review
             .body
             .to_string()
-            .contains("アプリケーションの権限申請の確認")
+            .contains("アプリケーションからの申請")
     );
     assert!(review.body.to_string().contains("申請元"));
     assert!(review.body.to_string().contains("承認する"));
@@ -261,7 +261,7 @@ async fn grant_code_prefixes_filter_before_the_limit_and_keep_labels_readable(po
         choices(&response)[0]["name"]
             .as_str()
             .unwrap()
-            .contains("ボット 920001")
+            .contains("Bot 920001")
     );
     for (choice, (_, client_id)) in choices(&response)
         .iter()
@@ -271,7 +271,7 @@ async fn grant_code_prefixes_filter_before_the_limit_and_keep_labels_readable(po
         let label = choice["name"].as_str().unwrap();
         assert_eq!(label.chars().count(), 100);
         assert!(label.starts_with(choice["value"].as_str().unwrap()));
-        assert!(label.contains("サーバー / ボット未連携:"));
+        assert!(label.contains("サーバー / Bot 未接続:"));
         assert!(label.contains(client_id));
         assert!(!label.contains(['\r', '\n']));
     }
@@ -316,10 +316,7 @@ async fn an_empty_unit_query_offers_what_the_caller_holds(pool: PgPool) {
     assert_eq!(values(&response), vec![money.unit.clone()]);
     assert_eq!(
         choices(&response)[0]["name"],
-        json!(format!(
-            "通貨名: {} 所持量: 200000{}",
-            money.name, money.unit
-        ))
+        json!(format!("通貨名: {} 残高: 200000{}", money.name, money.unit))
     );
 }
 
@@ -396,7 +393,7 @@ async fn pay_offers_the_guild_currency_to_a_user_without_holdings(pool: PgPool) 
     assert_eq!(values(&response), [money.unit.as_str()]);
     assert_eq!(
         choices(&response)[0]["name"],
-        format!("通貨名: {} 所持量: 0{}", money.name, money.unit),
+        format!("通貨名: {} 残高: 0{}", money.name, money.unit),
     );
 }
 
@@ -576,10 +573,12 @@ async fn long_currency_names_fit_choices_without_changing_the_selected_unit(pool
             assert!((1..=100).contains(&length));
             if choice["value"] != money.unit {
                 assert_eq!(length, 100);
-                assert!(choice["name"].as_str().unwrap().ends_with(&format!(
-                    " 所持量: 100{}",
-                    choice["value"].as_str().unwrap()
-                )));
+                assert!(
+                    choice["name"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with(&format!(" 残高: 100{}", choice["value"].as_str().unwrap()))
+                );
             }
         }
     }
@@ -622,7 +621,7 @@ async fn the_id_option_under_approve_offers_only_what_can_be_approved(pool: PgPo
         choices(&response)[0]["name"]
             .as_str()
             .expect("a name")
-            .contains(&format!("請求id: {}", claims.id(5))),
+            .contains(&format!("請求ID: {}", claims.id(5))),
         "the suggestion names the claim"
     );
 }
@@ -668,7 +667,7 @@ async fn long_application_names_fit_claim_choices_without_changing_the_ids(pool:
         for choice in choices(&response) {
             let name = choice["name"].as_str().unwrap();
             assert_eq!(name.chars().count(), 100);
-            assert!(name.contains(&format!("請求id: {}", choice["value"].as_str().unwrap())));
+            assert!(name.contains(&format!("請求ID: {}", choice["value"].as_str().unwrap())));
         }
     }
 }

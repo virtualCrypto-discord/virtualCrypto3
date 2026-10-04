@@ -77,7 +77,7 @@ async fn an_unknown_unit_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨が存在しません。");
+    assert_error(&response, "エラー: その通貨はありません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -90,7 +90,7 @@ async fn a_non_positive_amount_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 不正な金額です。");
+    assert_error(&response, "エラー: 枚数は1以上で指定してください。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -165,7 +165,7 @@ async fn paying_more_than_the_balance_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨が不足しています。");
+    assert_error(&response, "エラー: 残高が足りません。");
     assert_eq!(
         get_amount(&pool, money.user1, money.currency).await,
         sender_before
@@ -215,7 +215,7 @@ async fn paying_one_more_than_the_balance_is_reported(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨が不足しています。");
+    assert_error(&response, "エラー: 残高が足りません。");
 }
 
 /// An amount Discord sends as a string is parsed the same way. This one is past
@@ -236,12 +236,13 @@ async fn an_amount_sent_as_a_string_is_parsed(pool: PgPool) {
     )
     .await;
 
-    assert_error(&response, "エラー: 通貨が不足しています。");
+    assert_error(&response, "エラー: 残高が足りません。");
 }
 
-const BUSY: &str = "処理が混み合っているため、送金しませんでした。時間をおいてやり直してください。";
+const BUSY: &str =
+    "混み合っているため送金できませんでした。しばらくしてからもう一度お試しください。";
 const UNCERTAIN: &str =
-    "送金結果を確認できませんでした。再送せず、/history で送金履歴を確認してください。";
+    "送金できたか確認できませんでした。もう一度送る前に `/history pay` で確認してください。";
 
 async fn history_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
@@ -457,7 +458,7 @@ async fn a_database_failure_returns_only_a_private_error_and_rolls_back(pool: Pg
     .await;
     assert_error(
         &response,
-        "送金できませんでした。時間をおいてやり直してください。",
+        "送金できませんでした。しばらくしてからもう一度お試しください。",
     );
     assert_eq!(get_amount(&pool, money.user2, money.currency).await, before);
     assert_eq!(history_count(&pool).await, 0);

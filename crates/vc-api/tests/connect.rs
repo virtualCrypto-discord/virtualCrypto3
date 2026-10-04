@@ -643,8 +643,18 @@ async fn missing_integration_distinguishes_present_absent_and_unreadable_members
             "サーバーに参加していますが",
         ),
         (404, 404, "invalid_bot", "このサーバーに参加していません"),
-        (403, 502, "discord_error", "在籍を確認できませんでした"),
-        (429, 502, "discord_error", "在籍を確認できませんでした"),
+        (
+            403,
+            502,
+            "discord_error",
+            "サーバーにいるか確認できませんでした",
+        ),
+        (
+            429,
+            502,
+            "discord_error",
+            "サーバーにいるか確認できませんでした",
+        ),
     ] {
         let response = connect_with(
             pool.clone(),

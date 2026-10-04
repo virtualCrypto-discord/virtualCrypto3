@@ -79,7 +79,7 @@ fn assert_shown(response: &support::Response, claim_id: i64, claim: &ClaimSet, i
     assert_eq!(
         container["components"][0]["content"],
         json!(format!(
-            "**請求**\n**📤📥{claim_id}**\n状態　: ⌛未決定\n請求額: **100** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{inserted_at}>",
+            "**請求**\n**📤📥{claim_id}**\n状態　: ⌛未処理\n請求額: **100** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{inserted_at}>",
             money.unit, money.user1, money.user1
         ))
     );
@@ -133,8 +133,8 @@ async fn make_creates_a_claim_and_reports_its_id(pool: PgPool) {
     assert_eq!(response.body["data"]["flags"], json!(32768));
     assert_eq!(response.body["type"], json!(4));
 
-    let prefix = "請求id: ";
-    let suffix = " で請求を受け付けました。";
+    let prefix = "請求を作成しました（ID: ";
+    let suffix = "）。";
     assert!(description.starts_with(prefix), "{description}");
     assert!(description.contains(suffix), "{description}");
 
@@ -142,7 +142,7 @@ async fn make_creates_a_claim_and_reports_its_id(pool: PgPool) {
         .parse()
         .expect("the claim id");
     assert!(
-        description.ends_with(&format!("`/claim show id:{claim_id}`でご確認ください。")),
+        description.ends_with(&format!("`/claim show id:{claim_id}` で確認できます。")),
         "{description}"
     );
 
@@ -176,7 +176,7 @@ async fn make_rejects_a_non_positive_amount(pool: PgPool) {
             "accent_color": COLOR_ERROR,
             "components": [{
                 "type": 10,
-                "content": "**エラー**\n不正な金額です。1以上9223372036854775807以下である必要があります。",
+                "content": "**エラー**\n金額は1以上9223372036854775807以下で指定してください。",
             }],
         }])
     );
@@ -202,7 +202,7 @@ async fn make_rejects_an_unknown_unit(pool: PgPool) {
             "accent_color": COLOR_ERROR,
             "components": [{
                 "type": 10,
-                "content": "**エラー**\n指定された通貨は存在しません。",
+                "content": "**エラー**\nその通貨はありません。",
             }],
         }])
     );
@@ -224,7 +224,7 @@ async fn show_reports_an_unknown_claim(pool: PgPool) {
             "accent_color": COLOR_ERROR,
             "components": [{
                 "type": 10,
-                "content": "**エラー**\nそのidの請求は見つかりませんでした。",
+                "content": "**エラー**\n請求が見つかりません。",
             }],
         }])
     );
@@ -248,7 +248,7 @@ async fn show_hides_a_claim_the_caller_is_not_part_of(pool: PgPool) {
             "accent_color": COLOR_ERROR,
             "components": [{
                 "type": 10,
-                "content": "**エラー**\nそのidの請求は見つかりませんでした。",
+                "content": "**エラー**\n請求が見つかりません。",
             }],
         }])
     );
@@ -327,17 +327,17 @@ fn assert_action_result(response: &support::Response, claim_id: i64, result: &st
             "accent_color": COLOR_OK,
             "components": [{
                 "type": 10,
-                "content": format!("id: {claim_id}の請求を{result}"),
+                "content": format!("請求（ID: {claim_id}）を{result}"),
             }],
         }])
     );
     assert_eq!(response.body["data"]["flags"], json!(32768));
 }
 
-const INVALID_OPERATOR: &str = "この請求に対してこの操作を行う権限がありません。";
-const INVALID_STATUS: &str = "この請求に対してこの操作を行うことは出来ません。";
-const NOT_FOUND: &str = "そのidの請求は見つかりませんでした。";
-const NOT_ENOUGH: &str = "お金が足りません。";
+const INVALID_OPERATOR: &str = "あなたはこの請求に対してこの操作ができません。";
+const INVALID_STATUS: &str = "この請求はすでに処理されています。";
+const NOT_FOUND: &str = "請求が見つかりません。";
+const NOT_ENOUGH: &str = "残高が足りません。";
 
 /// c1 is pending, so the payer can approve it and the money moves.
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -351,7 +351,7 @@ async fn approve_pays_the_claimant(pool: PgPool) {
 
     let response = patch(pool.clone(), "approve", claim_id, money.user2).await;
 
-    assert_action_result(&response, claim_id, "承諾し、支払いました。");
+    assert_action_result(&response, claim_id, "承諾して支払いました。");
 
     let claim = vc_core::claim::view(&pool, 1, claim_id)
         .await
@@ -946,9 +946,9 @@ async fn list_reports_an_empty_page(pool: PgPool) {
             "type": 17,
             "accent_color": COLOR_BRAND,
             "components": [
-                { "type": 10, "content": "**請求一覧(all)**" },
+                { "type": 10, "content": "**請求一覧**" },
                 { "type": 14 },
-                { "type": 10, "content": "表示する内容がありません。" },
+                { "type": 10, "content": "請求はありません。" },
                 { "type": 14 },
                 {
                     "type": 1,
@@ -991,7 +991,7 @@ async fn list_renders_the_first_page(pool: PgPool) {
             json!({
                 "type": 10,
                 "content": format!(
-                    "**{}{}**\n状態　: ⌛未決定\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
+                    "**{}{}**\n状態　: ⌛未処理\n請求額: **{}** `{}`\n請求元: <@{}>\n請求先: <@{}>\n請求日: <t:{}>",
                     claim_icon(money.user1, claim),
                     claim.id,
                     claim.amount.unwrap_or_default(),
@@ -1012,7 +1012,7 @@ async fn list_renders_the_first_page(pool: PgPool) {
     assert_eq!(container["accent_color"], json!(COLOR_BRAND));
     let children = container["components"].as_array().expect("the children");
 
-    assert_eq!(children[0]["content"], json!("**請求一覧(all)**"));
+    assert_eq!(children[0]["content"], json!("**請求一覧**"));
 
     let said: Vec<Value> = children
         .iter()
@@ -1100,10 +1100,10 @@ async fn list_renders_the_first_page(pool: PgPool) {
 }
 
 /// The button path's own wording, which differs from the command path's.
-const BUTTON_UNAUTHORIZED: &str = "エラー: この請求に対してこの操作を行う権限がありません。";
-const BUTTON_ALREADY_PROCESSED: &str = "エラー: 処理しようとした請求はすでに処理済みです。";
-const BUTTON_NO_MONEY: &str = "エラー: お金が足りません。";
-const BUTTON_NOT_FOUND: &str = "エラー: そのidの請求は見つかりませんでした。";
+const BUTTON_UNAUTHORIZED: &str = "エラー: あなたはこの請求に対してこの操作ができません。";
+const BUTTON_ALREADY_PROCESSED: &str = "エラー: この請求はすでに処理されています。";
+const BUTTON_NO_MONEY: &str = "エラー: 残高が足りません。";
+const BUTTON_NOT_FOUND: &str = "エラー: 請求が見つかりません。";
 
 /// `InteractionsControllerTest.Claim.List.Helper.action_data/2`: a `type 3`
 /// button press, carrying the token the follow-up is posted to.
@@ -1197,7 +1197,7 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
 
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を承諾し、支払いました。") }] }])
+        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("請求（ID: `{claim_id}`）を承諾して支払いました。") }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 
@@ -1207,7 +1207,7 @@ async fn pressing_approve_pays_the_claimant(pool: PgPool) {
     assert_eq!(response.body["data"]["flags"], json!(32768));
     assert_eq!(
         response.body["data"]["components"][0]["components"][0]["content"],
-        json!("**請求一覧(all)**")
+        json!("**請求一覧**")
     );
 
     // Only user2's other claim is left, so the page holds one row.
@@ -1435,7 +1435,7 @@ async fn pressing_deny_leaves_the_money_where_it_is(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求を拒否しました。") }] }])
+        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("請求（ID: `{claim_id}`）を拒否しました。") }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 
@@ -1615,7 +1615,7 @@ async fn pressing_cancel_is_the_claimants_move(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         body["components"],
-        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("id: `{claim_id}` の請求をキャンセルしました。") }] }])
+        json!([{ "type": 17, "accent_color": COLOR_OK, "components": [{ "type": 10, "content": format!("請求（ID: `{claim_id}`）をキャンセルしました。") }] }])
     );
     assert_eq!(body["flags"], json!(32832));
 
@@ -1803,7 +1803,7 @@ async fn pressing_the_reload_button_draws_the_page_again(pool: PgPool) {
     );
     assert_eq!(
         response.body["data"]["components"][0]["components"][0]["content"],
-        json!("**請求一覧(all)**")
+        json!("**請求一覧**")
     );
     assert!(
         api.webhooks().is_empty(),
@@ -1970,7 +1970,7 @@ async fn pressing_the_show_screens_approve_updates_the_claim(pool: PgPool) {
 
     assert_eq!(
         children[0]["content"],
-        json!(format!("id: {claim_id}の請求を承諾し、支払いました。"))
+        json!(format!("請求（ID: {claim_id}）を承諾して支払いました。"))
     );
     assert!(
         children[1]["content"]

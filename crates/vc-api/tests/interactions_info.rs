@@ -13,7 +13,7 @@ use support::{
 
 const COLOR_BRAND: i64 = 0x0062_21ED;
 const COLOR_ERROR: i64 = 0x00EA_3875;
-const FOOTER: &str = "発行枠は一日一回総発行量の0.5%増加し、最大で総発行量の3.5%となります。";
+const FOOTER: &str = "発行枠は1日1回、総発行量の0.5%ずつ増えます（上限は総発行量の3.5%）。";
 /// setup_money leaves 199500 with the first user and 1000 with the second.
 const TOTAL: i64 = 200_500;
 const POOL: i64 = 500;
@@ -72,7 +72,7 @@ fn embed(name: &str, unit: &str, amount: i64) -> Value {
             { "type": 10, "content": format!("**単位**\n`{unit}`") },
             { "type": 10, "content": format!("**総発行量**\n`{TOTAL}{unit}`") },
             { "type": 10, "content": format!("**発行枠**\n`{POOL}{unit}`") },
-            { "type": 10, "content": format!("**あなたの所持量**\n`{amount}{unit}`") },
+            { "type": 10, "content": format!("**あなたの残高**\n`{amount}{unit}`") },
             { "type": 10, "content": "**削除可能**\nはい" },
             { "type": 10, "content": format!("-# {FOOTER}") },
         ],
@@ -141,7 +141,7 @@ async fn info_in_a_guild_without_a_currency_is_not_found(pool: PgPool) {
 
     let response = interaction(router(pool), from_guild(money.user1, -1)).await;
 
-    assert_error(&response, "通貨が見つかりませんでした。");
+    assert_error(&response, "通貨が見つかりません。");
 }
 
 /// A supplied unit is used instead of the guild, so the guild id does not have
@@ -161,7 +161,7 @@ async fn info_by_an_unknown_unit_is_not_found(pool: PgPool) {
 
     let response = interaction(router(pool), from_guild_unit("gao", money.user1, -1)).await;
 
-    assert_error(&response, "通貨が見つかりませんでした。");
+    assert_error(&response, "通貨が見つかりません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -188,7 +188,7 @@ async fn info_by_an_unknown_name_is_not_found(pool: PgPool) {
 
     let response = interaction(router(pool), from_guild_name("fuwafuwa", money.user1, -1)).await;
 
-    assert_error(&response, "通貨が見つかりませんでした。");
+    assert_error(&response, "通貨が見つかりません。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
@@ -208,10 +208,7 @@ async fn info_run_in_a_direct_message(pool: PgPool) {
 
     let response = interaction(router(pool), from_dm(money.user1)).await;
 
-    assert_error(
-        &response,
-        "DMで実行する場合はオプションを指定する必要があります。",
-    );
+    assert_error(&response, "DMでは `name` か `unit` を指定してください。");
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]

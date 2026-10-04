@@ -423,10 +423,7 @@ async fn currency_label(
         ));
     }
     let units = crate::resource::units(state.pool(), resources).await?;
-    let label = format!(
-        message!("command.grant.currency_label.002"),
-        units.join("、")
-    );
+    let label = units.join("、");
     if label.chars().count() <= 300 {
         Ok((label, false))
     } else {

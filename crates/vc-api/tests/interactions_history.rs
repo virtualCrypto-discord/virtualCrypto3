@@ -216,7 +216,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(screen.contains("## 入出金の履歴\n全1件"), "{screen}");
     assert!(
-        screen.contains("**契約にロック　−100** `n`\n預け先: ボット未連携: `a metered service`"),
+        screen.contains("**契約にロック　−100** `n`\n預け先: Bot 未接続: `a metered service`"),
         "{screen}"
     );
 
@@ -238,7 +238,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(OTHER, "pay", vec![])).await);
     assert!(receiver.contains("## 入出金の履歴\n全1件"), "{receiver}");
     assert!(
-        receiver.contains("**契約から受取　+25** `n`\n支払元: ボット未連携: `a metered service`"),
+        receiver.contains("**契約から受取　+25** `n`\n支払元: Bot 未接続: `a metered service`"),
         "{receiver}"
     );
 
@@ -251,7 +251,7 @@ async fn a_contract_lock_and_return_are_in_the_wallet_history(pool: PgPool) {
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(screen.contains("## 入出金の履歴\n全2件"), "{screen}");
     assert!(
-        screen.contains("**契約から返却　+75** `n`\n返却元: ボット未連携: `a metered service`"),
+        screen.contains("**契約から返却　+75** `n`\n返却元: Bot 未接続: `a metered service`"),
         "{screen}"
     );
 }
@@ -315,7 +315,7 @@ async fn edited_application_names_cannot_forge_contract_history(pool: PgPool) {
             format!("<@{BOT}>")
         } else {
             format!(
-                "ボット未連携: `｀ <@500000000000000004>  受取: **999999** @everyone <@&123>`\nアプリケーションID: `{client_id}`"
+                "Bot 未接続: `｀ <@500000000000000004>  受取: **999999** @everyone <@&123>`\nアプリケーションID: `{client_id}`"
             )
         };
         // Lock, return, and incoming charge all use the same safe identity.
@@ -633,15 +633,15 @@ async fn a_mixed_payment_to_a_party_shows_the_return_and_receipt_separately(pool
         rendered(&interaction(router(pool.clone()), history(MONEY_USER1, "pay", vec![])).await);
     assert!(screen.contains("## 入出金の履歴\n全3件"), "{screen}");
     assert!(
-        screen.contains("**契約にロック　−100** `n`\n預け先: ボット未連携: `a metered service`"),
+        screen.contains("**契約にロック　−100** `n`\n預け先: Bot 未接続: `a metered service`"),
         "{screen}"
     );
     assert!(
-        screen.contains("**契約から返却　+100** `n`\n返却元: ボット未連携: `a metered service`"),
+        screen.contains("**契約から返却　+100** `n`\n返却元: Bot 未接続: `a metered service`"),
         "{screen}"
     );
     assert!(
-        screen.contains("**契約から受取　+20** `n`\n支払元: ボット未連携: `a metered service`"),
+        screen.contains("**契約から受取　+20** `n`\n支払元: Bot 未接続: `a metered service`"),
         "{screen}"
     );
 
@@ -773,7 +773,7 @@ async fn separate_contracts_of_one_application_have_distinct_references(pool: Pg
     assert_eq!(entries.len(), 2);
     for (entry, id) in entries.iter().zip(contracts.iter().rev()) {
         assert!(entry.contains(&format!(" / 契約ID: `{id}`")), "{entry}");
-        assert!(entry.contains("預け先: ボット未連携: `same application`"));
+        assert!(entry.contains("預け先: Bot 未接続: `same application`"));
     }
     assert_ne!(entries[0], entries[1]);
 }
@@ -813,10 +813,7 @@ async fn empty_results_keep_the_filters_without_claiming_the_guild_never_issued(
     for response in [&paid, &issued, &absent] {
         let shown = rendered(response);
         assert!(shown.contains("全0件"), "{shown}");
-        assert!(
-            shown.contains("指定した条件に一致する履歴はありません"),
-            "{shown}"
-        );
+        assert!(shown.contains("条件に一致する履歴はありません"), "{shown}");
         assert!(
             !shown.contains("まだ発行枠から発行されていません"),
             "{shown}"

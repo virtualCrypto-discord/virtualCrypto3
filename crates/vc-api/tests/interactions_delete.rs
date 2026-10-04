@@ -150,7 +150,7 @@ async fn delete_outside_the_window_is_refused(pool: PgPool) {
             "accent_color": 0xEA3875,
             "components": [{
                 "type": 10,
-                "content": "エラー: 作成から72時間以上経過しているため削除できません。",
+                "content": "エラー: 作成から72時間を過ぎているため削除できません。",
             }],
         }])
     );

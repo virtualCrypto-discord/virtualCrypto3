@@ -118,7 +118,7 @@ async fn help_opens_one_command(pool: PgPool) {
     );
 
     // The options are the registered ones, requiredness and all.
-    assert!(rendered.contains("送信先のユーザーです。"), "{rendered}");
+    assert!(rendered.contains("送り先のユーザーです。"), "{rendered}");
     assert!(rendered.contains("（必須）"), "{rendered}");
 }
 
@@ -299,7 +299,8 @@ async fn the_starting_page_links_the_commands_it_names(pool: PgPool) {
         "the list of what this does: {rendered}"
     );
     assert!(
-        rendered.contains("</pay:22> で配る。</bal:33> で自分の残高を確認できます。"),
+        rendered
+            .contains("</pay:22> や `/issue` で通貨を配る。</bal:33> で自分の残高を確認できます。"),
         "two commands in one sentence: {rendered}"
     );
     assert!(
@@ -1545,7 +1546,7 @@ async fn a_bot_picked_in_a_dm_says_where_to_run_it(pool: PgPool) {
     let rendered = response.body["data"].to_string();
 
     assert!(
-        rendered.contains("サーバーの中で行います"),
+        rendered.contains("サーバー内で接続してください"),
         "it says where to run it: {rendered}"
     );
 
@@ -1639,7 +1640,7 @@ async fn application_secret_rotation_requires_confirmation_and_ownership(pool: P
         );
         if screen == Screen::RotateSecret {
             let rendered = response.body.to_string();
-            assert!(rendered.contains("旧 secret"));
+            assert!(rendered.contains("今の client_secret はすぐに使えなくなります"));
             assert!(rendered.contains("キャンセル"));
             assert!(!rendered.contains(&before));
         }
@@ -1734,7 +1735,7 @@ async fn bot_selection_previews_reconnection_and_refuses_a_person(pool: PgPool) 
     for text in [
         OLD_BOT.to_string(),
         NEW_BOT.to_string(),
-        "残高が合算".to_owned(),
+        "残高に合算".to_owned(),
         "キャンセル".to_owned(),
     ] {
         assert!(rendered.contains(&text));

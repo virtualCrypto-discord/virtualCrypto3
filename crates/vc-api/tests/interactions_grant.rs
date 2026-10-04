@@ -38,11 +38,8 @@ const SCOPES: &[&str] = &["vc.issue"];
 /// application has an account of its own, so no two may share one.
 const FIRST_OWNER: i64 = 910_000_000_000_000_001;
 
-/// What the list says when the guild has allowed nobody. The approval's own
-/// sentence is in here, because a guild that has allowed nobody is the guild most
-/// likely to be looking for it.
-const EMPTY: &str = "発行を許可しているアプリケーションはありません。申請が来たときは、\
-                     アプリケーションが表示するコードを `/grant approve code:` に入力し、内容を確認して「承認する」を押してください。";
+/// What the list says when the guild has allowed nobody.
+const EMPTY: &str = "発行を許可しているアプリケーションはありません。";
 
 fn router(discord: std::sync::Arc<support::FakeDiscord>, pool: PgPool) -> Router {
     vc_api::router(state(pool, discord))
@@ -242,7 +239,7 @@ async fn grant_screens_render_only_bound_bot_ids_as_mentions(pool: PgPool) {
             format!("<@{BOT}>")
         } else {
             format!(
-                "ボット未連携: `｀ <@987654321987654321>  **trusted** @everyone <@&123>`\nアプリケーションID: `{client_id}`"
+                "Bot 未接続: `｀ <@987654321987654321>  **trusted** @everyone <@&123>`\nアプリケーションID: `{client_id}`"
             )
         };
         let check = |response: &Response| {
@@ -355,11 +352,9 @@ async fn the_list_shows_who_may_issue(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "**発行を許可しているアプリケーション** (1件)\n\
-             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
-                .to_string(),
+            "**発行を許可しているアプリケーション** (1件)".to_string(),
             format!(
-                "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
+                "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n対象の通貨: すべての通貨"
             ),
         ]
     );
@@ -406,7 +401,7 @@ async fn the_list_names_the_currency_a_grant_is_narrowed_to(pool: PgPool) {
     assert_eq!(
         texts(&response)[1],
         format!(
-            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\nこの申請は、通貨 nyan だけを操作できます。"
+            "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n対象の通貨: nyan"
         )
     );
 }
@@ -426,7 +421,7 @@ async fn approving_the_code_writes_the_grant(pool: PgPool) {
     assert_eq!(response.status, 202, "body: {}", response.body);
     assert_eq!(
         texts(&response),
-        ["発行を許可しました。この申請は、すべての通貨を操作できます。"]
+        ["発行を許可しました。\n対象の通貨: すべての通貨"]
     );
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
     assert_eq!(request_status(&pool, application).await, "approved");
@@ -470,10 +465,7 @@ async fn approving_a_narrowed_ask_says_what_it_is_for(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 202, "body: {}", response.body);
-    assert_eq!(
-        texts(&response),
-        ["発行を許可しました。この申請は、通貨 nyan だけを操作できます。"]
-    );
+    assert_eq!(texts(&response), ["発行を許可しました。\n対象の通貨: nyan"]);
 }
 
 /// And the application it was written for is what the list then shows.
@@ -506,7 +498,7 @@ async fn approving_puts_the_application_on_the_list(pool: PgPool) {
     assert_eq!(
         texts(&response)[1],
         format!(
-            "ボット未連携: `an application`\nアプリケーションID: `{client_id}`\nこの申請は、すべての通貨を操作できます。"
+            "Bot 未接続: `an application`\nアプリケーションID: `{client_id}`\n対象の通貨: すべての通貨"
         )
     );
     assert_eq!(
@@ -538,7 +530,7 @@ async fn a_code_that_names_nothing_pending_is_refused(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。"
+            "承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
         ]
     );
 }
@@ -625,7 +617,7 @@ async fn a_press_from_a_member_without_the_bit_changes_nothing(pool: PgPool) {
     .await;
 
     assert_eq!(response.status, 202, "body: {}", response.body);
-    assert_eq!(texts(&response), ["エラー: この許可は現在確認できません。"]);
+    assert_eq!(texts(&response), ["エラー: この許可は見つかりません。"]);
     assert!(allowed(&pool, application, DEFAULT_GUILD).await);
 }
 
@@ -666,8 +658,7 @@ async fn the_list_pages(pool: PgPool) {
 
     assert_eq!(
         texts(&first)[0],
-        "**発行を許可しているアプリケーション** (6件)\n\
-         取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
+        "**発行を許可しているアプリケーション** (6件)"
     );
 
     // The five rows' buttons, then the arrows: there is no page one from page one,
@@ -695,11 +686,9 @@ async fn the_list_pages(pool: PgPool) {
     assert_eq!(
         texts(&second),
         [
-            "**発行を許可しているアプリケーション** (6件)\n\
-             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
-                .to_string(),
+            "**発行を許可しているアプリケーション** (6件)".to_string(),
             format!(
-                "ボット未連携: `an application 0`\nアプリケーションID: `{}`\nこの申請は、すべての通貨を操作できます。",
+                "Bot 未接続: `an application 0`\nアプリケーションID: `{}`\n対象の通貨: すべての通貨",
                 client_ids[0]
             ),
         ]
@@ -732,8 +721,7 @@ async fn the_list_pages(pool: PgPool) {
         assert_eq!(back.body["type"], 7, "a redraw: {}", back.body);
         assert_eq!(
             texts(&back)[0],
-            "**発行を許可しているアプリケーション** (6件)\n\
-             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
+            "**発行を許可しているアプリケーション** (6件)"
         );
         assert_eq!(
             buttons(&back).len(),
@@ -759,11 +747,9 @@ async fn the_list_pages(pool: PgPool) {
     assert_eq!(
         texts(&last),
         [
-            "**発行を許可しているアプリケーション** (6件)\n\
-             取り消すのは選んだ許可だけです。同じアプリケーションへの他の許可は残ります。"
-                .to_string(),
+            "**発行を許可しているアプリケーション** (6件)".to_string(),
             format!(
-                "ボット未連携: `an application 0`\nアプリケーションID: `{}`\nこの申請は、すべての通貨を操作できます。",
+                "Bot 未接続: `an application 0`\nアプリケーションID: `{}`\n対象の通貨: すべての通貨",
                 client_ids[0]
             ),
         ]
@@ -840,7 +826,7 @@ async fn the_command_needs_the_administrator_bit(pool: PgPool) {
     assert_eq!(
         texts(&response),
         [
-            "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。"
+            "承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
         ]
     );
 }
@@ -1118,12 +1104,12 @@ async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool)
     assert_eq!(grant_count(&pool).await, 0);
     let description = texts(&review).join("\n");
     for expected in [
-        "アプリケーションの権限申請の確認",
-        "申請元のアプリケーション: ボット未連携: `an application`",
+        "アプリケーションからの申請",
+        "アプリケーション: Bot 未接続: `an application`",
         &format!("対象: このサーバー ({DEFAULT_GUILD})"),
         "このサーバーの発行枠から通貨を発行する",
         "対象の通貨（すべて・ページ 1/1）",
-        "承認の対象は、全ページに表示されているすべての通貨です。",
+        "承認すると、すべてのページに表示された通貨が対象になります。",
     ] {
         assert!(description.contains(expected), "{description}");
     }
@@ -1140,7 +1126,7 @@ async fn server_confirmation_rechecks_guild_permissions_and_expiry(pool: PgPool)
     assert_eq!(
         texts(&dm),
         [
-            "ここで確認できる承認待ちの申請はありません。サーバーへの申請は、申請先のサーバー内で管理者が確認してください。"
+            "承認待ちの申請が見つかりません。サーバーへの申請は、そのサーバーで管理者が承認してください。"
         ]
     );
     assert!(buttons(&dm).is_empty());

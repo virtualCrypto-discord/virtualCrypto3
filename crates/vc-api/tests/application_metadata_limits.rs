@@ -123,7 +123,7 @@ fn all_settings_at_their_limits_fit_in_one_message_without_truncation() {
         );
         let screen = vc_api::developer::saved(
             screen,
-            "client_secret を再生成しました。旧 secret は使えません。利用中のサービスの設定を更新してください。",
+            "client_secret を再生成しました。古い client_secret は使えなくなりました。",
         );
         fn component_count(value: &Value) -> usize {
             match value {
