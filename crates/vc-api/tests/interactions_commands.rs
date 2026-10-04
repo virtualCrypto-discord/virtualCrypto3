@@ -299,7 +299,8 @@ async fn the_starting_page_links_the_commands_it_names(pool: PgPool) {
         "the list of what this does: {rendered}"
     );
     assert!(
-        rendered.contains("</pay:22> で配る。</bal:33> で自分の残高を確認できます。"),
+        rendered
+            .contains("</pay:22> や `/issue` で通貨を配る。</bal:33> で自分の残高を確認できます。"),
         "two commands in one sentence: {rendered}"
     );
     assert!(

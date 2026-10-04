@@ -316,10 +316,7 @@ async fn an_empty_unit_query_offers_what_the_caller_holds(pool: PgPool) {
     assert_eq!(values(&response), vec![money.unit.clone()]);
     assert_eq!(
         choices(&response)[0]["name"],
-        json!(format!(
-            "通貨名: {} 所持量: 200000{}",
-            money.name, money.unit
-        ))
+        json!(format!("通貨名: {} 残高: 200000{}", money.name, money.unit))
     );
 }
 
@@ -396,7 +393,7 @@ async fn pay_offers_the_guild_currency_to_a_user_without_holdings(pool: PgPool) 
     assert_eq!(values(&response), [money.unit.as_str()]);
     assert_eq!(
         choices(&response)[0]["name"],
-        format!("通貨名: {} 所持量: 0{}", money.name, money.unit),
+        format!("通貨名: {} 残高: 0{}", money.name, money.unit),
     );
 }
 
@@ -576,10 +573,12 @@ async fn long_currency_names_fit_choices_without_changing_the_selected_unit(pool
             assert!((1..=100).contains(&length));
             if choice["value"] != money.unit {
                 assert_eq!(length, 100);
-                assert!(choice["name"].as_str().unwrap().ends_with(&format!(
-                    " 所持量: 100{}",
-                    choice["value"].as_str().unwrap()
-                )));
+                assert!(
+                    choice["name"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with(&format!(" 残高: 100{}", choice["value"].as_str().unwrap()))
+                );
             }
         }
     }

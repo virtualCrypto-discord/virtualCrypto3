@@ -948,7 +948,7 @@ async fn list_reports_an_empty_page(pool: PgPool) {
             "components": [
                 { "type": 10, "content": "**請求一覧**" },
                 { "type": 14 },
-                { "type": 10, "content": "表示する内容がありません。" },
+                { "type": 10, "content": "請求はありません。" },
                 { "type": 14 },
                 {
                     "type": 1,

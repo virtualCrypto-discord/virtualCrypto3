@@ -72,7 +72,7 @@ fn embed(name: &str, unit: &str, amount: i64) -> Value {
             { "type": 10, "content": format!("**単位**\n`{unit}`") },
             { "type": 10, "content": format!("**総発行量**\n`{TOTAL}{unit}`") },
             { "type": 10, "content": format!("**発行枠**\n`{POOL}{unit}`") },
-            { "type": 10, "content": format!("**あなたの所持量**\n`{amount}{unit}`") },
+            { "type": 10, "content": format!("**あなたの残高**\n`{amount}{unit}`") },
             { "type": 10, "content": "**削除可能**\nはい" },
             { "type": 10, "content": format!("-# {FOOTER}") },
         ],
