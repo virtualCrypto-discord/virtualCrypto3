@@ -1,0 +1,142 @@
+name: release
+run-name: ${{ inputs.operation }} from run ${{ inputs.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Promote a verified CI artifact, or recover the snapshot from a production release run
+        type: choice
+        options: [promote, recover]
+        default: promote
+        required: true
+      run_id:
+        description: CI run ID for promote; production release run ID for recover
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_sha: ${{ steps.record.outputs.source_sha }}
+      image: ${{ steps.record.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Resolve trusted workflow artifact
+        id: record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          kind=staging
+          if [ "$OPERATION" = recover ]; then kind=production; fi
+          python3 scripts/fly-release.py resolve --kind "$kind" --run-id "$RUN_ID" --directory release-record
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: resolved-release-${{ github.run_attempt }}
+          path: release-record/
+          retention-days: 30
+
+  production:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://virtualcrypto-prod.fly.dev
+    concurrency:
+      group: fly-production
+      cancel-in-progress: false
+    steps:
+      # Run the release tools from this workflow's trusted main revision. The
+      # candidate checkout supplies only the production config for that image.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: tooling
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: inputs.operation == 'promote'
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: candidate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: resolved-release-${{ github.run_attempt }}
+          path: release-record
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.97"
+      - name: Record production before promotion
+        id: production-image
+        if: inputs.operation == 'promote'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_API_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN" || { echo 'Set FLY_PRODUCTION_API_TOKEN in the production environment'; exit 1; }
+          python3 tooling/scripts/fly-release.py promotion --directory release-record
+          python3 tooling/scripts/fly-release.py snapshot --environment production --directory release-record
+          flyctl config validate --config candidate/fly.toml --strict
+      - name: Copy the verified image into the production registry
+        if: inputs.operation == 'promote'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_API_TOKEN }}
+          FLY_STAGING_IMAGE_TOKEN: ${{ secrets.FLY_STAGING_IMAGE_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+          python3 tooling/scripts/fly-release.py mirror --directory release-record
+      - name: Promote the staging-tested digest
+        id: deploy
+        if: inputs.operation == 'promote'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_API_TOKEN }}
+          RELEASE_IMAGE: ${{ steps.production-image.outputs.image }}
+        working-directory: candidate
+        run: |
+          flyctl deploy --config fly.toml --app virtualcrypto-prod \
+            --image "$RELEASE_IMAGE" --ha=false --deploy-retries 0 --yes 2>&1 | tee ../release-record/deploy.log
+      - name: Smoke and verify production
+        if: inputs.operation == 'promote'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_API_TOKEN }}
+        run: |
+          python3 tooling/scripts/fly-smoke.py https://virtualcrypto-prod.fly.dev | tee release-record/smoke.json
+          python3 tooling/scripts/fly-release.py verify --environment production --directory release-record
+      - name: Record Machine versions after the attempt
+        if: always() && inputs.operation == 'promote' && steps.deploy.outcome != 'skipped'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_API_TOKEN }}
+        run: python3 tooling/scripts/fly-release.py observe --environment production --directory release-record
+      - name: Recover previous Machine images and configuration
+        if: inputs.operation == 'recover'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_API_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN" || { echo 'Set FLY_PRODUCTION_API_TOKEN in the production environment'; exit 1; }
+          python3 tooling/scripts/fly-release.py recover --environment production --directory release-record
+      - name: Release summary
+        if: always()
+        env:
+          OPERATION: ${{ inputs.operation }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          RELEASE_IMAGE: ${{ steps.production-image.outputs.image || needs.resolve.outputs.image }}
+        run: |
+          printf 'Operation: %s\n\nSource: `%s`\n\nCandidate: `%s`\n' \
+            "$OPERATION" "$SOURCE_SHA" "$RELEASE_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nRecovery uses the previous Machine snapshot; DB schema and Discord commands are not reverted.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve production release record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-release-${{ github.run_attempt }}
+          path: release-record/
+          retention-days: 30
+          if-no-files-found: error

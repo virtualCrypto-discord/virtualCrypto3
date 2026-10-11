@@ -1,5 +1,8 @@
 # Deploying this
 
+For release CI recommendations and the staging deployment/recovery rehearsal,
+see [Fly.io release CI](release-ci.md).
+
 The contract between the server and whatever runs it: what it needs, what it
 serves, and how the schema gets there. Written down because a Dockerfile is only as
 correct as this list.
@@ -235,6 +238,12 @@ build includes the SPA, and the release command runs before the rollout, allowin
 60 seconds to connect to a sleeping database (see "Release command" above). `--ha=false`
 avoids provisioning a spare Machine on the first deploy; it does not remove any
 previously created Machines.
+
+After rollout, CI checks the SPA/assets, a public PostgreSQL lookup and request
+rejection paths, then verifies every Machine's digest and HTTP check. The image
+digest, source SHA and previous configuration are retained in a staging release
+artifact. Production promotion is a separate manual `release` workflow using
+that successful CI run ID, with no rebuild; see [release operations](release-ci.md#running-the-workflows).
 
 ### Initial setup
 
