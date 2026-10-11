@@ -28,7 +28,7 @@ COPY .sqlx/ ./.sqlx/
 
 ENV SQLX_OFFLINE=true
 
-RUN cargo build --release -p vc-server -p vc-api --bin vc-server --bin register-commands
+RUN cargo build --locked --release -p vc-server -p vc-api --bin vc-server --bin register-commands
 
 # For the release command. `--locked` because an install that resolves something else
 # is not the one this was tested with.

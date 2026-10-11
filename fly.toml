@@ -1,10 +1,13 @@
-# The application this replaces: the same internal port this server defaults to and
-# the same region. A deploy sets the secrets under the names
+# Production remains in the region of its existing Machine. A deploy uses the names
 # `docs/deploy.md` lists, which are the ones this server reads. The Elixir read only
 # two names from the environment itself (`VCRYPTO_WEBHOOK_PROXY_CERT` and `_KEY`), so
 # that pair is one name in both deployments and the rest are this service's.
 app = "virtualcrypto-prod"
-primary_region = "phx"
+primary_region = "lax"
+
+[processes]
+  # Replace the legacy /app/bin/server Machine command explicitly.
+  app = "/app/bin/vc-server"
 
 [env]
   VCRYPTO_ENV = "production"
@@ -13,6 +16,7 @@ primary_region = "phx"
   dockerfile = "Dockerfile"
 
 [deploy]
+  strategy = "rolling"
   # The migrations, then registering the slash commands with the application, so
   # Discord's list always matches the deployed code. The image provides it as a script.
   release_command = "/app/bin/release"
@@ -20,3 +24,18 @@ primary_region = "phx"
 [http_service]
   internal_port = 8080
   force_https = true
+  processes = ["app"]
+  auto_stop_machines = "off"
+  auto_start_machines = true
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
