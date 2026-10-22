@@ -43,10 +43,14 @@ class UpdateTests(unittest.TestCase):
         image = 'registry.fly.io/virtualcrypto-backup@sha256:' + 'a' * 64
         after = copy.deepcopy(before)
         after['config']['image'] = image
-        with patch.object(deploy, 'machines', side_effect=[[before], [after]]), \
+        transient = dict(after, state='updating')
+        with patch.object(deploy, 'time') as clock, \
+             patch.object(deploy, 'machines', side_effect=[[before], [transient], [after]]), \
              patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}]) as api, \
              patch('sys.argv', ['update.py', image]):
+            clock.monotonic.return_value = 0
             deploy.main()
+            clock.sleep.assert_called_once_with(2)
         mutation = api.call_args_list[2]
         self.assertEqual(mutation.kwargs['data']['current_version'], 'version-1')
         self.assertTrue(mutation.kwargs['data']['skip_launch'])

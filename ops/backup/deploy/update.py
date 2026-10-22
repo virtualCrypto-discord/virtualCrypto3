@@ -5,6 +5,7 @@ import copy
 import os
 import json
 import re
+import time
 from urllib.request import Request, urlopen
 
 APP = 'virtualcrypto-backup'
@@ -66,7 +67,17 @@ def main():
         })
     finally:
         api(lease_path, method='DELETE', nonce=nonce)
-    after = validate_machine(machines())
+    deadline = time.monotonic() + 120
+    while True:
+        observed = machines()
+        if len(observed) != 1 or observed[0]['id'] != before['id']:
+            raise RuntimeError('Machine inventory changed')
+        if observed[0]['state'] == 'stopped':
+            after = validate_machine(observed)
+            break
+        if observed[0]['state'] not in ('created', 'updating', 'pending') or time.monotonic() >= deadline:
+            raise RuntimeError('Image update did not settle to a stopped Machine')
+        time.sleep(2)
     if after['id'] != before['id']:
         raise RuntimeError('Machine identity changed')
     if after['config']['image'].split('@')[-1] != args.image.split('@')[-1]:
