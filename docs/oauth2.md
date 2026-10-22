@@ -38,6 +38,13 @@ Owners can opt in through the existing authenticated metadata update endpoints
 {"token_endpoint_auth_method": "client_secret_basic"}
 ```
 
+Discord owners can also open **認証設定** from the application's detail screen.
+The current method is displayed on the detail screen and selected in the settings
+menu. Choosing a method saves it immediately through the same validated metadata
+update; the screen explains that Basic is required for both code exchange and
+refresh, including already-issued credentials. Secret rotation is available from
+the same settings screen. Only the application's owner can view or change it.
+
 Omitting the field on an update preserves it. Unknown values, booleans and
 `null` are rejected as `invalid_client_metadata`. Deploy client-side Basic
 authentication for **both** code exchange and refresh before opting in:
