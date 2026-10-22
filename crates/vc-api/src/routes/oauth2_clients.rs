@@ -39,6 +39,7 @@ use crate::state::AppState;
 /// endpoints answer with, gathered from three places.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Details {
+    pub token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod,
     pub client_id: String,
     pub client_secret: Option<String>,
     pub redirect_uris: Vec<String>,
@@ -79,6 +80,7 @@ pub fn render(details: &Details) -> Value {
     json!({
         "client_id": details.client_id,
         "client_secret": details.client_secret,
+        "token_endpoint_auth_method": details.token_endpoint_auth_method,
         // The convention for "this secret never expires", which is a zero rather
         // than a null so that a client reading an integer gets one.
         "client_secret_expires_at": 0,
@@ -169,6 +171,11 @@ pub async fn details(
     .await?;
 
     Ok(Some(Details {
+        token_endpoint_auth_method: vc_core::application::token_endpoint_auth_method(
+            pool,
+            application_id,
+        )
+        .await?,
         client_id: row.client_id,
         client_secret: row.client_secret,
         redirect_uris,
@@ -243,6 +250,8 @@ pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Respo
 /// instead of being rejected on the way in.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Registration {
+    #[serde(default, deserialize_with = "present_auth_method")]
+    pub token_endpoint_auth_method: Option<Value>,
     pub response_types: Option<Vec<String>>,
     pub grant_types: Option<Vec<String>>,
     pub application_type: Option<String>,
@@ -329,8 +338,30 @@ pub fn refused(
     refusal(status, error, description).response()
 }
 
-/// A metadata refusal, which is always `invalid_client_metadata` and the rule's
-/// own description.
+/// Keep explicit null distinct from omission so it is rejected as metadata.
+fn present_auth_method<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+fn parse_auth_method(
+    value: Option<&Value>,
+) -> Result<Option<vc_core::application::TokenEndpointAuthMethod>, Box<Refusal>> {
+    value
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|_| {
+                refusal(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_client_metadata",
+                    "invalid_token_endpoint_auth_method",
+                )
+            })
+        })
+        .transpose()
+}
+
+/// A metadata refusal, with the rule's own description.
 fn metadata(error: MetadataError) -> Box<Refusal> {
     refusal(
         StatusCode::BAD_REQUEST,
@@ -433,7 +464,9 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
     // with.
     validate_redirects(&redirect_uris)?;
 
+    let token_endpoint_auth_method = parse_auth_method(body.token_endpoint_auth_method.as_ref())?;
     Ok(NewApplication {
+        token_endpoint_auth_method,
         response_types,
         grant_types,
         application_type,
@@ -648,6 +681,7 @@ pub async fn register(
         Json(json!({
             "client_id": created.client_id,
             "client_secret": created.client_secret,
+            "token_endpoint_auth_method": created.token_endpoint_auth_method,
             "registration_access_token": created.access_token,
             "registration_client_uri": format!("{}/oauth2/clients/@me", state.links().site_url),
             "client_secret_expires_at": 0,
@@ -661,6 +695,7 @@ pub async fn register(
 /// The endpoint says them as JSON and the command says them as a screen, so this stops at
 /// the values and lets each one talk.
 pub struct Created {
+    pub token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod,
     pub client_id: String,
     pub client_secret: String,
     pub access_token: String,
@@ -732,8 +767,16 @@ pub async fn create(
         }
     }
 
+    let mut new = new.clone();
+    let method = new.token_endpoint_auth_method.unwrap_or_else(|| {
+        vc_core::application::TokenEndpointAuthMethod::registration_default(
+            state.token_endpoint_auth_default_from(),
+            OffsetDateTime::now_utc(),
+        )
+    });
+    new.token_endpoint_auth_method = Some(method);
     let registered =
-        match vc_core::application::register(state.pool(), new, &private_key, &public_key).await {
+        match vc_core::application::register(state.pool(), &new, &private_key, &public_key).await {
             Ok(registered) => registered,
             Err(_) => return Err(Box::new(internal("the application could not be written"))),
         };
@@ -756,6 +799,7 @@ pub async fn create(
     };
 
     Ok(Created {
+        token_endpoint_auth_method: method,
         client_id: registered.client_id,
         client_secret: registered.client_secret,
         access_token,
@@ -887,6 +931,7 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
     };
 
     let mut changes = Changes {
+        token_endpoint_auth_method: parse_auth_method(body.get("token_endpoint_auth_method"))?,
         rotate_client_secret,
         client_name: text(body, "client_name"),
         client_uri: text(body, "client_uri"),
@@ -1127,6 +1172,7 @@ mod tests {
 
     fn details() -> Details {
         Details {
+            token_endpoint_auth_method: Default::default(),
             client_id: "e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f".to_owned(),
             client_secret: Some("a-secret".to_owned()),
             redirect_uris: vec!["https://app.example/callback".to_owned()],

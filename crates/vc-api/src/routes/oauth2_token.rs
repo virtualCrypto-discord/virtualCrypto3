@@ -19,8 +19,8 @@ use time::OffsetDateTime;
 use vc_auth::issue::{app_scopes_are_valid, app_token, revoke_by_jti};
 use vc_core::application::{Application, verify_secret};
 use vc_core::grant::{
-    EXPIRES_IN, ExchangeError, create_device_token, exchange_code, exchange_refresh_token,
-    revoke_access_token, revoke_refresh_token,
+    EXPIRES_IN, ExchangeError, create_device_token, exchange_code_authenticated,
+    exchange_refresh_token_authenticated, revoke_access_token, revoke_refresh_token,
 };
 
 use crate::state::AppState;
@@ -81,8 +81,8 @@ pub async fn token(
 ) -> Response {
     match form.grant_type.as_deref() {
         None => error("invalid_request", "grant_type_parameter_missing"),
-        Some("authorization_code") => exchange(&state, form).await,
-        Some("refresh_token") => refresh(&state, form).await,
+        Some("authorization_code") => exchange(&state, &headers, form).await,
+        Some("refresh_token") => refresh(&state, &headers, form).await,
         Some("client_credentials") => credentials(&state, &headers, form).await,
         Some("urn:ietf:params:oauth:grant-type:device_code") => {
             device(&state, &headers, form).await
@@ -242,6 +242,22 @@ async fn scoped(state: &AppState, application: &Application, scope: &str) -> Res
     }
 }
 
+fn token_invalid_client(headers: &HeaderMap) -> Response {
+    if headers.contains_key(AUTHORIZATION) {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(
+                axum::http::header::WWW_AUTHENTICATE,
+                "Basic realm=\"oauth2/token\"",
+            )],
+            Json(json!({ "error": "invalid_client" })),
+        )
+            .into_response()
+    } else {
+        invalid_client()
+    }
+}
+
 fn invalid_client() -> Response {
     (
         StatusCode::BAD_REQUEST,
@@ -251,10 +267,14 @@ fn invalid_client() -> Response {
 }
 
 /// `grant_type=authorization_code`.
-async fn exchange(state: &AppState, form: TokenForm) -> Response {
+async fn exchange(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Response {
     // Which parameter is missing is what the client is told, in the Elixir's
     // order.
-    let Some(client_id) = form.client_id else {
+    let credentials = basic_auth(headers);
+    let Some(client_id) = form
+        .client_id
+        .or_else(|| credentials.as_ref().map(|(id, _)| id.clone()))
+    else {
         return error("invalid_request", "client_id");
     };
     let Some(redirect_uri) = form.redirect_uri else {
@@ -264,11 +284,12 @@ async fn exchange(state: &AppState, form: TokenForm) -> Response {
         return error("invalid_request", "code");
     };
 
-    let exchanged = exchange_code(
+    let exchanged = exchange_code_authenticated(
         state.pool(),
         &client_id,
         &redirect_uri,
         &code,
+        credentials.as_ref(),
         OffsetDateTime::now_utc,
     )
     .await;
@@ -288,18 +309,26 @@ async fn exchange(state: &AppState, form: TokenForm) -> Response {
 
             Json(body).into_response()
         }
+        Err(ExchangeError::InvalidClient) => token_invalid_client(headers),
         Err(error) => refused(error),
     }
 }
 
 /// `grant_type=refresh_token`.
-async fn refresh(state: &AppState, form: TokenForm) -> Response {
+async fn refresh(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Response {
     let Some(refresh_token) = form.refresh_token else {
         return error("invalid_request", "refresh_token");
     };
 
-    let refreshed =
-        exchange_refresh_token(state.pool(), &refresh_token, OffsetDateTime::now_utc).await;
+    let credentials = basic_auth(headers);
+    let refreshed = exchange_refresh_token_authenticated(
+        state.pool(),
+        &refresh_token,
+        credentials.as_ref(),
+        form.client_id.as_deref(),
+        OffsetDateTime::now_utc,
+    )
+    .await;
 
     match refreshed {
         Ok(refreshed) => Json(json!({
@@ -311,6 +340,7 @@ async fn refresh(state: &AppState, form: TokenForm) -> Response {
             "refresh_token": refreshed.refresh_token,
         }))
         .into_response(),
+        Err(ExchangeError::InvalidClient) => token_invalid_client(headers),
         Err(error) => refused(error),
     }
 }

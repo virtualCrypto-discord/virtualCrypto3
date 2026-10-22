@@ -1,5 +1,55 @@
 # OAuth2 and applications
 
+## Token endpoint client authentication
+
+Applications store `token_endpoint_auth_method` as one of:
+
+- `none`: preserve legacy code-exchange and refresh behavior, including public clients.
+- `client_secret_basic`: require HTTP Basic authentication for both authorization-code
+  exchange and refresh, with credentials belonging to the application that owns
+  the code or refresh token. A body `client_id`, if present, must also match.
+  Code exchange can take its client id from Basic authentication.
+
+Migration 0029 assigns `none` to existing applications. Neither passing the
+activation time nor restarting the service changes their saved setting.
+The existing client-credentials and device-code grants continue to require
+Basic authentication regardless of this setting.
+
+`POST /oauth2/clients` accepts an explicit `token_endpoint_auth_method`.
+If omitted, the registration service chooses and saves the default at creation:
+
+| `TOKEN_ENDPOINT_AUTH_DEFAULT_FROM` | Default for a new registration |
+| --- | --- |
+| Unset | `none` |
+| Configured time is still in the future | `none` |
+| Configured time has arrived | `client_secret_basic` |
+
+The variable is read at startup and must contain an RFC 3339 timestamp with a
+timezone, for example `2027-01-01T00:00:00+09:00`. Invalid or empty values fail
+startup. Set the same value on every server instance. The scheduled default
+also applies to registrations made through Discord. Explicit registration
+choices always win; public clients can explicitly select `none`.
+
+Registration responses and application metadata reads expose the saved method.
+Owners can opt in through the existing authenticated metadata update endpoints
+(for example `PATCH /oauth2/clients/@me` with its registration access token):
+
+```json
+{"token_endpoint_auth_method": "client_secret_basic"}
+```
+
+Omitting the field on an update preserves it. Unknown values, booleans and
+`null` are rejected as `invalid_client_metadata`. Deploy client-side Basic
+authentication for **both** code exchange and refresh before opting in:
+the policy immediately covers already-issued codes and refresh tokens too.
+Authentication failures do not consume either token or revoke a reused code's
+grant. Failed authentication using an Authorization header returns
+`401 invalid_client` with a Basic challenge; missing authentication returns
+`400 invalid_client`. Applications using `none` retain legacy handling of
+authentication headers. PKCE is separate and is not introduced by this change.
+
+
+
 The current browser flow is request-bound: `/oauth2/authorize` starts a new Discord
 identity check every time, `/callback/discord` shows consent, and a one-time
 `flow_id` approves only the stored request. There are no persistent browser

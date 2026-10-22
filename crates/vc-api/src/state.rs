@@ -63,6 +63,7 @@ pub struct Outbound {
 
 #[derive(Clone)]
 pub struct AppState {
+    token_endpoint_auth_default_from: Option<time::OffsetDateTime>,
     pool: PgPool,
     signing: Signing,
     discord_public_key: Arc<[u8; 32]>,
@@ -104,6 +105,7 @@ impl AppState {
             limiter,
             monitor,
             command_ids: Arc::new(CommandIds::default()),
+            token_endpoint_auth_default_from: None,
         }
     }
 
@@ -145,6 +147,18 @@ impl AppState {
             let _ = tokio::time::timeout(Duration::from_millis(100), ready).await;
         }
         cache.ids.get().unwrap_or(&EMPTY)
+    }
+
+    pub fn with_token_endpoint_auth_default_from(
+        mut self,
+        from: Option<time::OffsetDateTime>,
+    ) -> Self {
+        self.token_endpoint_auth_default_from = from;
+        self
+    }
+
+    pub fn token_endpoint_auth_default_from(&self) -> Option<time::OffsetDateTime> {
+        self.token_endpoint_auth_default_from
     }
 
     pub fn pool(&self) -> &PgPool {
