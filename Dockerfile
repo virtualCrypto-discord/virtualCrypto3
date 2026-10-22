@@ -41,8 +41,9 @@ RUN cargo install sqlx-cli --version 0.9.0 --locked \
 # on, or the release command fails on every deploy.
 FROM debian:trixie-slim
 
-# reqwest verifies TLS against these, and everything this service talks to is https —
-# Discord, and the webhook emitter.
+# OS trust store for tools that use it. The service's reqwest clients use
+# compiled-in webpki-roots; TLS security updates also require updating Cargo.lock
+# and rebuilding the binaries.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
