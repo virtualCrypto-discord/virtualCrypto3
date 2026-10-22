@@ -13,7 +13,7 @@ COPY web/ ./
 RUN npm run build
 
 # The server.
-FROM rust:1.98.1-slim AS build
+FROM rust:1.99.0-slim AS build
 
 WORKDIR /src
 
