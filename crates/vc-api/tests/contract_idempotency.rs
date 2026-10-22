@@ -17,6 +17,171 @@ use support::{
 };
 use tower::ServiceExt;
 
+/// Queue both requests on the contract before allowing either to modify it.
+/// Starting the second only after the first blocks also exercises both serial
+/// orders when callers swap the operations.
+async fn race_contract(
+    pool: &PgPool,
+    contract: i64,
+    first: impl std::future::Future<Output = Response>,
+    second: impl std::future::Future<Output = Response>,
+) -> (Response, Response) {
+    use std::time::Duration;
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM contracts WHERE id = $1 FOR UPDATE")
+        .bind(contract)
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let wait = |count: i64| async move {
+        loop {
+            let blocked: i64 = sqlx::query_scalar(
+                "SELECT count(DISTINCT a.pid) FROM pg_stat_activity a
+                 JOIN pg_locks l ON l.pid = a.pid
+                 WHERE a.datname = current_database() AND NOT l.granted",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if blocked >= count {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    let (first, second, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            first,
+            async {
+                wait(1).await;
+                second.await
+            },
+            async {
+                wait(2).await;
+                gate.rollback().await.unwrap();
+            }
+        )
+    })
+    .await
+    .expect("both operations must reach the lock and finish without a deadlock");
+    (first, second)
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn distinct_keys_cannot_spend_the_same_contract_quota(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let (first, second) = race_contract(
+        &pool,
+        fixture.contract,
+        charge(&pool, &fixture, 75, Some(key_header("first"))),
+        charge(&pool, &fixture, 75, Some(key_header("second"))),
+    )
+    .await;
+    assert_eq!(first.status, 201, "{}", first.body);
+    assert_eq!(second.status, 409, "{}", second.body);
+    assert_eq!(second.body["error_info"], "not_enough_amount");
+    for (key, original) in [("first", first), ("second", second)] {
+        let replay = charge(&pool, &fixture, 75, Some(key_header(key))).await;
+        assert_eq!(replay.status, original.status);
+        assert_eq!(replay.body, original.body);
+        assert_eq!(idempotency_status(&replay).as_deref(), Some("Duplicate"));
+    }
+    assert_eq!(remaining(&pool, &fixture).await, "25");
+    assert_eq!(escrow(&pool, fixture.contract).await, 25);
+    assert_eq!(balance(&pool, ALICE).await, 900);
+    assert_eq!(receiver_balance(&pool).await, 75);
+}
+
+async fn receiver_balance(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COALESCE(SUM(a.amount), 0)::bigint FROM assets a
+         JOIN users u ON u.id = a.user_id WHERE u.discord_id = $1 AND a.currency_id = 1",
+    )
+    .bind(RECEIVER_DISCORD_ID)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn withdraw(pool: &PgPool, fixture: &Fixture, alice: &str) -> Response {
+    send(
+        vc_api::router(state(pool.clone(), fake())),
+        "DELETE",
+        &format!("/api/v2/contracts/{}/approval", fixture.contract),
+        alice,
+        None,
+        Value::Null,
+    )
+    .await
+}
+
+async fn charge_and_withdraw(pool: PgPool, charge_first: bool) {
+    let fixture = fixture(&pool).await;
+    let alice = mint(&pool, ALICE, &[]).await;
+    let payment = charge(&pool, &fixture, 75, Some(key_header(KEY)));
+    let refund = withdraw(&pool, &fixture, &alice);
+    let (payment, refund) = if charge_first {
+        race_contract(&pool, fixture.contract, payment, refund).await
+    } else {
+        let (refund, payment) = race_contract(&pool, fixture.contract, refund, payment).await;
+        (payment, refund)
+    };
+    assert_eq!(refund.status, 200, "{}", refund.body);
+    assert_eq!(refund.body["status"], "canceled");
+    if charge_first {
+        assert_eq!(payment.status, 201, "{}", payment.body);
+        assert_eq!(receiver_balance(&pool).await, 75);
+        assert_eq!(balance(&pool, ALICE).await, 925);
+    } else {
+        assert_eq!(payment.status, 409, "{}", payment.body);
+        assert_eq!(receiver_balance(&pool).await, 0);
+        assert_eq!(balance(&pool, ALICE).await, 1_000);
+    }
+    // Both retries must preserve the already settled distribution.
+    let replay = charge(&pool, &fixture, 75, Some(key_header(KEY))).await;
+    assert_eq!(replay.status, payment.status);
+    assert_eq!(replay.body, payment.body);
+    withdraw(&pool, &fixture, &alice).await;
+    assert_eq!(escrow(&pool, fixture.contract).await, 0);
+    assert_eq!(
+        balance(&pool, ALICE).await + receiver_balance(&pool).await,
+        1_000
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn charge_racing_with_withdrawal_refunds_only_the_remainder(pool: PgPool) {
+    charge_and_withdraw(pool, true).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn withdrawal_racing_with_charge_prevents_further_spending(pool: PgPool) {
+    charge_and_withdraw(pool, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn simultaneous_withdrawals_refund_the_escrow_once(pool: PgPool) {
+    let fixture = fixture(&pool).await;
+    let alice = mint(&pool, ALICE, &[]).await;
+    let (first, second) = race_contract(
+        &pool,
+        fixture.contract,
+        withdraw(&pool, &fixture, &alice),
+        withdraw(&pool, &fixture, &alice),
+    )
+    .await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(second.status, 409, "{}", second.body);
+    assert_eq!(balance(&pool, ALICE).await, 1_000);
+    assert_eq!(receiver_balance(&pool).await, 0);
+    assert_eq!(escrow(&pool, fixture.contract).await, 0);
+    let histories: i64 = sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(histories, 2, "one escrow deposit and one refund");
+}
+
 const OWNER: i32 = 1;
 const OWNER_DISCORD_ID: i64 = 500_000_000_000_000_001;
 const ALICE: i32 = 2;
