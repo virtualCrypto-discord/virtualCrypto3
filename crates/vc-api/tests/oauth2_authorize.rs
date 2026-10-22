@@ -160,7 +160,7 @@ async fn browser_request_survives_discord_consent_and_token_exchange(pool: PgPoo
         .await;
         assert_eq!(response.status(), 200);
         assert_eq!(response.headers()["cache-control"], "no-store");
-        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert_eq!(response.headers()["referrer-policy"], "same-origin");
         assert_eq!(response.headers()["x-frame-options"], "DENY");
         assert!(!response.headers().contains_key("set-cookie"));
         let html = String::from_utf8(

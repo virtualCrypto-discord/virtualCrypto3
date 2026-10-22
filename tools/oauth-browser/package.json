@@ -1,0 +1,6 @@
+{
+  "name": "virtualcrypto-oauth-browser-tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "playwright": "1.61.1" }
+}

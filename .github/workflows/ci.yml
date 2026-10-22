@@ -66,6 +66,22 @@ jobs:
             just check
           '
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Install OAuth browser test dependencies
+        run: |
+          npm --prefix tools/oauth-browser ci --include=dev
+          cd tools/oauth-browser
+          npx playwright install --with-deps chromium
+      - name: OAuth browser E2E
+        env:
+          PGPASSWORD: postgres
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            SQLX_OFFLINE=true cargo test -p vc-api --test oauth2_browser -- --ignored --nocapture
+          '
+
       - name: Disk usage
         if: always()
         run: df -h
