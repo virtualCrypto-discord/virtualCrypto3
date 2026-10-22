@@ -31,6 +31,12 @@ pub(super) fn respond(headers: &HeaderMap, consent: Consent) -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // Native form POSTs under no-referrer carry Origin:null in browsers.
+    // Preserve same-origin CSRF evidence while hiding this callback URL externally.
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
     response
         .headers_mut()
         .insert(header::VARY, HeaderValue::from_static("Accept"));

@@ -28,3 +28,6 @@ tools/review-workbench/
 work/
 .env
 .env.*
+
+# Browser-only OAuth regression harness.
+tools/oauth-browser/

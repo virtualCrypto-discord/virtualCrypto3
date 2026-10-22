@@ -43,6 +43,7 @@ pub fn utc_now() -> PrimitiveDateTime {
 /// payload the Elixir goldens were captured with, and counts refresh calls so
 /// tests can prove when the refresh branch is (not) taken.
 pub struct FakeDiscord {
+    pub authorization_url: Option<String>,
     payload: Map<String, Value>,
     guild: Map<String, Value>,
     /// What `get_guild_member` reports, and the guild's roles. Only the consent
@@ -129,6 +130,7 @@ impl FakeDiscord {
         };
 
         Self {
+            authorization_url: None,
             payload: golden_discord_payload(),
             guild,
             member: Map::new(),
@@ -550,7 +552,12 @@ impl DiscordApi for FakeDiscord {
     /// Recognizable rather than real, so a test can assert a browser was sent to
     /// Discord and to which state.
     fn authorize_url(&self, state: &str) -> String {
-        format!("https://discord.test/authorize?state={state}")
+        format!(
+            "{}?state={state}",
+            self.authorization_url
+                .as_deref()
+                .unwrap_or("https://discord.test/authorize")
+        )
     }
 
     /// Discord returns ids as strings; the Elixir test fake happened to echo the

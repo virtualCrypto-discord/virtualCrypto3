@@ -241,7 +241,8 @@ fn private(mut response: Response) -> Response {
         .insert(CACHE_CONTROL, "no-store".parse().unwrap());
     response
         .headers_mut()
-        .insert(REFERRER_POLICY, "no-referrer".parse().unwrap());
+        .entry(REFERRER_POLICY)
+        .or_insert("no-referrer".parse().unwrap());
     response
 }
 
