@@ -396,7 +396,7 @@ pub async fn take_code<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
 /// The length is still visible in the time taken. Hiding it needs both sides
 /// hashed, and the secret is not stored hashed here, so that would be a change
 /// to the schema rather than to this function.
-fn secrets_match(presented: &str, stored: &str) -> bool {
+pub(crate) fn secrets_match(presented: &str, stored: &str) -> bool {
     let (presented, stored) = (presented.as_bytes(), stored.as_bytes());
 
     if presented.len() != stored.len() {
@@ -854,9 +854,58 @@ pub fn check_application_type(kind: &str) -> Result<(), MetadataError> {
     }
 }
 
+/// Registered authentication policy for code and refresh-token exchanges.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, sqlx::Type,
+)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "token_endpoint_auth_method", rename_all = "snake_case")]
+pub enum TokenEndpointAuthMethod {
+    #[default]
+    None,
+    ClientSecretBasic,
+}
+
+impl TokenEndpointAuthMethod {
+    pub fn registration_default(
+        from: Option<time::OffsetDateTime>,
+        now: time::OffsetDateTime,
+    ) -> Self {
+        if from.is_some_and(|from| now >= from) {
+            Self::ClientSecretBasic
+        } else {
+            Self::None
+        }
+    }
+}
+
+pub async fn token_endpoint_auth_method(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+) -> Result<TokenEndpointAuthMethod, sqlx::Error> {
+    sqlx::query_scalar("SELECT token_endpoint_auth_method FROM applications WHERE id = $1")
+        .bind(application_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn set_token_endpoint_auth_method(
+    connection: &mut sqlx::PgConnection,
+    application_id: i64,
+    method: TokenEndpointAuthMethod,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE applications SET token_endpoint_auth_method = $2 WHERE id = $1")
+        .bind(application_id)
+        .bind(method)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
 /// The metadata registration was given, already validated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewApplication {
+    pub token_endpoint_auth_method: Option<TokenEndpointAuthMethod>,
     pub response_types: Vec<String>,
     pub grant_types: Vec<String>,
     pub application_type: String,
@@ -947,6 +996,13 @@ pub async fn register(
     .fetch_one(&mut *tx)
     .await?;
 
+    set_token_endpoint_auth_method(
+        &mut tx,
+        application_id,
+        new.token_endpoint_auth_method.unwrap_or_default(),
+    )
+    .await?;
+
     // The account that owns it: an application id and nothing else, which is why
     // `users.discord_id` is nullable and why its own answer shows a null there.
     let user_id = sqlx::query_scalar!(
@@ -1002,6 +1058,7 @@ fn new_secret() -> String {
 /// this is a two-level option and why the write reads first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
+    pub token_endpoint_auth_method: Option<TokenEndpointAuthMethod>,
     /// Generate a fresh secret in the same transaction as the metadata edit.
     pub rotate_client_secret: bool,
     pub client_name: Option<Option<String>>,
@@ -1124,6 +1181,10 @@ pub async fn patch(
     )
     .execute(&mut *tx)
     .await?;
+
+    if let Some(method) = changes.token_endpoint_auth_method {
+        set_token_endpoint_auth_method(&mut tx, application_id, method).await?;
+    }
 
     if let Some(redirect_uris) = &changes.redirect_uris {
         sqlx::query!(

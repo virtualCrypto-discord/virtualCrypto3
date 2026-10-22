@@ -11,6 +11,8 @@ primary_region = "iad"
   VCRYPTO_SITE_URL = "https://virtualcrypto-staging.fly.dev"
   VCRYPTO_DISCORD_CALLBACK_URI = "https://virtualcrypto-staging.fly.dev/callback/discord"
   SECURE_COOKIES = "true"
+  # Exercise the post-cutover registration default in staging.
+  TOKEN_ENDPOINT_AUTH_DEFAULT_FROM = "2026-10-01T00:00:00Z"
 
 [deploy]
   # Migrations (allowing the stopped database time to boot through Flycast), then

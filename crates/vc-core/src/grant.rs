@@ -260,6 +260,7 @@ pub const EXPIRES_IN: i64 = 3600;
 /// Why a code could not be exchanged, in the API's own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExchangeError {
+    InvalidClient,
     /// `invalid_grant`, `invalid_code`: never issued, or past its fifteen
     /// minutes. The Elixir answers both the same way, so this does too.
     InvalidCode,
@@ -279,6 +280,7 @@ pub enum ExchangeError {
 impl ExchangeError {
     pub fn error(self) -> &'static str {
         match self {
+            ExchangeError::InvalidClient => "invalid_client",
             ExchangeError::InvalidCode | ExchangeError::UsedCode => "invalid_grant",
             ExchangeError::NotFoundClient => "invalid_request",
             ExchangeError::IssuedToOtherClient
@@ -289,6 +291,7 @@ impl ExchangeError {
 
     pub fn description(self) -> &'static str {
         match self {
+            ExchangeError::InvalidClient => "invalid_client",
             ExchangeError::InvalidCode => "invalid_code",
             ExchangeError::UsedCode => "used_code",
             ExchangeError::NotFoundClient => "not_found_client",
@@ -321,10 +324,35 @@ pub async fn exchange_code(
     code: &str,
     clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Exchanged, ExchangeError> {
+    exchange_code_authenticated(pool, client_id, redirect_uri, code, None, clock).await
+}
+
+pub async fn exchange_code_authenticated(
+    pool: &PgPool,
+    client_id: &str,
+    redirect_uri: &str,
+    code: &str,
+    credentials: Option<&(String, String)>,
+    clock: impl FnOnce() -> OffsetDateTime,
+) -> std::result::Result<Exchanged, ExchangeError> {
     let mut tx = pool
         .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
         .await
         .map_err(|_| ExchangeError::InvalidCode)?;
+    // Authenticate before consuming a code or revoking a reused code's grant.
+    // Derive the policy from its owner, never a caller-selected client_id.
+    let owner: Option<i64> = sqlx::query_scalar(
+        "SELECT application_id FROM authorization_codes WHERE code = $1
+         UNION SELECT application_id FROM grants WHERE latest_code = $1 LIMIT 1",
+    )
+    .bind(code)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ExchangeError::InvalidCode)?
+    .flatten();
+    if let Some(owner) = owner {
+        authenticate_token_owner(&mut tx, owner, credentials, Some(client_id)).await?;
+    }
     let result = exchange_code_in(&mut tx, client_id, redirect_uri, code, clock).await;
     if result.is_ok() || result == Err(ExchangeError::UsedCode) {
         tx.commit().await.map_err(|_| ExchangeError::InvalidCode)?;
@@ -459,6 +487,16 @@ pub async fn exchange_refresh_token(
     refresh_token: &str,
     clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Refreshed, ExchangeError> {
+    exchange_refresh_token_authenticated(pool, refresh_token, None, None, clock).await
+}
+
+pub async fn exchange_refresh_token_authenticated(
+    pool: &PgPool,
+    refresh_token: &str,
+    credentials: Option<&(String, String)>,
+    client_id: Option<&str>,
+    clock: impl FnOnce() -> OffsetDateTime,
+) -> std::result::Result<Refreshed, ExchangeError> {
     // The token is a row's `token_id`, so anything that is not a UUID is not a
     // token rather than a database error.
     let Ok(presented) = Uuid::parse_str(refresh_token) else {
@@ -469,6 +507,18 @@ pub async fn exchange_refresh_token(
         .begin()
         .await
         .map_err(|_| ExchangeError::InvalidRefreshToken)?;
+    let owner: Option<i64> = sqlx::query_scalar(
+        "SELECT g.application_id FROM grants g JOIN refresh_tokens r ON r.grant_id = g.id
+         WHERE r.token_id = $1",
+    )
+    .bind(presented)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ExchangeError::InvalidRefreshToken)?
+    .flatten();
+    if let Some(owner) = owner {
+        authenticate_token_owner(&mut tx, owner, credentials, client_id).await?;
+    }
     // Revocation locks the grant before cascading to its tokens. Take the same
     // order, locking the grant before the refresh token. Read the clock only
     // after both locks; either wait can cross the token's expiry.
@@ -511,6 +561,39 @@ pub async fn exchange_refresh_token(
         access_token,
         refresh_token,
     })
+}
+
+/// Hold the application's policy stable until the exchange commits. A metadata
+/// update takes the conflicting application lock, so opt-in cannot be bypassed
+/// by reading an old policy and exchanging after the update has completed.
+async fn authenticate_token_owner(
+    connection: &mut sqlx::PgConnection,
+    owner: i64,
+    credentials: Option<&(String, String)>,
+    body_client_id: Option<&str>,
+) -> std::result::Result<(), ExchangeError> {
+    use crate::application::{TokenEndpointAuthMethod, secrets_match};
+    let (method, client_id, secret): (TokenEndpointAuthMethod, Uuid, Option<String>) =
+        sqlx::query_as(
+            "SELECT token_endpoint_auth_method, client_id, client_secret
+             FROM applications WHERE id = $1 FOR SHARE",
+        )
+        .bind(owner)
+        .fetch_one(connection)
+        .await
+        .map_err(|_| ExchangeError::InvalidClient)?;
+    if method == TokenEndpointAuthMethod::None {
+        // Legacy applications retain their previous handling of credentials.
+        return Ok(());
+    }
+    let (id, presented) = credentials.ok_or(ExchangeError::InvalidClient)?;
+    if Uuid::parse_str(id).ok() != Some(client_id)
+        || body_client_id.is_some_and(|id| Uuid::parse_str(id).ok() != Some(client_id))
+        || !secret.is_some_and(|secret| secrets_match(presented, &secret))
+    {
+        return Err(ExchangeError::InvalidClient);
+    }
+    Ok(())
 }
 
 /// Who an ask is put to, and who a grant was written for: a guild whose pool the

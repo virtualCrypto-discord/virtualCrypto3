@@ -23,3 +23,8 @@ justfile
 # Local human/LLM review application and its preparation outputs.
 tools/review-workbench/
 .review-artifacts/
+
+# Local validation scripts, downloaded tools, reports and credentials.
+work/
+.env
+.env.*
