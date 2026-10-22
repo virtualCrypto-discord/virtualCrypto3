@@ -43,7 +43,7 @@ class UpdateTests(unittest.TestCase):
         image = 'registry.fly.io/virtualcrypto-backup@sha256:' + 'a' * 64
         after = copy.deepcopy(before)
         after['config']['image'] = image
-        transient = dict(after, state='updating')
+        transient = dict(after, state='replacing')
         with patch.object(deploy, 'time') as clock, \
              patch.object(deploy, 'machines', side_effect=[[before], [transient], [after]]), \
              patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}]) as api, \

@@ -75,8 +75,8 @@ def main():
         if observed[0]['state'] == 'stopped':
             after = validate_machine(observed)
             break
-        if observed[0]['state'] not in ('created', 'updating', 'pending') or time.monotonic() >= deadline:
-            raise RuntimeError('Image update did not settle to a stopped Machine')
+        if observed[0]['state'] not in ('created', 'updating', 'pending', 'replacing') or time.monotonic() >= deadline:
+            raise RuntimeError(f"Image update did not settle to a stopped Machine: {observed[0]['state']}")
         time.sleep(2)
     if after['id'] != before['id']:
         raise RuntimeError('Machine identity changed')
