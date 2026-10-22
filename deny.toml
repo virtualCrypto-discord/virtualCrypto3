@@ -1,0 +1,5 @@
+# Run with `just audit`. Fetch RustSec on every run, independently of GitHub's
+# advisory review pipeline. Vulnerability advisories fail the check by default.
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+ignore = []

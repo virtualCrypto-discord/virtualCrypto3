@@ -19,7 +19,11 @@ fmt:
 	cargo fmt --all
 
 # The gates CI runs, in the order it runs them.
-check: fmt-check lint test sqlx-check baseline-check
+check: audit fmt-check lint test sqlx-check baseline-check
+
+# Check the locked dependency graph against the latest RustSec advisories.
+audit:
+	cargo deny --locked --all-features check advisories
 
 fmt-check:
 	cargo fmt --all --check
