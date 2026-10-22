@@ -15,7 +15,7 @@ The trust boundary is preservation of existing backups, not isolation of databas
 
 The GitHub `backup` environment permits only the main branch and holds `FLY_BACKUP_API_TOKEN`, a deploy token scoped to the backup Fly app. This token can replace code that uses the app's secrets: **database disclosure through a compromised deployment is an accepted risk**. Direct database passwords, WireGuard keys, Worker deployment tokens, R2 keys, and the age private key are not stored in GitHub.
 
-Fly app secrets are `PGPASSWORD`, `UPLOAD_TOKEN`, and `DISCORD_WEBHOOK_URL`. The existing SELECT-only database role is retained as an accidental-write safeguard, not as protection against vc3 compromise. It needs SELECT on current tables/sequences and future tables/sequences owned by `web`.
+Fly app secrets are `PGPASSWORD`, `MTLS_CLIENT_CERT_B64`, `MTLS_CLIENT_KEY_B64`, and `DISCORD_WEBHOOK_URL`. The existing SELECT-only database role is retained as an accidental-write safeguard, not as protection against vc3 compromise. It needs SELECT on current tables/sequences and future tables/sequences owned by `web`.
 
 The workflow updates only the existing stopped Machine by immutable image digest. It neither creates Machines nor starts an extra backup. Daily scheduling, restart policy `no`, 256 MiB memory, 2 GB ephemeral rootfs, no public services, and no volumes are checked before and after the update. If the daily job is running, deployment fails safely and can be retried. `deploy/machine.json` records the initial deployment for disaster recovery; routine updates preserve the live configuration. Keep the previous image printed in the deployment log for rollback.
 
@@ -30,3 +30,9 @@ Fly sends job failures to Discord. The independent Worker reports more than 30 h
 Initial verification restored all 28 public tables from an R2-downloaded, checksum-verified, decrypted archive into an isolated PostgreSQL 18 container. Restore with `age -d -i /safe/identity.txt -o backup.dump backup.dump.age`, then `pg_restore --no-owner --no-acl --exit-on-error` into a disposable database. Never test restoration over production.
 
 R2 remains within its free allocation for this workload when that allocation is available. Fly adds about $0.30/month for 2 GB stopped rootfs, plus short runtime and egress. These are bounded-workload estimates, not account-wide spending caps. No automatic quota, VM size, or plan increases are allowed.
+
+## mTLS upload authentication
+
+Uploads go only to `https://vc-backup.tignear.com`. Fly secrets contain the client certificate and private key as base64-encoded PEM (base64 is an encoding, not encryption). The runner loads them into a default verifying TLS context from permission-0600 temporary files and immediately removes those files. A missing or invalid certificate/key aborts before `pg_dump`. Server certificate verification remains enabled, and redirects are rejected rather than forwarding the backup to another host. There is no upload bearer token.
+
+The independent Worker checks Cloudflare's client-certificate verification and an allowed SHA-256 fingerprint. The client certificate expires on 2041-10-18 UTC; coordinate renewal with the Worker allowlist before removing/revoking the old certificate. GitHub receives only the app-scoped deployment token, not the certificate or key directly. Disclosure via replaced Fly code remains an accepted risk.
