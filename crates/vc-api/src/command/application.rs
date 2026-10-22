@@ -550,6 +550,7 @@ pub async fn component(
                 &found.client_id,
                 found.token_endpoint_auth_method,
                 found.pkce_policy,
+                state.pkce_enforcement_from(found.token_endpoint_auth_method),
                 found.client_secret.as_deref(),
             )])))
         }

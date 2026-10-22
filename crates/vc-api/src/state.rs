@@ -174,16 +174,27 @@ impl AppState {
         self
     }
 
+    /// Earliest enforcement date applicable to this application's authentication method.
+    pub fn pkce_enforcement_from(
+        &self,
+        method: vc_core::application::TokenEndpointAuthMethod,
+    ) -> Option<time::OffsetDateTime> {
+        self.pkce_required_from
+            .into_iter()
+            .chain(
+                self.pkce_public_required_from
+                    .filter(|_| method == vc_core::application::TokenEndpointAuthMethod::None),
+            )
+            .min()
+    }
+
     pub fn pkce_required(
         &self,
         now: time::OffsetDateTime,
         method: vc_core::application::TokenEndpointAuthMethod,
     ) -> bool {
-        self.pkce_required_from.is_some_and(|from| now >= from)
-            || (method == vc_core::application::TokenEndpointAuthMethod::None
-                && self
-                    .pkce_public_required_from
-                    .is_some_and(|from| now >= from))
+        self.pkce_enforcement_from(method)
+            .is_some_and(|from| now >= from)
     }
 
     pub fn with_token_endpoint_auth_default_from(

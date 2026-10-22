@@ -177,11 +177,7 @@ async fn owner_can_open_change_and_reopen_pkce_settings(pool: PgPool) {
             .iter()
             .any(|component| component["custom_id"] == open)
     );
-    assert!(
-        shown
-            .to_string()
-            .contains("任意（サーバーの必須化期限まで）")
-    );
+    assert!(shown.to_string().contains("任意"));
     for (value, expected) in [
         ("required", application::PkcePolicy::Required),
         ("optional", application::PkcePolicy::Optional),
@@ -213,7 +209,7 @@ async fn owner_can_open_change_and_reopen_pkce_settings(pool: PgPool) {
             updated
                 .to_string()
                 .contains(if expected == application::PkcePolicy::Optional {
-                    "任意（サーバーの必須化期限まで）"
+                    "任意"
                 } else {
                     "必須（S256）"
                 })
@@ -264,4 +260,43 @@ async fn non_owner_cannot_change_pkce_and_invalid_policy_is_refused(pool: PgPool
         application::pkce_policy(&pool, app).await.unwrap(),
         application::PkcePolicy::Optional
     );
+}
+
+#[tokio::test]
+async fn pkce_settings_show_the_applicable_deadline_as_a_discord_timestamp() {
+    use vc_core::application::PkcePolicy;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/test")
+        .unwrap();
+    let public = time::OffsetDateTime::from_unix_timestamp(1800000000).unwrap();
+    let all = public + time::Duration::days(30);
+    for (public_from, all_from, method, expected) in [
+        (Some(public), Some(all), Method::None, Some(public)),
+        (
+            Some(public),
+            Some(all),
+            Method::ClientSecretBasic,
+            Some(all),
+        ),
+        (Some(all), Some(public), Method::None, Some(public)),
+        (Some(public), None, Method::ClientSecretBasic, None),
+        (None, None, Method::None, None),
+    ] {
+        let state = state(pool.clone(), fake())
+            .with_pkce_public_required_from(public_from)
+            .with_pkce_required_from(all_from);
+        let from = state.pkce_enforcement_from(method);
+        assert_eq!(from, expected);
+        let screen =
+            vc_api::developer::token_auth("client", method, PkcePolicy::Optional, from, None)
+                .to_string();
+        match expected {
+            Some(date) => assert!(screen.contains(&format!("<t:{}:F>", date.unix_timestamp()))),
+            None => {
+                assert!(screen.contains("必須化日時は未設定"));
+                assert!(!screen.contains("<t:"));
+            }
+        }
+        assert!(!screen.contains("サーバーの必須化期限"));
+    }
 }
