@@ -40,6 +40,7 @@ use crate::state::AppState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Details {
     pub token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod,
+    pub pkce_policy: vc_core::application::PkcePolicy,
     pub client_id: String,
     pub client_secret: Option<String>,
     pub redirect_uris: Vec<String>,
@@ -81,6 +82,7 @@ pub fn render(details: &Details) -> Value {
         "client_id": details.client_id,
         "client_secret": details.client_secret,
         "token_endpoint_auth_method": details.token_endpoint_auth_method,
+        "pkce_policy": details.pkce_policy,
         // The convention for "this secret never expires", which is a zero rather
         // than a null so that a client reading an integer gets one.
         "client_secret_expires_at": 0,
@@ -171,6 +173,7 @@ pub async fn details(
     .await?;
 
     Ok(Some(Details {
+        pkce_policy: vc_core::application::pkce_policy(pool, application_id).await?,
         token_endpoint_auth_method: vc_core::application::token_endpoint_auth_method(
             pool,
             application_id,
@@ -252,6 +255,8 @@ pub async fn mine(State(state): State<AppState>, user: AuthUser) -> Result<Respo
 pub struct Registration {
     #[serde(default, deserialize_with = "present_auth_method")]
     pub token_endpoint_auth_method: Option<Value>,
+    #[serde(default, deserialize_with = "present_auth_method")]
+    pub pkce_policy: Option<Value>,
     pub response_types: Option<Vec<String>>,
     pub grant_types: Option<Vec<String>>,
     pub application_type: Option<String>,
@@ -355,6 +360,22 @@ fn parse_auth_method(
                     StatusCode::BAD_REQUEST,
                     "invalid_client_metadata",
                     "invalid_token_endpoint_auth_method",
+                )
+            })
+        })
+        .transpose()
+}
+
+fn parse_pkce_policy(
+    value: Option<&Value>,
+) -> Result<Option<vc_core::application::PkcePolicy>, Box<Refusal>> {
+    value
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|_| {
+                refusal(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_client_metadata",
+                    "invalid_pkce_policy",
                 )
             })
         })
@@ -466,6 +487,7 @@ pub fn validated(body: Registration) -> Result<NewApplication, Box<Refusal>> {
 
     let token_endpoint_auth_method = parse_auth_method(body.token_endpoint_auth_method.as_ref())?;
     Ok(NewApplication {
+        pkce_policy: parse_pkce_policy(body.pkce_policy.as_ref())?,
         token_endpoint_auth_method,
         response_types,
         grant_types,
@@ -682,6 +704,7 @@ pub async fn register(
             "client_id": created.client_id,
             "client_secret": created.client_secret,
             "token_endpoint_auth_method": created.token_endpoint_auth_method,
+            "pkce_policy": created.pkce_policy,
             "registration_access_token": created.access_token,
             "registration_client_uri": format!("{}/oauth2/clients/@me", state.links().site_url),
             "client_secret_expires_at": 0,
@@ -696,6 +719,7 @@ pub async fn register(
 /// the values and lets each one talk.
 pub struct Created {
     pub token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod,
+    pub pkce_policy: vc_core::application::PkcePolicy,
     pub client_id: String,
     pub client_secret: String,
     pub access_token: String,
@@ -768,13 +792,21 @@ pub async fn create(
     }
 
     let mut new = new.clone();
+    let registration_time = OffsetDateTime::now_utc();
     let method = new.token_endpoint_auth_method.unwrap_or_else(|| {
         vc_core::application::TokenEndpointAuthMethod::registration_default(
             state.token_endpoint_auth_default_from(),
-            OffsetDateTime::now_utc(),
+            registration_time,
         )
     });
     new.token_endpoint_auth_method = Some(method);
+    let pkce_policy = new.pkce_policy.unwrap_or_else(|| {
+        vc_core::application::PkcePolicy::registration_default(
+            state.pkce_default_from(),
+            registration_time,
+        )
+    });
+    new.pkce_policy = Some(pkce_policy);
     let registered =
         match vc_core::application::register(state.pool(), &new, &private_key, &public_key).await {
             Ok(registered) => registered,
@@ -799,6 +831,7 @@ pub async fn create(
     };
 
     Ok(Created {
+        pkce_policy,
         token_endpoint_auth_method: method,
         client_id: registered.client_id,
         client_secret: registered.client_secret,
@@ -931,6 +964,7 @@ pub fn changes(body: &Map<String, Value>) -> Result<Changes, Box<Refusal>> {
     };
 
     let mut changes = Changes {
+        pkce_policy: parse_pkce_policy(body.get("pkce_policy"))?,
         token_endpoint_auth_method: parse_auth_method(body.get("token_endpoint_auth_method"))?,
         rotate_client_secret,
         client_name: text(body, "client_name"),
@@ -1173,6 +1207,7 @@ mod tests {
     fn details() -> Details {
         Details {
             token_endpoint_auth_method: Default::default(),
+            pkce_policy: Default::default(),
             client_id: "e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f".to_owned(),
             client_secret: Some("a-secret".to_owned()),
             redirect_uris: vec!["https://app.example/callback".to_owned()],

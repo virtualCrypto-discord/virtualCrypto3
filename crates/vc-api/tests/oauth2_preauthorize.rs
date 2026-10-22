@@ -77,6 +77,7 @@ async fn a_valid_request_answers_with_the_name_to_show(pool: PgPool) {
     assert_eq!(
         checked,
         Ok(Preauthorized {
+            pkce_policy: vc_core::application::PkcePolicy::Optional,
             token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod::None,
             client_name: Some("An Application".to_owned()),
         })

@@ -1,4 +1,9 @@
 {
+  "docs.api.pkce.policy_create": "`pkce_policy` — `optional` または `required`。省略時は新規登録デフォルト切替日時より前なら optional、以降なら required を保存します。明示指定を優先します。",
+  "docs.api.pkce.policy_update": "`pkce_policy` — `optional` または `required`。省略時は維持。required は新しく開始する認可で S256 を必須にします。optional でもサーバーの必須化期限以降は必須です。null・真偽値・未知の値は invalid_client_metadata。",
+  "developer.pkce.optional": "任意（サーバーの必須化期限まで）",
+  "developer.pkce.required": "必須（S256）",
+  "developer.pkce.explanation": "PKCE を必須にすると、これから開始する認可に S256 が必要です。開始済みの認可と refresh は影響を受けません。任意を選んでも、サーバーの必須化期限以降は必須です。",
   "docs.api.pkce.challenge": "`code_challenge`・`code_challenge_method` — PKCE は S256 のみ対応。verifier の SHA-256 をパディング無し base64url にした challenge と `S256` を指定。必須化は任意→public（認証方式 `none`）のみ必須→全クライアント必須の3段階。public 用と全体用の日時は別々に設定されます。移行期間中も指定した場合は検証します。",
   "docs.api.pkce.verifier": "`code_verifier` — 認可開始時に challenge を指定した場合は必須。43〜128 文字の ASCII 英数字と `-._~`。欠落・不正・不一致、または challenge のないコードへの指定は `invalid_grant` / `invalid_code_verifier`。refresh 時は不要。",
   "command.application.register.001": "登録",

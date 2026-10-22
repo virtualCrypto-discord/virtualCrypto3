@@ -126,6 +126,7 @@ pub fn applications_page(
 /// because a screen that names each as its own argument is a signature nobody reads.
 pub struct Fields<'a> {
     pub token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod,
+    pub pkce_policy: vc_core::application::PkcePolicy,
     pub client_name: Option<&'a str>,
     pub redirect_uris: &'a [String],
     pub client_uri: Option<&'a str>,
@@ -170,7 +171,7 @@ pub fn application(
     let auth_summary = format!(
         message!("developer.token_auth.current"),
         method = auth_method_label(fields.token_endpoint_auth_method),
-    );
+    ) + &format!("\nPKCE: {}", pkce_policy_label(fields.pkce_policy));
     let mut children = vec![heading];
 
     children.extend([
@@ -338,11 +339,19 @@ fn auth_method_label(method: vc_core::application::TokenEndpointAuthMethod) -> &
     }
 }
 
+fn pkce_policy_label(policy: vc_core::application::PkcePolicy) -> &'static str {
+    match policy {
+        vc_core::application::PkcePolicy::Optional => message!("developer.pkce.optional"),
+        vc_core::application::PkcePolicy::Required => message!("developer.pkce.required"),
+    }
+}
+
 /// Authentication settings have their own screen to stay within Discord's
 /// component limit even when the application has a logo and a saved banner.
 pub fn token_auth(
     client_id: &str,
     method: vc_core::application::TokenEndpointAuthMethod,
+    pkce_policy: vc_core::application::PkcePolicy,
     secret: Option<&str>,
 ) -> Value {
     use crate::custom_id::ui::developer::{Screen, custom_id_for, custom_id_for_field};
@@ -364,6 +373,22 @@ pub fn token_auth(
                 .into_iter()
                 .map(|(value, choice)| {
                     setting_option(value, auth_method_label(choice), method == choice)
+                })
+                .collect(),
+                1,
+                1,
+            )]),
+            text(message!("developer.pkce.explanation")),
+            action_row(vec![select_many(
+                &custom_id_for_field(Screen::Edit, client_id, "pkce_policy"),
+                Some("PKCE"),
+                [
+                    ("optional", vc_core::application::PkcePolicy::Optional),
+                    ("required", vc_core::application::PkcePolicy::Required),
+                ]
+                .into_iter()
+                .map(|(value, choice)| {
+                    setting_option(value, pkce_policy_label(choice), pkce_policy == choice)
                 })
                 .collect(),
                 1,
@@ -736,6 +761,7 @@ mod tests {
                     webhook_url: None,
                     discord_support_server_invite_slug: None,
                     token_endpoint_auth_method: Default::default(),
+                    pkce_policy: Default::default(),
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],
@@ -785,6 +811,7 @@ mod tests {
                     webhook_url: None,
                     discord_support_server_invite_slug: None,
                     token_endpoint_auth_method: Default::default(),
+                    pkce_policy: Default::default(),
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],

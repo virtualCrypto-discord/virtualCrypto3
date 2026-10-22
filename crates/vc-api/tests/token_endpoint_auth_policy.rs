@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use time::{Duration, OffsetDateTime};
 use tower::ServiceExt;
 use vc_api::routes::oauth2_clients::{self, Registration};
-use vc_core::application::{self, TokenEndpointAuthMethod as Method};
+use vc_core::application::{self, PkcePolicy as Policy, TokenEndpointAuthMethod as Method};
 
 const REDIRECT: &str = "https://app.example/callback";
 
@@ -299,6 +299,124 @@ async fn registration_persists_scheduled_default_and_respects_explicit_choice(po
                 .await
                 .unwrap(),
             expected
+        );
+    }
+}
+
+#[test]
+fn pkce_metadata_rejects_unknown_null_boolean_and_preserves_omission() {
+    for invalid in [json!(null), json!(true), json!("unknown"), json!(1)] {
+        let body = json!({"redirect_uris":[], "pkce_policy":invalid});
+        let registration: Registration = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(
+            oauth2_clients::validated(registration).unwrap_err().error,
+            "invalid_client_metadata"
+        );
+        assert_eq!(
+            oauth2_clients::changes(body.as_object().unwrap())
+                .unwrap_err()
+                .error,
+            "invalid_client_metadata"
+        );
+    }
+    for method in ["optional", "required"] {
+        let body = json!({"redirect_uris":[], "pkce_policy":method});
+        let registration = serde_json::from_value(body.clone()).unwrap();
+        assert!(
+            oauth2_clients::validated(registration)
+                .unwrap()
+                .pkce_policy
+                .is_some()
+        );
+        assert!(
+            oauth2_clients::changes(body.as_object().unwrap())
+                .unwrap()
+                .pkce_policy
+                .is_some()
+        );
+    }
+    assert!(
+        oauth2_clients::changes(json!({}).as_object().unwrap())
+            .unwrap()
+            .pkce_policy
+            .is_none()
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pkce_registration_persists_dated_default_and_explicit_choice(pool: PgPool) {
+    let now = OffsetDateTime::now_utc();
+    for (from, explicit, expected) in [
+        (None, None, Policy::Optional),
+        (Some(now + Duration::days(1)), None, Policy::Optional),
+        (Some(now - Duration::days(1)), None, Policy::Required),
+        (
+            Some(now - Duration::days(1)),
+            Some(Policy::Optional),
+            Policy::Optional,
+        ),
+        (None, Some(Policy::Required), Policy::Required),
+    ] {
+        let state = support::state(pool.clone(), support::fake()).with_pkce_default_from(from);
+        let mut new = oauth2_clients::validated(Registration {
+            redirect_uris: Some(vec![]),
+            ..Default::default()
+        })
+        .unwrap();
+        new.pkce_policy = explicit;
+        let created = oauth2_clients::create(&state, 1, &new).await.unwrap();
+        assert_eq!(created.pkce_policy, expected);
+        let application = application::find_by_client_id(&pool, &created.client_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            application::pkce_policy(&pool, application.id)
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn pkce_registration_cutover_is_inclusive() {
+    let now = OffsetDateTime::now_utc();
+    assert_eq!(Policy::registration_default(None, now), Policy::Optional);
+    assert_eq!(
+        Policy::registration_default(Some(now + Duration::nanoseconds(1)), now),
+        Policy::Optional
+    );
+    assert_eq!(
+        Policy::registration_default(Some(now), now),
+        Policy::Required
+    );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pkce_policy_patch_is_persisted_rendered_and_omission_preserves_it(pool: PgPool) {
+    let (id, _, _) = fixture(&pool).await;
+    assert_eq!(
+        application::pkce_policy(&pool, id).await.unwrap(),
+        Policy::Optional
+    );
+    for policy in [Policy::Required, Policy::Optional] {
+        let body = json!({"pkce_policy":policy});
+        application::patch(
+            &pool,
+            id,
+            &oauth2_clients::changes(body.as_object().unwrap()).unwrap(),
+        )
+        .await
+        .unwrap();
+        application::patch(&pool, id, &application::Changes::default())
+            .await
+            .unwrap();
+        assert_eq!(application::pkce_policy(&pool, id).await.unwrap(), policy);
+        let details = oauth2_clients::details(&pool, id).await.unwrap().unwrap();
+        assert_eq!(
+            oauth2_clients::render(&details)["pkce_policy"],
+            json!(policy)
         );
     }
 }

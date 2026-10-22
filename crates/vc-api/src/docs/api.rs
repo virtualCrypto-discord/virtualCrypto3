@@ -1035,6 +1035,7 @@ const ENDPOINTS: &[Endpoint] = &[
             message!("docs.api.all.354"),
             message!("docs.api.all.355"),
             message!("docs.api.all.356"),
+            message!("docs.api.pkce.policy_create"),
         ],
         // `oauth2_clients::register`, whose 201 is the four values a client needs
         // and the address it reads itself at.
@@ -1143,6 +1144,7 @@ const ENDPOINTS: &[Endpoint] = &[
             message!("docs.api.all.388"),
             message!("docs.api.all.389"),
             message!("docs.api.all.390"),
+            message!("docs.api.pkce.policy_update"),
         ],
         example: None,
         notes: &[message!("docs.api.all.391"), message!("docs.api.all.392")],

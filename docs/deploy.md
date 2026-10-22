@@ -34,17 +34,32 @@ a deployment of this port has nothing to add here.
 
 ## OAuth migration deadlines
 
-Optional `TOKEN_ENDPOINT_AUTH_DEFAULT_FROM` controls the default authentication
-method for new application registrations. Independently,
-`PKCE_PUBLIC_REQUIRED_FROM` requires S256 PKCE for saved authentication method
-`none`, while `PKCE_REQUIRED_FROM` requires it for all clients. Set the public
-cutoff earlier for a three-stage rollout: optional, public-only required, all
-required. The all-client cutoff takes precedence. All accept RFC 3339 timestamps
-with a timezone; empty or invalid values fail startup. Unset PKCE deadlines keep
-PKCE optional. Set identical values on all instances and restart after changing
-them. Deploy support with both deadlines unset first, then allow public and
-confidential clients separate migration periods before enforcement. Existing
-pending flows and refresh tokens remain usable. See [OAuth2](oauth2.md).
+`TOKEN_ENDPOINT_AUTH_DEFAULT_FROM` controls the saved authentication default for
+new registrations; `PKCE_DEFAULT_FROM` independently controls their saved
+`pkce_policy` default (`optional` before, `required` at/after). Explicit metadata
+choices win and existing applications retain their saved settings.
+
+`PKCE_PUBLIC_REQUIRED_FROM` requires S256 PKCE for authentication method `none`,
+while `PKCE_REQUIRED_FROM` requires it for all clients regardless of saved PKCE
+policy. Set the public cutoff earlier for a three-stage rollout. All variables
+accept RFC 3339 timestamps with a timezone, are read at startup, and reject
+empty/invalid values. Set the same values on every instance.
+
+Production `fly.toml` configures the agreed schedule (Japan time):
+
+| Variable | Value |
+| --- | --- |
+| `TOKEN_ENDPOINT_AUTH_DEFAULT_FROM` | `2026-11-01T00:00:00+09:00` |
+| `PKCE_DEFAULT_FROM` | `2026-11-01T00:00:00+09:00` |
+| `PKCE_PUBLIC_REQUIRED_FROM` | `2027-11-01T00:00:00+09:00` |
+| `PKCE_REQUIRED_FROM` | `2027-11-01T00:00:00+09:00` |
+
+Here public and confidential enforcement share the same date. The binary has no
+implicit deadlines when variables are absent. Check for Fly secrets overriding
+these `[env]` values before deployment. Staging's earlier Basic registration
+cutoff remains a separate test configuration. Pending flows and issued codes
+retain their saved PKCE conditions, and refresh tokens remain usable. See
+[OAuth2](oauth2.md#pkce-and-scheduled-enforcement).
 
 ## What it takes with a default
 

@@ -888,3 +888,78 @@ async fn public_only_stage_uses_saved_auth_method_and_preserves_started_flows(po
             .contains("code_challenge_required")
     );
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn application_pkce_opt_in_applies_to_new_flows_and_cannot_override_global_policy(
+    pool: PgPool,
+) {
+    use vc_core::application::{Changes, PkcePolicy, patch};
+    let f = fixture(&pool).await;
+    let old = start(&f, &[]).await;
+    patch(
+        &pool,
+        f.application,
+        &Changes {
+            pkce_policy: Some(PkcePolicy::Required),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let rejected = get(&f.app, &uri(&f.client, &[]), None, "text/html").await;
+    assert!(
+        rejected.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("code_challenge_required")
+    );
+    assert_eq!(
+        callback(&f.app, &old, Some(&old.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(approve(&f.app, &old).await.status(), 303);
+    let proof = start_uri(
+        &f.app,
+        &format!(
+            "{}&code_challenge={PKCE_CHALLENGE}&code_challenge_method=S256",
+            uri(&f.client, &[])
+        ),
+    )
+    .await;
+    patch(
+        &pool,
+        f.application,
+        &Changes {
+            pkce_policy: Some(PkcePolicy::Optional),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        callback(&f.app, &proof, Some(&proof.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    let issued = approve(&f.app, &proof).await;
+    let body = json!({"grant_type":"authorization_code","client_id":f.client,"redirect_uri":REDIRECT,"code":response_code(&issued)});
+    assert_eq!(
+        exchange_pkce(&f.app, &body, None).await.1["error_description"],
+        "invalid_code_verifier"
+    );
+    start(&f, &[]).await;
+    let strict = pkce_router(
+        &pool,
+        Some(time::OffsetDateTime::now_utc() - time::Duration::days(1)),
+    );
+    let rejected = get(&strict, &uri(&f.client, &[]), None, "text/html").await;
+    assert!(
+        rejected.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("code_challenge_required")
+    );
+}

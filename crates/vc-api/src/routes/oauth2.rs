@@ -398,10 +398,11 @@ pub async fn authorize(
     request.pkce = match vc_core::pkce::Challenge::from_request(
         challenge.as_deref(),
         method.as_deref(),
-        state.pkce_required(
-            time::OffsetDateTime::now_utc(),
-            preauthorized.token_endpoint_auth_method,
-        ),
+        preauthorized.pkce_policy == vc_core::application::PkcePolicy::Required
+            || state.pkce_required(
+                time::OffsetDateTime::now_utc(),
+                preauthorized.token_endpoint_auth_method,
+            ),
     ) {
         Ok(challenge) => challenge,
         Err(description) => {
