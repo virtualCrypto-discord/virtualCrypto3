@@ -352,6 +352,7 @@ pub fn token_auth(
     client_id: &str,
     method: vc_core::application::TokenEndpointAuthMethod,
     pkce_policy: vc_core::application::PkcePolicy,
+    pkce_enforcement_from: Option<time::OffsetDateTime>,
     secret: Option<&str>,
 ) -> Value {
     use crate::custom_id::ui::developer::{Screen, custom_id_for, custom_id_for_field};
@@ -378,7 +379,17 @@ pub fn token_auth(
                 1,
                 1,
             )]),
-            text(message!("developer.pkce.explanation")),
+            text(format!(
+                "{}\n{}",
+                message!("developer.pkce.explanation"),
+                match pkce_enforcement_from {
+                    Some(from) => format!(
+                        message!("developer.pkce.deadline"),
+                        timestamp = from.unix_timestamp()
+                    ),
+                    None => message!("developer.pkce.no_deadline").to_owned(),
+                }
+            )),
             action_row(vec![select_many(
                 &custom_id_for_field(Screen::Edit, client_id, "pkce_policy"),
                 Some("PKCE"),
