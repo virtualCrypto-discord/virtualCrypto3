@@ -29,7 +29,7 @@ jobs:
       source_sha: ${{ steps.record.outputs.source_sha }}
       image: ${{ steps.record.outputs.image }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve trusted workflow artifact
         id: record
         env:
@@ -59,10 +59,10 @@ jobs:
     steps:
       # Run the release tools from this workflow's trusted main revision. The
       # candidate checkout supplies only the production config for that image.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tooling
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: inputs.operation == 'promote'
         with:
           ref: ${{ needs.resolve.outputs.source_sha }}
