@@ -204,6 +204,7 @@ async fn browser_request_survives_discord_consent_and_token_exchange(pool: PgPoo
         let url = reqwest::Url::parse(approved.headers()[LOCATION].to_str().unwrap()).unwrap();
         let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(pairs["state"], CLIENT_STATE);
+        assert_eq!(pairs["iss"], links().site_url);
         assert_eq!(pairs["guild_id"], MONEY_GUILD.to_string());
         assert_eq!(pairs["scope"], "vc.issue");
         assert_eq!(pairs["y"], "two");
@@ -686,7 +687,9 @@ async fn pkce_cutover_applies_to_new_starts_and_preserves_pending_flows_and_issu
     let pairs: std::collections::HashMap<_, _> = redirect.query_pairs().into_owned().collect();
     assert_eq!(pairs["error"], "invalid_request");
     assert_eq!(pairs["error_description"], "code_challenge_required");
+    assert_eq!(pairs["iss"], links().site_url);
     assert_eq!(pairs["state"], CLIENT_STATE);
+    assert_eq!(pairs["iss"], links().site_url);
 
     // The pre-cutover request can finish consent after the cutoff.
     assert_eq!(

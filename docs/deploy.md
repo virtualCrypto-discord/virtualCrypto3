@@ -415,3 +415,27 @@ volume; its storage and snapshots remain billable. This single-node staging DB
 has no high availability and is not a production backup. PostgreSQL operations
 and recovery are our responsibility with unmanaged Fly Postgres.
 See [Postgres scale to zero](https://fly.io/docs/postgres/managing/scale-to-zero/).
+
+## OAuth authorization server metadata
+
+`GET /.well-known/oauth-authorization-server` publishes public RFC 8414 JSON
+metadata, including endpoint URLs, supported grants, token authentication methods,
+S256 PKCE support, and RFC 9207 issuer-response support. Cross-origin browser GETs
+are allowed. Registration still requires its existing access token and scope;
+discovery does not make registration anonymous. The existing revocation endpoint
+is advertised with authentication method `none`, matching its current behavior.
+
+The issuer is `VCRYPTO_SITE_URL` with trailing slashes removed. Configure the
+canonical HTTPS origin for each deployment; request Host/Forwarded headers never
+control the issuer or advertised URLs. This is OAuth metadata, not OpenID Connect
+discovery, and does not advertise an ID-token or JWKS capability. The legacy
+device-code grant is listed, but no RFC 8628 device-authorization endpoint is
+advertised because this service does not provide one.
+
+Authorization redirects to registered clients now include exactly one `iss`
+parameter, on success and on redirecting errors. Clients should compare it exactly
+with the expected metadata issuer before exchanging a code; reject missing,
+duplicate or mismatched issuers when using this advertised capability. Existing
+`state` and PKCE checks remain necessary. An `iss` query parameter already present
+in a registered redirect URI is replaced by the server issuer; other query
+parameters are preserved. Non-redirecting errors never redirect to untrusted URIs.
