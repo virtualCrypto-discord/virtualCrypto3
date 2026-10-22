@@ -9,6 +9,12 @@ const browser = await chromium.launch({
 try {
   for (const client of fixture.clients) {
     const context = await browser.newContext();
+    const discovery = await context.request.get(`${fixture.base}/.well-known/oauth-authorization-server`);
+    assert.equal(discovery.status(), 200);
+    const metadata = await discovery.json();
+    assert.equal(metadata.issuer, fixture.base);
+    assert.equal(metadata.authorization_response_iss_parameter_supported, true);
+    assert.deepEqual(metadata.code_challenge_methods_supported, ['S256']);
     const page = await context.newPage();
     page.setDefaultTimeout(15000);
     // The fixture provides a local Discord stand-in on a different origin.
@@ -18,6 +24,7 @@ try {
     const params = new URLSearchParams({ response_type: 'code', client_id: client.id, redirect_uri: fixture.redirect, guild_id: fixture.guild, scope: 'vc.issue', state });
     await page.goto(`${fixture.base}/oauth2/authorize?${params}`);
     assert.equal(new URL(page.url()).searchParams.get('error_description'), 'code_challenge_required');
+    assert.deepEqual(new URL(page.url()).searchParams.getAll('iss'), [metadata.issuer]);
     params.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
     params.set('code_challenge_method', 'S256');
     await page.goto(`${fixture.base}/oauth2/authorize?${params}`);
@@ -33,6 +40,7 @@ try {
     await page.waitForURL(url => url.origin === new URL(fixture.redirect).origin && url.pathname === '/client/callback');
     const returned = new URL(page.url());
     assert.equal(returned.searchParams.get('state'), state);
+    assert.deepEqual(returned.searchParams.getAll('iss'), [metadata.issuer]);
     const code = returned.searchParams.get('code');
     assert.ok(code);
     const headers = client.method === 'client_secret_basic'

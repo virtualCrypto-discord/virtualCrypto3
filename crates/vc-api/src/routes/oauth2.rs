@@ -59,7 +59,7 @@ impl Refusal {
 /// not happen, since `preauthorize` has already matched it against the
 /// application's own registrations, but "should not happen" is not a reason to
 /// send a browser somewhere unparsed.
-pub fn answer(refusal: Refusal, redirect_uri: &str, state: Option<&str>) -> Response {
+pub fn answer(issuer: &str, refusal: Refusal, redirect_uri: &str, state: Option<&str>) -> Response {
     let Refusal::Redirect { error, description } = refusal else {
         return page();
     };
@@ -69,7 +69,7 @@ pub fn answer(refusal: Refusal, redirect_uri: &str, state: Option<&str>) -> Resp
         pairs.push(("state", state));
     }
 
-    to_client(redirect_uri, &pairs)
+    to_client(issuer, redirect_uri, &pairs)
 }
 
 /// Send the browser back to the client with these parameters, encoded.
@@ -77,18 +77,34 @@ pub fn answer(refusal: Refusal, redirect_uri: &str, state: Option<&str>) -> Resp
 /// The one place a redirect to a client is built, so that the error path and the
 /// success path cannot disagree about how a redirect URI with a query of its own
 /// is added to.
-pub fn to_client(redirect_uri: &str, pairs: &[(&str, &str)]) -> Response {
+pub fn to_client(issuer: &str, redirect_uri: &str, pairs: &[(&str, &str)]) -> Response {
     let Ok(mut url) = Url::parse(redirect_uri) else {
         return page();
     };
 
+    // A registered query must not introduce an ambiguous or forged issuer.
+    if let Some(raw) = url.query() {
+        let retained = raw
+            .split('&')
+            .filter(|pair| !raw_query_pairs(pair).iter().any(|(name, _)| name == "iss"))
+            .collect::<Vec<_>>()
+            .join("&");
+        url.set_query(if retained.is_empty() {
+            None
+        } else {
+            Some(&retained)
+        });
+    }
     {
         let mut query = url.query_pairs_mut();
         for (name, value) in pairs {
-            query.append_pair(name, value);
+            if *name != "iss" {
+                query.append_pair(name, value);
+            }
         }
     }
 
+    url.query_pairs_mut().append_pair("iss", issuer);
     Redirect::to(url.as_str()).into_response()
 }
 
@@ -223,7 +239,11 @@ pub async fn approve(
     if let Some(state) = request.state.as_deref() {
         pairs.push(("state", state));
     }
-    let mut response = private(to_client(&request.redirect_uri, &pairs));
+    let mut response = private(to_client(
+        super::oauth2_metadata::issuer(&state),
+        &request.redirect_uri,
+        &pairs,
+    ));
     response.headers_mut().insert(
         SET_COOKIE,
         flow::clear_cookie(form.flow_id, state.secure_cookies()),
@@ -388,6 +408,7 @@ pub async fn authorize(
         Ok(application) => application,
         Err(error) => {
             return Ok(answer(
+                super::oauth2_metadata::issuer(&state),
                 refusal_for(error),
                 &request.redirect_uri,
                 request.state.as_deref(),
@@ -408,6 +429,7 @@ pub async fn authorize(
         Ok(challenge) => challenge,
         Err(description) => {
             return Ok(private(answer(
+                super::oauth2_metadata::issuer(&state),
                 Refusal::redirect("invalid_request", description),
                 &request.redirect_uri,
                 request.state.as_deref(),
@@ -420,6 +442,7 @@ pub async fn authorize(
     );
     if let Err(refusal) = resources_of(&state, request.guild_id, resource_uris.clone()).await {
         return Ok(answer(
+            super::oauth2_metadata::issuer(&state),
             refusal,
             &request.redirect_uri,
             request.state.as_deref(),
@@ -491,6 +514,7 @@ pub async fn discord_callback(
         Ok(checked) => checked,
         Err(error) => {
             return Ok(answer(
+                super::oauth2_metadata::issuer(&state),
                 refusal_for(error),
                 &request.redirect_uri,
                 request.state.as_deref(),
@@ -501,6 +525,7 @@ pub async fn discord_callback(
         Ok(resources) => resources,
         Err(refusal) => {
             return Ok(answer(
+                super::oauth2_metadata::issuer(&state),
                 refusal,
                 &request.redirect_uri,
                 request.state.as_deref(),
@@ -509,6 +534,7 @@ pub async fn discord_callback(
     };
     if let Err(refusal) = describe(&state, &request, i64::from(account_id)).await {
         return Ok(answer(
+            super::oauth2_metadata::issuer(&state),
             refusal,
             &request.redirect_uri,
             request.state.as_deref(),
@@ -761,12 +787,17 @@ mod tests {
 
     #[test]
     fn a_redirecting_refusal_carries_the_error_and_the_state() {
-        let response = answer(redirecting(), "https://app.example/callback", Some("abc"));
+        let response = answer(
+            "https://vc.example",
+            redirecting(),
+            "https://app.example/callback",
+            Some("abc"),
+        );
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             location(&response),
-            "https://app.example/callback?error=invalid_request&error_description=invalid_guild_id&state=abc"
+            "https://app.example/callback?error=invalid_request&error_description=invalid_guild_id&state=abc&iss=https%3A%2F%2Fvc.example"
         );
     }
 
@@ -774,27 +805,59 @@ mod tests {
     /// not be able to end the parameter they are in.
     #[test]
     fn a_state_that_looks_like_a_query_is_escaped() {
-        let response = answer(redirecting(), "https://app.example/callback", Some("a&b=c"));
+        let response = answer(
+            "https://vc.example",
+            redirecting(),
+            "https://app.example/callback",
+            Some("a&b=c"),
+        );
 
         assert_eq!(
             location(&response),
-            "https://app.example/callback?error=invalid_request&error_description=invalid_guild_id&state=a%26b%3Dc"
+            "https://app.example/callback?error=invalid_request&error_description=invalid_guild_id&state=a%26b%3Dc&iss=https%3A%2F%2Fvc.example"
         );
     }
 
     #[test]
     fn a_redirect_uri_that_already_has_a_query_is_added_to() {
-        let response = answer(redirecting(), "https://app.example/callback?x=1", None);
+        let response = answer(
+            "https://vc.example",
+            redirecting(),
+            "https://app.example/callback?x=1",
+            None,
+        );
 
         assert_eq!(
             location(&response),
-            "https://app.example/callback?x=1&error=invalid_request&error_description=invalid_guild_id"
+            "https://app.example/callback?x=1&error=invalid_request&error_description=invalid_guild_id&iss=https%3A%2F%2Fvc.example"
         );
     }
 
     #[test]
+    fn registered_query_cannot_override_or_duplicate_the_issuer() {
+        let response = to_client(
+            "https://vc.example",
+            "https://app.example/callback?x=1&iss=evil&%69ss=other",
+            &[("code", "code"), ("iss", "forged")],
+        );
+        let url = Url::parse(&location(&response)).unwrap();
+        let issuers: Vec<_> = url
+            .query_pairs()
+            .filter(|(k, _)| k == "iss")
+            .map(|(_, v)| v.into_owned())
+            .collect();
+        assert_eq!(issuers, ["https://vc.example"]);
+        assert!(url.query_pairs().any(|(k, v)| k == "x" && v == "1"));
+    }
+
+    #[test]
     fn a_page_refusal_goes_nowhere() {
-        let response = answer(Refusal::Page, "https://app.example/callback", Some("abc"));
+        let response = answer(
+            "https://vc.example",
+            Refusal::Page,
+            "https://app.example/callback",
+            Some("abc"),
+        );
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(
@@ -809,7 +872,7 @@ mod tests {
     /// worth sending a browser to something that will not parse.
     #[test]
     fn an_unparseable_redirect_uri_is_answered_here_instead() {
-        let response = answer(redirecting(), "not a url", None);
+        let response = answer("https://vc.example", redirecting(), "not a url", None);
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(

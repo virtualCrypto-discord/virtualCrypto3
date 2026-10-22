@@ -10,6 +10,7 @@ pub mod interactions;
 pub mod limited;
 pub mod oauth2;
 pub mod oauth2_clients;
+mod oauth2_metadata;
 pub mod oauth2_token;
 pub mod pagination;
 mod request_timeout;
@@ -53,6 +54,10 @@ pub fn router(web_root: std::path::PathBuf) -> Router<AppState> {
 
     Router::new()
         .route("/health", get(health))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth2_metadata::metadata),
+        )
         // Retired login routes and the request-bound Discord OAuth callback.
         .route("/login", get(web::retired))
         .route("/logout", get(web::retired))
