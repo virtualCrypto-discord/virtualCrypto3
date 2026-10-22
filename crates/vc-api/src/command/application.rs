@@ -110,6 +110,7 @@ async fn register(state: &AppState, payload: &Value) -> Result<Value, CommandErr
                 Some(&created.client_secret),
                 &crate::routes::connect::token_url(state.links(), &created.client_id),
                 developer::Fields {
+                    token_endpoint_auth_method: created.token_endpoint_auth_method,
                     client_name: new.client_name.as_deref(),
                     redirect_uris: &new.redirect_uris,
                     client_uri: new.client_uri.as_deref(),
@@ -239,6 +240,7 @@ fn application_screen(state: &AppState, found: &crate::routes::oauth2_clients::D
         found.client_secret.as_deref(),
         &crate::routes::connect::token_url(state.links(), &found.client_id),
         developer::Fields {
+            token_endpoint_auth_method: found.token_endpoint_auth_method,
             client_name: found.client_name.as_deref(),
             redirect_uris: &found.redirect_uris,
             client_uri: found.client_uri.as_deref(),
@@ -535,6 +537,19 @@ pub async fn component(
                 connect_bot(state, client_id, bot, payload).await?,
             ])))
         }
+        (Some(2), Screen::TokenAuth) => {
+            let Some((_, found)) = owned(state, &client_id, payload).await? else {
+                return Ok(update(ephemeral(vec![developer::refusal(
+                    message!("command.application.component.005"),
+                    Some(message!("command.application.component.006")),
+                )])));
+            };
+            Ok(update(ephemeral(vec![developer::token_auth(
+                &found.client_id,
+                found.token_endpoint_auth_method,
+                found.client_secret.as_deref(),
+            )])))
+        }
         (Some(2), Screen::RotateSecret) => {
             let (client_id, action) = crate::custom_id::ui::developer::field_of(&client_id);
             if action == "confirm" {
@@ -674,11 +689,11 @@ async fn edit_field(
 ///
 /// Three of these fields are sets and one is a single value, and the difference is the
 /// endpoint's: `grant_types`, `response_types` and `subscribed_events` are read as
-/// arrays and `application_type` as a string. So a single choice is unwrapped here
+/// arrays and `application_type` / `token_endpoint_auth_method` as strings. So a single choice is unwrapped here
 /// rather than sent as an array the endpoint would refuse.
 fn edited(field: &str, values: Vec<Value>) -> Option<(String, Value)> {
     match field {
-        "application_type" => values
+        "application_type" | "token_endpoint_auth_method" => values
             .first()
             .map(|value| (field.to_owned(), value.clone())),
         "grant_types" | "response_types" | "subscribed_events" => {

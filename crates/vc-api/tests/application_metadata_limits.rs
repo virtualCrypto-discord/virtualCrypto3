@@ -107,6 +107,8 @@ fn all_settings_at_their_limits_fit_in_one_message_without_truncation() {
             Some(&secret),
             &token,
             vc_api::developer::Fields {
+                token_endpoint_auth_method:
+                    vc_core::application::TokenEndpointAuthMethod::ClientSecretBasic,
                 client_name: new.client_name.as_deref(),
                 redirect_uris: &new.redirect_uris,
                 client_uri: new.client_uri.as_deref(),

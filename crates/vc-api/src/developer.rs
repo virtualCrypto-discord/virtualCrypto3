@@ -125,6 +125,7 @@ pub fn applications_page(
 /// They travel together because the screen shows all nine and each has its own control, and
 /// because a screen that names each as its own argument is a signature nobody reads.
 pub struct Fields<'a> {
+    pub token_endpoint_auth_method: vc_core::application::TokenEndpointAuthMethod,
     pub client_name: Option<&'a str>,
     pub redirect_uris: &'a [String],
     pub client_uri: Option<&'a str>,
@@ -166,6 +167,10 @@ pub fn application(
         _ => text(&title),
     };
 
+    let auth_summary = format!(
+        message!("developer.token_auth.current"),
+        method = auth_method_label(fields.token_endpoint_auth_method),
+    );
     let mut children = vec![heading];
 
     children.extend([
@@ -300,13 +305,13 @@ pub fn application(
             0,
             EVENT_TYPES.len() as u8,
         )]),
-        secret_block(secret),
+        text(format!("{}\n\n{auth_summary}", secret_text(secret))),
         action_row(vec![button(
             &crate::custom_id::ui::developer::custom_id_for(
-                crate::custom_id::ui::developer::Screen::RotateSecret,
+                crate::custom_id::ui::developer::Screen::TokenAuth,
                 client_id,
             ),
-            message!("developer.application.017"),
+            message!("developer.token_auth.open"),
             ButtonStyle::Secondary,
         )]),
         text(format!(
@@ -323,6 +328,62 @@ pub fn application(
     ]);
 
     container(Some(WORKING), children)
+}
+
+fn auth_method_label(method: vc_core::application::TokenEndpointAuthMethod) -> &'static str {
+    use vc_core::application::TokenEndpointAuthMethod;
+    match method {
+        TokenEndpointAuthMethod::None => message!("developer.token_auth.none"),
+        TokenEndpointAuthMethod::ClientSecretBasic => message!("developer.token_auth.basic"),
+    }
+}
+
+/// Authentication settings have their own screen to stay within Discord's
+/// component limit even when the application has a logo and a saved banner.
+pub fn token_auth(
+    client_id: &str,
+    method: vc_core::application::TokenEndpointAuthMethod,
+    secret: Option<&str>,
+) -> Value {
+    use crate::custom_id::ui::developer::{Screen, custom_id_for, custom_id_for_field};
+    use vc_core::application::TokenEndpointAuthMethod;
+    container(
+        Some(WORKING),
+        vec![
+            text(message!("developer.token_auth.explanation")),
+            action_row(vec![select_many(
+                &custom_id_for_field(Screen::Edit, client_id, "token_endpoint_auth_method"),
+                Some(message!("developer.token_auth.open")),
+                [
+                    ("none", TokenEndpointAuthMethod::None),
+                    (
+                        "client_secret_basic",
+                        TokenEndpointAuthMethod::ClientSecretBasic,
+                    ),
+                ]
+                .into_iter()
+                .map(|(value, choice)| {
+                    setting_option(value, auth_method_label(choice), method == choice)
+                })
+                .collect(),
+                1,
+                1,
+            )]),
+            secret_block(secret),
+            action_row(vec![
+                button(
+                    &custom_id_for(Screen::RotateSecret, client_id),
+                    message!("developer.application.017"),
+                    ButtonStyle::Secondary,
+                ),
+                button(
+                    &custom_id_for(Screen::Show, client_id),
+                    message!("developer.token_auth.back"),
+                    ButtonStyle::Secondary,
+                ),
+            ]),
+        ],
+    )
 }
 
 /// Editing a set starts with its saved values checked, so adding a choice retains the others.
@@ -383,12 +444,13 @@ fn event_name(kind: i64) -> &'static str {
 /// The secret as it appears on the application's screen.
 ///
 fn secret_block(secret: Option<&str>) -> Value {
+    text(secret_text(secret))
+}
+
+fn secret_text(secret: Option<&str>) -> String {
     match secret {
-        Some(secret) => text(format!(
-            message!("developer.secret_block.001"),
-            secret = secret
-        )),
-        None => text(message!("developer.secret_block.002")),
+        Some(secret) => format!(message!("developer.secret_block.001"), secret = secret),
+        None => message!("developer.secret_block.002").to_owned(),
     }
 }
 
@@ -673,6 +735,7 @@ mod tests {
                     logo_uri: None,
                     webhook_url: None,
                     discord_support_server_invite_slug: None,
+                    token_endpoint_auth_method: Default::default(),
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],
@@ -721,6 +784,7 @@ mod tests {
                     logo_uri: None,
                     webhook_url: None,
                     discord_support_server_invite_slug: None,
+                    token_endpoint_auth_method: Default::default(),
                     application_type: "web",
                     grant_types: &[],
                     response_types: &[],

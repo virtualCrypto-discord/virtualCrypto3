@@ -310,6 +310,7 @@ pub mod ui {
             Back,
             Show,
             RotateSecret,
+            TokenAuth,
             ConfirmConnect,
         }
 
@@ -324,6 +325,7 @@ pub mod ui {
                 Screen::Show => 7,
                 Screen::RotateSecret => 8,
                 Screen::ConfirmConnect => 10,
+                Screen::TokenAuth => 11,
             }
         }
 
@@ -401,6 +403,7 @@ pub mod ui {
                 7 => Screen::Show,
                 8 => Screen::RotateSecret,
                 10 => Screen::ConfirmConnect,
+                11 => Screen::TokenAuth,
                 _ => return Err(UiError::Unknown(u16::from(id))),
             };
 
