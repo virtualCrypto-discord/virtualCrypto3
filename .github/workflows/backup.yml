@@ -52,4 +52,4 @@ jobs:
           docker push "$tag"
           image=$(docker image inspect "$tag" --format '{{index .RepoDigests 0}}')
           python3 ops/backup/deploy/update.py "$image"
-          printf 'Backup image: `%s`\n\nTakes effect on the next scheduled run.\n' "$image" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Backup image: %s\n\nTakes effect on the next scheduled run.\n' "$image" >> "$GITHUB_STEP_SUMMARY"

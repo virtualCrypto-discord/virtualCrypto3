@@ -31,3 +31,41 @@ class DeploymentTests(unittest.TestCase):
             machine['config'][key] = value
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 deploy.validate_machine([machine])
+
+class UpdateTests(unittest.TestCase):
+    def test_updates_only_image_with_version_guard_and_releases_lease(self):
+        from unittest.mock import patch
+        case = DeploymentTests()
+        case.setUp()
+        before = case.machine
+        before['instance_id'] = 'version-1'
+        before['config']['image'] = 'old-image'
+        image = 'registry.fly.io/virtualcrypto-backup@sha256:' + 'a' * 64
+        after = copy.deepcopy(before)
+        after['config']['image'] = image
+        with patch.object(deploy, 'machines', side_effect=[[before], [after]]), \
+             patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}]) as api, \
+             patch('sys.argv', ['update.py', image]):
+            deploy.main()
+        mutation = api.call_args_list[2]
+        self.assertEqual(mutation.kwargs['data']['current_version'], 'version-1')
+        self.assertTrue(mutation.kwargs['data']['skip_launch'])
+        self.assertEqual(mutation.kwargs['nonce'], 'lease')
+        expected = dict(before['config'], image=image)
+        self.assertEqual(mutation.kwargs['data']['config'], expected)
+        self.assertEqual(api.call_args_list[-1].kwargs['method'], 'DELETE')
+
+    def test_releases_lease_and_does_not_update_after_concurrent_change(self):
+        from unittest.mock import patch
+        case = DeploymentTests()
+        case.setUp()
+        before = dict(case.machine, instance_id='version-1')
+        before['config']['image'] = 'old-image'
+        current = dict(before, instance_id='version-2')
+        image = 'registry.fly.io/virtualcrypto-backup@sha256:' + 'a' * 64
+        with patch.object(deploy, 'machines', return_value=[before]), \
+             patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, current, {}]) as api, \
+             patch('sys.argv', ['update.py', image]), self.assertRaises(RuntimeError):
+            deploy.main()
+        self.assertEqual(api.call_count, 3)
+        self.assertEqual(api.call_args_list[-1].kwargs['method'], 'DELETE')

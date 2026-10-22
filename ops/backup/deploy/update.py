@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Update the existing scheduled Machine without starting an extra backup."""
 import argparse
+import copy
+import os
 import json
 import re
-import subprocess
+from urllib.request import Request, urlopen
 
 APP = 'virtualcrypto-backup'
 
@@ -26,8 +28,20 @@ def validate_machine(machines):
     return machine
 
 
+def api(path='', *, method='GET', data=None, nonce=None):
+    headers = {'Authorization': 'Bearer ' + os.environ['FLY_API_TOKEN'], 'Content-Type': 'application/json'}
+    if nonce:
+        headers['fly-machine-lease-nonce'] = nonce
+    request = Request(f'https://api.machines.dev/v1/apps/{APP}/machines/{path}'.rstrip('/'),
+                      data=json.dumps(data).encode() if data is not None else None,
+                      headers=headers, method=method)
+    with urlopen(request, timeout=60) as response:
+        body = response.read()
+        return json.loads(body) if body else None
+
+
 def machines():
-    return json.loads(subprocess.check_output(['flyctl', 'machine', 'list', '--app', APP, '--json'], text=True))
+    return api()
 
 
 def main():
@@ -38,8 +52,20 @@ def main():
         raise RuntimeError('Expected immutable backup-app registry image digest')
     before = validate_machine(machines())
     print('Previous image:', before['config']['image'], flush=True)
-    subprocess.run(['flyctl', 'machine', 'update', before['id'], '--app', APP,
-                    '--image', args.image, '--skip-start', '--yes'], check=True)
+    lease_path = before['id'] + '/lease'
+    lease = api(lease_path, method='POST', data={'ttl': 300, 'description': 'vc3 backup image update'})
+    nonce = lease['data']['nonce']
+    try:
+        current = validate_machine([api(before['id'])])
+        if current['instance_id'] != before['instance_id']:
+            raise RuntimeError('Machine changed while acquiring lease; retry deployment')
+        config = copy.deepcopy(before['config'])
+        config['image'] = args.image
+        api(before['id'], method='POST', nonce=nonce, data={
+            'config': config, 'current_version': before['instance_id'], 'skip_launch': True,
+        })
+    finally:
+        api(lease_path, method='DELETE', nonce=nonce)
     after = validate_machine(machines())
     if after['id'] != before['id']:
         raise RuntimeError('Machine identity changed')
