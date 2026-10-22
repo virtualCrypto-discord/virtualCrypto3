@@ -21,6 +21,7 @@ pub mod mute;
 pub mod notification;
 pub mod page;
 pub mod payment;
+pub mod pkce;
 pub mod purge;
 pub mod transfer;
 pub mod user;

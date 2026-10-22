@@ -32,6 +32,17 @@ with.
 All seven are already set on the app (`flyctl secrets list -a virtualcrypto-prod`), so
 a deployment of this port has nothing to add here.
 
+## OAuth migration deadlines
+
+Optional `TOKEN_ENDPOINT_AUTH_DEFAULT_FROM` controls the default authentication
+method for new application registrations. Independently, `PKCE_REQUIRED_FROM`
+requires S256 PKCE on new browser authorization flows, including existing clients.
+Both accept RFC 3339 timestamps with a timezone; empty or invalid values fail
+startup. Unset values preserve optional behavior. Set identical values on all
+instances and restart after changing them. Deploy PKCE support with its deadline
+unset first, then allow client migration before scheduling enforcement. Existing
+pending flows and refresh tokens remain usable. See [OAuth2](oauth2.md).
+
 ## What it takes with a default
 
 Already on the app:

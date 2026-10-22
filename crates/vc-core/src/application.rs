@@ -144,6 +144,32 @@ pub async fn authorize_in(
     client_id: &str,
     now: time::OffsetDateTime,
 ) -> Result<String, PreauthorizeError> {
+    authorize_in_with_pkce(
+        conn,
+        guild_id,
+        scopes,
+        resources,
+        redirect_uri,
+        client_id,
+        now,
+        None,
+    )
+    .await
+}
+
+/// The challenge is validated when the browser flow starts, and travels with
+/// that flow. Do not re-evaluate the deployment cutoff when consent completes.
+#[allow(clippy::too_many_arguments)]
+pub async fn authorize_in_with_pkce(
+    conn: &mut sqlx::PgConnection,
+    guild_id: i64,
+    scopes: &[String],
+    resources: &[i64],
+    redirect_uri: &str,
+    client_id: &str,
+    now: time::OffsetDateTime,
+    challenge: Option<&crate::pkce::Challenge>,
+) -> Result<String, PreauthorizeError> {
     let application = check(&mut *conn, scopes, redirect_uri, client_id).await?;
 
     let code = new_code();
@@ -166,9 +192,17 @@ pub async fn authorize_in(
         at + CODE_TTL,
         at
     )
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    if let Some(challenge) = challenge {
+        sqlx::query("UPDATE authorization_codes SET code_challenge = $2 WHERE code = $1")
+            .bind(&code)
+            .bind(challenge.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    }
 
     Ok(code)
 }

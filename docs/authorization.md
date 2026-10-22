@@ -20,7 +20,8 @@ and guild grants are not interchangeable merely because both tokens are UUIDs.
 
 ## Browser authorization without persistent login
 
-`GET /oauth2/authorize` validates and stores one authorization request, then sends
+`GET /oauth2/authorize` validates and stores one authorization request (including
+its S256 PKCE challenge and the requirement at flow start; see [OAuth2](oauth2.md#pkce-and-scheduled-enforcement)), then sends
 the browser to Discord for identity verification. A ten-minute, HttpOnly,
 SameSite=Lax cookie binds only that request to the browser; each flow has its own
 cookie so multiple tabs do not overwrite each other. It is not a login credential.

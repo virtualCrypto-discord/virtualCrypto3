@@ -66,7 +66,10 @@ struct Flow {
     cookie: String,
 }
 async fn start(f: &Fixture, resources: &[String]) -> Flow {
-    let response = get(&f.app, &uri(&f.client, resources), None, "text/html").await;
+    start_uri(&f.app, &uri(&f.client, resources)).await
+}
+async fn start_uri(app: &Router, uri: &str) -> Flow {
+    let response = get(app, uri, None, "text/html").await;
     assert_eq!(response.status(), 303);
     assert_eq!(response.headers()["cache-control"], "no-store");
     let url = reqwest::Url::parse(response.headers()[LOCATION].to_str().unwrap()).unwrap();
@@ -497,4 +500,281 @@ async fn everyone_administrator_can_authorize_and_revocation_is_rechecked(pool: 
             .unwrap()
             .contains("permission_denied")
     );
+}
+
+const PKCE_VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+const PKCE_CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+fn pkce_router(pool: &PgPool, from: Option<time::OffsetDateTime>) -> Router {
+    vc_api::router(
+        state(
+            pool.clone(),
+            FakeDiscord::with_member(MONEY_USER1, &[], &[]),
+        )
+        .with_pkce_required_from(from),
+    )
+}
+
+async fn exchange_pkce(app: &Router, body: &Value, basic: Option<&str>) -> (u16, Value) {
+    use base64::Engine;
+    // Exercise both accepted encodings: public clients use JSON, Basic uses form.
+    let (content_type, encoded) = if basic.is_some() {
+        let mut form = reqwest::Url::parse("https://example.test/").unwrap();
+        for (key, value) in body.as_object().unwrap() {
+            form.query_pairs_mut()
+                .append_pair(key, value.as_str().unwrap());
+        }
+        (
+            "application/x-www-form-urlencoded",
+            form.query().unwrap().to_owned(),
+        )
+    } else {
+        ("application/json", body.to_string())
+    };
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/oauth2/token")
+        .header("content-type", content_type);
+    if let Some(client) = basic {
+        request = request.header(
+            "authorization",
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(format!("{client}:secret"))
+            ),
+        );
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(encoded)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    (status, body)
+}
+
+fn response_code(response: &Response) -> String {
+    let url = reqwest::Url::parse(response.headers()[LOCATION].to_str().unwrap()).unwrap();
+    url.query_pairs()
+        .find(|(k, _)| k == "code")
+        .unwrap()
+        .1
+        .into_owned()
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pkce_survives_browser_flow_and_requires_correct_proof_for_public_and_basic_clients(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    sqlx::query("UPDATE applications SET client_secret='secret', grant_types=ARRAY['authorization_code','refresh_token']::openid_connect_grant_types[] WHERE id=$1")
+        .bind(f.application).execute(&pool).await.unwrap();
+    for basic in [false, true] {
+        if basic {
+            vc_core::application::patch(
+                &pool,
+                f.application,
+                &vc_core::application::Changes {
+                    token_endpoint_auth_method: Some(
+                        vc_core::application::TokenEndpointAuthMethod::ClientSecretBasic,
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let flow = start_uri(
+            &f.app,
+            &format!(
+                "{}&code_challenge={PKCE_CHALLENGE}&code_challenge_method=S256",
+                uri(&f.client, &[])
+            ),
+        )
+        .await;
+        assert_eq!(
+            callback(&f.app, &flow, Some(&flow.cookie), "application/json")
+                .await
+                .status(),
+            200
+        );
+        // Approval body fields cannot replace the challenge stored at the start.
+        let issued = post(
+            &f.app,
+            &flow,
+            &format!(
+                "{}&code_challenge=attacker&code_challenge_method=plain",
+                form(&flow)
+            ),
+            &[("sec-fetch-site", "same-origin")],
+        )
+        .await;
+        assert_eq!(issued.status(), 303);
+        let code = response_code(&issued);
+        let saved: Option<String> =
+            sqlx::query_scalar("SELECT code_challenge FROM authorization_codes WHERE code=$1")
+                .bind(&code)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(saved.as_deref(), Some(PKCE_CHALLENGE));
+        let mut body = json!({"grant_type":"authorization_code","client_id":f.client,"redirect_uri":REDIRECT,"code":code});
+        let auth = basic.then_some(f.client.as_str());
+        for verifier in [
+            None,
+            Some(""),
+            Some("wrong"),
+            Some("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+        ] {
+            body.as_object_mut().unwrap().remove("code_verifier");
+            if let Some(v) = verifier {
+                body["code_verifier"] = json!(v);
+            }
+            let (status, result) = exchange_pkce(&f.app, &body, auth).await;
+            assert_eq!(status, 400);
+            assert_eq!(result["error"], "invalid_grant");
+            assert_eq!(result["error_description"], "invalid_code_verifier");
+        }
+        body["code_verifier"] = json!(PKCE_VERIFIER);
+        if basic {
+            assert_eq!(
+                exchange_pkce(&f.app, &body, None).await.1["error"],
+                "invalid_client"
+            );
+        }
+        let (status, result) = exchange_pkce(&f.app, &body, auth).await;
+        assert_eq!(status, 200, "{result}");
+        let strict = pkce_router(
+            &pool,
+            Some(time::OffsetDateTime::now_utc() - time::Duration::days(1)),
+        );
+        let refresh = json!({"grant_type":"refresh_token","refresh_token":result["refresh_token"]});
+        assert_eq!(exchange_pkce(&strict, &refresh, auth).await.0, 200);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn pkce_cutover_applies_to_new_starts_and_preserves_pending_flows_and_issued_codes(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let now = time::OffsetDateTime::now_utc();
+    let future = pkce_router(&pool, Some(now + time::Duration::days(1)));
+    let pending = start_uri(&future, &uri(&f.client, &[])).await;
+    // A flow saved by the old binary has no PKCE field at all.
+    sqlx::query(
+        "UPDATE browser_authorizations SET request=request #- '{request,pkce}' WHERE id=$1",
+    )
+    .bind(uuid::Uuid::parse_str(&pending.id).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let started = start(&f, &[]).await;
+    assert_eq!(
+        callback(&f.app, &started, Some(&started.cookie), "application/json")
+            .await
+            .status(),
+        200
+    );
+    let old_code = response_code(&approve(&f.app, &started).await);
+
+    let strict = pkce_router(&pool, Some(now - time::Duration::days(1)));
+    let denied = get(&strict, &uri(&f.client, &[]), None, "text/html").await;
+    let redirect = reqwest::Url::parse(denied.headers()[LOCATION].to_str().unwrap()).unwrap();
+    let pairs: std::collections::HashMap<_, _> = redirect.query_pairs().into_owned().collect();
+    assert_eq!(pairs["error"], "invalid_request");
+    assert_eq!(pairs["error_description"], "code_challenge_required");
+    assert_eq!(pairs["state"], CLIENT_STATE);
+
+    // The pre-cutover request can finish consent after the cutoff.
+    assert_eq!(
+        callback(&strict, &pending, Some(&pending.cookie), "application/json")
+            .await
+            .status(),
+        200
+    );
+    let later_code = response_code(&approve(&strict, &pending).await);
+    for code in [old_code, later_code] {
+        let mut body = json!({"grant_type":"authorization_code","client_id":f.client,"redirect_uri":REDIRECT,"code":code,"code_verifier":PKCE_VERIFIER});
+        assert_eq!(
+            exchange_pkce(&strict, &body, None).await.1["error"],
+            "invalid_grant"
+        );
+        body.as_object_mut().unwrap().remove("code_verifier");
+        assert_eq!(exchange_pkce(&strict, &body, None).await.0, 200);
+    }
+    // A fresh request supplying S256 still starts after enforcement.
+    start_uri(
+        &strict,
+        &format!(
+            "{}&code_challenge={PKCE_CHALLENGE}&code_challenge_method=S256",
+            uri(&f.client, &[])
+        ),
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn malformed_pkce_is_rejected_even_before_cutover_and_never_redirects_to_untrusted_uri(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    for suffix in [
+        format!("&code_challenge={PKCE_CHALLENGE}"),
+        format!("&code_challenge={PKCE_CHALLENGE}&code_challenge_method=plain"),
+        "&code_challenge_method=S256".into(),
+        "&code_challenge=short&code_challenge_method=S256".into(),
+        "&code_challenge=&code_challenge_method=S256".into(),
+        format!("&code_challenge={PKCE_CHALLENGE}&code_challenge_method=other"),
+    ] {
+        let response = get(
+            &f.app,
+            &format!("{}{suffix}", uri(&f.client, &[])),
+            None,
+            "text/html",
+        )
+        .await;
+        assert_eq!(response.status(), 303);
+        let redirect = reqwest::Url::parse(response.headers()[LOCATION].to_str().unwrap()).unwrap();
+        assert_eq!(redirect.host_str(), Some("app.example"));
+        assert!(
+            redirect
+                .query_pairs()
+                .any(|(k, v)| k == "error" && v == "invalid_request")
+        );
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM browser_authorizations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let bad = uri(&f.client, &[]).replace("app.example", "attacker.example");
+    let response = get(
+        &f.app,
+        &format!("{bad}&code_challenge=bad&code_challenge_method=plain"),
+        None,
+        "text/html",
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    assert!(!response.headers().contains_key(LOCATION));
+}
+
+#[tokio::test]
+async fn pkce_activation_boundary_is_inclusive_and_independent_of_client_auth_default() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/test")
+        .unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let base = state(pool, fake()).with_token_endpoint_auth_default_from(Some(now));
+    assert!(!base.pkce_required(now));
+    assert!(
+        !base
+            .clone()
+            .with_pkce_required_from(Some(now + time::Duration::seconds(1)))
+            .pkce_required(now)
+    );
+    assert!(base.with_pkce_required_from(Some(now)).pkce_required(now));
 }

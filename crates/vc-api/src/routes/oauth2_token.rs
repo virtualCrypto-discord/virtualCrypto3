@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use vc_auth::issue::{app_scopes_are_valid, app_token, revoke_by_jti};
 use vc_core::application::{Application, verify_secret};
 use vc_core::grant::{
-    EXPIRES_IN, ExchangeError, create_device_token, exchange_code_authenticated,
+    EXPIRES_IN, ExchangeError, create_device_token, exchange_code_with_pkce,
     exchange_refresh_token_authenticated, revoke_access_token, revoke_refresh_token,
 };
 
@@ -67,6 +67,7 @@ pub struct TokenForm {
     pub client_id: Option<String>,
     pub redirect_uri: Option<String>,
     pub code: Option<String>,
+    pub code_verifier: Option<String>,
     pub refresh_token: Option<String>,
     pub device_code: Option<String>,
     #[allow(dead_code)]
@@ -284,12 +285,13 @@ async fn exchange(state: &AppState, headers: &HeaderMap, form: TokenForm) -> Res
         return error("invalid_request", "code");
     };
 
-    let exchanged = exchange_code_authenticated(
+    let exchanged = exchange_code_with_pkce(
         state.pool(),
         &client_id,
         &redirect_uri,
         &code,
         credentials.as_ref(),
+        form.code_verifier.as_deref(),
         OffsetDateTime::now_utc,
     )
     .await;

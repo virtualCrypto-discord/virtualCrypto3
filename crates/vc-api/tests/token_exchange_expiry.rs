@@ -75,7 +75,7 @@ async fn code_expiring_during_its_lock_wait_is_not_consumed(pool: PgPool) {
             grant::exchange_code(&pool, &client, callback, &code, || *clock.lock().unwrap()).await
         })
     };
-    wait_for_lock(&pool, "DELETE FROM authorization_codes%").await;
+    wait_for_lock(&pool, "SELECT code_challenge FROM authorization_codes%").await;
     *clock.lock().unwrap() = expires.assume_utc() + time::Duration::seconds(1);
     blocker.rollback().await.unwrap();
     assert_eq!(exchange.await.unwrap(), Err(ExchangeError::InvalidCode));

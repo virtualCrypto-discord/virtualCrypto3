@@ -53,9 +53,53 @@ Authentication failures do not consume either token or revoke a reused code's
 grant. Failed authentication using an Authorization header returns
 `401 invalid_client` with a Basic challenge; missing authentication returns
 `400 invalid_client`. Applications using `none` retain legacy handling of
-authentication headers. PKCE is separate and is not introduced by this change.
+authentication headers. PKCE is a separate policy, described below.
 
 
+
+## PKCE and scheduled enforcement
+
+Authorization-code flows support PKCE **S256 only**, independently of client
+authentication. Public and confidential clients both use it. Send
+`code_challenge=BASE64URL(SHA256(code_verifier))` (without padding) and
+`code_challenge_method=S256` to `GET /oauth2/authorize`. Generate a fresh,
+cryptographically random verifier for each flow; RFC 7636 recommends 32 random
+bytes encoded as base64url. Keep the verifier bound to the initiating browser
+session and validate `state`. Send the original `code_verifier` when exchanging
+the code at `POST /oauth2/token` (form or JSON). The verifier must contain
+43–128 ASCII unreserved characters (`A-Z a-z 0-9 - . _ ~`). The demo app does this.
+
+| `PKCE_REQUIRED_FROM` | New authorization flows |
+| --- | --- |
+| Unset | PKCE optional |
+| Configured time is still in the future | PKCE optional |
+| Configured time has arrived (inclusive) | S256 PKCE required for all clients |
+
+This is **not** the new-client registration cutoff. Existing applications are
+also covered when they start a new flow after this time. Read at startup; use
+an RFC 3339 timestamp with a timezone, e.g. `2027-04-01T00:00:00+09:00`.
+Invalid/empty values fail startup. Configure the same value on all instances.
+Leave it unset while rolling out support, migrate clients, then announce and
+configure a sufficiently distant deadline independently of
+`TOKEN_ENDPOINT_AUTH_DEFAULT_FROM`. No enforcement date is shipped by default.
+
+The requirement is evaluated once, when the browser flow starts. Pending flows
+and issued codes from before the deadline retain their saved PKCE conditions,
+even across deployment or the deadline. Migration 0030 leaves existing codes
+without a challenge. Existing refresh tokens remain usable; refreshing does not
+require a verifier. PKCE does not replace Basic authentication where configured.
+
+A supplied challenge is always validated, including before the deadline. `plain`,
+an omitted method with a challenge, and malformed challenges produce
+`invalid_request`. A required but missing challenge returns
+`invalid_request` / `code_challenge_required` to the validated redirect URI.
+A missing, malformed or incorrect verifier for a challenged code returns
+`invalid_grant` / `invalid_code_verifier` without consuming the code. Supplying a
+verifier for a code issued without a challenge is also rejected to prevent
+downgrades. Never add a verifier only at the token endpoint.
+
+References: [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636.html),
+[RFC 9700 §4.8](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.8).
 
 The current browser flow is request-bound: `/oauth2/authorize` starts a new Discord
 identity check every time, `/callback/discord` shows consent, and a one-time

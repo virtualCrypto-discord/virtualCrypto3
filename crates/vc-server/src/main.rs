@@ -113,6 +113,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => return Err(error.into()),
     };
 
+    let pkce_required_from = match std::env::var("PKCE_REQUIRED_FROM") {
+        Ok(value) => Some(
+            time::OffsetDateTime::parse(&value, &time::format_description::well_known::Rfc3339)
+                .map_err(|error| format!("invalid PKCE_REQUIRED_FROM: {error}"))?,
+        ),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
+
     let state = AppState::new(
         pool,
         vc_api::state::Signing::new(jwt_secret, secure_cookies),
@@ -144,7 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
         Arc::clone(&monitor),
     )
-    .with_token_endpoint_auth_default_from(token_endpoint_auth_default_from);
+    .with_token_endpoint_auth_default_from(token_endpoint_auth_default_from)
+    .with_pkce_required_from(pkce_required_from);
 
     // The sweep that ends each observation window and sends whatever it owes.
     // Its own task rather than the scheduler's, so `VCRYPTO_SETTLE_INTERVAL_SECS=0`
