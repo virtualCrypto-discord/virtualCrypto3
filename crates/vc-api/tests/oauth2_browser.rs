@@ -58,7 +58,7 @@ async fn consent_form_pkce_and_refresh_in_chromium(pool: PgPool) {
         let base = callback_base.clone();
         async move {
             let state = uuid::Uuid::parse_str(&query["state"]).unwrap();
-            axum::response::Redirect::to(&format!("{base}/callback/discord?state={state}&code=test-discord-code"))
+            axum::response::Redirect::to(&format!("{base}/callback/discord?state={state}&code=test-discord-code&iss=https%3A%2F%2Fdiscord.com"))
         }
     }))
     .route("/test/null-origin", get(|axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String,String>>| async move {

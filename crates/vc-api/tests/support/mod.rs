@@ -69,6 +69,7 @@ pub struct FakeDiscord {
     /// missing from the server or merely unpermitted in it.
     integrations_status: u16,
     guild_status: u16,
+    exchange_calls: AtomicUsize,
     refresh_calls: AtomicUsize,
     user_calls: AtomicUsize,
     user_status: u16,
@@ -144,6 +145,7 @@ impl FakeDiscord {
             command_failures: AtomicUsize::new(0),
             integrations_status: 200,
             guild_status: 200,
+            exchange_calls: AtomicUsize::new(0),
             refresh_calls: AtomicUsize::new(0),
             user_calls: AtomicUsize::new(0),
             user_status: 200,
@@ -276,6 +278,10 @@ impl FakeDiscord {
         let mut fake = Self::new();
         fake.user_status = status;
         fake
+    }
+
+    pub fn exchange_calls(&self) -> usize {
+        self.exchange_calls.load(Ordering::SeqCst)
     }
 
     pub fn refresh_calls(&self) -> usize {
@@ -542,6 +548,7 @@ impl DiscordApi for FakeDiscord {
     }
 
     async fn exchange_code(&self, _code: &str) -> Result<RefreshedToken, DiscordError> {
+        self.exchange_calls.fetch_add(1, Ordering::SeqCst);
         Ok(RefreshedToken {
             token: EXCHANGED_TOKEN.to_string(),
             expires_in: 3600,
