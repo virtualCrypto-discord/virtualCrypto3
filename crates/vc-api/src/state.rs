@@ -65,6 +65,7 @@ pub struct Outbound {
 pub struct AppState {
     token_endpoint_auth_default_from: Option<time::OffsetDateTime>,
     pkce_required_from: Option<time::OffsetDateTime>,
+    pkce_public_required_from: Option<time::OffsetDateTime>,
     pool: PgPool,
     signing: Signing,
     discord_public_key: Arc<[u8; 32]>,
@@ -108,6 +109,7 @@ impl AppState {
             command_ids: Arc::new(CommandIds::default()),
             token_endpoint_auth_default_from: None,
             pkce_required_from: None,
+            pkce_public_required_from: None,
         }
     }
 
@@ -156,8 +158,21 @@ impl AppState {
         self
     }
 
-    pub fn pkce_required(&self, now: time::OffsetDateTime) -> bool {
+    pub fn with_pkce_public_required_from(mut self, from: Option<time::OffsetDateTime>) -> Self {
+        self.pkce_public_required_from = from;
+        self
+    }
+
+    pub fn pkce_required(
+        &self,
+        now: time::OffsetDateTime,
+        method: vc_core::application::TokenEndpointAuthMethod,
+    ) -> bool {
         self.pkce_required_from.is_some_and(|from| now >= from)
+            || (method == vc_core::application::TokenEndpointAuthMethod::None
+                && self
+                    .pkce_public_required_from
+                    .is_some_and(|from| now >= from))
     }
 
     pub fn with_token_endpoint_auth_default_from(

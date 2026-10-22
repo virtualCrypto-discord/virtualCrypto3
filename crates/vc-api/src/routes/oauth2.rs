@@ -376,7 +376,7 @@ pub async fn authorize(
         Ok(request) => request,
         Err(_) => return Ok(page()),
     };
-    if let Err(error) = vc_core::application::preauthorize(
+    let preauthorized = match vc_core::application::preauthorize(
         state.pool(),
         &request.scopes,
         &request.redirect_uri,
@@ -384,18 +384,24 @@ pub async fn authorize(
     )
     .await
     {
-        return Ok(answer(
-            refusal_for(error),
-            &request.redirect_uri,
-            request.state.as_deref(),
-        ));
-    }
+        Ok(application) => application,
+        Err(error) => {
+            return Ok(answer(
+                refusal_for(error),
+                &request.redirect_uri,
+                request.state.as_deref(),
+            ));
+        }
+    };
     // Validate PKCE only after the redirect URI has been checked. Freeze the
     // policy here: callbacks/consent may finish after the scheduled cutoff.
     request.pkce = match vc_core::pkce::Challenge::from_request(
         challenge.as_deref(),
         method.as_deref(),
-        state.pkce_required(time::OffsetDateTime::now_utc()),
+        state.pkce_required(
+            time::OffsetDateTime::now_utc(),
+            preauthorized.token_endpoint_auth_method,
+        ),
     ) {
         Ok(challenge) => challenge,
         Err(description) => {

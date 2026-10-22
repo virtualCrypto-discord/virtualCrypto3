@@ -763,18 +763,128 @@ async fn malformed_pkce_is_rejected_even_before_cutover_and_never_redirects_to_u
 }
 
 #[tokio::test]
-async fn pkce_activation_boundary_is_inclusive_and_independent_of_client_auth_default() {
+async fn pkce_activation_boundaries_are_inclusive_and_independent_of_client_auth_default() {
+    use vc_core::application::TokenEndpointAuthMethod::{ClientSecretBasic, None as Public};
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://localhost/test")
         .unwrap();
     let now = time::OffsetDateTime::now_utc();
+    let later = now + time::Duration::days(30);
     let base = state(pool, fake()).with_token_endpoint_auth_default_from(Some(now));
-    assert!(!base.pkce_required(now));
-    assert!(
-        !base
+    for method in [Public, ClientSecretBasic] {
+        assert!(!base.pkce_required(now, method));
+    }
+    let phased = base
+        .clone()
+        .with_pkce_public_required_from(Some(now))
+        .with_pkce_required_from(Some(later));
+    for method in [Public, ClientSecretBasic] {
+        assert!(!phased.pkce_required(now - time::Duration::nanoseconds(1), method));
+        assert!(phased.pkce_required(later, method));
+    }
+    assert!(phased.pkce_required(now, Public));
+    assert!(!phased.pkce_required(now, ClientSecretBasic));
+    assert!(!phased.pkce_required(later - time::Duration::nanoseconds(1), ClientSecretBasic));
+    let public_only = base.clone().with_pkce_public_required_from(Some(now));
+    assert!(public_only.pkce_required(later, Public));
+    assert!(!public_only.pkce_required(later, ClientSecretBasic));
+    // All-client enforcement wins even if the public deadline is absent or later.
+    for public_from in [None, Some(later)] {
+        let all = base
             .clone()
-            .with_pkce_required_from(Some(now + time::Duration::seconds(1)))
-            .pkce_required(now)
+            .with_pkce_public_required_from(public_from)
+            .with_pkce_required_from(Some(now));
+        assert!(all.pkce_required(now, Public));
+        assert!(all.pkce_required(now, ClientSecretBasic));
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn public_only_stage_uses_saved_auth_method_and_preserves_started_flows(pool: PgPool) {
+    use vc_core::application::{Changes, TokenEndpointAuthMethod, patch};
+    let f = fixture(&pool).await;
+    let now = time::OffsetDateTime::now_utc();
+    let app = vc_api::router(
+        state(
+            pool.clone(),
+            FakeDiscord::with_member(MONEY_USER1, &[], &[]),
+        )
+        .with_pkce_public_required_from(Some(now - time::Duration::days(1)))
+        .with_pkce_required_from(Some(now + time::Duration::days(30))),
     );
-    assert!(base.with_pkce_required_from(Some(now)).pkce_required(now));
+    let rejected = get(&app, &uri(&f.client, &[]), None, "text/html").await;
+    assert_eq!(rejected.status(), 303);
+    assert!(
+        rejected.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("code_challenge_required")
+    );
+    let proof = start_uri(
+        &app,
+        &format!(
+            "{}&code_challenge={PKCE_CHALLENGE}&code_challenge_method=S256",
+            uri(&f.client, &[])
+        ),
+    )
+    .await;
+    assert_eq!(
+        callback(&app, &proof, Some(&proof.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    patch(
+        &pool,
+        f.application,
+        &Changes {
+            token_endpoint_auth_method: Some(TokenEndpointAuthMethod::ClientSecretBasic),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let legacy = start_uri(&app, &uri(&f.client, &[])).await;
+    // Optional does not mean that malformed PKCE can be ignored.
+    let malformed = get(
+        &app,
+        &format!(
+            "{}&code_challenge=bad&code_challenge_method=plain",
+            uri(&f.client, &[])
+        ),
+        None,
+        "text/html",
+    )
+    .await;
+    assert!(
+        malformed.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("invalid_code_challenge_method")
+    );
+    // Changes to classification do not retroactively invalidate a started flow.
+    patch(
+        &pool,
+        f.application,
+        &Changes {
+            token_endpoint_auth_method: Some(TokenEndpointAuthMethod::None),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        callback(&app, &legacy, Some(&legacy.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(approve(&app, &legacy).await.status(), 303);
+    let rejected = get(&app, &uri(&f.client, &[]), None, "text/html").await;
+    assert!(
+        rejected.headers()[LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("code_challenge_required")
+    );
 }

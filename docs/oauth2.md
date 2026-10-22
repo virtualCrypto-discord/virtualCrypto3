@@ -69,19 +69,31 @@ session and validate `state`. Send the original `code_verifier` when exchanging
 the code at `POST /oauth2/token` (form or JSON). The verifier must contain
 43–128 ASCII unreserved characters (`A-Z a-z 0-9 - . _ ~`). The demo app does this.
 
-| `PKCE_REQUIRED_FROM` | New authorization flows |
-| --- | --- |
-| Unset | PKCE optional |
-| Configured time is still in the future | PKCE optional |
-| Configured time has arrived (inclusive) | S256 PKCE required for all clients |
+Two independent deadlines provide three rollout stages:
 
-This is **not** the new-client registration cutoff. Existing applications are
-also covered when they start a new flow after this time. Read at startup; use
-an RFC 3339 timestamp with a timezone, e.g. `2027-04-01T00:00:00+09:00`.
-Invalid/empty values fail startup. Configure the same value on all instances.
-Leave it unset while rolling out support, migrate clients, then announce and
-configure a sufficiently distant deadline independently of
-`TOKEN_ENDPOINT_AUTH_DEFAULT_FROM`. No enforcement date is shipped by default.
+| Stage | New authorization flows |
+| --- | --- |
+| Neither deadline reached (or both unset) | PKCE optional for all clients |
+| `PKCE_PUBLIC_REQUIRED_FROM` reached | PKCE required for `token_endpoint_auth_method=none`; optional for `client_secret_basic` |
+| `PKCE_REQUIRED_FROM` reached | S256 PKCE required for all clients |
+
+Classification uses the saved token-endpoint authentication method at flow start,
+not `application_type`, possession of an issued secret, or a request parameter.
+Existing legacy registrations with `none` therefore belong to the public stage.
+The all-client deadline takes precedence even if the public deadline is unset or
+later. Either deadline may be left unset; to schedule all three stages, set the
+public deadline earlier than the all-client deadline.
+
+These are **not** the new-client registration cutoff. Existing applications are
+also covered when they start a new flow after the applicable time. Both variables
+are read at startup and accept RFC 3339 timestamps with a timezone, e.g.
+`PKCE_PUBLIC_REQUIRED_FROM=2027-04-01T00:00:00+09:00` and
+`PKCE_REQUIRED_FROM=2027-07-01T00:00:00+09:00` (illustrative dates only).
+Invalid/empty values fail startup. Configure identical values on all instances.
+Leave both unset while rolling out support, migrate public clients first, then
+allow confidential clients a longer migration period before all-client enforcement.
+Both deadlines are independent of `TOKEN_ENDPOINT_AUTH_DEFAULT_FROM`.
+No enforcement date is shipped by default.
 
 The requirement is evaluated once, when the browser flow starts. Pending flows
 and issued codes from before the deadline retain their saved PKCE conditions,

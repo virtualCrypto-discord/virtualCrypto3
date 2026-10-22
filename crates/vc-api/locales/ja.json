@@ -1,5 +1,5 @@
 {
-  "docs.api.pkce.challenge": "`code_challenge`・`code_challenge_method` — PKCE は S256 のみ対応。verifier の SHA-256 をパディング無し base64url にした challenge と `S256` を指定。必須化日時以降に開始する認可は全クライアントで必須。移行期間中も指定した場合は検証します。",
+  "docs.api.pkce.challenge": "`code_challenge`・`code_challenge_method` — PKCE は S256 のみ対応。verifier の SHA-256 をパディング無し base64url にした challenge と `S256` を指定。必須化は任意→public（認証方式 `none`）のみ必須→全クライアント必須の3段階。public 用と全体用の日時は別々に設定されます。移行期間中も指定した場合は検証します。",
   "docs.api.pkce.verifier": "`code_verifier` — 認可開始時に challenge を指定した場合は必須。43〜128 文字の ASCII 英数字と `-._~`。欠落・不正・不一致、または challenge のないコードへの指定は `invalid_grant` / `invalid_code_verifier`。refresh 時は不要。",
   "command.application.register.001": "登録",
   "command.application.register.002": "アプリケーションを登録しました。",

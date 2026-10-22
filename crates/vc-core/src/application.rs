@@ -34,6 +34,7 @@ pub enum PreauthorizeError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preauthorized {
     pub client_name: Option<String>,
+    pub token_endpoint_auth_method: TokenEndpointAuthMethod,
 }
 
 /// `validate_authorization_request_and_get_application_info/3`, which is what
@@ -52,7 +53,14 @@ pub async fn preauthorize(
         .map_err(|_| PreauthorizeError::InvalidClientId)?;
     let application = check(&mut conn, scopes, redirect_uri, client_id).await?;
 
+    let token_endpoint_auth_method =
+        sqlx::query_scalar("SELECT token_endpoint_auth_method FROM applications WHERE id = $1")
+            .bind(application.id)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|_| PreauthorizeError::InvalidClientId)?;
     Ok(Preauthorized {
+        token_endpoint_auth_method,
         client_name: application.client_name,
     })
 }
