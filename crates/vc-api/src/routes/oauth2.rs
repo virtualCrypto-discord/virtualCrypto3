@@ -444,6 +444,7 @@ pub async fn authorize(
 
 #[derive(Deserialize)]
 pub struct CallbackQuery {
+    pub iss: String,
     pub state: Uuid,
     pub code: Option<String>,
 }
@@ -455,6 +456,11 @@ pub async fn discord_callback(
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, ApiError> {
+    // RFC 9207: compare with the trusted issuer before exchanging any code.
+    // Keep this an exact string comparison, not URL normalization or discovery.
+    if query.iss != "https://discord.com" {
+        return Ok(page());
+    }
     let Some(secret) = flow::binding(&headers, query.state) else {
         return Ok(unauthorized());
     };

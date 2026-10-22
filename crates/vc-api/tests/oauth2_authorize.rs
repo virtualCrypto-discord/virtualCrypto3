@@ -92,7 +92,10 @@ async fn start_uri(app: &Router, uri: &str) -> Flow {
 async fn callback(app: &Router, flow: &Flow, cookie: Option<&str>, accept: &str) -> Response {
     get(
         app,
-        &format!("/callback/discord?state={}&code=the-code", flow.id),
+        &format!(
+            "/callback/discord?state={}&code=the-code&iss=https%3A%2F%2Fdiscord.com",
+            flow.id
+        ),
         cookie,
         accept,
     )
@@ -445,7 +448,10 @@ async fn failed_or_denied_discord_callbacks_cannot_be_replayed(pool: PgPool) {
     let flow = start(&f, &[]).await;
     let rejected = get(
         &f.app,
-        &format!("/callback/discord?state={}&error=access_denied", flow.id),
+        &format!(
+            "/callback/discord?state={}&error=access_denied&iss=https%3A%2F%2Fdiscord.com",
+            flow.id
+        ),
         Some(&flow.cookie),
         "text/html",
     )
@@ -962,4 +968,48 @@ async fn application_pkce_opt_in_applies_to_new_flows_and_cannot_override_global
             .unwrap()
             .contains("code_challenge_required")
     );
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn discord_issuer_is_required_and_checked_before_code_exchange(pool: PgPool) {
+    let mut f = fixture(&pool).await;
+    let discord = FakeDiscord::with_member(MONEY_USER1, &[], &[]);
+    f.app = vc_api::router(state(pool.clone(), discord.clone()));
+    let flow = start(&f, &[]).await;
+    for issuer in [
+        "",
+        "&iss=",
+        "&iss=https%3A%2F%2Fevil.example",
+        "&iss=http%3A%2F%2Fdiscord.com",
+        "&iss=https%3A%2F%2Fdiscord.com%2F",
+        "&iss=https%3A%2F%2FDISCORD.COM",
+        "&iss=https%3A%2F%2Fdiscord.com%3A443",
+        "&iss=https%3A%2F%2Fdiscord.com.evil.example",
+        "&iss=https%3A%2F%2Fdiscord.com&iss=https%3A%2F%2Fdiscord.com",
+        "&iss=https%3A%2F%2Fdiscord.com&iss=https%3A%2F%2Fevil.example",
+        "&iss=https%3A%2F%2Fevil.example&iss=https%3A%2F%2Fdiscord.com",
+    ] {
+        for outcome in ["code=the-code", "error=access_denied"] {
+            let response = get(
+                &f.app,
+                &format!("/callback/discord?state={}&{outcome}{issuer}", flow.id),
+                Some(&flow.cookie),
+                "text/html",
+            )
+            .await;
+            assert_eq!(response.status(), 400, "{outcome}{issuer}");
+            assert!(!response.headers().contains_key(LOCATION));
+            assert_eq!(discord.exchange_calls(), 0);
+        }
+    }
+    assert_eq!(count_codes(&pool).await, 0);
+    // Rejected responses did not consume the browser-bound flow.
+    assert_eq!(
+        callback(&f.app, &flow, Some(&flow.cookie), "text/html")
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(discord.exchange_calls(), 1);
+    assert_eq!(approve(&f.app, &flow).await.status(), 303);
 }
