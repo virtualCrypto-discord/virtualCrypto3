@@ -261,6 +261,7 @@ pub const EXPIRES_IN: i64 = 3600;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExchangeError {
     InvalidClient,
+    InvalidVerifier,
     /// `invalid_grant`, `invalid_code`: never issued, or past its fifteen
     /// minutes. The Elixir answers both the same way, so this does too.
     InvalidCode,
@@ -280,6 +281,7 @@ pub enum ExchangeError {
 impl ExchangeError {
     pub fn error(self) -> &'static str {
         match self {
+            ExchangeError::InvalidVerifier => "invalid_grant",
             ExchangeError::InvalidClient => "invalid_client",
             ExchangeError::InvalidCode | ExchangeError::UsedCode => "invalid_grant",
             ExchangeError::NotFoundClient => "invalid_request",
@@ -291,6 +293,7 @@ impl ExchangeError {
 
     pub fn description(self) -> &'static str {
         match self {
+            ExchangeError::InvalidVerifier => "invalid_code_verifier",
             ExchangeError::InvalidClient => "invalid_client",
             ExchangeError::InvalidCode => "invalid_code",
             ExchangeError::UsedCode => "used_code",
@@ -335,6 +338,27 @@ pub async fn exchange_code_authenticated(
     credentials: Option<&(String, String)>,
     clock: impl FnOnce() -> OffsetDateTime,
 ) -> std::result::Result<Exchanged, ExchangeError> {
+    exchange_code_with_pkce(
+        pool,
+        client_id,
+        redirect_uri,
+        code,
+        credentials,
+        None,
+        clock,
+    )
+    .await
+}
+
+pub async fn exchange_code_with_pkce(
+    pool: &PgPool,
+    client_id: &str,
+    redirect_uri: &str,
+    code: &str,
+    credentials: Option<&(String, String)>,
+    verifier: Option<&str>,
+    clock: impl FnOnce() -> OffsetDateTime,
+) -> std::result::Result<Exchanged, ExchangeError> {
     let mut tx = pool
         .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
         .await
@@ -352,6 +376,20 @@ pub async fn exchange_code_authenticated(
     .flatten();
     if let Some(owner) = owner {
         authenticate_token_owner(&mut tx, owner, credentials, Some(client_id)).await?;
+    }
+    // Lock the code before checking its challenge. A failed proof leaves it
+    // untouched; successful validation and consumption share this transaction.
+    let challenge: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT code_challenge FROM authorization_codes WHERE code = $1 FOR UPDATE",
+    )
+    .bind(code)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ExchangeError::InvalidCode)?;
+    if let Some(challenge) = challenge
+        && !crate::pkce::verify(challenge.as_deref(), verifier)
+    {
+        return Err(ExchangeError::InvalidVerifier);
     }
     let result = exchange_code_in(&mut tx, client_id, redirect_uri, code, clock).await;
     if result.is_ok() || result == Err(ExchangeError::UsedCode) {

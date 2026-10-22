@@ -34,6 +34,8 @@ pub enum PreauthorizeError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preauthorized {
     pub client_name: Option<String>,
+    pub token_endpoint_auth_method: TokenEndpointAuthMethod,
+    pub pkce_policy: PkcePolicy,
 }
 
 /// `validate_authorization_request_and_get_application_info/3`, which is what
@@ -52,7 +54,18 @@ pub async fn preauthorize(
         .map_err(|_| PreauthorizeError::InvalidClientId)?;
     let application = check(&mut conn, scopes, redirect_uri, client_id).await?;
 
+    // Read both policies from one row snapshot, including during a concurrent metadata edit.
+    let (token_endpoint_auth_method, pkce_policy) =
+        sqlx::query_as::<_, (TokenEndpointAuthMethod, PkcePolicy)>(
+            "SELECT token_endpoint_auth_method, pkce_policy FROM applications WHERE id = $1",
+        )
+        .bind(application.id)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|_| PreauthorizeError::InvalidClientId)?;
     Ok(Preauthorized {
+        pkce_policy,
+        token_endpoint_auth_method,
         client_name: application.client_name,
     })
 }
@@ -144,6 +157,32 @@ pub async fn authorize_in(
     client_id: &str,
     now: time::OffsetDateTime,
 ) -> Result<String, PreauthorizeError> {
+    authorize_in_with_pkce(
+        conn,
+        guild_id,
+        scopes,
+        resources,
+        redirect_uri,
+        client_id,
+        now,
+        None,
+    )
+    .await
+}
+
+/// The challenge is validated when the browser flow starts, and travels with
+/// that flow. Do not re-evaluate the deployment cutoff when consent completes.
+#[allow(clippy::too_many_arguments)]
+pub async fn authorize_in_with_pkce(
+    conn: &mut sqlx::PgConnection,
+    guild_id: i64,
+    scopes: &[String],
+    resources: &[i64],
+    redirect_uri: &str,
+    client_id: &str,
+    now: time::OffsetDateTime,
+    challenge: Option<&crate::pkce::Challenge>,
+) -> Result<String, PreauthorizeError> {
     let application = check(&mut *conn, scopes, redirect_uri, client_id).await?;
 
     let code = new_code();
@@ -166,9 +205,17 @@ pub async fn authorize_in(
         at + CODE_TTL,
         at
     )
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    if let Some(challenge) = challenge {
+        sqlx::query("UPDATE authorization_codes SET code_challenge = $2 WHERE code = $1")
+            .bind(&code)
+            .bind(challenge.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(|_| PreauthorizeError::InvalidClientId)?;
+    }
 
     Ok(code)
 }
@@ -854,6 +901,54 @@ pub fn check_application_type(kind: &str) -> Result<(), MetadataError> {
     }
 }
 
+/// Per-application PKCE opt-in, independent of deployment enforcement deadlines.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, sqlx::Type,
+)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "pkce_policy", rename_all = "snake_case")]
+pub enum PkcePolicy {
+    #[default]
+    Optional,
+    Required,
+}
+
+impl PkcePolicy {
+    pub fn registration_default(
+        from: Option<time::OffsetDateTime>,
+        now: time::OffsetDateTime,
+    ) -> Self {
+        if from.is_some_and(|from| now >= from) {
+            Self::Required
+        } else {
+            Self::Optional
+        }
+    }
+}
+
+pub async fn pkce_policy(
+    pool: &sqlx::PgPool,
+    application_id: i64,
+) -> Result<PkcePolicy, sqlx::Error> {
+    sqlx::query_scalar("SELECT pkce_policy FROM applications WHERE id = $1")
+        .bind(application_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn set_pkce_policy(
+    connection: &mut sqlx::PgConnection,
+    application_id: i64,
+    policy: PkcePolicy,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE applications SET pkce_policy = $2 WHERE id = $1")
+        .bind(application_id)
+        .bind(policy)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
 /// Registered authentication policy for code and refresh-token exchanges.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, sqlx::Type,
@@ -906,6 +1001,7 @@ async fn set_token_endpoint_auth_method(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewApplication {
     pub token_endpoint_auth_method: Option<TokenEndpointAuthMethod>,
+    pub pkce_policy: Option<PkcePolicy>,
     pub response_types: Vec<String>,
     pub grant_types: Vec<String>,
     pub application_type: String,
@@ -996,6 +1092,7 @@ pub async fn register(
     .fetch_one(&mut *tx)
     .await?;
 
+    set_pkce_policy(&mut tx, application_id, new.pkce_policy.unwrap_or_default()).await?;
     set_token_endpoint_auth_method(
         &mut tx,
         application_id,
@@ -1059,6 +1156,7 @@ fn new_secret() -> String {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
     pub token_endpoint_auth_method: Option<TokenEndpointAuthMethod>,
+    pub pkce_policy: Option<PkcePolicy>,
     /// Generate a fresh secret in the same transaction as the metadata edit.
     pub rotate_client_secret: bool,
     pub client_name: Option<Option<String>>,
@@ -1182,6 +1280,9 @@ pub async fn patch(
     .execute(&mut *tx)
     .await?;
 
+    if let Some(policy) = changes.pkce_policy {
+        set_pkce_policy(&mut tx, application_id, policy).await?;
+    }
     if let Some(method) = changes.token_endpoint_auth_method {
         set_token_endpoint_auth_method(&mut tx, application_id, method).await?;
     }

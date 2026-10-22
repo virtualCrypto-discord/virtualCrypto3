@@ -164,3 +164,104 @@ async fn non_owner_cannot_read_or_change_auth_and_invalid_method_is_refused(pool
         Method::None
     );
 }
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn owner_can_open_change_and_reopen_pkce_settings(pool: PgPool) {
+    support::insert_user(&pool, 1, OWNER).await;
+    let app = support::insert_application(&pool, OWNER, "auth settings").await;
+    let client = support::client_id_of(&pool, app).await;
+    let shown = press(&pool, OWNER, &custom_id_for(Screen::Show, &client), None).await;
+    let open = custom_id_for(Screen::TokenAuth, &client);
+    assert!(
+        components(&shown)
+            .iter()
+            .any(|component| component["custom_id"] == open)
+    );
+    assert!(
+        shown
+            .to_string()
+            .contains("任意（サーバーの必須化期限まで）")
+    );
+    for (value, expected) in [
+        ("required", application::PkcePolicy::Required),
+        ("optional", application::PkcePolicy::Optional),
+    ] {
+        let screen = press(&pool, OWNER, &open, None).await;
+        let menu_id = custom_id_for_field(Screen::Edit, &client, "pkce_policy");
+        let menu = components(&screen)
+            .into_iter()
+            .find(|c| c["custom_id"] == menu_id)
+            .unwrap();
+        assert_eq!(menu["min_values"], 1);
+        assert_eq!(menu["max_values"], 1);
+        assert!(
+            components(&screen)
+                .iter()
+                .any(|c| c["custom_id"] == custom_id_for(Screen::RotateSecret, &client))
+        );
+        assert!(
+            components(&screen)
+                .iter()
+                .any(|c| c["custom_id"] == custom_id_for(Screen::Show, &client))
+        );
+        let updated = press(&pool, OWNER, &menu_id, Some(json!([value]))).await;
+        assert_eq!(
+            application::pkce_policy(&pool, app).await.unwrap(),
+            expected
+        );
+        assert!(
+            updated
+                .to_string()
+                .contains(if expected == application::PkcePolicy::Optional {
+                    "任意（サーバーの必須化期限まで）"
+                } else {
+                    "必須（S256）"
+                })
+        );
+        let reopened = press(&pool, OWNER, &open, None).await;
+        let menu = components(&reopened)
+            .into_iter()
+            .find(|c| c["custom_id"] == menu_id)
+            .unwrap();
+        let defaults: Vec<_> = menu["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["default"] == true)
+            .collect();
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0]["value"], value);
+    }
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn non_owner_cannot_change_pkce_and_invalid_policy_is_refused(pool: PgPool) {
+    support::insert_user(&pool, 1, OWNER).await;
+    let app = support::insert_application(&pool, OWNER, "auth settings").await;
+    sqlx::query("UPDATE applications SET client_secret='private-test-secret' WHERE id=$1")
+        .bind(app)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let client = support::client_id_of(&pool, app).await;
+    let denied = press(
+        &pool,
+        OWNER + 1,
+        &custom_id_for(Screen::TokenAuth, &client),
+        None,
+    )
+    .await;
+    assert!(!denied.to_string().contains("private-test-secret"));
+    let menu = custom_id_for_field(Screen::Edit, &client, "pkce_policy");
+    press(&pool, OWNER + 1, &menu, Some(json!(["required"]))).await;
+    assert_eq!(
+        application::pkce_policy(&pool, app).await.unwrap(),
+        application::PkcePolicy::Optional
+    );
+    let invalid = press(&pool, OWNER, &menu, Some(json!(["unknown"]))).await;
+    assert!(invalid.to_string().contains("invalid_pkce_policy"));
+    assert_eq!(
+        application::pkce_policy(&pool, app).await.unwrap(),
+        application::PkcePolicy::Optional
+    );
+}

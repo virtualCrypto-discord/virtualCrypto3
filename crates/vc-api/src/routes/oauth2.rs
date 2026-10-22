@@ -197,7 +197,7 @@ pub async fn approve(
     {
         return Ok(unauthorized());
     }
-    let code = match vc_core::application::authorize_in(
+    let code = match vc_core::application::authorize_in_with_pkce(
         &mut tx,
         request.guild_id,
         &request.scopes,
@@ -205,6 +205,7 @@ pub async fn approve(
         &request.redirect_uri,
         &request.client_id,
         time::OffsetDateTime::now_utc(),
+        request.pkce.as_ref(),
     )
     .await
     {
@@ -263,6 +264,8 @@ pub fn refusal_for(error: PreauthorizeError) -> Refusal {
 /// absence has to reach the checks below instead of being rejected on the way in.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AuthorizeQuery {
+    pub code_challenge: Option<String>,
+    pub code_challenge_method: Option<String>,
     pub response_type: Option<String>,
     pub client_id: Option<String>,
     pub redirect_uri: Option<String>,
@@ -274,6 +277,8 @@ pub struct AuthorizeQuery {
 /// A well-formed request: what the rest of the chain needs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
+    #[serde(default)]
+    pub pkce: Option<vc_core::pkce::Challenge>,
     pub client_id: String,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
@@ -325,6 +330,7 @@ impl Request {
             .ok_or(Malformed::NoGuildId)?;
 
         Ok(Request {
+            pkce: None,
             client_id,
             redirect_uri,
             scopes: query
@@ -361,14 +367,16 @@ pub struct Consent {
 /// Start a fresh Discord identity check for this exact authorization request.
 pub async fn authorize(
     State(state): State<AppState>,
-    Query(query): Query<AuthorizeQuery>,
+    Query(mut query): Query<AuthorizeQuery>,
     RawQuery(raw): RawQuery,
 ) -> Result<Response, ApiError> {
-    let request = match Request::parse(query) {
+    let challenge = query.code_challenge.take();
+    let method = query.code_challenge_method.take();
+    let mut request = match Request::parse(query) {
         Ok(request) => request,
         Err(_) => return Ok(page()),
     };
-    if let Err(error) = vc_core::application::preauthorize(
+    let preauthorized = match vc_core::application::preauthorize(
         state.pool(),
         &request.scopes,
         &request.redirect_uri,
@@ -376,12 +384,35 @@ pub async fn authorize(
     )
     .await
     {
-        return Ok(answer(
-            refusal_for(error),
-            &request.redirect_uri,
-            request.state.as_deref(),
-        ));
-    }
+        Ok(application) => application,
+        Err(error) => {
+            return Ok(answer(
+                refusal_for(error),
+                &request.redirect_uri,
+                request.state.as_deref(),
+            ));
+        }
+    };
+    // Validate PKCE only after the redirect URI has been checked. Freeze the
+    // policy here: callbacks/consent may finish after the scheduled cutoff.
+    request.pkce = match vc_core::pkce::Challenge::from_request(
+        challenge.as_deref(),
+        method.as_deref(),
+        preauthorized.pkce_policy == vc_core::application::PkcePolicy::Required
+            || state.pkce_required(
+                time::OffsetDateTime::now_utc(),
+                preauthorized.token_endpoint_auth_method,
+            ),
+    ) {
+        Ok(challenge) => challenge,
+        Err(description) => {
+            return Ok(private(answer(
+                Refusal::redirect("invalid_request", description),
+                &request.redirect_uri,
+                request.state.as_deref(),
+            )));
+        }
+    };
     let resource_uris = values_named(
         &raw_query_pairs(raw.as_deref().unwrap_or_default()),
         "resource",

@@ -28,8 +28,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// What the operator typed, and the key webhooks are signed with.
 struct Application {
@@ -46,6 +48,7 @@ struct Application {
 #[derive(Deserialize)]
 struct Callback {
     code: Option<String>,
+    state: Option<String>,
     error_description: Option<String>,
 }
 
@@ -105,6 +108,15 @@ async fn main() {
 /// The page a person opens: the address the service authorizes at, with this application's own
 /// callback as the place the code comes back to.
 async fn home(State(application): State<Arc<Application>>) -> impl IntoResponse {
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).expect("OS randomness");
+    let verifier = URL_SAFE_NO_PAD.encode(random);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    getrandom::fill(&mut random).expect("OS randomness");
+    let state = URL_SAFE_NO_PAD.encode(random);
+    let cookie = format!(
+        "demo_pkce_{state}={verifier}; HttpOnly; SameSite=Lax; Path=/callback; Max-Age=600"
+    );
     let mut authorize = reqwest::Url::parse(&format!("{}/oauth2/authorize", application.service))
         .expect("--service is an absolute URL");
     authorize.query_pairs_mut().extend_pairs([
@@ -116,6 +128,9 @@ async fn home(State(application): State<Arc<Application>>) -> impl IntoResponse 
         ),
         ("guild_id", application.guild_id.as_str()),
         ("scope", "vc.issue"),
+        ("state", state.as_str()),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
     ]);
     let authorize = authorize
         .as_str()
@@ -123,9 +138,15 @@ async fn home(State(application): State<Arc<Application>>) -> impl IntoResponse 
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
-    Html(format!(
-        "<a href=\"{authorize}\">Authorize guild issuance</a>"
-    ))
+    (
+        [
+            ("set-cookie", cookie),
+            ("cache-control", "no-store".to_owned()),
+        ],
+        Html(format!(
+            "<a href=\"{authorize}\">Authorize guild issuance</a>"
+        )),
+    )
 }
 
 /// Where the code comes back. It is exchanged at the token endpoint with the application's own
@@ -133,13 +154,46 @@ async fn home(State(application): State<Arc<Application>>) -> impl IntoResponse 
 async fn callback(
     State(application): State<Arc<Application>>,
     Query(callback): Query<Callback>,
-) -> impl IntoResponse {
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let Some(state) = callback.state.as_deref().filter(|s| {
+        s.len() == 43
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+    }) else {
+        return (StatusCode::BAD_REQUEST, "invalid callback state").into_response();
+    };
+    let cookie_name = format!("demo_pkce_{state}");
+    let mut cookies = headers
+        .get_all("cookie")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .flat_map(|h| h.split(';'))
+        .filter_map(|c| c.trim().split_once('='))
+        .filter(|(name, _)| *name == cookie_name);
+    let Some((_, verifier)) = cookies.next() else {
+        return (StatusCode::BAD_REQUEST, "missing browser-bound PKCE flow").into_response();
+    };
+    if cookies.next().is_some() {
+        return (StatusCode::BAD_REQUEST, "ambiguous PKCE cookie").into_response();
+    }
+    let response_headers = [
+        (
+            "set-cookie",
+            format!("{cookie_name}=; HttpOnly; SameSite=Lax; Path=/callback; Max-Age=0"),
+        ),
+        ("cache-control", "no-store".to_owned()),
+    ];
     if let Some(description) = callback.error_description {
-        return format!("the service refused: {description}");
+        return (
+            response_headers,
+            format!("the service refused: {description}"),
+        )
+            .into_response();
     }
 
     let Some(code) = callback.code else {
-        return "the callback carried no code".to_owned();
+        return (response_headers, "the callback carried no code").into_response();
     };
 
     let form = [
@@ -150,19 +204,21 @@ async fn callback(
             format!("http://{}/callback", application.address),
         ),
         ("client_id", application.client_id.clone()),
-        ("client_secret", application.client_secret.clone()),
+        ("code_verifier", verifier.to_owned()),
     ];
 
     let answer = reqwest::Client::new()
         .post(format!("{}/oauth2/token", application.service))
+        .basic_auth(&application.client_id, Some(&application.client_secret))
         .form(&form)
         .send()
         .await;
 
-    match answer {
+    let body = match answer {
         Ok(answer) => format!("the token endpoint answered: {:?}", answer.text().await),
         Err(error) => format!("the token endpoint could not be reached: {error}"),
-    }
+    };
+    (response_headers, body).into_response()
 }
 
 /// A webhook: verified the way the service's handshake expects, which is a PING it signs with the

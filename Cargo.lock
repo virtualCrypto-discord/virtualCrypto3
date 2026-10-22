@@ -2574,9 +2574,11 @@ dependencies = [
 name = "vc-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "getrandom 0.4.3",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror",
  "time",
@@ -2590,10 +2592,13 @@ name = "vc-demo-app"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "ed25519-dalek",
+ "getrandom 0.4.3",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
 ]
 

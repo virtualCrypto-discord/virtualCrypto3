@@ -884,10 +884,11 @@ const ENDPOINTS: &[Endpoint] = &[
             message!("docs.api.all.284"),
             message!("docs.api.all.285"),
             message!("docs.api.all.286"),
+            message!("docs.api.pkce.challenge"),
         ],
         example: Some(Example {
             request: &[
-                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=vc.issue&guild_id=900000000000000001",
+                "GET /oauth2/authorize?response_type=code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&scope=vc.issue&guild_id=900000000000000001&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256",
             ],
             response: &[
                 "303 See Other",
@@ -936,6 +937,7 @@ const ENDPOINTS: &[Endpoint] = &[
             message!("docs.api.all.312"),
             message!("docs.api.all.313"),
             message!("docs.api.all.314"),
+            message!("docs.api.pkce.verifier"),
         ],
         // `oauth2_token::exchange`, whose answer is the code flow's own: the token
         // and the unit it is good for.
@@ -944,7 +946,7 @@ const ENDPOINTS: &[Endpoint] = &[
                 "POST /oauth2/token",
                 "Content-Type: application/x-www-form-urlencoded",
                 "",
-                "grant_type=authorization_code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&code=3d1f0c…",
+                "grant_type=authorization_code&client_id=e0e4a8ce-6d0e-4a5e-9f4a-1a2b3c4d5e6f&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&code=3d1f0c…&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
             ],
             response: &[
                 "{",
@@ -1033,6 +1035,7 @@ const ENDPOINTS: &[Endpoint] = &[
             message!("docs.api.all.354"),
             message!("docs.api.all.355"),
             message!("docs.api.all.356"),
+            message!("docs.api.pkce.policy_create"),
         ],
         // `oauth2_clients::register`, whose 201 is the four values a client needs
         // and the address it reads itself at.
@@ -1141,6 +1144,7 @@ const ENDPOINTS: &[Endpoint] = &[
             message!("docs.api.all.388"),
             message!("docs.api.all.389"),
             message!("docs.api.all.390"),
+            message!("docs.api.pkce.policy_update"),
         ],
         example: None,
         notes: &[message!("docs.api.all.391"), message!("docs.api.all.392")],

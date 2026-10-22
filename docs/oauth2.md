@@ -53,9 +53,93 @@ Authentication failures do not consume either token or revoke a reused code's
 grant. Failed authentication using an Authorization header returns
 `401 invalid_client` with a Basic challenge; missing authentication returns
 `400 invalid_client`. Applications using `none` retain legacy handling of
-authentication headers. PKCE is separate and is not introduced by this change.
+authentication headers. PKCE is a separate policy, described below.
 
 
+
+## PKCE and scheduled enforcement
+
+Authorization-code flows support PKCE **S256 only**, independently of client
+authentication. Public and confidential clients both use it. Send
+`code_challenge=BASE64URL(SHA256(code_verifier))` (without padding) and
+`code_challenge_method=S256` to `GET /oauth2/authorize`. Generate a fresh,
+cryptographically random verifier for each flow; RFC 7636 recommends 32 random
+bytes encoded as base64url. Keep the verifier bound to the initiating browser
+session and validate `state`. Send the original `code_verifier` when exchanging
+the code at `POST /oauth2/token` (form or JSON). The verifier must contain
+43–128 ASCII unreserved characters (`A-Z a-z 0-9 - . _ ~`). The demo app does this.
+
+Applications save `pkce_policy` as `optional` or `required`. Migration 0031 assigns
+`optional` to existing applications. Registration and metadata PATCH accept this
+field, and registration responses and metadata reads expose the saved value.
+Owners can change it through Discord's **認証設定** or, for example,
+`PATCH /oauth2/clients/@me` with `{"pkce_policy":"required"}`. Unknown values,
+booleans and explicit null are rejected as `invalid_client_metadata` /
+`invalid_pkce_policy`; omission in a PATCH preserves the saved setting.
+
+`PKCE_DEFAULT_FROM` controls the saved default for **new registrations only**:
+if the field is omitted, unset/before the timestamp means `optional`, and at or
+after it means `required`. An explicit valid choice wins. The API and Discord use
+the same registration service. Existing applications never change just because
+the date passes. Read at startup, the variable accepts an RFC 3339 timestamp with
+a timezone; invalid/empty values fail startup. It is independent of the Basic
+authentication default and the two enforcement deadlines.
+
+`required` opts in immediately for new authorization flows, even before global
+enforcement. `optional` cannot override a global requirement. Changing either
+policy or client authentication method does not change a flow already started;
+a saved challenge always requires its verifier, even if the owner opts out later.
+Refresh tokens are unaffected.
+
+Two independent deadlines provide three rollout stages:
+
+| Stage | New authorization flows |
+| --- | --- |
+| Neither deadline reached (or both unset) | Follow saved `pkce_policy` |
+| `PKCE_PUBLIC_REQUIRED_FROM` reached | PKCE required for `token_endpoint_auth_method=none`; otherwise follow saved `pkce_policy` |
+| `PKCE_REQUIRED_FROM` reached | S256 PKCE required for all clients |
+
+Classification uses the saved token-endpoint authentication method at flow start,
+not `application_type`, possession of an issued secret, or a request parameter.
+Existing legacy registrations with `none` therefore belong to the public stage.
+The all-client deadline takes precedence even if the public deadline is unset or
+later. Either deadline may be left unset; to schedule all three stages, set the
+public deadline earlier than the all-client deadline.
+
+These are **not** the new-client registration cutoff. Existing applications are
+also covered when they start a new flow after the applicable time. Both variables
+are read at startup and accept RFC 3339 timestamps with a timezone, e.g.
+`PKCE_PUBLIC_REQUIRED_FROM=2027-04-01T00:00:00+09:00` and
+`PKCE_REQUIRED_FROM=2027-07-01T00:00:00+09:00` (illustrative dates only).
+Invalid/empty values fail startup. Configure identical values on all instances.
+For a three-stage rollout, leave enforcement unset while rolling out support, migrate public clients first, then
+allow confidential clients a longer migration period before all-client enforcement.
+Both deadlines are independent of `TOKEN_ENDPOINT_AUTH_DEFAULT_FROM`.
+The binary has no implicit deadlines. The production `fly.toml` explicitly sets
+both new-registration defaults to **2026-11-01 00:00 JST**, and both PKCE enforcement
+deadlines to **2027-11-01 00:00 JST**. This selected schedule gives existing clients
+a year and collapses the public-only stage; the separate variables still allow
+that stage on other schedules. Explicit `optional` cannot bypass final enforcement.
+Fly secrets with the same names can override these deployment values; check for
+such overrides before rollout. Committing configuration does not deploy it.
+
+The requirement is evaluated once, when the browser flow starts. Pending flows
+and issued codes from before the deadline retain their saved PKCE conditions,
+even across deployment or the deadline. Migration 0030 leaves existing codes
+without a challenge. Existing refresh tokens remain usable; refreshing does not
+require a verifier. PKCE does not replace Basic authentication where configured.
+
+A supplied challenge is always validated, including before the deadline. `plain`,
+an omitted method with a challenge, and malformed challenges produce
+`invalid_request`. A required but missing challenge returns
+`invalid_request` / `code_challenge_required` to the validated redirect URI.
+A missing, malformed or incorrect verifier for a challenged code returns
+`invalid_grant` / `invalid_code_verifier` without consuming the code. Supplying a
+verifier for a code issued without a challenge is also rejected to prevent
+downgrades. Never add a verifier only at the token endpoint.
+
+References: [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636.html),
+[RFC 9700 §4.8](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.8).
 
 The current browser flow is request-bound: `/oauth2/authorize` starts a new Discord
 identity check every time, `/callback/discord` shows consent, and a one-time
