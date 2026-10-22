@@ -113,6 +113,157 @@ fn pay(amount: &str) -> Value {
     })
 }
 
+async fn competing_payments(pool: PgPool, left_bulk: bool, right_bulk: bool) {
+    use std::time::Duration;
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+    let body = |bulk| {
+        if bulk {
+            json!([pay("199500")])
+        } else {
+            pay("199500")
+        }
+    };
+    let left_body = body(left_bulk);
+    let right_body = body(right_bulk);
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(i64::from(USER1))
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let (left, right, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            send(
+                build(pool.clone()),
+                &token,
+                left_body.clone(),
+                Some(key_header("left"))
+            ),
+            send(
+                build(pool.clone()),
+                &token,
+                right_body.clone(),
+                Some(key_header("right"))
+            ),
+            async {
+                loop {
+                    let blocked: i64 = sqlx::query_scalar(
+                        "SELECT count(DISTINCT a.pid) FROM pg_stat_activity a
+                         JOIN pg_locks l ON l.pid = a.pid
+                         WHERE a.datname = current_database() AND NOT l.granted",
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                    if blocked >= 2 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                gate.rollback().await.unwrap();
+            }
+        )
+    })
+    .await
+    .expect("both payments contend and finish without deadlocking");
+    let mut statuses = [left.status, right.status];
+    statuses.sort();
+    assert_eq!(statuses, [201, 409], "{} / {}", left.body, right.body);
+    for (key, body, original) in [("left", left_body, left), ("right", right_body, right)] {
+        let replay = send(build(pool.clone()), &token, body, Some(key_header(key))).await;
+        assert_eq!(replay.status, original.status);
+        assert_eq!(replay.body, original.body);
+        assert_eq!(idempotency_status(&replay), Some("Duplicate"));
+    }
+    assert_eq!(amount(&pool, USER1).await, 0);
+    assert_eq!(amount(&pool, USER2).await, 200_500);
+    let sender_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM assets WHERE user_id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sender_rows, 0,
+        "the competing request must handle deletion at zero"
+    );
+    let histories: i64 = sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(histories, 1, "only the successful payment writes history");
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn distinct_single_payment_keys_cannot_overspend(pool: PgPool) {
+    competing_payments(pool, false, false).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn distinct_single_and_bulk_keys_cannot_overspend(pool: PgPool) {
+    competing_payments(pool, false, true).await;
+}
+
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn distinct_bulk_payment_keys_cannot_overspend(pool: PgPool) {
+    competing_payments(pool, true, true).await;
+}
+
+/// Lose the response after commit at the HTTP middleware boundary. This is
+/// deliberately different from a database COMMIT acknowledgement being lost.
+#[sqlx::test(migrations = "../vc-core/migrations")]
+async fn a_committed_payment_with_a_lost_http_response_can_be_retried(pool: PgPool) {
+    use std::{sync::Arc, time::Duration};
+    fixture(&pool).await;
+    let token = mint(&pool, USER1, &["vc.pay"]).await;
+    let committed = Arc::new(tokio::sync::Notify::new());
+    let signal = committed.clone();
+    let app = build(pool.clone()).layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let signal = signal.clone();
+            async move {
+                let response = next.run(request).await;
+                assert_eq!(response.status(), 201);
+                // No response reaches the client, although the transaction is committed.
+                drop(response);
+                signal.notify_one();
+                std::future::pending::<axum::response::Response>().await
+            }
+        },
+    ));
+    let first_token = token.clone();
+    let first = tokio::spawn(async move {
+        send(
+            app,
+            &first_token,
+            pay("25"),
+            Some(key_header("lost-response")),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), committed.notified())
+        .await
+        .unwrap();
+    assert_eq!(amount(&pool, USER2).await, 1_025);
+    first.abort();
+    assert!(matches!(first.await, Err(error) if error.is_cancelled()));
+    let replay = send(
+        build(pool.clone()),
+        &token,
+        pay("25"),
+        Some(key_header("lost-response")),
+    )
+    .await;
+    assert_eq!(replay.status, 201, "{}", replay.body);
+    assert_eq!(idempotency_status(&replay), Some("Duplicate"));
+    assert_eq!(amount(&pool, USER1).await, 199_475);
+    assert_eq!(amount(&pool, USER2).await, 1_025);
+    let histories: i64 = sqlx::query_scalar("SELECT count(*) FROM currency_payment_histories")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(histories, 1);
+}
+
 #[sqlx::test(migrations = "../vc-core/migrations")]
 async fn a_refused_payment_does_not_create_its_receiver_even_when_the_answer_is_cached(
     pool: PgPool,
