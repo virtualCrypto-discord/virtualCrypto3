@@ -74,13 +74,13 @@ pub enum Signal {
 impl Signal {
     /// How many occurrences in one window before the first warning is sent.
     ///
-    /// Most signals warn on the first occurrence: a `same_origin` failure is
-    /// rare enough that one is news. A duplicate interaction receipt is not —
-    /// Discord retries on its own, and a receipt still pending answers `409` —
-    /// so that one only speaks up when it stops looking like a retry.
+    /// Authentication and signature refusals can be ordinary unauthenticated
+    /// traffic, expired credentials, or probes. Like duplicate interaction
+    /// receipts, they warn only when repeated within the observation window.
+    /// Other signals retain their immediate warning.
     pub fn threshold(self) -> u32 {
         match self {
-            Signal::ReplayDuplicate => 10,
+            Signal::AuthFailed | Signal::InteractionSignature | Signal::ReplayDuplicate => 10,
             _ => 1,
         }
     }
@@ -544,7 +544,7 @@ mod tests {
         let monitor = monitor();
         let now = Instant::now();
 
-        monitor.observe_at(Signal::AuthFailed, "unauthenticated", "no session", now);
+        monitor.observe_at(Signal::Forbidden, "unauthenticated", "no session", now);
 
         assert!(
             monitor.sweep_at(now + Duration::from_secs(300)).is_empty(),
@@ -558,18 +558,18 @@ mod tests {
         let monitor = monitor();
         let now = Instant::now();
 
-        monitor.observe_at(Signal::AuthFailed, "unauthenticated", "no session", now);
-        monitor.observe_at(Signal::AuthFailed, "unauthenticated", "no session", now);
+        monitor.observe_at(Signal::Forbidden, "unauthenticated", "no session", now);
+        monitor.observe_at(Signal::Forbidden, "unauthenticated", "no session", now);
 
         let later = now + Duration::from_secs(300);
         let owed = monitor.sweep_at(later);
         assert_eq!(owed.len(), 1);
         assert_eq!(owed[0].count, 2);
 
-        assert_eq!(monitor.count_for(Signal::AuthFailed, "unauthenticated"), 0);
+        assert_eq!(monitor.count_for(Signal::Forbidden, "unauthenticated"), 0);
 
         // And the next occurrence warns as a first again, not as a continuation.
-        let first_again = monitor.observe_at(Signal::AuthFailed, "unauthenticated", "why", later);
+        let first_again = monitor.observe_at(Signal::Forbidden, "unauthenticated", "why", later);
         assert_eq!(
             first_again.first().map(|report| report.kind),
             Some(Kind::First)
@@ -608,6 +608,40 @@ mod tests {
         let owed = monitor.sweep_at(now + Duration::from_secs(300));
         assert_eq!(owed.len(), 1);
         assert_eq!(owed[0].count, 11, "the window's total, retries included");
+    }
+
+    #[test]
+    fn authentication_and_signature_refusals_only_warn_when_repeated() {
+        for signal in [Signal::AuthFailed, Signal::InteractionSignature] {
+            let monitor = monitor();
+            let now = Instant::now();
+
+            for _ in 0..9 {
+                assert!(
+                    monitor
+                        .observe_at(signal, "unauthenticated", "id", now)
+                        .is_empty(),
+                    "isolated refusals do not alert"
+                );
+            }
+
+            let tenth = monitor.observe_at(signal, "unauthenticated", "id", now);
+            assert_eq!(
+                tenth.first().map(|report| (report.kind, report.count)),
+                Some((Kind::First, 10))
+            );
+
+            assert!(
+                monitor
+                    .observe_at(signal, "unauthenticated", "id", now)
+                    .is_empty(),
+                "the tenth was the warning; the rest wait for the window"
+            );
+
+            let owed = monitor.sweep_at(now + Duration::from_secs(300));
+            assert_eq!(owed.len(), 1);
+            assert_eq!(owed[0].count, 11, "the window's total, retries included");
+        }
     }
 
     /// The watch is its own window, tighter than the loose limit's: it fires on
@@ -763,12 +797,11 @@ mod tests {
         let monitor = monitor();
         let now = Instant::now();
         for _ in 0..100 {
-            monitor.observe_at(Signal::AuthFailed, "unauthenticated", "old detail", now);
+            monitor.observe_at(Signal::Forbidden, "unauthenticated", "old detail", now);
         }
 
         let later = now + Duration::from_secs(301);
-        let reports =
-            monitor.observe_at(Signal::AuthFailed, "unauthenticated", "new detail", later);
+        let reports = monitor.observe_at(Signal::Forbidden, "unauthenticated", "new detail", later);
         assert_eq!(reports.len(), 2);
         assert_eq!(reports[0].kind, Kind::Summary);
         assert_eq!(reports[0].count, 100);
@@ -778,7 +811,7 @@ mod tests {
         assert_eq!(reports[1].detail, "new detail");
         assert!(monitor.sweep_at(later).is_empty(), "no duplicate summary");
 
-        monitor.observe_at(Signal::AuthFailed, "unauthenticated", "new detail", later);
+        monitor.observe_at(Signal::Forbidden, "unauthenticated", "new detail", later);
         let reports = monitor.sweep_at(later + Duration::from_secs(300));
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].kind, Kind::Summary);
@@ -789,6 +822,12 @@ mod tests {
     fn request_rollover_only_summarizes_occurrences_after_the_first_warning() {
         for (signal, count, owes_summary) in [
             (Signal::AuthFailed, 1, false),
+            (Signal::AuthFailed, 9, false),
+            (Signal::AuthFailed, 10, false),
+            (Signal::AuthFailed, 11, true),
+            (Signal::InteractionSignature, 9, false),
+            (Signal::InteractionSignature, 10, false),
+            (Signal::InteractionSignature, 11, true),
             (Signal::ReplayDuplicate, 9, false),
             (Signal::ReplayDuplicate, 10, false),
             (Signal::ReplayDuplicate, 11, true),
@@ -819,20 +858,20 @@ mod tests {
         let monitor = monitor();
         let now = Instant::now();
         for i in 0..SWEEP_AT {
-            monitor.observe_at(Signal::AuthFailed, &format!("account:{i}"), "why", now);
+            monitor.observe_at(Signal::Forbidden, &format!("account:{i}"), "why", now);
         }
         for subject in ["account:0", "account:1"] {
-            monitor.observe_at(Signal::AuthFailed, subject, "why", now);
+            monitor.observe_at(Signal::Forbidden, subject, "why", now);
         }
 
         let later = now + Duration::from_secs(300);
-        let reports = monitor.observe_at(Signal::AuthFailed, "new-account", "new", later);
+        let reports = monitor.observe_at(Signal::Forbidden, "new-account", "new", later);
         assert_eq!(reports.len(), 3);
         for subject in ["account:0", "account:1"] {
             assert!(reports.iter().any(|report| report.subject == subject
                 && report.kind == Kind::Summary
                 && report.count == 2));
-            assert_eq!(monitor.count_for(Signal::AuthFailed, subject), 0);
+            assert_eq!(monitor.count_for(Signal::Forbidden, subject), 0);
         }
         assert_eq!(reports[2].kind, Kind::First);
         assert_eq!(reports[2].subject, "new-account");

@@ -103,7 +103,14 @@ The `VCRYPTO_SECURITY_*` and `VCRYPTO_WATCH_*` entries are the behaviour warning
 this service watches the refusals it already makes (an `invalid_token`, a failed
 `same_origin` check, a signature Discord would not have signed, a 429 against the
 loose limit) plus its own error rate and request volume, counts them per subject for
-`VCRYPTO_SECURITY_WINDOW_SECS` (default 300) and warns once per subject per window.
+`VCRYPTO_SECURITY_WINDOW_SECS` (default 300). Authentication failures
+(`auth_failed`), interaction signature refusals (`interaction_signature`), and
+duplicate interaction receipts (`replay_duplicate`) warn at 10 occurrences per
+signal and subject in that window; other signals warn on the first occurrence.
+Each can emit one initial warning and, if more occurrences follow, one summary
+at the end of the window. Counts are per process; unauthenticated subjects are
+shared categories, not individual IP addresses. Below-threshold events do not
+produce a security warning or webhook notification.
 Warnings always go to the log under the tracing target `vc_security`, so
 `RUST_LOG=vc_security=warn` collects exactly these; `VCRYPTO_SECURITY_WEBHOOK_URL`,
 when set, is where they are also POSTed — one line for a Discord webhook URL, one

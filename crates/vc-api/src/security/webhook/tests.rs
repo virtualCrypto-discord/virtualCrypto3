@@ -362,7 +362,7 @@ async fn background_worker_resumes_existing_rows_without_a_new_notification(pool
 async fn observation_and_watch_persist_before_returning(pool: PgPool) {
     let monitor = BehaviorMonitor::for_test()
         .with_webhook(pool.clone(), Some("https://example.invalid/hook".into()));
-    monitor.observe(Signal::AuthFailed, "caller", "why").await;
+    monitor.observe(Signal::Forbidden, "caller", "why").await;
     assert_eq!(pending(&pool).await, 1);
     for _ in 0..31 {
         monitor.watch("caller").await;

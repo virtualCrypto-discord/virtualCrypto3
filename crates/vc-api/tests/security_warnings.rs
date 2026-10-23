@@ -81,13 +81,22 @@ async fn a_credential_that_does_not_resolve_is_counted(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../vc-core/migrations")]
-async fn a_refusal_saves_its_notification_before_returning(pool: PgPool) {
+async fn repeated_refusals_save_one_notification_at_the_threshold(pool: PgPool) {
     let monitor = Arc::new(BehaviorMonitor::for_test().with_webhook(
         pool.clone(),
         Some("https://security.example.invalid/webhook/secret".into()),
     ));
     let app = vc_api::router(state_watched(pool.clone(), fake(), unlimited(), monitor));
-    let response = get(app, URI, Some("not-a-jwt")).await;
+    for _ in 0..9 {
+        let response = get(app.clone(), URI, Some("not-a-jwt")).await;
+        assert_eq!(response.status, 401);
+        let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM security_webhook_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(queued, 0, "isolated authentication failures do not notify");
+    }
+    let response = get(app.clone(), URI, Some("not-a-jwt")).await;
     assert_eq!(response.status, 401);
     let saved: (String, serde_json::Value) =
         sqlx::query_as("SELECT signal, body FROM security_webhook_queue")
@@ -96,6 +105,16 @@ async fn a_refusal_saves_its_notification_before_returning(pool: PgPool) {
             .unwrap();
     assert_eq!(saved.0, "auth_failed");
     assert_eq!(saved.1["subject"], "unauthenticated");
+    assert_eq!(saved.1["count"], 10);
+    assert_eq!(get(app, URI, Some("not-a-jwt")).await.status, 401);
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM security_webhook_queue")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        queued, 1,
+        "no additional immediate notification in this window"
+    );
 }
 
 /// Every response is a datum for the error rate and the surge, except the
