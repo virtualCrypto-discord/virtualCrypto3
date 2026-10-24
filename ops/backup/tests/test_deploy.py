@@ -33,6 +33,42 @@ class DeploymentTests(unittest.TestCase):
                 deploy.validate_machine([machine])
 
 class UpdateTests(unittest.TestCase):
+    def test_does_not_start_an_unverified_replacement(self):
+        from unittest.mock import patch
+        case = DeploymentTests()
+        case.setUp()
+        before = dict(case.machine, instance_id='version-1')
+        before['config']['image'] = 'old-image'
+        image = 'registry.fly.io/virtualcrypto-backup@sha256:' + 'a' * 64
+        for drift in [{'image': 'wrong-image'}, {'schedule': 'hourly'},
+                      {'env': {'UNEXPECTED': 'change'}}]:
+            after = copy.deepcopy(before)
+            after['config'].update(image=image)
+            after['config'].update(drift)
+            with self.subTest(drift=drift), \
+                 patch.object(deploy, 'machines', side_effect=[[before], [after]]), \
+                 patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}]) as api, \
+                 patch('sys.argv', ['update.py', image]), self.assertRaises(RuntimeError):
+                deploy.main()
+            self.assertEqual(api.call_count, 4)
+            self.assertFalse(any(call.args[0].endswith('/start') for call in api.call_args_list))
+
+    def test_does_not_retry_an_ambiguous_start(self):
+        from unittest.mock import patch
+        case = DeploymentTests()
+        case.setUp()
+        before = dict(case.machine, instance_id='version-1')
+        before['config']['image'] = 'old-image'
+        image = 'registry.fly.io/virtualcrypto-backup@sha256:' + 'a' * 64
+        after = copy.deepcopy(before)
+        after['config']['image'] = image
+        with patch.object(deploy, 'machines', side_effect=[[before], [after]]), \
+             patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}, TimeoutError('start response lost')]) as api, \
+             patch('sys.argv', ['update.py', image]), self.assertRaises(TimeoutError):
+            deploy.main()
+        self.assertEqual(api.call_count, 5)
+        self.assertEqual(api.call_args_list[-1].args, ('existing/start',))
+
     def test_updates_only_image_with_version_guard_and_releases_lease(self):
         from unittest.mock import patch
         case = DeploymentTests()
@@ -46,7 +82,7 @@ class UpdateTests(unittest.TestCase):
         transient = dict(after, state='replacing')
         with patch.object(deploy, 'time') as clock, \
              patch.object(deploy, 'machines', side_effect=[[before], [transient], [after]]), \
-             patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}]) as api, \
+             patch.object(deploy, 'api', side_effect=[{'data': {'nonce': 'lease'}}, before, {}, {}, {}]) as api, \
              patch('sys.argv', ['update.py', image]):
             clock.monotonic.return_value = 0
             deploy.main()
@@ -57,7 +93,9 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(mutation.kwargs['nonce'], 'lease')
         expected = dict(before['config'], image=image)
         self.assertEqual(mutation.kwargs['data']['config'], expected)
-        self.assertEqual(api.call_args_list[-1].kwargs['method'], 'DELETE')
+        self.assertEqual(api.call_args_list[-2].kwargs['method'], 'DELETE')
+        self.assertEqual(api.call_args_list[-1].args, ('existing/start',))
+        self.assertEqual(api.call_args_list[-1].kwargs, {'method': 'POST'})
 
     def test_releases_lease_and_does_not_update_after_concurrent_change(self):
         from unittest.mock import patch

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Update the existing scheduled Machine without starting an extra backup."""
+"""Update and validate the scheduled Machine, then start its new instance once."""
 import argparse
 import copy
 import os
@@ -88,7 +88,13 @@ def main():
     new = {k: v for k, v in after['config'].items() if k not in ('image', 'metadata')}
     if old != new:
         raise RuntimeError('Unexpected Machine configuration change; inspect before the next run')
+    # Replacing an instance with skip_launch leaves it unstarted. A configured
+    # schedule alone does not establish the first run of the new instance.
+    # Start only after verifying its image and bounds; never retry an ambiguous
+    # start response, since that could run the backup twice.
+    api(before['id'] + '/start', method='POST')
     print('Scheduled image:', after['config']['image'])
+    print('Started updated Machine once; subsequent backups use the daily schedule.')
 
 
 if __name__ == '__main__':
