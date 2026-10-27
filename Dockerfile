@@ -1,5 +1,5 @@
 # The SPA, which the API serves out of `web/dist`.
-FROM node:25-slim AS web
+FROM node:26-slim AS web
 
 WORKDIR /src/web
 
